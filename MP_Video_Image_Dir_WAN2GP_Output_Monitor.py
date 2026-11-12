@@ -60,14 +60,20 @@ TARGET_SCRIPTS = [
     "wan2gp_ltx_batch",
     "wan2gp_tts_batch",
 ]
-TARGET_SCRIPT_PATHS = [
-    "/var/home/mplanetarian/MP_Mix_Manager_v0.3/scripts/wan2gp_flux_batch.py",
-    "/var/home/mplanetarian/MP_Mix_Manager_v0.3/scripts/wan2gp_ltx_batch.py",
-    "/var/home/mplanetarian/MP_Mix_Manager_v0.3/scripts/wan2gp_tts_batch.py",
-    "/home/mplanetarian/MP_Mix_Manager_v0.3/scripts/wan2gp_flux_batch.py",
-    "/home/mplanetarian/MP_Mix_Manager_v0.3/scripts/wan2gp_ltx_batch.py",
-    "/home/mplanetarian/MP_Mix_Manager_v0.3/scripts/wan2gp_tts_batch.py",
-]
+# Resolved from the install tree at import time, so no path is hard-coded.
+def _batch_script_paths() -> list[str]:
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
+        from mp_install_dir import find_install_dir
+        root = find_install_dir()
+    except Exception:
+        root = None
+    if not root:
+        return []
+    return [str(root / "scripts" / f"{name}.py") for name in TARGET_SCRIPTS]
+
+
+TARGET_SCRIPT_PATHS = _batch_script_paths()
 
 IMAGE_EXTS = {".jpeg", ".jpg", ".png"}
 VIDEO_EXTS = {".mp4", ".webm", ".mpeg", ".avi", ".mkv"}
@@ -101,9 +107,15 @@ def resolve_default_watch_dir() -> Path:
         Path.cwd(),
         Path(__file__).resolve().parent,
         Path(__file__).resolve().parent.parent,
-        Path.home() / "MP_Mix_Manager_v0.3",
-        Path("/var/home/mplanetarian/MP_Mix_Manager_v0.3"),
     ]
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
+        from mp_install_dir import find_install_dir
+        found = find_install_dir()
+        if found:
+            search_dirs.insert(0, found)
+    except Exception:
+        pass
     for base in search_dirs:
         cfg = base / "config.env"
         if cfg.is_file():

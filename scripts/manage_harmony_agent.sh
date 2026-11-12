@@ -349,14 +349,23 @@ launch_voice_chat_ollama() {
 
     local ollama_script=""
     for cand in \
-        "$(dirname "${BASH_SOURCE[0]}")/manage_ollama.sh" \
-        "$HOME/MP_Mix_Manager_v0.3/scripts/manage_ollama.sh" \
-        "/var/home/mplanetarian/MP_Mix_Manager_v0.3/scripts/manage_ollama.sh"; do
+        "$(dirname "${BASH_SOURCE[0]}")/manage_ollama.sh"; do
         if [ -f "$cand" ]; then
             ollama_script="$cand"
             break
         fi
     done
+    if [ -z "$ollama_script" ]; then
+        local _lib="$(dirname "${BASH_SOURCE[0]}")/lib/mp_install_dir.sh"
+        [ ! -f "$_lib" ] && _lib="$HOME/.config/mix-manager/lib/mp_install_dir.sh"
+        if [ -f "$_lib" ]; then
+            # shellcheck source=/dev/null
+            . "$_lib"
+            local _root
+            _root="$(mp_find_install_dir 2>/dev/null || true)"
+            [ -n "$_root" ] && [ -f "$_root/scripts/manage_ollama.sh" ] && ollama_script="$_root/scripts/manage_ollama.sh"
+        fi
+    fi
 
     if [ -n "$ollama_script" ]; then
         VOICE_AI_AUDIO_DIR="${AUDIO_DIR}" bash "$ollama_script" voice "$@"

@@ -611,8 +611,8 @@ vec2 mapScene(vec3 p) {
         if (shards < result.x) result = vec2(shards, 4.0);
         return result;
     } else if (u.preset.x > 3.5) {
-        // --- PRESET 4: SENSORIUM INTERFACE (DEFASTEN EARTH FLIPPER CELESTIAL GYROSCOPE) ---
-        // Inspired by Defasten's "Yaporigami - Earth Flipper (2022)" and Sensorium_Interface.jpeg:
+        // --- PRESET 4: SENSORIUM INTERFACE (EARTH FLIPPER CELESTIAL GYROSCOPE) ---
+        // Inspired Sensorium_Interface.jpeg:
         // "A primordial liquidstream of celestial origin spins itself back into existence 🌀🌌💦"
         // 1. Central Multi-Axis Gyroscopic Liquid Glass Core & Celestial Nucleus (Material 1)
         //    Slowly undulating with hydraulic harmonic wave ripples, spinning in non-Euclidean gyroscopic precession.

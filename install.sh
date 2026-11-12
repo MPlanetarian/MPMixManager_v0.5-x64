@@ -28,7 +28,7 @@ if [ -z "${VERSION:-}" ]; then
     if [ -f "$SCRIPT_DIR/VERSION" ]; then
         VERSION="$(head -n 1 "$SCRIPT_DIR/VERSION" | tr -d '\r\n')"
     else
-        VERSION="0.4.2 Stable (Liquid)"
+        VERSION="0.5.0 Stable (Sensorium)"
     fi
 fi
 export VERSION
@@ -173,6 +173,7 @@ mkdir -p "$HOME/.local/bin"
 ln -sf "$SCRIPT_DIR/bin/cliamp" "$HOME/.local/bin/cliamp" 2>/dev/null || true
 ln -sf "$SCRIPT_DIR/bin/mix-archive-manager" "$HOME/.local/bin/mix-archive-manager" 2>/dev/null || true
 ln -sf "$SCRIPT_DIR/Mix_Archive_Manager.sh" "$HOME/.local/bin/manager" 2>/dev/null || true
+ln -sf "$SCRIPT_DIR/bin/mp-desktop-exec" "$HOME/.local/bin/mp-desktop-exec" 2>/dev/null || true
 ln -sf "$SCRIPT_DIR/bin/launch-manager-fullscreen" "$HOME/.local/bin/launch-manager-fullscreen" 2>/dev/null || true
 ln -sf "$SCRIPT_DIR/bin/transfer-monitor" "$HOME/.local/bin/transfer-monitor" 2>/dev/null || true
 ln -sf "$SCRIPT_DIR/bin/chrome-upload-monitor" "$HOME/.local/bin/chrome-upload-monitor" 2>/dev/null || true
@@ -197,6 +198,14 @@ ln -sf "$SCRIPT_DIR/scripts/dsh_mobile.sh" "$HOME/.local/bin/dsh-mobile" 2>/dev/
 ln -sf "$SCRIPT_DIR/scripts/dsh_mobile.sh" "$HOME/.local/bin/manage-dsh-mobile" 2>/dev/null || true
 ln -sf "$SCRIPT_DIR/scripts/kc_run_aider_qwen.sh" "$HOME/.local/bin/aider-qwen" 2>/dev/null || true
 ln -sf "$SCRIPT_DIR/Mix_Archive_Manager.sh" "$HOME/manager.sh" 2>/dev/null || true
+
+# Record this install tree and publish the resolver library, so launchers and
+# desktop entries do not have to hard-code a user name or a versioned path.
+mkdir -p "$HOME/.config/mix-manager/lib" 2>/dev/null || true
+printf '%s\n' "$SCRIPT_DIR" > "$HOME/.config/mix-manager/install_dir" 2>/dev/null || true
+if [ -f "$SCRIPT_DIR/scripts/lib/mp_install_dir.sh" ]; then
+    cp -f "$SCRIPT_DIR/scripts/lib/mp_install_dir.sh" "$HOME/.config/mix-manager/lib/mp_install_dir.sh" 2>/dev/null || true
+fi
 
 echo -e "${GREEN}      ✓ Installed symlinks into ~/.local/bin and ~/manager.sh.${NC}"
 

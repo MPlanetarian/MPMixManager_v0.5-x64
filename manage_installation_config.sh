@@ -27,7 +27,7 @@ if [ -z "${VERSION:-}" ]; then
     elif [ -f "$SCRIPT_DIR/../VERSION" ]; then
         VERSION="$(head -n 1 "$SCRIPT_DIR/../VERSION" | tr -d '\r\n')"
     else
-        VERSION="0.4.2 Stable (Liquid)"
+        VERSION="0.5.0 Stable (Sensorium)"
     fi
 fi
 export VERSION
@@ -181,7 +181,16 @@ migrate_installation_path() {
     ln -sf "$target_dir/bin/list-midi-devices" "$HOME/.local/bin/list-midi-devices" 2>/dev/null || true
     ln -sf "$target_dir/Cut_Video.sh" "$HOME/.local/bin/cut-video" 2>/dev/null || true
     ln -sf "$target_dir/Mix_Archive_Manager.sh" "$HOME/manager.sh" 2>/dev/null || true
-    
+    ln -sf "$target_dir/bin/mp-desktop-exec" "$HOME/.local/bin/mp-desktop-exec" 2>/dev/null || true
+
+    # Record the new tree and publish the path resolver, so the launchers and
+    # desktop entries keep resolving after a migration.
+    mkdir -p "$HOME/.config/mix-manager/lib" 2>/dev/null || true
+    printf '%s\n' "$target_dir" > "$HOME/.config/mix-manager/install_dir" 2>/dev/null || true
+    if [ -f "$target_dir/scripts/lib/mp_install_dir.sh" ]; then
+        cp -f "$target_dir/scripts/lib/mp_install_dir.sh" "$HOME/.config/mix-manager/lib/mp_install_dir.sh" 2>/dev/null || true
+    fi
+
     # Desktop shortcuts follow the install that was just written.
     if [ "$OS_TYPE" = "windows" ] || [ "$OS_TYPE" = "wsl" ]; then
         if [ -f "$target_dir/scripts/install_windows_user.sh" ]; then

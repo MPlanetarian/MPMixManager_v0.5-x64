@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# MP_Mix_Manager_v0.4 - Local Launcher (Optimized & Non-Blocking)
+# MP_Mix_Manager_v0.5 - Local Launcher (Optimized & Non-Blocking)
 
 shopt -s checkwinsize 2>/dev/null
 export PYTHONIOENCODING=utf-8 PYTHONUTF8=1

@@ -11,7 +11,7 @@ if [ -z "${VERSION:-}" ]; then
     if [ -f "$SCRIPT_DIR/VERSION" ]; then
         VERSION="$(head -n 1 "$SCRIPT_DIR/VERSION" | tr -d '\r\n')"
     else
-        VERSION="0.4.2 Stable (Liquid)"
+        VERSION="0.5.0 Stable (Sensorium)"
     fi
 fi
 export VERSION
@@ -98,7 +98,6 @@ find_loader_video_path() {
     cand_list+=(
         "$SCRIPT_DIR/MP_loader.mp4"
         "$SCRIPT_DIR/assets/MP_loader.mp4"
-        "/var/home/mplanetarian/MP_Mix_Manager_v0.3/MP_loader.mp4"
         "$SCRIPT_DIR/gemini_generated_video_BEB1D608.mp4"
         "/var/home/mplanetarian/GoogleDrive/gemini_generated_video_BEB1D608.mp4"
     )

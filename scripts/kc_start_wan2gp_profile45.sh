@@ -9,13 +9,20 @@ export WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-wayland-0}"
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 export PATH="$HOME/.local/bin:$PATH"
 
-# Resolve codebase directory
-CODEBASE_DIR="/var/home/mplanetarian/MP_Mix_Manager_v0.3"
+# Resolve codebase directory through the install-tree resolver, then fall back
+# to a standalone scripts folder.
+_KCSCRIPT_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
+CODEBASE_DIR="$_KCSCRIPT_DIR/.."
+_lib="$_KCSCRIPT_DIR/lib/mp_install_dir.sh"
+[ ! -f "$_lib" ] && _lib="$HOME/.config/mix-manager/lib/mp_install_dir.sh"
+if [ -f "$_lib" ]; then
+    # shellcheck source=/dev/null
+    . "$_lib"
+    _root="$(mp_find_install_dir 2>/dev/null || true)"
+    [ -n "$_root" ] && CODEBASE_DIR="$_root"
+fi
 if [ ! -f "$CODEBASE_DIR/wan2gp.sh" ]; then
     for _c in \
-        "$HOME/MP_Mix_Manager_v0.3" \
-        "/var/home/mplanetarian/MP_Mix_Manager_v0.1" \
-        "$HOME/MP_Mix_Manager_v0.1" \
         "$HOME/Documents/BASH_SCRIPTS"; do
         if [ -f "$_c/wan2gp.sh" ]; then
             CODEBASE_DIR="$_c"

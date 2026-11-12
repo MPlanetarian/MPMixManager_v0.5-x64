@@ -3,7 +3,8 @@ Type=Application
 Name=Kill All MP Audio Players
 GenericName=Stop MP Audio Players
 Comment=Immediately terminate all MP Audio Player instances, background daemons, and visualizers
-Exec=/var/home/mplanetarian/MP_Mix_Manager_v0.4/scripts/kill_all_mp_audio_players.sh
+# The install tree is resolved at launch, so no versioned path is stored here.
+Exec=sh -c "exec \\"\\$HOME/.local/bin/mp-desktop-exec\\" kill_all_mp_audio_players.sh"
 Icon=media-playback-stop
 Terminal=false
 Categories=AudioVideo;Audio;Player;Utility;

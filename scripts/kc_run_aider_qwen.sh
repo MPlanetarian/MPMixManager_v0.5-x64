@@ -24,8 +24,18 @@ if ! curl -s --connect-timeout 2 http://127.0.0.1:11434/ >/dev/null 2>&1 && ! pg
     done
 fi
 
-# 2. Determine target workspace
-WORKDIR="${AIDER_DIR:-/var/home/mplanetarian/MP_Mix_Manager_v0.3}"
+# 2. Determine target workspace. Default to this install tree.
+_KCSCRIPT_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
+_lib="$_KCSCRIPT_DIR/lib/mp_install_dir.sh"
+[ ! -f "$_lib" ] && _lib="$HOME/.config/mix-manager/lib/mp_install_dir.sh"
+_default_dir=""
+if [ -f "$_lib" ]; then
+    # shellcheck source=/dev/null
+    . "$_lib"
+    _default_dir="$(mp_find_install_dir 2>/dev/null || true)"
+fi
+[ -z "$_default_dir" ] && _default_dir="$(dirname "$_KCSCRIPT_DIR")"
+WORKDIR="${AIDER_DIR:-$_default_dir}"
 [ ! -d "$WORKDIR" ] && WORKDIR="$HOME"
 
 notify-send -a "KDE Connect" -i "utilities-terminal" "Aider AI" "Opening Aider (Qwen2.5 7B) in Konsole..." 2>/dev/null || true

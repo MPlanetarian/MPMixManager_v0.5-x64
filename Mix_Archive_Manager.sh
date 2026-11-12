@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-if [[ "$OSTYPE" == "darwin"* && "${BASH_VERSINFO[0]:-0}" -lt 4 ]]; then for bash in /opt/homebrew/bin/bash /usr/local/bin/bash; do [[ -x "$bash" ]] && exec "$bash" "$0" "$@"; done; fi; SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; MANAGER_START_EPOCH="${MANAGER_START_EPOCH:-${EPOCHSECONDS:-$(date +%s 2>/dev/null || echo 0)}}"; export MANAGER_START_EPOCH; shopt -s checkwinsize 2>/dev/null || true; export PYTHONIOENCODING="utf-8" PYTHONUTF8=1; UNAME_S="${UNAME_S:-$(uname -s 2>/dev/null)}"; UNAME_M="${UNAME_M:-$(uname -m 2>/dev/null)}"; _TERM_LINES=""; _TERM_COLS=""; _TERM_RESIZED=1; _on_winch() { _TERM_RESIZED=1; }; trap '_on_winch' WINCH; S70="======================================================================"; D70="----------------------------------------------------------------------"; if [ -z "${VERSION:-}" ]; then if [ -f "$SCRIPT_DIR/VERSION" ]; then VERSION="$(head -n 1 "$SCRIPT_DIR/VERSION" | tr -d '\r\n')"; else VERSION="0.4.2 Stable (Liquid)"; fi; fi; export VERSION
+if [[ "$OSTYPE" == "darwin"* && "${BASH_VERSINFO[0]:-0}" -lt 4 ]]; then for bash in /opt/homebrew/bin/bash /usr/local/bin/bash; do [[ -x "$bash" ]] && exec "$bash" "$0" "$@"; done; fi; _mp_self="${BASH_SOURCE[0]}"; while [ -h "$_mp_self" ]; do _mp_dir="$(cd -P "$(dirname "$_mp_self")" >/dev/null 2>&1 && pwd)"; _mp_self="$(readlink "$_mp_self")"; case "$_mp_self" in /*) ;; *) _mp_self="$_mp_dir/$_mp_self" ;; esac; done; SCRIPT_DIR="$(cd -P "$(dirname "$_mp_self")" >/dev/null 2>&1 && pwd)"; unset _mp_self _mp_dir; MANAGER_START_EPOCH="${MANAGER_START_EPOCH:-${EPOCHSECONDS:-$(date +%s 2>/dev/null || echo 0)}}"; export MANAGER_START_EPOCH; shopt -s checkwinsize 2>/dev/null || true; export PYTHONIOENCODING="utf-8" PYTHONUTF8=1; UNAME_S="${UNAME_S:-$(uname -s 2>/dev/null)}"; UNAME_M="${UNAME_M:-$(uname -m 2>/dev/null)}"; _TERM_LINES=""; _TERM_COLS=""; _TERM_RESIZED=1; _on_winch() { _TERM_RESIZED=1; }; trap '_on_winch' WINCH; S70="======================================================================"; D70="----------------------------------------------------------------------"; if [ -z "${VERSION:-}" ]; then if [ -f "$SCRIPT_DIR/VERSION" ]; then VERSION="$(head -n 1 "$SCRIPT_DIR/VERSION" | tr -d '\r\n')"; else VERSION="0.5.0 Stable (Sensorium)"; fi; fi; export VERSION
 _has_flatpak() { [[ -d "/var/lib/flatpak/app/$1" || -d "$HOME/.local/share/flatpak/app/$1" ]] && return 0; command -v flatpak &>/dev/null || return 1; [[ -z "${_FP_LIST_CACHE+x}" ]] && _FP_LIST_CACHE="$(flatpak list --columns=application 2>/dev/null)"; [[ "$_FP_LIST_CACHE" == *"$1"* ]]; }
 _fmt_sec() { local t=${1:-0}; ((t<0)) && t=0; ((t>=3600)) && printf "%02d:%02d:%02d" $((t/3600)) $(((t%3600)/60)) $((t%60)) || printf "%02d:%02d" $(((t%3600)/60)) $((t%60)); }
 format_seconds_aud() { _fmt_sec "$1"; }
@@ -1669,7 +1669,7 @@ ensure_manager_fullscreen() {
     apply_manager_console_tab_title "$new_title"
 }
 align_mix_windows_on_screen() {
-[ "$OS_TYPE" = "windows" ] && return 0; local align_sh="$SCRIPT_DIR/scripts/align_mix_windows.py"; [ ! -f "$align_sh" ] && align_sh="$HOME/MP_Mix_Manager_v0.3/scripts/align_mix_windows.py"; [ ! -f "$align_sh" ] && align_sh="/var/home/mplanetarian/MP_Mix_Manager_v0.3/scripts/align_mix_windows.py"; [ ! -f "$align_sh" ] && align_sh="$HOME/MP_Mix_Manager_v0.3/scripts/align_mix_windows.py"; [ ! -f "$align_sh" ] && align_sh="/var/home/mplanetarian/MP_Mix_Manager_v0.3/scripts/align_mix_windows.py"; [ ! -f "$align_sh" ] && align_sh="$HOME/Documents/BASH_SCRIPTS/scripts/align_mix_windows.py"; [ ! -f "$align_sh" ] && align_sh="$PWD/scripts/align_mix_windows.py"; if [ -f "$align_sh" ] && command -v python3 &>/dev/null; then local mgr_pid="$$"; local parent_pid="$PPID"; (python3 "$align_sh" --mgr-pid "$mgr_pid" --parent-pid "$parent_pid" "$@" &>/dev/null || true) &
+[ "$OS_TYPE" = "windows" ] && return 0; local align_sh="$SCRIPT_DIR/scripts/align_mix_windows.py"; [ ! -f "$align_sh" ] && align_sh="$HOME/Documents/BASH_SCRIPTS/scripts/align_mix_windows.py"; [ ! -f "$align_sh" ] && align_sh="$PWD/scripts/align_mix_windows.py"; if [ -f "$align_sh" ] && command -v python3 &>/dev/null; then local mgr_pid="$$"; local parent_pid="$PPID"; (python3 "$align_sh" --mgr-pid "$mgr_pid" --parent-pid "$parent_pid" "$@" &>/dev/null || true) &
 disown 2>/dev/null || true; fi
 }
 open_cover_art_window() {
@@ -2194,20 +2194,27 @@ launch_mp_audio_player_liquid_glass() {
     local py=""
     local backend_name="OpenGL"
 
-# Robust BASE_DIR candidate search (v0.4 only)
+# Resolve the install tree by marker file. No user name or version is assumed.
     local BASE_DIR="$SCRIPT_DIR"
     if [ ! -f "$BASE_DIR/MP_Audio_Player_Liquid_Glass_OpenGL.py" ] && [ ! -f "$BASE_DIR/MP_Audio_Player_Liquid_Glass.py" ]; then
-        for _c in \
-            "${MP_MIX_MANAGER_DIR:-}" \
-            "$PWD" \
-            "$HOME/MP_Mix_Manager_v0.4" \
-            "/home/mplanetarian/MP_Mix_Manager_v0.4" \
-            "/var/home/mplanetarian/MP_Mix_Manager_v0.4"; do
-            if [ -n "$_c" ] && { [ -f "$_c/MP_Audio_Player_Liquid_Glass_OpenGL.py" ] || [ -f "$_c/MP_Audio_Player_Liquid_Glass.py" ] || [ -f "$_c/MP_Audio_Player_Liquid_Glass_macOS.py" ]; }; then
-                BASE_DIR="$_c"
-                break
-            fi
-        done
+        local _lib="$SCRIPT_DIR/scripts/lib/mp_install_dir.sh"
+        [ ! -f "$_lib" ] && _lib="$SCRIPT_DIR/lib/mp_install_dir.sh"
+        # shellcheck source=/dev/null
+        [ -f "$_lib" ] && . "$_lib"
+        local _found=""
+        if command -v mp_find_install_dir >/dev/null 2>&1; then
+            _found="$(mp_find_install_dir MP_Audio_Player_Liquid_Glass_OpenGL.py 2>/dev/null || true)"
+            [ -z "$_found" ] && _found="$(mp_find_install_dir MP_Audio_Player_Liquid_Glass.py 2>/dev/null || true)"
+        fi
+        if [ -z "$_found" ]; then
+            for _c in $(ls -d "$HOME"/MP*ix*anager* 2>/dev/null | sort -rV); do
+                if [ -f "$_c/MP_Audio_Player_Liquid_Glass_OpenGL.py" ] || [ -f "$_c/MP_Audio_Player_Liquid_Glass.py" ] || [ -f "$_c/MP_Audio_Player_Liquid_Glass_macOS.py" ]; then
+                    _found="$_c"
+                    break
+                fi
+            done
+        fi
+        [ -n "$_found" ] && BASE_DIR="$_found"
     fi
 
     if [ "$os_type" = "Darwin" ]; then
@@ -2545,13 +2552,11 @@ manage_mp_liquid_visualizer_presets() {
         echo -e "${BOLD}Available Visualizer Presets (9 Official Presets):${NC}"
         echo -e "  ${BOLD}${CYAN}1)${NC} ${BOLD}${GREEN}${p1_mark}Cosmic Dreamworlds (Liquid)${NC}        ${DIM}[MPlanetarian - Cosmic Dreamworlds Deluxe Edition]${NC}"
         echo -e "  ${BOLD}${CYAN}2)${NC} ${BOLD}${GREEN}${p2_mark}Orbital Void Reflux${NC}                ${DIM}[MPlanetarian - Orbital Void Reflux (Cover_WMI_V2.png)]${NC}"
-        echo -e "  ${BOLD}${CYAN}3)${NC} ${BOLD}${GREEN}${p3_mark}Dreamworlds Ultra (Defasten Biomech)${NC} ${DIM}[Defasten Xinri D & Start_Menu_Icon.png]${NC}"
-        echo -e "  ${BOLD}${CYAN}4)${NC} ${BOLD}${GREEN}${p4_mark}Infinite Complexity${NC}                 ${DIM}[Defasten Mirrored Madness & Cover_v4.png]${NC}"
-        echo -e "  ${BOLD}${CYAN}5)${NC} ${BOLD}${GREEN}${p5_mark}Sensorium Interface${NC}                 ${DIM}[Defasten Earth Flipper & Sensorium_Interface.jpeg]${NC}"
+        echo -e "  ${BOLD}${CYAN}3)${NC} ${BOLD}${GREEN}${p3_mark}Dreamworlds Ultra (Biomech)${NC} ${DIM}[Xinri D & Start_Menu_Icon.png]${NC}"
+        echo -e "  ${BOLD}${CYAN}5)${NC} ${BOLD}${GREEN}${p5_mark}Sensorium Interface${NC}                 ${DIM}[Earth Trip & Sensorium_Interface.jpeg]${NC}"
         echo -e "  ${BOLD}${CYAN}6)${NC} ${BOLD}${GREEN}${p6_mark}Stream of Frequency${NC}                 ${DIM}[MPlanetarian - Stream of Frequency (Official Cover)]${NC}"
-        echo -e "  ${BOLD}${CYAN}7)${NC} ${BOLD}${GREEN}${p7_mark}Beyond Dimensions${NC}                   ${DIM}[Defasten Beyond Basel 2023 & Cotangent Dimensions]${NC}"
-        echo -e "  ${BOLD}${CYAN}8)${NC} ${BOLD}${GREEN}${p8_mark}Particle Accelerator${NC}                ${DIM}[Defasten TOROID & Vortex Sync (Mateh's Version)]${NC}"
-        echo -e "  ${BOLD}${CYAN}9)${NC} ${BOLD}${GREEN}${p9_mark}Cosmic Universe${NC}                     ${DIM}[Defasten Constellation & The Cosmological Horizon]${NC}"
+        echo -e "  ${BOLD}${CYAN}7)${NC} ${BOLD}${GREEN}${p7_mark}Beyond Dimensions${NC}                   ${DIM}[Beyond Stars & Cotangent Dimensions]${NC}"
+        echo -e "  ${BOLD}${CYAN}9)${NC} ${BOLD}${GREEN}${p9_mark}Cosmic Universe${NC}                     ${DIM}[Constellation & The Cosmological Horizon]${NC}"
         echo -e "  ${BOLD}${CYAN}r)${NC} ${BOLD}${GREEN}${pr_mark}Random Preset Mode${NC}                  ${DIM}[Randomly Selects a Visualizer Preset on Each Run]${NC}"
         echo -e "  ${BOLD}${CYAN}l)${NC} Launch MP_Liquid_Visualizer Now (1094x734 on macOS, the Liquid Player size on Linux, 700x700 elsewhere Borderless Vulkan Window)"
         echo -e "  ${BOLD}${CYAN}0)${NC} Return\n"
@@ -2568,8 +2573,8 @@ manage_mp_liquid_visualizer_presets() {
                 sleep 1
                 ;;
             3)
-                [ -f "$vis_py" ] && python3 "$vis_py" --set-preset "Dreamworlds Ultra (Defasten Biomech)"
-                echo -e "\n${GREEN}✔ Active Preset set to: Dreamworlds Ultra (Defasten Biomech)${NC}"
+                [ -f "$vis_py" ] && python3 "$vis_py" --set-preset "Dreamworlds Ultra (Biomech)"
+                echo -e "\n${GREEN}✔ Active Preset set to: Dreamworlds Ultra (Biomech)${NC}"
                 sleep 1
                 ;;
             4)
@@ -2862,15 +2867,25 @@ manage_mp_audio_player() {
     local py_script="$SCRIPT_DIR/MP_Audio_Player.py"
     [ ! -f "$py_script" ] && py_script="$SCRIPT_DIR/scripts/MP_Audio_Player.py"
     if [ ! -f "$py_script" ]; then
-        for _c in "$PWD" "$HOME/MP_Mix_Manager_v0.4" "/var/home/mplanetarian/MP_Mix_Manager_v0.4" "$MP_MIX_MANAGER_DIR"; do
-            if [ -n "$_c" ] && [ -f "$_c/MP_Audio_Player.py" ]; then
-                py_script="$_c/MP_Audio_Player.py"
-                break
-            elif [ -n "$_c" ] && [ -f "$_c/scripts/MP_Audio_Player.py" ]; then
-                py_script="$_c/scripts/MP_Audio_Player.py"
-                break
-            fi
-        done
+        local _lib="$SCRIPT_DIR/scripts/lib/mp_install_dir.sh"
+        [ ! -f "$_lib" ] && _lib="$SCRIPT_DIR/lib/mp_install_dir.sh"
+        # shellcheck source=/dev/null
+        [ -f "$_lib" ] && . "$_lib"
+        local _root=""
+        command -v mp_find_install_dir >/dev/null 2>&1 && _root="$(mp_find_install_dir MP_Audio_Player.py 2>/dev/null || true)"
+        if [ -z "$_root" ]; then
+            for _c in $(ls -d "$HOME"/MP*ix*anager* 2>/dev/null | sort -rV); do
+                if [ -f "$_c/MP_Audio_Player.py" ] || [ -f "$_c/scripts/MP_Audio_Player.py" ]; then
+                    _root="$_c"
+                    break
+                fi
+            done
+        fi
+        if [ -f "$_root/MP_Audio_Player.py" ]; then
+            py_script="$_root/MP_Audio_Player.py"
+        elif [ -f "$_root/scripts/MP_Audio_Player.py" ]; then
+            py_script="$_root/scripts/MP_Audio_Player.py"
+        fi
     fi
     
     if [ -f "$py_script" ]; then
@@ -3166,13 +3181,13 @@ switch_to_x11() {
 if [ "$OS_TYPE" = "macos" ]; then echo -e "\n${BOLD}${YELLOW}macOS Audio & Sound Configuration.${NC}\n${CYAN}Opening Audio MIDI Setup...${NC}"; open -a "Audio MIDI Setup" 2>/dev/null || open /System/Applications/Utilities/Audio\ MIDI\ Setup.app 2>/dev/null; press_enter; return 0; elif [ "$OS_TYPE" = "windows" ] || [ "$OS_TYPE" = "wsl" ]; then echo -e "\n${BOLD}${YELLOW}Windows Audio Control Panel.${NC}\n${CYAN}Opening Windows Sound Settings...${NC}"; cmd.exe /c start control.exe mmsys.cpl 2>/dev/null; press_enter; return 0; fi; local script="$SCRIPT_DIR/switch-to-plasma-x11.sh"; [ ! -f "$script" ] && script="$SCRIPT_DIR/scripts/switch-to-plasma-x11.sh"; [ ! -f "$script" ] && script="$HOME/Documents/BASH_SCRIPTS/switch-to-plasma-x11.sh"; if [ -x "$script" ]; then "$script"; elif [ -f "$script" ]; then bash "$script"; else echo -e "${RED}Error: Switch script not found at $script!${NC}"; press_enter; fi
 }
 launch_wan2gp_terminal() {
-local profile="$1"; local title="WAN2GP (Profile $profile)"; local script="$SCRIPT_DIR/scripts/wan2gp.sh"; [ ! -f "$script" ] && script="$SCRIPT_DIR/wan2gp.sh"; [ ! -f "$script" ] && script="$HOME/wan2gp.sh"; [ ! -f "$script" ] && script="/var/home/mplanetarian/MP_Mix_Manager_v0.3/scripts/wan2gp.sh"; [ ! -f "$script" ] && script="$HOME/Documents/BASH_SCRIPTS/wan2gp.sh"; export WAN2GP_OUTPUTS WAN2GP_FLUX_BATCH_DIR WAN2GP_LTX_BATCH_DIR WAN2GP_DIR WAN2GP_PYTHON; local cmd="export WAN2GP_OUTPUTS=\"$WAN2GP_OUTPUTS\" WAN2GP_FLUX_BATCH_DIR=\"$WAN2GP_FLUX_BATCH_DIR\" WAN2GP_LTX_BATCH_DIR=\"$WAN2GP_LTX_BATCH_DIR\" WAN2GP_DIR=\"$WAN2GP_DIR\" WAN2GP_PYTHON=\"$WAN2GP_PYTHON\"; bash \"$script\" \"$profile\"; echo ''; echo 'WAN2GP finished. Press [Enter] to exit...'; read -r"; if launch_in_terminal "$title" "$cmd" "tab"; then echo -e "${GREEN}✓ WAN2GP launched in a new console tab/window (Profile $profile).${NC}"; sleep 1.2; return 0; else echo -e "${RED}Error: No supported terminal emulator found to launch in a new window/tab.${NC}"; press_enter; return 1; fi
+local profile="$1"; local title="WAN2GP (Profile $profile)"; local script="$SCRIPT_DIR/scripts/wan2gp.sh"; [ ! -f "$script" ] && script="$SCRIPT_DIR/wan2gp.sh"; [ ! -f "$script" ] && script="$HOME/wan2gp.sh"; [ ! -f "$script" ] && script="$HOME/Documents/BASH_SCRIPTS/wan2gp.sh"; export WAN2GP_OUTPUTS WAN2GP_FLUX_BATCH_DIR WAN2GP_LTX_BATCH_DIR WAN2GP_DIR WAN2GP_PYTHON; local cmd="export WAN2GP_OUTPUTS=\"$WAN2GP_OUTPUTS\" WAN2GP_FLUX_BATCH_DIR=\"$WAN2GP_FLUX_BATCH_DIR\" WAN2GP_LTX_BATCH_DIR=\"$WAN2GP_LTX_BATCH_DIR\" WAN2GP_DIR=\"$WAN2GP_DIR\" WAN2GP_PYTHON=\"$WAN2GP_PYTHON\"; bash \"$script\" \"$profile\"; echo ''; echo 'WAN2GP finished. Press [Enter] to exit...'; read -r"; if launch_in_terminal "$title" "$cmd" "tab"; then echo -e "${GREEN}✓ WAN2GP launched in a new console tab/window (Profile $profile).${NC}"; sleep 1.2; return 0; else echo -e "${RED}Error: No supported terminal emulator found to launch in a new window/tab.${NC}"; press_enter; return 1; fi
 }
 launch_wan2gp_flux_batch_terminal() {
-local mode="$1"; local title="WAN2GP Flux 2 Klein Batch"; if [[ "$mode" == *"--multi-control"* ]]; then title="WAN2GP Flux Multi-Control Batch"; fi; local script="$SCRIPT_DIR/scripts/wan2gp_flux_batch.py"; [ ! -f "$script" ] && script="$SCRIPT_DIR/wan2gp_flux_batch.py"; [ ! -f "$script" ] && script="$HOME/wan2gp_flux_batch.py"; [ ! -f "$script" ] && script="$HOME/Documents/BASH_SCRIPTS/scripts/wan2gp_flux_batch.py"; [ ! -f "$script" ] && script="/var/home/mplanetarian/MP_Mix_Manager_v0.3/scripts/wan2gp_flux_batch.py"; if [ ! -f "$script" ]; then echo -e "${RED}Error: wan2gp_flux_batch.py not found!${NC}"; press_enter; return 1; fi; chmod +x "$script" 2>/dev/null || true; export WAN2GP_OUTPUTS WAN2GP_FLUX_BATCH_DIR WAN2GP_LTX_BATCH_DIR WAN2GP_DIR WAN2GP_PYTHON; local cmd="export WAN2GP_OUTPUTS=\"$WAN2GP_OUTPUTS\" WAN2GP_FLUX_BATCH_DIR=\"$WAN2GP_FLUX_BATCH_DIR\" WAN2GP_LTX_BATCH_DIR=\"$WAN2GP_LTX_BATCH_DIR\" WAN2GP_DIR=\"$WAN2GP_DIR\" WAN2GP_PYTHON=\"$WAN2GP_PYTHON\"; bash \"$script\" --batch-dir \"$WAN2GP_FLUX_BATCH_DIR\" --output-dir \"$WAN2GP_OUTPUTS\" $mode; echo ''; echo 'Batch process finished. Press [Enter] to exit...'; read -r"; if launch_in_terminal "$title" "$cmd" "tab"; then echo -e "${GREEN}✓ Flux 2 Klein 9B Batch Processor launched in a new console tab/window.${NC}"; sleep 1.2; return 0; else echo -e "${RED}Error: No supported terminal emulator found to launch in a new window/tab.${NC}"; press_enter; return 1; fi
+local mode="$1"; local title="WAN2GP Flux 2 Klein Batch"; if [[ "$mode" == *"--multi-control"* ]]; then title="WAN2GP Flux Multi-Control Batch"; fi; local script="$SCRIPT_DIR/scripts/wan2gp_flux_batch.py"; [ ! -f "$script" ] && script="$SCRIPT_DIR/wan2gp_flux_batch.py"; [ ! -f "$script" ] && script="$HOME/wan2gp_flux_batch.py"; [ ! -f "$script" ] && script="$HOME/Documents/BASH_SCRIPTS/scripts/wan2gp_flux_batch.py"; if [ ! -f "$script" ]; then echo -e "${RED}Error: wan2gp_flux_batch.py not found!${NC}"; press_enter; return 1; fi; chmod +x "$script" 2>/dev/null || true; export WAN2GP_OUTPUTS WAN2GP_FLUX_BATCH_DIR WAN2GP_LTX_BATCH_DIR WAN2GP_DIR WAN2GP_PYTHON; local cmd="export WAN2GP_OUTPUTS=\"$WAN2GP_OUTPUTS\" WAN2GP_FLUX_BATCH_DIR=\"$WAN2GP_FLUX_BATCH_DIR\" WAN2GP_LTX_BATCH_DIR=\"$WAN2GP_LTX_BATCH_DIR\" WAN2GP_DIR=\"$WAN2GP_DIR\" WAN2GP_PYTHON=\"$WAN2GP_PYTHON\"; bash \"$script\" --batch-dir \"$WAN2GP_FLUX_BATCH_DIR\" --output-dir \"$WAN2GP_OUTPUTS\" $mode; echo ''; echo 'Batch process finished. Press [Enter] to exit...'; read -r"; if launch_in_terminal "$title" "$cmd" "tab"; then echo -e "${GREEN}✓ Flux 2 Klein 9B Batch Processor launched in a new console tab/window.${NC}"; sleep 1.2; return 0; else echo -e "${RED}Error: No supported terminal emulator found to launch in a new window/tab.${NC}"; press_enter; return 1; fi
 }
 launch_wan2gp_ltx_batch_terminal() {
-local mode="$1"; local model="${2:-2b}"; local lora="${3:-${WAN2GP_LTX_LORA:-bfs_head_swap}}"; local title="WAN2GP LTX Video ${model^^} Batch"; if [ -n "$lora" ] && [ "$lora" != "none" ]; then title="WAN2GP LTX Video ${model^^} [${lora}]"; elif [[ "$mode" == *"--no-control"* ]]; then title="WAN2GP LTX Video ${model^^} (Pure I2V)"; elif [[ "$mode" == *"--watch"* ]]; then title="WAN2GP LTX Video ${model^^} (Watch Mode)"; fi; local script="$SCRIPT_DIR/scripts/wan2gp_ltx_batch.py"; [ ! -f "$script" ] && script="$SCRIPT_DIR/wan2gp_ltx_batch.py"; [ ! -f "$script" ] && script="$HOME/wan2gp_ltx_batch.py"; [ ! -f "$script" ] && script="$HOME/Documents/BASH_SCRIPTS/scripts/wan2gp_ltx_batch.py"; [ ! -f "$script" ] && script="/var/home/mplanetarian/MP_Mix_Manager_v0.3/scripts/wan2gp_ltx_batch.py"; if [ ! -f "$script" ]; then echo -e "${RED}Error: wan2gp_ltx_batch.py not found!${NC}"; press_enter; return 1; fi; chmod +x "$script" 2>/dev/null || true; local lora_arg=""; if [ -n "$lora" ] && [ "$lora" != "none" ]; then lora_arg="--lora $lora"; fi; export WAN2GP_OUTPUTS WAN2GP_FLUX_BATCH_DIR WAN2GP_LTX_BATCH_DIR WAN2GP_DIR WAN2GP_PYTHON; local cmd="export WAN2GP_OUTPUTS=\"$WAN2GP_OUTPUTS\" WAN2GP_FLUX_BATCH_DIR=\"$WAN2GP_FLUX_BATCH_DIR\" WAN2GP_LTX_BATCH_DIR=\"$WAN2GP_LTX_BATCH_DIR\" WAN2GP_DIR=\"$WAN2GP_DIR\" WAN2GP_PYTHON=\"$WAN2GP_PYTHON\"; bash \"$script\" --model $model $lora_arg --batch-dir \"$WAN2GP_LTX_BATCH_DIR\" --output-dir \"$WAN2GP_OUTPUTS\" $mode; echo ''; echo 'Batch process finished. Press [Enter] to exit...'; read -r"; if launch_in_terminal "$title" "$cmd" "tab"; then echo -e "${GREEN}✓ LTX Video ${model^^} Batch Processor launched in a new console tab/window.${NC}"; sleep 1.2; return 0; else echo -e "${RED}Error: No supported terminal emulator found to launch in a new window/tab.${NC}"; press_enter; return 1; fi
+local mode="$1"; local model="${2:-2b}"; local lora="${3:-${WAN2GP_LTX_LORA:-bfs_head_swap}}"; local title="WAN2GP LTX Video ${model^^} Batch"; if [ -n "$lora" ] && [ "$lora" != "none" ]; then title="WAN2GP LTX Video ${model^^} [${lora}]"; elif [[ "$mode" == *"--no-control"* ]]; then title="WAN2GP LTX Video ${model^^} (Pure I2V)"; elif [[ "$mode" == *"--watch"* ]]; then title="WAN2GP LTX Video ${model^^} (Watch Mode)"; fi; local script="$SCRIPT_DIR/scripts/wan2gp_ltx_batch.py"; [ ! -f "$script" ] && script="$SCRIPT_DIR/wan2gp_ltx_batch.py"; [ ! -f "$script" ] && script="$HOME/wan2gp_ltx_batch.py"; [ ! -f "$script" ] && script="$HOME/Documents/BASH_SCRIPTS/scripts/wan2gp_ltx_batch.py"; if [ ! -f "$script" ]; then echo -e "${RED}Error: wan2gp_ltx_batch.py not found!${NC}"; press_enter; return 1; fi; chmod +x "$script" 2>/dev/null || true; local lora_arg=""; if [ -n "$lora" ] && [ "$lora" != "none" ]; then lora_arg="--lora $lora"; fi; export WAN2GP_OUTPUTS WAN2GP_FLUX_BATCH_DIR WAN2GP_LTX_BATCH_DIR WAN2GP_DIR WAN2GP_PYTHON; local cmd="export WAN2GP_OUTPUTS=\"$WAN2GP_OUTPUTS\" WAN2GP_FLUX_BATCH_DIR=\"$WAN2GP_FLUX_BATCH_DIR\" WAN2GP_LTX_BATCH_DIR=\"$WAN2GP_LTX_BATCH_DIR\" WAN2GP_DIR=\"$WAN2GP_DIR\" WAN2GP_PYTHON=\"$WAN2GP_PYTHON\"; bash \"$script\" --model $model $lora_arg --batch-dir \"$WAN2GP_LTX_BATCH_DIR\" --output-dir \"$WAN2GP_OUTPUTS\" $mode; echo ''; echo 'Batch process finished. Press [Enter] to exit...'; read -r"; if launch_in_terminal "$title" "$cmd" "tab"; then echo -e "${GREEN}✓ LTX Video ${model^^} Batch Processor launched in a new console tab/window.${NC}"; sleep 1.2; return 0; else echo -e "${RED}Error: No supported terminal emulator found to launch in a new window/tab.${NC}"; press_enter; return 1; fi
 }
 launch_wan2gp_inftlk_batch_terminal() {
 local mode="$1"; local title="MP Infinite Talker (Stephen Hawking)"; if [[ "$mode" == *"--watch"* ]]; then title="MP Infinite Talker (Watch Mode)"; fi; local script="$SCRIPT_DIR/scripts/MP_Infinite_Talker.py"; [ ! -f "$script" ] && script="$SCRIPT_DIR/MP_Infinite_Talker.py"; [ ! -f "$script" ] && script="$HOME/MP_Infinite_Talker.py"; if [ ! -f "$script" ]; then echo -e "${RED}Error: MP_Infinite_Talker.py not found!${NC}"; press_enter; return 1; fi; chmod +x "$script" 2>/dev/null || true; export WAN2GP_OUTPUTS WAN2GP_INFTLKBATCH_DIR WAN2GP_FLUX_BATCH_DIR WAN2GP_LTX_BATCH_DIR WAN2GP_DIR WAN2GP_PYTHON; local batch_d="${WAN2GP_INFTLKBATCH_DIR:-/run/media/mplanetarian/GAMES1/DATA_DRIVE_MOVED/WAN2GP_INFTLKBATCH}"; local cmd="export WAN2GP_OUTPUTS=\"$WAN2GP_OUTPUTS\" WAN2GP_INFTLKBATCH_DIR=\"$batch_d\" WAN2GP_FLUX_BATCH_DIR=\"$WAN2GP_FLUX_BATCH_DIR\" WAN2GP_LTX_BATCH_DIR=\"$WAN2GP_LTX_BATCH_DIR\" WAN2GP_DIR=\"$WAN2GP_DIR\" WAN2GP_PYTHON=\"$WAN2GP_PYTHON\"; bash \"$script\" --batch-dir \"$batch_d\" --output-dir \"$WAN2GP_OUTPUTS\" $mode; echo ''; echo 'Infinite Talk process finished. Press [Enter] to exit...'; read -r"; if launch_in_terminal "$title" "$cmd" "tab"; then echo -e "${GREEN}✓ MP Infinite Talker launched in a new console tab/window.${NC}"; sleep 1.2; return 0; else echo -e "${RED}Error: No supported terminal emulator found to launch in a new window/tab.${NC}"; press_enter; return 1; fi
@@ -3190,7 +3205,7 @@ run_wan2gp_tts_batch() {
 local script="$SCRIPT_DIR/scripts/wan2gp_tts_batch.py"; [ ! -f "$script" ] && script="$SCRIPT_DIR/wan2gp_tts_batch.py"; [ ! -f "$script" ] && script="$HOME/wan2gp_tts_batch.py"; [ ! -f "$script" ] && script="$HOME/bin/wan2gp_tts_batch"; if [ -f "$script" ]; then python3 "$script" "$@"; else echo -e "${RED}Error: wan2gp_tts_batch.py not found at $script!${NC}"; press_enter; fi
 }
 run_wan2gp_output_monitor() {
-local script="$SCRIPT_DIR/scripts/MP_Video_Image_Dir_WAN2GP_Output_Monitor.py"; [ ! -f "$script" ] && script="$SCRIPT_DIR/MP_Video_Image_Dir_WAN2GP_Output_Monitor.py"; [ ! -f "$script" ] && script="$HOME/MP_Mix_Manager_v0.3/scripts/MP_Video_Image_Dir_WAN2GP_Output_Monitor.py"; [ ! -f "$script" ] && script="$HOME/Downloads/MP_Video_Image_Dir_WAN2GP_Output_Monitor.py"; if [ ! -f "$script" ]; then echo -e "${RED}Error: MP_Video_Image_Dir_WAN2GP_Output_Monitor.py not found!${NC}"; press_enter; return 1; fi; chmod +x "$script" 2>/dev/null || true; local target_dir="${1:-${WAN2GP_OUTPUTS:-}}"; if [ -z "$target_dir" ] || [ ! -d "$target_dir" ]; then if [ -d "/run/media/mplanetarian/GAMES1/DATA_DRIVE_MOVED/WAN2GP_OUTPUTS" ]; then target_dir="/run/media/mplanetarian/GAMES1/DATA_DRIVE_MOVED/WAN2GP_OUTPUTS"; elif [ -d "$HOME/Documents/WAN2GP_OUTPUTS" ]; then target_dir="$HOME/Documents/WAN2GP_OUTPUTS"; elif [ -d "$HOME/WAN2GP_OUTPUTS" ]; then target_dir="$HOME/WAN2GP_OUTPUTS"; fi; fi
+local script="$SCRIPT_DIR/scripts/MP_Video_Image_Dir_WAN2GP_Output_Monitor.py"; [ ! -f "$script" ] && script="$SCRIPT_DIR/MP_Video_Image_Dir_WAN2GP_Output_Monitor.py"; [ ! -f "$script" ] && script="$HOME/Downloads/MP_Video_Image_Dir_WAN2GP_Output_Monitor.py"; if [ ! -f "$script" ]; then echo -e "${RED}Error: MP_Video_Image_Dir_WAN2GP_Output_Monitor.py not found!${NC}"; press_enter; return 1; fi; chmod +x "$script" 2>/dev/null || true; local target_dir="${1:-${WAN2GP_OUTPUTS:-}}"; if [ -z "$target_dir" ] || [ ! -d "$target_dir" ]; then if [ -d "/run/media/mplanetarian/GAMES1/DATA_DRIVE_MOVED/WAN2GP_OUTPUTS" ]; then target_dir="/run/media/mplanetarian/GAMES1/DATA_DRIVE_MOVED/WAN2GP_OUTPUTS"; elif [ -d "$HOME/Documents/WAN2GP_OUTPUTS" ]; then target_dir="$HOME/Documents/WAN2GP_OUTPUTS"; elif [ -d "$HOME/WAN2GP_OUTPUTS" ]; then target_dir="$HOME/WAN2GP_OUTPUTS"; fi; fi
 local mon_opts=(
 "1|Launch Output Monitor in Current Terminal|(Live console view)"
 "2|Launch Output Monitor in New Terminal Window/Tab|(Keeps Manager running)"
@@ -5266,7 +5281,7 @@ local s4_opts=(
 "6|Open Official Native Instruments PDF Manuals|(Controller Editor & S4 MK2 Guides)"
 "0|Return to Previous Menu|(or Esc / q)"
 )
-run_interactive_submenu "TRAKTOR KONTROL S4 MIDI HARDWARE CONTROL & MAPPING (v0.4.2)" "$s4_hdr" s4_opts 0
+run_interactive_submenu "TRAKTOR KONTROL S4 MIDI HARDWARE CONTROL & MAPPING (v0.5.0)" "$s4_hdr" s4_opts 0
 local opt="$REPLY"
 case "$opt" in
 1)

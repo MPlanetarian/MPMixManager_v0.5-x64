@@ -14,10 +14,15 @@ if [ -f "$_KCSCRIPT_DIR/dsh_mobile.sh" ]; then
     exec bash "$_KCSCRIPT_DIR/dsh_mobile.sh" start
 elif [ -f "$_KCSCRIPT_DIR/../dsh_mobile.sh" ]; then
     exec bash "$_KCSCRIPT_DIR/../dsh_mobile.sh" start
-elif [ -f "X:/MP_Mix_Manager_v0.3/scripts/dsh_mobile.sh" ]; then
-    exec bash "X:/MP_Mix_Manager_v0.3/scripts/dsh_mobile.sh" start
-elif [ -f "/var/home/mplanetarian/MP_Mix_Manager_v0.3/scripts/dsh_mobile.sh" ]; then
-    exec bash "/var/home/mplanetarian/MP_Mix_Manager_v0.3/scripts/dsh_mobile.sh" start
+fi
+# Fall back to the resolved install tree (see scripts/lib/mp_install_dir.sh).
+_lib="$_KCSCRIPT_DIR/lib/mp_install_dir.sh"
+[ ! -f "$_lib" ] && _lib="$HOME/.config/mix-manager/lib/mp_install_dir.sh"
+if [ -f "$_lib" ]; then
+    # shellcheck source=/dev/null
+    . "$_lib"
+    _root="$(mp_find_install_dir 2>/dev/null || true)"
+    [ -n "$_root" ] && [ -f "$_root/scripts/dsh_mobile.sh" ] && exec bash "$_root/scripts/dsh_mobile.sh" start
 fi
 
 # Check if DeepSeek Harness is already listening on port 3080 or process active

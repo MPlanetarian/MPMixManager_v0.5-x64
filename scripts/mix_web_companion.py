@@ -12,13 +12,15 @@ import html
 import http.server
 import json
 import os
+import random
 import re
-import shutil
 import socket
-import subprocess
 import sys
+import threading
 import time
+import urllib.error
 import urllib.parse
+import urllib.request
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -35,7 +37,7 @@ def _get_app_version() -> str:
                 return cand.read_text(encoding="utf-8").strip()
             except Exception:
                 pass
-    return "0.4.2 Stable (Liquid)"
+    return "0.5.0 Stable (Sensorium)"
 
 VERSION = _get_app_version()
 
@@ -593,6 +595,7 @@ THEME_ALIASES: Dict[str, str] = {
 }
 
 CLI_THEME: Optional[str] = None
+WEB_THEME_FILE = Path.home() / ".config" / "mix-manager" / "web_companion_theme"
 _tracklist_cache: Dict[str, str] = {}
 
 
@@ -601,11 +604,62 @@ def get_base_dir() -> Path:
     return p.parent.parent if p.parent.name == "scripts" else p.parent
 
 
+def normalize_theme_id(value: Any) -> Optional[str]:
+    """Map a theme name, alias, or id to a real palette id."""
+    if not value:
+        return None
+    key = str(value).strip().lower()
+    if not key:
+        return None
+    if key in THEME_ALIASES:
+        return THEME_ALIASES[key]
+    if key in THEMES:
+        return key
+    # Accept a human-readable palette name too, e.g. "Retro Linux Memories".
+    for tid, palette in THEMES.items():
+        if str(palette.get("name", "")).strip().lower() == key:
+            return tid
+    return None
+
+
+def get_web_theme_override() -> Optional[str]:
+    """Theme chosen from the web companion UI. It wins over the manager theme."""
+    if WEB_THEME_FILE.is_file():
+        try:
+            return normalize_theme_id(WEB_THEME_FILE.read_text(encoding="utf-8").strip())
+        except Exception:
+            pass
+    return None
+
+
+def set_web_theme(theme_id: str) -> Optional[str]:
+    tid = normalize_theme_id(theme_id)
+    if not tid:
+        return None
+    try:
+        WEB_THEME_FILE.parent.mkdir(parents=True, exist_ok=True)
+        WEB_THEME_FILE.write_text(tid + "\n", encoding="utf-8")
+    except Exception:
+        return None
+    return tid
+
+
+def available_themes() -> List[Dict[str, str]]:
+    return [
+        {"id": tid, "name": str(palette.get("name", tid))}
+        for tid, palette in THEMES.items()
+    ]
+
+
 def get_current_theme_id(cli_theme: Optional[str] = None) -> str:
     if cli_theme:
         k = cli_theme.strip().lower()
         if k in THEME_ALIASES: return THEME_ALIASES[k]
         if k in THEMES: return k
+
+    override = get_web_theme_override()
+    if override:
+        return override
 
     env_theme = os.environ.get("CURRENT_THEME", "").strip().lower()
     if env_theme:
@@ -641,104 +695,380 @@ def get_local_ip() -> str:
     return ip
 
 
-def is_pid_alive(pid: Any) -> bool:
+# ------------------------------------------------------------------------------
+# STREAMING SERVICE STATE
+#
+# This process is an HTTP streamer only. It deliberately contains no IPC to a
+# local audio player, because it must never cause sound on the host machine.
+# ------------------------------------------------------------------------------
+CONFIG_DIR = Path.home() / ".config" / "mix-manager"
+
+AUDIO_EXTENSIONS = (".flac", ".wav", ".mp3", ".ogg", ".m4a", ".aac", ".aiff", ".wma")
+AUDIO_CONTENT_TYPES = {
+    ".flac": "audio/flac",
+    ".wav": "audio/wav",
+    ".mp3": "audio/mpeg",
+    ".m4a": "audio/mp4",
+    ".aac": "audio/aac",
+    ".ogg": "audio/ogg",
+    ".aiff": "audio/aiff",
+    ".wma": "audio/x-ms-wma",
+}
+RESUME_FILE = CONFIG_DIR / "playback_resume.json"
+PLAYLIST_DIR = CONFIG_DIR / "playlists"
+
+_autoplay_done = threading.Event()
+_autoplay_result: Dict[str, Any] = {"status": "pending", "detail": ""}
+
+
+# ------------------------------------------------------------------------------
+# MP ASSISTANT BRIDGE (MP Harmony Agent)
+#
+# The MP Harmony Agent listens on 127.0.0.1:11435, so a phone on the LAN cannot
+# reach it directly. Everything below proxies the agent's OpenAI-compatible API
+# through this server, which is already bound to 0.0.0.0. That keeps the phone
+# talking to one origin and one port, and keeps speech audio on the same path.
+# ------------------------------------------------------------------------------
+ASSISTANT_URL = os.environ.get("MP_ASSISTANT_URL", "http://127.0.0.1:11435").rstrip("/")
+ASSISTANT_TIMEOUT = float(os.environ.get("MP_ASSISTANT_TIMEOUT", "600"))
+
+
+def assistant_url() -> str:
+    """Agent base URL. Read per call so config.env edits apply without a restart."""
+    configured = os.environ.get("MP_ASSISTANT_URL") or _config_value("MP_ASSISTANT_URL", "")
+    return (configured or ASSISTANT_URL).rstrip("/")
+
+
+def assistant_enabled() -> bool:
+    """The tab is on unless the operator turns it off in config.env."""
+    return _env_flag("MP_ASSISTANT_ENABLED", True)
+
+
+def assistant_request(path: str, payload: Optional[Dict[str, Any]] = None,
+                      session_id: str = "", timeout: float = 5.0):
+    """Make a JSON request to the MP Harmony Agent. Returns (status, body)."""
+    url = assistant_url() + path
+    data = None
+    headers = {"Accept": "application/json"}
+    if payload is not None:
+        data = json.dumps(payload).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    if session_id:
+        headers["X-Session-Id"] = session_id
+    req = urllib.request.Request(url, data=data, headers=headers,
+                                 method="POST" if data is not None else "GET")
     try:
-        pid_int = int(pid)
-        if sys.platform == "win32":
-            import ctypes
-            k = ctypes.WinDLL("kernel32", use_last_error=True)
-            h = k.OpenProcess(0x1000, False, pid_int)
-            if h:
-                ec = ctypes.c_ulong()
-                ok = k.GetExitCodeProcess(h, ctypes.byref(ec))
-                k.CloseHandle(h)
-                return bool(ok and ec.value == 259)
-            return False
-        else:
-            os.kill(pid_int, 0)
-            return True
-    except (OSError, ValueError, TypeError):
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.status, resp.read()
+    except urllib.error.HTTPError as err:
+        try:
+            return err.code, err.read()
+        except Exception:
+            return err.code, b""
+    except Exception as err:
+        return 0, json.dumps({"error": str(err)}).encode("utf-8")
+
+
+def assistant_status() -> Dict[str, Any]:
+    """Health summary used by the tab badge and the voice default."""
+    if not assistant_enabled():
+        return {"available": False, "status": "disabled",
+                "detail": "Set MP_ASSISTANT_ENABLED=true in config.env to enable the tab."}
+    code, body = assistant_request("/health", timeout=3.0)
+    if code != 200:
+        return {"available": False, "status": "offline", "port": PORT,
+                "detail": "MP Harmony Agent is not answering on port 11435."}
+    try:
+        health = json.loads(body.decode("utf-8"))
+    except Exception:
+        health = {}
+    return {
+        "available": True,
+        "status": "online",
+        "agent": health.get("agent", "MP Harmony AI Agent"),
+        "model": health.get("model", "gpt-oss-pinned:latest"),
+        "voice": health.get("active_voice", "stephen_hawking_matrix"),
+        "tools_count": health.get("tools_count", 0),
+    }
+
+
+def assistant_voices() -> List[Dict[str, str]]:
+    """Voice list mirrors MP_Harmony_Agent.VOICES_MAP (kept in step manually)."""
+    known = [
+        ("stephen_hawking_matrix", "Stephen Hawking (Enters the Matrix) [Default]"),
+        ("morpheus", "Morpheus (The Matrix - Master)"),
+        ("morpheus_construct", "Morpheus (The Construct)"),
+        ("morpheus_redpill", "Morpheus (Red Pill)"),
+        ("morpheus_dojo", "Morpheus (Combat Dojo)"),
+        ("morpheus_system", "Morpheus (The System)"),
+        ("agent_smith", "Agent Smith (The Matrix)"),
+        ("neo", "Neo (The Matrix)"),
+        ("trinity", "Trinity (The Matrix)"),
+        ("oracle", "The Oracle (The Matrix)"),
+        ("zion", "Zion (Councillor Hamann)"),
+    ]
+    return [{"id": vid, "name": label} for vid, label in known]
+
+
+# ------------------------------------------------------------------------------
+# STREAM CATALOG & QUEUE
+#
+# This service is a pure HTTP audio streamer. It never opens a sound device and
+# never spawns a local player: phones and tablets pull the mix themselves from
+# /api/stream. Everything below is bookkeeping for which file to serve next.
+# ------------------------------------------------------------------------------
+def _env_flag(name: str, default: bool = True) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        raw = read_config_env().get(name)
+    if raw is None:
+        return default
+    return str(raw).strip().lower() not in ("0", "false", "no", "off", "")
+
+
+def read_config_env() -> Dict[str, str]:
+    """Read config.env so the service sees manager settings without systemd env."""
+    cfg: Dict[str, str] = {}
+    for cand in (get_base_dir() / "config.env", CONFIG_DIR / "config.env"):
+        if not cand.is_file():
+            continue
+        try:
+            for line in cand.read_text(encoding="utf-8", errors="ignore").splitlines():
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    key, val = line.split("=", 1)
+                    cfg.setdefault(key.strip(), val.strip().strip("\"'"))
+        except Exception:
+            pass
+    return cfg
+
+
+def _config_value(key: str, default: str = "") -> str:
+    if key in os.environ:
+        return os.environ[key]
+    return read_config_env().get(key, default)
+
+
+def is_audio_file(path: Any) -> bool:
+    try:
+        return bool(path) and Path(str(path)).suffix.lower() in AUDIO_EXTENSIONS
+    except Exception:
         return False
 
 
-# ------------------------------------------------------------------------------
-# MP AUDIO PLAYER IPC & STATUS RETRIEVAL
-# ------------------------------------------------------------------------------
-CONFIG_DIR = Path.home() / ".config" / "mix-manager"
-SOCKET_PATH = CONFIG_DIR / "mp_audio_player.sock"
-PORT_FILE = CONFIG_DIR / "mp_audio_player.port"
-STATE_FILE = CONFIG_DIR / "mp_player_state.json"
-PID_FILE = CONFIG_DIR / "mp_player.pid"
+def scan_playlist_files() -> List[str]:
+    """Return the playlist the companion should play from.
+
+    Order of preference:
+      1. WEB_COMPANION_PLAYLIST (explicit .m3u/.m3u8/.json file)
+      2. Saved player playlist for the configured mode (MUSIC or MIX_ARCHIVE)
+      3. Every audio file in the configured archive folders, newest first
+
+    An empty list means "there is nothing to play" and autoplay is skipped.
+    """
+    explicit = _config_value("WEB_COMPANION_PLAYLIST", "").strip()
+    if explicit:
+        return _read_playlist_file(Path(os.path.expanduser(explicit)))
+
+    mode = (_config_value("WEB_COMPANION_MODE", "MIX_ARCHIVE") or "MIX_ARCHIVE").upper()
+    if mode == "MUSIC":
+        for cand in (PLAYLIST_DIR / "DJ_Tracks_ALL_MUSIC_FOLDERS.json",
+                     PLAYLIST_DIR / "DJ_Tracks_ALL_MUSIC_FOLDERS.m3u"):
+            if cand.is_file():
+                files = _read_playlist_file(cand)
+                if files:
+                    return files
+
+    return scan_archive_files()
 
 
-def query_mp_player_socket() -> Optional[Dict[str, Any]]:
-    has_unix = hasattr(socket, "AF_UNIX")
-    if (has_unix and not SOCKET_PATH.exists()) or (not has_unix and not PORT_FILE.exists()):
-        return None
+def _read_playlist_file(path: Path) -> List[str]:
+    if not path.is_file():
+        return []
     try:
-        s = socket.socket(socket.AF_UNIX if has_unix else socket.AF_INET, socket.SOCK_STREAM)
-        s.settimeout(0.35)
-        s.connect(str(SOCKET_PATH) if has_unix else ("127.0.0.1", int(PORT_FILE.read_text().strip())))
-        s.sendall(json.dumps({"cmd": "status"}).encode("utf-8"))
-        raw = s.recv(65536).decode("utf-8")
-        s.close()
-        if raw:
-            res = json.loads(raw)
-            if isinstance(res, dict) and res.get("status") == "ok":
-                return res.get("data")
+        if path.suffix.lower() == ".json":
+            data = json.loads(path.read_text(encoding="utf-8", errors="ignore"))
+            raw = data.get("tracks") if isinstance(data, dict) else data
+            paths: List[str] = []
+            for item in raw or []:
+                if isinstance(item, dict):
+                    item = item.get("path") or item.get("file") or ""
+                if isinstance(item, str) and is_audio_file(item):
+                    paths.append(item)
+            return [p for p in paths if os.path.isfile(p)]
+        paths = []
+        for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if is_audio_file(line):
+                paths.append(line)
+        return [p for p in paths if os.path.isfile(p)]
     except Exception:
-        pass
-    return None
+        return []
 
 
-def read_mp_player_state_file() -> Optional[Dict[str, Any]]:
-    if not STATE_FILE.is_file():
+def _archive_dirs() -> List[Path]:
+    dirs: List[Path] = []
+    seen = set()
+
+    def add(value: Any) -> None:
+        if not value:
+            return
+        try:
+            p = Path(os.path.expanduser(str(value).strip().strip("\"'"))).resolve()
+            if p.is_dir() and str(p) not in seen:
+                seen.add(str(p))
+                dirs.append(p)
+        except Exception:
+            pass
+
+    add(_config_value("MIX_ARCHIVE_DIR", ""))
+    for part in re.split(r"[;\n,]", _config_value("EXTRA_MIX_ARCHIVE_DIRS", "") or ""):
+        add(part)
+    base = get_base_dir()
+    for name in ("MIX_ARCHIVE", "FLAC_CONVERTED_OUTPUTS"):
+        add(base / name)
+    return dirs
+
+
+def scan_archive_files() -> List[str]:
+    """Newest-first audio files across the configured archive folders."""
+    skip = {"__pycache__", "node_modules", ".git", "venv", ".venv"}
+    found: List[Tuple[float, str]] = []
+    seen = set()
+    for root_dir in _archive_dirs():
+        for root, subdirs, files in os.walk(root_dir):
+            subdirs[:] = [d for d in subdirs if not d.startswith(".") and d not in skip]
+            for name in files:
+                if not is_audio_file(name):
+                    continue
+                full = os.path.join(root, name)
+                if full in seen:
+                    continue
+                seen.add(full)
+                try:
+                    st = os.stat(full)
+                except OSError:
+                    continue
+                # A zero-byte file (usually an interrupted conversion) would
+                # stall the phone on an empty body, so it is not streamable.
+                if st.st_size <= 0:
+                    continue
+                found.append((st.st_mtime, full))
+    found.sort(key=lambda item: item[0], reverse=True)
+    return [path for _, path in found]
+
+
+# ------------------------------------------------------------------------------
+# STREAM CATALOG
+#
+# Pure HTTP streaming state. No sound device is ever opened and no local player
+# process is ever spawned - the phone or tablet is the only audio output.
+# ------------------------------------------------------------------------------
+def player_position(status: Optional[Dict[str, Any]]) -> float:
+    try:
+        return float((status or {}).get("position_sec", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def load_resume_state() -> Optional[Dict[str, Any]]:
+    if not RESUME_FILE.is_file():
         return None
     try:
-        with open(STATE_FILE, "r", encoding="utf-8", errors="ignore") as f:
-            data = json.load(f)
-        if isinstance(data, dict):
+        data = json.loads(RESUME_FILE.read_text(encoding="utf-8", errors="ignore"))
+        if isinstance(data, dict) and data.get("path") and os.path.isfile(str(data["path"])):
             return data
     except Exception:
         pass
     return None
 
 
-def send_mp_player_command(cmd: str, **kwargs) -> bool:
-    has_unix = hasattr(socket, "AF_UNIX")
-    if (has_unix and not SOCKET_PATH.exists()) or (not has_unix and not PORT_FILE.exists()):
-        return False
-    try:
-        s = socket.socket(socket.AF_UNIX if has_unix else socket.AF_INET, socket.SOCK_STREAM)
-        s.settimeout(0.5)
-        s.connect(str(SOCKET_PATH) if has_unix else ("127.0.0.1", int(PORT_FILE.read_text().strip())))
-        payload = {"cmd": cmd, **kwargs}
-        s.sendall(json.dumps(payload).encode("utf-8"))
-        raw = s.recv(4096).decode("utf-8")
-        s.close()
-        if raw:
-            res = json.loads(raw)
-            return res.get("status") == "ok"
-    except Exception:
-        pass
-    return False
+def _pick_start_track(playlist: List[str]) -> Tuple[Optional[str], float]:
+    """Choose the resume track when it is still in the playlist, else the first."""
+    resume = load_resume_state()
+    if resume:
+        saved_path = str(resume.get("path"))
+        try:
+            saved_pos = max(0.0, float(resume.get("position_sec", 0.0) or 0.0))
+        except (TypeError, ValueError):
+            saved_pos = 0.0
+        if saved_path in playlist:
+            return saved_path, saved_pos
+    return (playlist[0], 0.0) if playlist else (None, 0.0)
 
 
-def is_mp_player_active() -> Tuple[bool, Optional[Dict[str, Any]]]:
-    st = query_mp_player_socket()
-    if st and is_pid_alive(st.get("pid")):
-        return True, st
+_queue_cache: Dict[str, Any] = {"files": [], "built_at": 0.0}
+_queue_lock = threading.Lock()
+QUEUE_TTL_SECONDS = 30.0
 
-    st = read_mp_player_state_file()
-    if st:
-        pid = st.get("pid")
-        if not pid and PID_FILE.is_file():
-            try: pid = int(PID_FILE.read_text().strip())
-            except Exception: pid = None
-        if is_pid_alive(pid):
-            return True, st
 
-    return False, None
+def build_stream_queue(force: bool = False) -> List[str]:
+    """Resolve the play queue the phones will stream through.
+
+    The result is cached briefly: the page polls several endpoints per second
+    and each call would otherwise re-walk the whole archive. Callers that need
+    to see a newly added file can pass force=True.
+    """
+    with _queue_lock:
+        now = time.monotonic()
+        files = _queue_cache["files"]
+        fresh = files and (now - _queue_cache["built_at"]) < QUEUE_TTL_SECONDS
+        if fresh and not force:
+            return list(files)
+
+    files = scan_playlist_files()
+    if files and _env_flag("WEB_COMPANION_SHUFFLE", False):
+        files = list(files)
+        random.shuffle(files)
+
+    with _queue_lock:
+        _queue_cache["files"] = list(files)
+        _queue_cache["built_at"] = time.monotonic()
+    return files
+
+
+def invalidate_stream_queue() -> None:
+    with _queue_lock:
+        _queue_cache["built_at"] = 0.0
+
+
+def autoplay_once() -> Dict[str, Any]:
+    """Pick the track to serve once, at startup. Never starts local playback."""
+    if _autoplay_done.is_set():
+        return dict(_autoplay_result)
+
+    playlist = build_stream_queue()
+    track, position = _pick_start_track(playlist)
+    if not track:
+        _autoplay_result.update(status="empty_playlist", detail="Playlist is empty")
+        _autoplay_done.set()
+        return dict(_autoplay_result)
+
+    _autoplay_result.update(
+        status="ready",
+        detail=f"Streaming queue ready ({len(playlist)} mixes)",
+        match=track,
+        track=os.path.basename(track),
+        position=round(position, 2),
+        queue_len=len(playlist),
+        verified=True,
+        verified_position=round(position, 2),
+    )
+    _autoplay_done.set()
+    return dict(_autoplay_result)
+
+
+def start_autoplay_worker() -> threading.Thread:
+    thread = threading.Thread(target=autoplay_once, name="mp-companion-stream-queue", daemon=True)
+    thread.start()
+    return thread
+
+
+def autoplay_state() -> Dict[str, Any]:
+    return dict(_autoplay_result)
+
 
 
 # ------------------------------------------------------------------------------
@@ -856,130 +1186,352 @@ def clean_track_title(raw_title: str, raw_path: str, tl_meta: Dict[str, str]) ->
     return title, artist, album
 
 
-def get_eq_status() -> Dict[str, Any]:
-    mp_active, mp_data = is_mp_player_active()
-    if mp_active and mp_data:
-        return {
-            "state": str(mp_data.get("state", "stopped")).lower(),
-            "position": str(mp_data.get("position_fmt", "00:00")),
-            "duration": str(mp_data.get("duration_fmt", "--:--")),
-            "position_sec": float(mp_data.get("position_sec", 0.0)),
-            "duration_sec": float(mp_data.get("duration_sec", 0.0)),
-            "progress_pct": float(mp_data.get("progress_pct", 0.0)),
-            "volume": int(mp_data.get("volume", 85)),
-            "pitch_percent": int(mp_data.get("pitch_percent", 0)),
-            "shuffle": bool(mp_data.get("shuffle", False)),
-            "repeat": str(mp_data.get("repeat", "all")),
-            "levels": mp_data.get("levels", [0.0] * 24),
-            "peaks": mp_data.get("peaks", [0.0] * 24),
-        }
-    return {
-        "state": "stopped", "position": "00:00", "duration": "--:--",
-        "position_sec": 0.0, "duration_sec": 0.0, "progress_pct": 0.0,
-        "volume": 85, "pitch_percent": 0, "shuffle": False, "repeat": "all",
-        "levels": [0.0] * 24, "peaks": [0.0] * 24,
+# ------------------------------------------------------------------------------
+# STREAMING SESSION
+#
+# The companion tracks "which file is being served" and a coarse elapsed clock,
+# so the phone dashboard has a position and a progress bar. It is deliberately
+# NOT an authority on playback: the browser owns that. Nothing here opens an
+# audio device.
+# ------------------------------------------------------------------------------
+VOLUME_FILE = CONFIG_DIR / "web_companion_stream.json"
+_stream_lock = threading.Lock()
+
+
+def _stream_state_path() -> Path:
+    return VOLUME_FILE
+
+
+def load_stream_session() -> Dict[str, Any]:
+    state: Dict[str, Any] = {
+        "index": 0,
+        "path": "",
+        "playing": False,
+        "position_sec": 0.0,
+        "started_at": 0.0,
+        "duration_sec": 0.0,
+        "volume": 100,
+        "shuffle": False,
+        "repeat": "all",
     }
+    if _stream_state_path().is_file():
+        try:
+            saved = json.loads(_stream_state_path().read_text(encoding="utf-8", errors="ignore"))
+            if isinstance(saved, dict):
+                state.update({k: saved[k] for k in state if k in saved})
+        except Exception:
+            pass
+    return state
+
+
+def save_stream_session(state: Dict[str, Any]) -> None:
+    try:
+        _stream_state_path().parent.mkdir(parents=True, exist_ok=True)
+        tmp = _stream_state_path().with_suffix(".tmp")
+        tmp.write_text(json.dumps(state), encoding="utf-8")
+        tmp.replace(_stream_state_path())
+    except Exception:
+        pass
+
+
+def stream_position(state: Dict[str, Any]) -> float:
+    """Elapsed seconds within the current file, accounting for active playback."""
+    base = float(state.get("position_sec", 0.0) or 0.0)
+    if state.get("playing") and state.get("started_at"):
+        base += max(0.0, time.time() - float(state["started_at"]))
+    return max(0.0, base)
+
+
+def clamp_position(state: Dict[str, Any], pos: float) -> float:
+    duration = float(state.get("duration_sec", 0.0) or 0.0)
+    pos = max(0.0, float(pos))
+    return min(pos, duration) if duration > 0 else pos
+
+
+def current_stream_file() -> Tuple[str, Dict[str, Any]]:
+    """Return the file the phone should currently be streaming."""
+    queue = build_stream_queue()
+    state = load_stream_session()
+    if not queue:
+        return "", state
+    idx = int(state.get("index", 0) or 0)
+    if idx < 0 or idx >= len(queue):
+        idx = 0
+        state["index"] = 0
+    # Keep the saved path authoritative if it is still present in the queue.
+    saved = str(state.get("path", "") or "")
+    if saved and saved in queue:
+        idx = queue.index(saved)
+    else:
+        state["path"] = queue[idx]
+    return queue[idx], state
+
+
+def get_eq_status() -> Dict[str, Any]:
+    active_file, state = current_stream_file()
+    playing = bool(state.get("playing"))
+    pos = stream_position(state)
+    dur = float(state.get("duration_sec", 0.0) or 0.0)
+    pct = round(pos / dur * 100.0, 1) if dur > 0 else 0.0
+    return {
+        "state": "playing" if playing else ("paused" if active_file else "stopped"),
+        "position": format_seconds(pos),
+        "duration": format_seconds(dur) if dur > 0 else "--:--",
+        "position_sec": round(pos, 2),
+        "duration_sec": round(dur, 2),
+        "progress_pct": pct,
+        "volume": int(state.get("volume", 100)),
+        "pitch_percent": 0,
+        "shuffle": bool(state.get("shuffle", False)),
+        "repeat": str(state.get("repeat", "all")),
+        "levels": [0.0] * 24,
+        "peaks": [0.0] * 24,
+    }
+
+
+def format_seconds(value: Any) -> str:
+    try:
+        total = int(max(0.0, float(value)))
+    except (TypeError, ValueError):
+        total = 0
+    return f"{total // 3600:02d}:{(total % 3600) // 60:02d}:{total % 60:02d}"
+
+
+_duration_cache: Dict[str, Tuple[float, float, float]] = {}
+
+
+def probe_duration(path: str) -> float:
+    """Read only the container header for length. Never decodes audio."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return 0.0
+    cached = _duration_cache.get(path)
+    if cached and cached[0] == st.st_mtime and cached[1] == st.st_size:
+        return cached[2]
+    duration = 0.0
+    try:
+        import soundfile  # header-only probe; no device, no decoding
+        duration = float(soundfile.info(path).duration or 0.0)
+    except Exception:
+        duration = 0.0
+    if duration <= 0.0:
+        duration = _wav_duration(path)
+    _duration_cache[path] = (st.st_mtime, st.st_size, duration)
+    return duration
+
+
+def _wav_duration(path: str) -> float:
+    """Fallback for plain PCM WAV: data chunk size / byte rate."""
+    try:
+        with open(path, "rb") as f:
+            header = f.read(64)
+        if header[:4] != b"RIFF" or header[8:12] != b"WAVE":
+            return 0.0
+        byte_rate = int.from_bytes(header[28:32], "little")
+        data_size = int.from_bytes(header[40:44], "little")
+        if byte_rate > 0 and data_size > 0:
+            return data_size / float(byte_rate)
+    except Exception:
+        pass
+    return 0.0
 
 
 def get_playback_status(cli_theme: Optional[str] = None) -> Dict[str, Any]:
     active_theme = get_theme_palette(cli_theme)
-    status: Dict[str, Any] = {
-        "player": "None", "state": "stopped", "title": "No Mix Playing", "raw_title": "",
-        "artist": "MPlanetarian", "album": "", "position": "00:00", "duration": "00:00",
-        "position_sec": 0.0, "duration_sec": 0.0, "progress_pct": 0.0, "active_file": "",
-        "format": "", "sample_rate": "", "channels": "", "volume": 85, "pitch_percent": 0,
-        "pitch_factor": 1.0, "shuffle": False, "repeat": "all", "levels": [0.0] * 24,
-        "peaks": [0.0] * 24, "mini_eq": "", "tracklist": [], "tracklist_total": 0, "theme": active_theme
+    active_file, state = current_stream_file()
+    queue = build_stream_queue()
+
+    duration = probe_duration(active_file) if active_file else 0.0
+    if duration > 0 and abs(float(state.get("duration_sec", 0.0) or 0.0) - duration) > 0.5:
+        state["duration_sec"] = duration
+
+    pos = clamp_position(state, stream_position(state))
+    pct = round(pos / duration * 100.0, 1) if duration > 0 else 0.0
+    playing = bool(state.get("playing")) and bool(active_file)
+
+    title, artist, album = clean_track_title("", active_file, {})
+    tracklist: List[str] = []
+    if active_file:
+        tl_path = find_tracklist_for_mix(active_file)
+        tl_info = parse_tracklist_file(tl_path) if tl_path else {"metadata": {}, "tracks": []}
+        title, artist, album = clean_track_title(
+            os.path.basename(active_file), active_file, tl_info.get("metadata", {})
+        )
+        tracklist = tl_info.get("tracks", [])
+
+    return {
+        "player": "Web Stream",
+        "state": "playing" if playing else ("paused" if active_file else "stopped"),
+        "title": title or "No Mix Playing",
+        "raw_title": os.path.basename(active_file),
+        "artist": artist,
+        "album": album,
+        "position": format_seconds(pos),
+        "duration": format_seconds(duration) if duration else "00:00:00",
+        "position_sec": round(pos, 2),
+        "duration_sec": round(duration, 2),
+        "progress_pct": pct,
+        "active_file": active_file,
+        "format": Path(active_file).suffix.lstrip(".").upper() if active_file else "",
+        "sample_rate": "",
+        "channels": "Stereo",
+        "volume": int(state.get("volume", 100)),
+        "pitch_percent": 0,
+        "pitch_factor": 1.0,
+        "shuffle": bool(state.get("shuffle", False)),
+        "repeat": str(state.get("repeat", "all")),
+        "levels": [0.0] * 24,
+        "peaks": [0.0] * 24,
+        "mini_eq": "",
+        "tracklist": tracklist,
+        "tracklist_total": len(tracklist),
+        "queue_len": len(queue),
+        "queue_position": int(state.get("index", 0) or 0) + 1,
+        "theme": active_theme,
     }
 
-    mp_active, mp_data = is_mp_player_active()
-    if mp_active and mp_data:
-        status["player"] = "MP Audio Player"
-        status["state"] = str(mp_data.get("state", "stopped")).lower()
-        raw_title = str(mp_data.get("title", ""))
-        active_path = str(mp_data.get("path", ""))
-        status["raw_title"] = raw_title
-        status["active_file"] = active_path
-        status["position"] = str(mp_data.get("position_fmt", "00:00"))
-        status["duration"] = str(mp_data.get("duration_fmt", "--:--"))
-        status["position_sec"] = float(mp_data.get("position_sec", 0.0))
-        status["duration_sec"] = float(mp_data.get("duration_sec", 0.0))
-        status["progress_pct"] = float(mp_data.get("progress_pct", 0.0))
-        status["volume"] = int(mp_data.get("volume", 85))
-        status["pitch_percent"] = int(mp_data.get("pitch_percent", 0))
-        status["pitch_factor"] = float(mp_data.get("pitch_factor", 1.0))
-        status["shuffle"] = bool(mp_data.get("shuffle", False))
-        status["repeat"] = str(mp_data.get("repeat", "all"))
-        status["levels"] = mp_data.get("levels", [0.0] * 24)
-        status["peaks"] = mp_data.get("peaks", [0.0] * 24)
-        status["mini_eq"] = str(mp_data.get("mini_eq", ""))
 
-        sr = mp_data.get("sample_rate", 0)
-        status["sample_rate"] = f"{round(sr / 1000.0, 1)} kHz" if sr else ""
-        ch = mp_data.get("channels", 2)
-        status["channels"] = "Stereo" if ch == 2 else ("Mono" if ch == 1 else f"{ch} Ch")
-        if active_path:
-            status["format"] = Path(active_path).suffix.lstrip(".").upper()
+MINI_PLAYLIST_SIZE = 3
 
-        tl_path = find_tracklist_for_mix(active_path)
-        tl_info = parse_tracklist_file(tl_path) if tl_path else {"metadata": {}, "tracks": []}
-        title, artist, album = clean_track_title(raw_title, active_path, tl_info.get("metadata", {}))
-        status["title"] = title
-        status["artist"] = artist
-        status["album"] = album
-        status["tracklist"] = tl_info.get("tracks", [])
-        status["tracklist_total"] = len(status["tracklist"])
-        return status
 
-    return status
+def get_mini_playlist(limit: int = MINI_PLAYLIST_SIZE) -> Dict[str, Any]:
+    """A short window of the stream queue: the current mix plus the next ones.
+
+    Only `limit` entries are returned, so the phone shows a compact playlist
+    instead of the whole archive.
+    """
+    queue = build_stream_queue()
+    if not queue:
+        return {"items": [], "total": 0, "current_index": -1}
+
+    state = load_stream_session()
+    idx = int(state.get("index", 0) or 0)
+    saved = str(state.get("path", "") or "")
+    if saved and saved in queue:
+        idx = queue.index(saved)
+    idx = max(0, min(idx, len(queue) - 1))
+
+    items: List[Dict[str, Any]] = []
+    for offset in range(max(1, int(limit))):
+        i = (idx + offset) % len(queue)
+        path = queue[i]
+        title, artist, album = clean_track_title("", path, {})
+        items.append({
+            "index": i,
+            "title": title,
+            "artist": artist,
+            "file": path,
+            "current": i == idx,
+            "duration": format_seconds(probe_duration(path)),
+            "duration_sec": round(probe_duration(path), 2),
+        })
+    return {"items": items, "total": len(queue), "current_index": idx}
 
 
 def control_player(action: str, params: Optional[Dict[str, List[str]]] = None) -> bool:
+    """Drive the stream session. The browser performs the actual playback."""
     params = params or {}
-    mp_active, _ = is_mp_player_active()
+    if action in ("refresh", "rescan"):
+        invalidate_stream_queue()
+        return True
+    queue = build_stream_queue()
+    if not queue:
+        return False
 
-    if mp_active:
-        if action in ("play-pause", "toggle"):
-            return send_mp_player_command("play_pause")
-        elif action == "play":
-            return send_mp_player_command("play")
-        elif action == "pause":
-            return send_mp_player_command("pause")
+    with _stream_lock:
+        state = load_stream_session()
+        path, _ = current_stream_file()
+        if path and state.get("path") != path:
+            state["path"] = path
+        if state.get("path"):
+            try:
+                state["index"] = queue.index(state["path"])
+            except ValueError:
+                state["index"] = 0
+                state["path"] = queue[0]
+
+        pos = clamp_position(state, stream_position(state))
+        duration = float(state.get("duration_sec", 0.0) or 0.0) or probe_duration(state["path"])
+        # Make the known length visible to clamp_position() before the action
+        # runs, otherwise a fresh session (duration 0) lets a skip run past the
+        # end of the mix and the reported clock overshoots.
+        if duration > 0:
+            state["duration_sec"] = duration
+
+        def seek_to(target: float) -> None:
+            state["position_sec"] = clamp_position(state, target)
+            state["started_at"] = time.time() if state.get("playing") else 0.0
+
+        def switch(step: int) -> None:
+            state["index"] = (int(state.get("index", 0)) + step) % len(queue)
+            state["path"] = queue[state["index"]]
+            state["position_sec"] = 0.0
+            state["started_at"] = time.time() if state.get("playing") else 0.0
+            state["duration_sec"] = probe_duration(state["path"])
+
+        if action in ("play", "resume"):
+            state["playing"] = True
+            state["started_at"] = time.time()
+        elif action in ("pause", "play-pause", "toggle"):
+            if state.get("playing"):
+                state["playing"] = False
+                state["position_sec"] = pos
+                state["started_at"] = 0.0
+            else:
+                state["playing"] = True
+                state["position_sec"] = pos
+                state["started_at"] = time.time()
         elif action == "next":
-            return send_mp_player_command("next")
+            switch(1)
         elif action in ("previous", "prev"):
-            return send_mp_player_command("prev")
-        elif action in ("shuffle", "toggle_shuffle"):
-            return send_mp_player_command("shuffle")
-        elif action in ("repeat", "cycle_repeat"):
-            return send_mp_player_command("repeat")
+            switch(-1)
+        elif action == "select_index":
+            try:
+                target = int(params.get("index", [0])[0])
+            except (TypeError, ValueError):
+                target = 0
+            target = max(0, min(target, len(queue) - 1))
+            state["index"] = target
+            state["path"] = queue[target]
+            state["position_sec"] = 0.0
+            state["started_at"] = time.time() if state.get("playing") else 0.0
+            state["duration_sec"] = probe_duration(state["path"])
         elif action == "seek_forward":
-            return send_mp_player_command("seek", seconds=30.0)
+            seek_to(pos + 30.0)
         elif action == "seek_backward":
-            return send_mp_player_command("seek", seconds=-30.0)
+            seek_to(pos - 30.0)
         elif action == "seek":
-            sec = float(params.get("seconds", [10.0])[0])
-            return send_mp_player_command("seek", seconds=sec)
+            seek_to(pos + float(params.get("seconds", [10.0])[0]))
         elif action == "seek_to":
-            pos = float(params.get("position", [0.0])[0])
-            return send_mp_player_command("seek_to", position=pos)
+            seek_to(float(params.get("position", [0.0])[0]))
+        elif action in ("shuffle", "toggle_shuffle"):
+            state["shuffle"] = not bool(state.get("shuffle"))
+        elif action in ("repeat", "cycle_repeat"):
+            order = ["off", "all", "one"]
+            cur = str(state.get("repeat", "all"))
+            state["repeat"] = order[(order.index(cur) + 1) % len(order)] if cur in order else "all"
         elif action == "vol_up":
-            return send_mp_player_command("vol_up", step=5)
+            state["volume"] = min(100, int(state.get("volume", 100)) + 5)
         elif action == "vol_down":
-            return send_mp_player_command("vol_down", step=5)
+            state["volume"] = max(0, int(state.get("volume", 100)) - 5)
         elif action == "set_volume":
-            vol = int(params.get("volume", [85])[0])
-            return send_mp_player_command("set_volume", volume=vol)
+            state["volume"] = max(0, min(100, int(params.get("volume", [100])[0])))
         elif action == "mute":
-            return send_mp_player_command("mute")
-        elif action == "pitch_up":
-            return send_mp_player_command("pitch_up", step=1)
-        elif action == "pitch_down":
-            return send_mp_player_command("pitch_down", step=1)
-        elif action == "reset_pitch":
-            return send_mp_player_command("reset_pitch")
+            state["volume"] = 0
+        elif action == "track_ended":
+            # The phone finished the file: advance and keep the elapsed clock honest.
+            switch(1)
+            state["duration_sec"] = probe_duration(state["path"])
+            state["playing"] = True
+            state["started_at"] = time.time()
+        else:
+            return False
 
-    return False
+        if duration > 0:
+            state["duration_sec"] = duration
+        save_stream_session(state)
+    return True
 
 
 # ------------------------------------------------------------------------------
@@ -1085,6 +1637,392 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             letter-spacing: 0.5px;
             font-weight: 600;
         }}
+        .theme-select {{
+            appearance: none;
+            -webkit-appearance: none;
+            margin-top: 10px;
+            padding: 8px 34px 8px 14px;
+            border-radius: 12px;
+            font-size: 0.78rem;
+            font-weight: 700;
+            letter-spacing: 0.3px;
+            color: var(--text-main);
+            background-color: var(--card-bg);
+            background-image: linear-gradient(45deg, transparent 50%, var(--accent-secondary) 50%),
+                              linear-gradient(135deg, var(--accent-secondary) 50%, transparent 50%);
+            background-position: calc(100% - 18px) 52%, calc(100% - 12px) 52%;
+            background-size: 6px 6px, 6px 6px;
+            background-repeat: no-repeat;
+            border: 1px solid var(--card-border);
+            box-shadow: var(--card-shadow);
+            cursor: pointer;
+            max-width: 100%;
+        }}
+        .theme-select:focus {{
+            outline: none;
+            border-color: var(--accent-primary);
+        }}
+        .theme-select option {{
+            background: #14141c;
+            color: #ffffff;
+        }}
+        /* Primary tab bar: MP Liquid Player | MP Assistant */
+        .tab-bar {{
+            display: flex;
+            width: 100%;
+            max-width: 520px;
+            gap: 6px;
+            margin: 0 0 14px 0;
+            padding: 5px;
+            background: var(--card-bg);
+            border: 1px solid var(--card-border);
+            border-radius: 14px;
+            box-shadow: var(--card-shadow);
+            position: sticky;
+            top: 8px;
+            z-index: 500;
+        }}
+        .tab-btn {{
+            flex: 1;
+            appearance: none;
+            -webkit-appearance: none;
+            padding: 11px 8px;
+            border: 1px solid transparent;
+            border-radius: 10px;
+            background: transparent;
+            color: var(--text-dim);
+            font-size: 0.82rem;
+            font-weight: 800;
+            letter-spacing: 0.4px;
+            text-transform: uppercase;
+            cursor: pointer;
+            transition: background 0.18s ease, color 0.18s ease;
+        }}
+        .tab-btn.active {{
+            background: var(--btn-gradient);
+            color: #fff;
+            border-color: var(--accent-primary);
+            box-shadow: var(--btn-shadow);
+        }}
+        .tab-panel {{
+            /* The cards used to be direct flex children of <body>, which is what
+               centred them. Keep that alignment now they sit inside a panel. */
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            width: 100%;
+        }}
+        .tab-panel[hidden] {{
+            display: none !important;
+        }}
+        /* MP Assistant chat */
+        .assistant-head {{
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            margin-bottom: 12px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+            flex-wrap: wrap;
+        }}
+        .assistant-title {{
+            font-size: 0.95rem;
+            font-weight: 800;
+            color: var(--accent-secondary);
+            letter-spacing: 0.5px;
+        }}
+        .assistant-status {{
+            font-size: 0.7rem;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 0.6px;
+            padding: 3px 10px;
+            border-radius: 12px;
+            background: rgba(255, 255, 255, 0.06);
+            border: 1px solid var(--card-border);
+            color: var(--text-dim);
+        }}
+        .assistant-status.online {{
+            background: var(--badge-bg);
+            color: var(--badge-color);
+            border-color: var(--badge-color);
+        }}
+        .assistant-status.offline {{
+            background: rgba(255, 170, 0, 0.12);
+            color: #ffaa00;
+            border-color: #ffaa00;
+        }}
+        .assistant-voice-row {{
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            width: 100%;
+            margin-bottom: 12px;
+            flex-wrap: wrap;
+        }}
+        .assistant-voice-row label {{
+            font-size: 0.72rem;
+            font-weight: 700;
+            color: var(--text-dim);
+            letter-spacing: 0.4px;
+        }}
+        .assistant-voice-select {{
+            flex: 1;
+            min-width: 150px;
+            appearance: none;
+            -webkit-appearance: none;
+            padding: 7px 30px 7px 12px;
+            border-radius: 10px;
+            font-size: 0.76rem;
+            font-weight: 700;
+            color: var(--text-main);
+            background-color: rgba(255, 255, 255, 0.05);
+            background-image: linear-gradient(45deg, transparent 50%, var(--accent-secondary) 50%),
+                              linear-gradient(135deg, var(--accent-secondary) 50%, transparent 50%);
+            background-position: calc(100% - 17px) 52%, calc(100% - 11px) 52%;
+            background-size: 6px 6px, 6px 6px;
+            background-repeat: no-repeat;
+            border: 1px solid var(--card-border);
+            cursor: pointer;
+        }}
+        .assistant-voice-select option {{
+            background: #14141c;
+            color: #ffffff;
+        }}
+        .assistant-log {{
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            min-height: 220px;
+            max-height: 46vh;
+            overflow-y: auto;
+            padding: 4px 2px 8px 2px;
+            margin-bottom: 12px;
+            scroll-behavior: smooth;
+            -webkit-overflow-scrolling: touch;
+        }}
+        .msg {{
+            padding: 10px 13px;
+            border-radius: 14px;
+            font-size: 0.86rem;
+            line-height: 1.5;
+            white-space: pre-wrap;
+            word-break: break-word;
+            max-width: 92%;
+        }}
+        .msg.user {{
+            align-self: flex-end;
+            background: var(--btn-gradient);
+            color: #fff;
+            border-bottom-right-radius: 4px;
+            font-weight: 600;
+        }}
+        .msg.agent {{
+            align-self: flex-start;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid var(--card-border);
+            color: var(--text-main);
+            border-bottom-left-radius: 4px;
+        }}
+        .msg.agent.error {{
+            border-color: #ffaa00;
+            color: #ffaa00;
+            background: rgba(255, 170, 0, 0.08);
+        }}
+        .msg-hint {{
+            align-self: center;
+            font-size: 0.72rem;
+            color: var(--text-dim);
+            text-align: center;
+            padding: 6px 10px;
+            opacity: 0.85;
+        }}
+        .assistant-input-row {{
+            display: flex;
+            align-items: flex-end;
+            gap: 8px;
+            width: 100%;
+            padding-top: 10px;
+            border-top: 1px solid rgba(255, 255, 255, 0.07);
+        }}
+        .assistant-input {{
+            flex: 1;
+            resize: none;
+            min-height: 46px;
+            max-height: 130px;
+            padding: 12px 14px;
+            border-radius: 12px;
+            border: 1px solid var(--card-border);
+            background: rgba(255, 255, 255, 0.05);
+            color: var(--text-main);
+            font-family: inherit;
+            /* 16px keeps iOS Safari from zooming the page on focus. */
+            font-size: 16px;
+            line-height: 1.35;
+        }}
+        .assistant-input:focus {{
+            outline: none;
+            border-color: var(--accent-primary);
+        }}
+        .assistant-input::placeholder {{
+            color: var(--text-dim);
+            opacity: 0.7;
+        }}
+        .assistant-send {{
+            background: var(--btn-gradient);
+            color: #fff;
+            border: none;
+            box-shadow: var(--btn-shadow);
+            padding: 12px 16px;
+            font-size: 0.88rem;
+            font-weight: 800;
+            border-radius: 12px;
+            min-width: 62px;
+        }}
+        .assistant-send:disabled {{
+            opacity: 0.5;
+            cursor: not-allowed;
+        }}
+        .assistant-actions {{
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 8px;
+            width: 100%;
+            margin-top: 10px;
+            flex-wrap: wrap;
+        }}
+        .assistant-actions button {{
+            padding: 7px 12px;
+            font-size: 0.74rem;
+            border-radius: 9px;
+            font-weight: 700;
+        }}
+        .voice-toggle {{
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 0.74rem;
+            font-weight: 700;
+            color: var(--text-dim);
+        }}
+        .assistant-audio {{
+            /* Laid out but invisible. `display: none` can stop iOS Safari from
+               playing the reply element at all, so it is moved off-screen
+               instead of removed from the layout. */
+            position: absolute;
+            left: -9999px;
+            width: 1px;
+            height: 1px;
+            opacity: 0;
+            pointer-events: none;
+        }}
+        .assistant-replay {{
+            display: inline-block;
+            margin-top: 8px;
+            padding: 6px 11px;
+            font-size: 0.72rem;
+            font-weight: 700;
+            border-radius: 9px;
+            border: 1px solid var(--card-border);
+            background: rgba(255, 255, 255, 0.06);
+            color: var(--accent-secondary);
+            cursor: pointer;
+        }}
+        .assistant-replay:active {{
+            transform: scale(0.97);
+        }}
+        .assistant-speaking {{
+            font-size: 0.72rem;
+            font-weight: 800;
+            letter-spacing: 0.4px;
+            color: var(--accent-secondary);
+            opacity: 0.9;
+        }}
+        .mini-playlist {{
+            margin-top: 14px;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }}
+        .mini-pl-head {{
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            font-size: 0.7rem;
+            font-weight: 800;
+            letter-spacing: 0.7px;
+            color: var(--text-dim);
+            text-transform: uppercase;
+        }}
+        .mini-pl-item {{
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 12px;
+            border-radius: 12px;
+            background: rgba(255, 255, 255, 0.04);
+            border: 1px solid var(--card-border);
+            cursor: pointer;
+            transition: background 0.15s ease, border-color 0.15s ease;
+        }}
+        .mini-pl-item:hover {{
+            background: rgba(255, 255, 255, 0.08);
+            border-color: var(--accent-secondary);
+        }}
+        .mini-pl-item.current {{
+            background: var(--badge-bg);
+            border-color: var(--badge-color);
+            box-shadow: 0 0 0 1px var(--badge-color) inset;
+        }}
+        .mini-pl-num {{
+            font-size: 0.68rem;
+            font-weight: 800;
+            color: var(--text-dim);
+            min-width: 16px;
+        }}
+        .mini-pl-item.current .mini-pl-num {{
+            color: var(--badge-color);
+        }}
+        .mini-pl-body {{
+            flex: 1;
+            min-width: 0;
+        }}
+        .mini-pl-title {{
+            font-size: 0.78rem;
+            font-weight: 700;
+            color: var(--text-main);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }}
+        .mini-pl-dur {{
+            font-size: 0.68rem;
+            color: var(--text-dim);
+            margin-top: 2px;
+        }}
+        .autoplay-notice {{
+            margin-top: 8px;
+            padding: 6px 12px;
+            border-radius: 10px;
+            font-size: 0.72rem;
+            font-weight: 700;
+            letter-spacing: 0.3px;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid var(--card-border);
+            color: var(--text-dim);
+        }}
+        .autoplay-notice.ok {{
+            background: var(--badge-bg);
+            color: var(--badge-color);
+            border-color: var(--badge-color);
+        }}
+        .autoplay-notice.warn {{
+            background: rgba(255, 170, 0, 0.12);
+            color: #ffaa00;
+            border-color: #ffaa00;
+        }}
         .card {{
             background-color: var(--card-bg);
             border-radius: 18px;
@@ -1094,6 +2032,12 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             box-shadow: var(--card-shadow);
             border: 1px solid var(--card-border);
             margin-bottom: 16px;
+        }}
+        .assistant-card {{
+            /* The chat log is the scrolling region, so the card itself must not
+               be squeezed on a short iPhone viewport. */
+            display: flex;
+            flex-direction: column;
         }}
         .badges-row {{
             display: flex;
@@ -1223,6 +2167,19 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             box-shadow: var(--btn-shadow);
             text-transform: uppercase;
             letter-spacing: 1px;
+        }}
+        .overlay-skip {{
+            margin-top: 14px;
+            background: transparent;
+            border: none;
+            box-shadow: none;
+            color: var(--text-dim);
+            font-size: 0.8rem;
+            font-weight: 700;
+            padding: 8px;
+            width: 100%;
+            cursor: pointer;
+            text-decoration: underline;
         }}
         .visualizer-container {{
             width: 100%;
@@ -1440,6 +2397,7 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             <h2>🎧 MP Mix Stream</h2>
             <p>Tap below to engage mobile studio audio streaming and dashboard synchronization.</p>
             <button class="btn-activate-stream" onclick="activateMobileStream()">Engage Audio Stream</button>
+            <button class="overlay-skip" onclick="dismissStreamOverlay()">Skip — use the assistant only</button>
         </div>
     </div>
 
@@ -1447,8 +2405,24 @@ def render_html_page(theme: Dict[str, Any]) -> str:
         <h1>MP MIX MANAGER <span class="app-version">v{html.escape(VERSION)}</span></h1>
         <p>Studio & DJ Booth Mobile Web Companion</p>
         <div id="themeBadge" class="theme-pill">🎨 <span id="themeNameText">{html.escape(t['name'])}</span></div>
+        <div>
+            <select id="themeSelect" class="theme-select" onchange="changeTheme(this.value)"
+                    aria-label="Choose theme" title="Change the companion theme">
+                <option value="{html.escape(t['id'])}">{html.escape(t['name'])}</option>
+            </select>
+        </div>
+        <div id="autoplayNotice" class="autoplay-notice" style="display: none;"></div>
     </div>
 
+    <!-- Primary tabs: the player and the assistant share one page -->
+    <div class="tab-bar" role="tablist" aria-label="MP Web Companion sections">
+        <button class="tab-btn active" id="tabBtnPlayer" role="tab" aria-selected="true"
+                aria-controls="panelPlayer" onclick="showTab('player')">🎧 MP Liquid Player</button>
+        <button class="tab-btn" id="tabBtnAssistant" role="tab" aria-selected="false"
+                aria-controls="panelAssistant" onclick="showTab('assistant')">🧠 MP Assistant</button>
+    </div>
+
+    <div class="tab-panel" id="panelPlayer" role="tabpanel" aria-labelledby="tabBtnPlayer">
     <div class="card now-playing">
         <div id="mobileAudioBanner" class="mobile-audio-banner">
             <h4>📱 Mobile Audio Stream Active</h4>
@@ -1492,11 +2466,11 @@ def render_html_page(theme: Dict[str, Any]) -> str:
 
         <!-- Primary Controls -->
         <div class="controls-row">
-            <button class="btn-sub" onclick="sendAction('seek_backward')">⏪ 30s</button>
+            <button class="btn-sub" onclick="skipBy(-30)">⏪ 30s</button>
             <button onclick="sendAction('previous')">⏮</button>
             <button class="btn-main" id="btnPlayPause" onclick="handlePlayPauseClick()">⏯ Play</button>
             <button onclick="sendAction('next')">⏭</button>
-            <button class="btn-sub" onclick="sendAction('seek_forward')">30s ⏩</button>
+            <button class="btn-sub" onclick="skipBy(30)">30s ⏩</button>
         </div>
 
         <!-- Mode Controls -->
@@ -1524,6 +2498,14 @@ def render_html_page(theme: Dict[str, Any]) -> str:
                 <button class="btn-mini" onclick="sendAction('reset_pitch')">0</button>
             </div>
         </div>
+        <!-- Mini Playlist: the current mix plus the next two -->
+        <div class="mini-playlist" id="miniPlaylist">
+            <div class="mini-pl-head">
+                <span>🎵 Up Next</span>
+                <span id="miniPlCount">3</span>
+            </div>
+            <div id="miniPlItems"></div>
+        </div>
     </div>
 
     <!-- Tracklist Card -->
@@ -1533,6 +2515,43 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             <span class="tl-count" id="tlCount">0 Tracks</span>
         </div>
         <ul class="tl-items" id="tlItems"></ul>
+    </div>
+    </div><!-- /panelPlayer -->
+
+    <!-- MP Assistant: live MP Harmony prompt -->
+    <div class="tab-panel" id="panelAssistant" role="tabpanel" aria-labelledby="tabBtnAssistant" hidden>
+        <div class="card assistant-card">
+            <div class="assistant-head">
+                <span class="assistant-title">🧠 MP ASSISTANT</span>
+                <span class="assistant-status" id="assistantStatus">CHECKING…</span>
+            </div>
+            <div class="assistant-voice-row">
+                <label for="assistantVoice">Voice</label>
+                <select id="assistantVoice" class="assistant-voice-select"
+                        aria-label="Assistant voice" title="Default voice is Stephen Hawking">
+                    <option value="stephen_hawking_matrix">Stephen Hawking (Enters the Matrix)</option>
+                </select>
+            </div>
+            <div class="assistant-log" id="assistantLog">
+                <div class="msg-hint">Ask MP Harmony anything. Replies are spoken in Stephen Hawking's
+                    voice unless you choose another one above.</div>
+            </div>
+            <div class="assistant-input-row">
+                <textarea id="assistantInput" class="assistant-input" rows="1"
+                          placeholder="Message MP Harmony…" aria-label="Message MP Harmony"></textarea>
+                <button class="assistant-send" id="assistantSend" onclick="sendAssistantMessage()">Send</button>
+            </div>
+            <div class="assistant-actions">
+                <label class="voice-toggle">
+                    <input type="checkbox" id="assistantSpeak" checked>
+                    🔊 Speak replies
+                </label>
+                <span class="assistant-speaking" id="assistantSpeaking" hidden>🔊 Speaking…</span>
+                <button onclick="resetAssistantChat()">↺ New chat</button>
+            </div>
+            <audio id="assistantAudio" class="assistant-audio" preload="auto"
+                   playsinline webkit-playsinline></audio>
+        </div>
     </div>
 
     <div class="footer">
@@ -1546,33 +2565,243 @@ def render_html_page(theme: Dict[str, Any]) -> str:
         let isPlayerActive = false;
         let audioStreamConfigured = false;
         let activeAudioFile = "";
+        let audioSeekInFlight = false;
+        let lastAudioSyncAt = 0;
+        let lastServerPos = -1.0;
+        let audioStreamEngaged = false;
+        // A seek requested before the media metadata is known (fresh load, or a
+        // file that is still buffering) is parked here and applied as soon as
+        // the element has a timeline to scrub.
+        let pendingSeek = null;
+
+        function audioElIsPlaying() {{
+            const audioEl = document.getElementById('mobileAudioStream');
+            return Boolean(audioEl && !audioEl.paused && !audioEl.ended);
+        }}
+
+        // Seek the phone's element only once per request and clear the guard
+        // when the element reports it actually moved. Without this the 100 ms
+        // poll can re-issue the same seek while the previous one is settling.
+        function seekAudioTo(pos) {{
+            const audioEl = document.getElementById('mobileAudioStream');
+            if (!audioEl || !isFinite(pos) || pos < 0) return;
+            // readyState 0 = HAVE_NOTHING: there is no timeline yet, so writing
+            // currentTime would be ignored. Remember it and retry on metadata.
+            if (audioEl.readyState < 1) {{
+                pendingSeek = pos;
+                return;
+            }}
+            if (audioSeekInFlight && Math.abs(audioEl.currentTime - pos) < 0.5) return;
+            try {{
+                audioSeekInFlight = true;
+                audioEl.currentTime = pos;
+                lastAudioSyncAt = performance.now();
+                setTimeout(() => {{ audioSeekInFlight = false; }}, 1500);
+            }} catch (e) {{
+                pendingSeek = pos;
+                audioSeekInFlight = false;
+            }}
+        }}
+
+        function applyPendingSeek() {{
+            if (pendingSeek === null) return;
+            const audioEl = document.getElementById('mobileAudioStream');
+            if (!audioEl || audioEl.readyState < 1) return;
+            const pos = pendingSeek;
+            pendingSeek = null;
+            seekAudioTo(pos);
+        }}
+
+        // The 30s arrows act on the element that is actually playing (the
+        // phone), then report the new offset to the server so the dashboard
+        // clock and any other client stay in step.
+        function skipBy(delta) {{
+            const audioEl = document.getElementById('mobileAudioStream');
+            const configured = Boolean(audioEl) && audioStreamConfigured;
+            // No src assigned yet (the tap-to-listen overlay is still up): the
+            // browser has no offset to move, so nudge the server clock and let
+            // the element align to it when it engages.
+            if (!configured) {{
+                sendAction(delta < 0 ? 'seek_backward' : 'seek_forward');
+                return;
+            }}
+            const hasTimeline = audioEl.readyState > 0 && isFinite(audioEl.currentTime);
+            // While the file is still loading, stack presses on the offset we
+            // already have queued rather than on a stale currentTime of 0.
+            let base;
+            if (hasTimeline) {{
+                base = audioEl.currentTime;
+            }} else if (pendingSeek !== null) {{
+                base = pendingSeek;
+            }} else {{
+                base = Math.max(0, lastServerPos);
+            }}
+            const dur = (hasTimeline && isFinite(audioEl.duration) && audioEl.duration > 0)
+                ? audioEl.duration
+                : Number(currentDurationSec) || 0;
+            let target = base + delta;
+            if (target < 0) target = 0;
+            if (dur > 0 && target > dur) target = Math.max(0, dur - 0.25);
+            // seekAudioTo parks the request until metadata is available, so a
+            // press during loading still lands once the timeline exists.
+            seekAudioTo(target);
+            sendAction('seek_to', {{ position: target.toFixed(2) }});
+        }}
 
         window.addEventListener('DOMContentLoaded', () => {{
             if (currentThemeId === 'dynamic_rainbow_liquid_glass') {{
                 document.body.classList.add('rainbow-animated');
             }}
+            const audioEl = document.getElementById('mobileAudioStream');
+            if (audioEl) {{
+                audioEl.addEventListener('seeked', () => {{ audioSeekInFlight = false; }});
+                // A skip pressed while the file was still loading has to be
+                // replayed once the element finally has a timeline.
+                audioEl.addEventListener('loadedmetadata', applyPendingSeek);
+                audioEl.addEventListener('canplay', applyPendingSeek);
+                // The phone decides when a mix ends, so tell the server which
+                // file to serve next instead of waiting for a local player.
+                audioEl.addEventListener('ended', () => {{
+                    sendAction('track_ended');
+                }});
+            }}
+            loadThemeList();
+            fetchMiniPlaylist();
         }});
+
+        function applyPalette(th) {{
+            if (!th || !th.id) return;
+            currentThemeId = th.id;
+            const nameEl = document.getElementById('themeNameText');
+            if (nameEl) nameEl.innerText = th.name;
+            const r = document.querySelector(':root');
+            r.style.setProperty('--bg', th.bg);
+            r.style.setProperty('--card-bg', th.card_bg);
+            r.style.setProperty('--card-border', th.card_border);
+            r.style.setProperty('--card-shadow', th.card_shadow);
+            r.style.setProperty('--text-main', th.text_main);
+            r.style.setProperty('--text-dim', th.text_dim);
+            r.style.setProperty('--accent-primary', th.accent_primary);
+            r.style.setProperty('--accent-secondary', th.accent_secondary);
+            r.style.setProperty('--accent-tertiary', th.accent_tertiary);
+            r.style.setProperty('--accent-crimson', th.accent_crimson);
+            r.style.setProperty('--header-gradient', th.header_gradient);
+            r.style.setProperty('--btn-gradient', th.btn_gradient);
+            r.style.setProperty('--btn-shadow', th.btn_shadow);
+            r.style.setProperty('--progress-fill', th.progress_fill);
+            r.style.setProperty('--badge-bg', th.badge_bg);
+            r.style.setProperty('--badge-color', th.badge_color);
+            r.style.setProperty('--eq-bar', th.eq_bar);
+            r.style.setProperty('--eq-peak', th.eq_peak);
+            document.body.classList.toggle('rainbow-animated', th.id === 'dynamic_rainbow_liquid_glass');
+        }}
+
+        async function loadThemeList() {{
+            try {{
+                const res = await fetch('/api/themes');
+                const data = await res.json();
+                const sel = document.getElementById('themeSelect');
+                if (!sel || !data.themes) return;
+                sel.innerHTML = '';
+                data.themes.forEach(th => {{
+                    const opt = document.createElement('option');
+                    opt.value = th.id;
+                    opt.textContent = th.name;
+                    sel.appendChild(opt);
+                }});
+                sel.value = data.current || currentThemeId;
+            }} catch (e) {{}}
+        }}
+
+        async function changeTheme(themeId) {{
+            if (!themeId) return;
+            try {{
+                const res = await fetch('/api/set_theme?theme=' + encodeURIComponent(themeId));
+                const data = await res.json();
+                if (data && data.success && data.palette) {{
+                    applyPalette(data.palette);
+                }} else {{
+                    loadThemeList();
+                }}
+            }} catch (e) {{
+                loadThemeList();
+            }}
+        }}
+
+        function renderMiniPlaylist(data) {{
+            const wrap = document.getElementById('miniPlItems');
+            if (!wrap) return;
+            const items = (data && data.items) || [];
+            const countEl = document.getElementById('miniPlCount');
+            if (countEl) countEl.innerText = items.length + ' of ' + (data.total || 0);
+            wrap.innerHTML = '';
+            items.forEach((item, i) => {{
+                const row = document.createElement('div');
+                row.className = 'mini-pl-item' + (item.current ? ' current' : '');
+                row.onclick = () => sendAction('select_index', {{ index: item.index }});
+
+                const num = document.createElement('div');
+                num.className = 'mini-pl-num';
+                num.innerText = item.current ? '▶' : String(i + 1);
+
+                const body = document.createElement('div');
+                body.className = 'mini-pl-body';
+                const title = document.createElement('div');
+                title.className = 'mini-pl-title';
+                title.innerText = item.title || 'Untitled Mix';
+                const dur = document.createElement('div');
+                dur.className = 'mini-pl-dur';
+                dur.innerText = (item.artist || '') + (item.duration ? ' • ' + item.duration : '');
+                body.appendChild(title);
+                body.appendChild(dur);
+
+                row.appendChild(num);
+                row.appendChild(body);
+                wrap.appendChild(row);
+            }});
+        }}
+
+        async function fetchMiniPlaylist() {{
+            try {{
+                const res = await fetch('/api/playlist');
+                renderMiniPlaylist(await res.json());
+            }} catch (e) {{}}
+        }}
 
         function activateMobileStream() {{
             const overlay = document.getElementById('streamOverlay');
             if (overlay) overlay.style.display = 'none';
-
             const banner = document.getElementById('mobileAudioBanner');
             if (banner) banner.style.display = 'block';
-
             const audioEl = document.getElementById('mobileAudioStream');
             if (audioEl) {{
                 if (activeAudioFile && !audioStreamConfigured) {{
                     audioEl.src = '/api/stream?file=' + encodeURIComponent(activeAudioFile);
                     audioStreamConfigured = true;
                 }}
+                // One-time alignment with the saved stream position; the
+                // browser then owns playback. Never re-sync from here.
+                if (isPlayerActive && lastServerPos > 0) {{
+                    audioEl.addEventListener('loadedmetadata', function once() {{
+                        audioEl.removeEventListener('loadedmetadata', once);
+                        seekAudioTo(lastServerPos);
+                    }});
+                }}
                 audioEl.play().then(() => {{
+                    audioStreamEngaged = true;
                     console.log("Audio stream engaged successfully");
                 }}).catch(e => {{
                     console.log("Stream play blocked:", e);
                     if (overlay) overlay.style.display = 'flex';
                 }});
             }}
+        }}
+
+        function dismissStreamOverlay() {{
+            // The assistant tab does not need audio, so let a phone open it
+            // without being forced through the autoplay unlock first.
+            const overlay = document.getElementById('streamOverlay');
+            if (overlay) overlay.style.display = 'none';
         }}
 
         function handlePlayPauseClick() {{
@@ -1645,7 +2874,7 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             
             const audioEl = document.getElementById('mobileAudioStream');
             if (audioEl && audioEl.duration) {{
-                audioEl.currentTime = seekPos;
+                seekAudioTo(seekPos);
             }}
 
             sendAction('seek_to', {{ position: seekPos.toFixed(1) }});
@@ -1672,39 +2901,22 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             if (btn) btn.classList.toggle('active', Boolean(repMode && repMode !== 'off'));
         }}
 
+        function formatClock(seconds) {{
+            const total = Math.max(0, Math.floor(Number(seconds) || 0));
+            const h = Math.floor(total / 3600);
+            const m = Math.floor((total % 3600) / 60);
+            const s = total % 60;
+            return String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
+        }}
+
         async function fetchTheme() {{
             try {{
                 const res = await fetch('/api/theme');
                 const th = await res.json();
                 if (th && th.id && th.id !== currentThemeId) {{
-                    currentThemeId = th.id;
-                    document.getElementById('themeNameText').innerText = th.name;
-
-                    const r = document.querySelector(':root');
-                    r.style.setProperty('--bg', th.bg);
-                    r.style.setProperty('--card-bg', th.card_bg);
-                    r.style.setProperty('--card-border', th.card_border);
-                    r.style.setProperty('--card-shadow', th.card_shadow);
-                    r.style.setProperty('--text-main', th.text_main);
-                    r.style.setProperty('--text-dim', th.text_dim);
-                    r.style.setProperty('--accent-primary', th.accent_primary);
-                    r.style.setProperty('--accent-secondary', th.accent_secondary);
-                    r.style.setProperty('--accent-tertiary', th.accent_tertiary);
-                    r.style.setProperty('--accent-crimson', th.accent_crimson);
-                    r.style.setProperty('--header-gradient', th.header_gradient);
-                    r.style.setProperty('--btn-gradient', th.btn_gradient);
-                    r.style.setProperty('--btn-shadow', th.btn_shadow);
-                    r.style.setProperty('--progress-fill', th.progress_fill);
-                    r.style.setProperty('--badge-bg', th.badge_bg);
-                    r.style.setProperty('--badge-color', th.badge_color);
-                    r.style.setProperty('--eq-bar', th.eq_bar);
-                    r.style.setProperty('--eq-peak', th.eq_peak);
-
-                    if (th.id === 'dynamic_rainbow_liquid_glass') {{
-                        document.body.classList.add('rainbow-animated');
-                    }} else {{
-                        document.body.classList.remove('rainbow-animated');
-                    }}
+                    applyPalette(th);
+                    const sel = document.getElementById('themeSelect');
+                    if (sel) sel.value = th.id;
                 }}
             }} catch (e) {{}}
         }}
@@ -1713,25 +2925,50 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             try {{
                 const res = await fetch('/api/eq');
                 const data = await res.json();
-                isPlayerActive = (data.state === 'playing');
+                // The phone is the only audio output, so the visualizer follows
+                // its element. The server cannot observe audio itself.
+                isPlayerActive = audioElIsPlaying();
 
                 if (data.levels && data.levels.length) {{
                     for (let i = 0; i < BANDS && i < data.levels.length; i++) {{
                         targetLevels[i] = isPlayerActive ? Math.max(0.04, Math.min(1.0, data.levels[i])) : 0.04;
                     }}
                 }}
-                if (data.position) document.getElementById('posTime').innerText = data.position;
-                if (data.duration) document.getElementById('durTime').innerText = data.duration;
-                if (data.progress_pct !== undefined) {{
-                    document.getElementById('progressBar').style.width = Math.max(0, Math.min(100, data.progress_pct)) + '%';
+                // No local audio analysis exists (the phone owns playback), so
+                // synthesise a gentle spectrum while the stream is running.
+                if (isPlayerActive) {{
+                    const t = performance.now() / 1000;
+                    for (let i = 0; i < BANDS; i++) {{
+                        const base = 0.30 + 0.22 * Math.sin(t * 1.7 + i * 0.55);
+                        const wobble = 0.14 * Math.sin(t * 3.1 + i * 1.15);
+                        const tilt = 1.0 - (i / BANDS) * 0.55;
+                        targetLevels[i] = Math.max(0.05, Math.min(0.95, (base + wobble) * tilt));
+                    }}
+                }}
+                const audioEl = document.getElementById('mobileAudioStream');
+                const hasLocalClock = audioEl && isFinite(audioEl.duration) && audioEl.duration > 0 && audioStreamConfigured;
+                const shownPos = hasLocalClock ? audioEl.currentTime : Number(data.position_sec || 0);
+                const shownDur = hasLocalClock ? audioEl.duration : Number(data.duration_sec || 0);
+
+                if (hasLocalClock) {{
+                    document.getElementById('posTime').innerText = formatClock(shownPos);
+                    document.getElementById('durTime').innerText = formatClock(shownDur);
+                    const pct = shownDur > 0 ? (shownPos / shownDur) * 100 : 0;
+                    document.getElementById('progressBar').style.width = Math.max(0, Math.min(100, pct)) + '%';
+                    currentDurationSec = shownDur;
+                }} else {{
+                    if (data.position) document.getElementById('posTime').innerText = data.position;
+                    if (data.duration) document.getElementById('durTime').innerText = data.duration;
+                    if (data.progress_pct !== undefined) {{
+                        document.getElementById('progressBar').style.width = Math.max(0, Math.min(100, data.progress_pct)) + '%';
+                    }}
                 }}
                 if (data.position_sec !== undefined) {{
-                    const audioEl = document.getElementById('mobileAudioStream');
-                    if (audioEl && !audioEl.paused && audioStreamConfigured) {{
-                        if (Math.abs(audioEl.currentTime - data.position_sec) > 2.0) {{
-                            audioEl.currentTime = data.position_sec;
-                        }}
-                    }}
+                    // The server only records where streaming last left off.
+                    // The browser clock is authoritative while audio plays, so
+                    // never seek from this poll - that is what used to trap
+                    // playback in a repeating fragment.
+                    lastServerPos = Number(data.position_sec);
                 }}
                 if (data.volume !== undefined) {{
                     document.getElementById('volPill').innerText = 'Vol: ' + data.volume + '%';
@@ -1745,6 +2982,31 @@ def render_html_page(theme: Dict[str, Any]) -> str:
                 updateShuffleUI(Boolean(data.shuffle));
                 if (data.repeat) updateRepeatUI(data.repeat);
             }} catch (e) {{}}
+        }}
+
+        function updateAutoplayNotice(state) {{
+            const el = document.getElementById('autoplayNotice');
+            if (!el) return;
+            if (!state || !state.status || state.status === 'pending') {{
+                el.style.display = 'none';
+                return;
+            }}
+            const labels = {{
+                ready: '🎧 Stream ready — tap to listen',
+                playing: '🎧 Stream ready — tap to listen',
+                empty_playlist: '⏹ No mixes found in the archive',
+                disabled: '⏹ Streaming disabled',
+                player_unavailable: '⚠ Stream source unavailable',
+                player_unreachable: '⚠ Stream source unreachable',
+                playback_unverified: '⚠ Stream not confirmed',
+            }};
+            el.innerText = labels[state.status] || state.status;
+            el.className = 'autoplay-notice ' + (
+                (state.status === 'ready' || state.status === 'playing') ? 'ok' :
+                (state.status === 'empty_playlist' || state.status === 'disabled') ? '' : 'warn'
+            );
+            el.style.display = 'block';
+            if (state.detail) el.title = state.detail;
         }}
 
         async function fetchStatus() {{
@@ -1773,18 +3035,34 @@ def render_html_page(theme: Dict[str, Any]) -> str:
 
                 document.getElementById('sourceBadge').innerText = (data.player || "None").toUpperCase();
                 currentDurationSec = data.duration_sec || 0;
+                updateAutoplayNotice(data.autoplay);
 
                 if (data.active_file && activeAudioFile !== data.active_file) {{
+                    const wasPlaying = audioStreamEngaged && audioElIsPlaying();
                     activeAudioFile = data.active_file;
                     audioStreamConfigured = false;
+                    lastServerPos = -1.0;
+                    // A skip queued for the previous mix must not be replayed
+                    // against the next file.
+                    pendingSeek = null;
                     const audioEl = document.getElementById('mobileAudioStream');
                     if (audioEl) {{
                         audioEl.src = '/api/stream?file=' + encodeURIComponent(data.active_file);
                         audioStreamConfigured = true;
-                        if (data.position_sec > 0) {{
-                            audioEl.currentTime = data.position_sec;
+                        const resumeAt = Number(data.position_sec) || 0;
+                        if (resumeAt > 0) {{
+                            // Wait for metadata before seeking, otherwise the
+                            // assignment is discarded by the new source load.
+                            audioEl.addEventListener('loadedmetadata', function once() {{
+                                audioEl.removeEventListener('loadedmetadata', once);
+                                seekAudioTo(resumeAt);
+                            }});
                         }}
                         audioEl.load();
+                        // Keep playing across a server-side track change.
+                        if (wasPlaying) {{
+                            audioEl.play().catch(() => {{}});
+                        }}
                     }}
                 }}
 
@@ -1825,15 +3103,543 @@ def render_html_page(theme: Dict[str, Any]) -> str:
                 await fetch(url, {{ method: 'POST' }});
                 setTimeout(fetchEq, 50);
                 setTimeout(fetchStatus, 150);
+                setTimeout(fetchMiniPlaylist, 250);
             }} catch (e) {{}}
         }}
 
         setInterval(fetchEq, 100);
         setInterval(fetchStatus, 2000);
         setInterval(fetchTheme, 3000);
+        setInterval(fetchMiniPlaylist, 15000);
         fetchEq();
         fetchStatus();
         fetchTheme();
+        fetchMiniPlaylist();
+
+        // ------------------------------------------------------------------
+        // MP ASSISTANT TAB
+        // The player keeps polling and playing while the assistant is open, so
+        // a mix can keep running underneath the conversation.
+        // ------------------------------------------------------------------
+        let assistantOnline = false;
+        let assistantBusy = false;
+        let assistantSession = '';
+        const DEFAULT_ASSISTANT_VOICE = 'stephen_hawking_matrix';
+
+        function assistantSessionId() {{
+            if (!assistantSession) {{
+                const key = 'mpAssistantSession';
+                try {{
+                    assistantSession = localStorage.getItem(key) || '';
+                }} catch (e) {{ assistantSession = ''; }}
+                if (!assistantSession) {{
+                    assistantSession = 'web-' + Date.now().toString(36) + '-' +
+                        Math.random().toString(36).slice(2, 8);
+                    try {{ localStorage.setItem(key, assistantSession); }} catch (e) {{}}
+                }}
+            }}
+            return assistantSession;
+        }}
+
+        function showTab(name) {{
+            const isAssistant = name === 'assistant';
+            const playerPanel = document.getElementById('panelPlayer');
+            const assistantPanel = document.getElementById('panelAssistant');
+            const playerBtn = document.getElementById('tabBtnPlayer');
+            const assistantBtn = document.getElementById('tabBtnAssistant');
+            if (!playerPanel || !assistantPanel) return;
+
+            playerPanel.hidden = isAssistant;
+            assistantPanel.hidden = !isAssistant;
+            if (playerBtn) {{
+                playerBtn.classList.toggle('active', !isAssistant);
+                playerBtn.setAttribute('aria-selected', String(!isAssistant));
+            }}
+            if (assistantBtn) {{
+                assistantBtn.classList.toggle('active', isAssistant);
+                assistantBtn.setAttribute('aria-selected', String(isAssistant));
+            }}
+            try {{ localStorage.setItem('mpCompanionTab', name); }} catch (e) {{}}
+            // Keep the deep link shareable and survive a Safari reload.
+            try {{
+                if (history.replaceState) {{
+                    history.replaceState(null, '', '#' + name);
+                }}
+            }} catch (e) {{}}
+            if (isAssistant) {{
+                // Entering the assistant tab is an explicit "no audio needed"
+                // choice, so do not leave the autoplay gate covering the chat.
+                dismissStreamOverlay();
+                fetchAssistantStatus();
+                // The tab switch is a real tap, so use it to unlock the reply
+                // element before the model has even been asked anything.
+                unlockAssistantAudio();
+                const input = document.getElementById('assistantInput');
+                if (input && assistantOnline) setTimeout(() => input.focus(), 60);
+            }}
+        }}
+
+        function assistantVoiceChoice() {{
+            const sel = document.getElementById('assistantVoice');
+            return (sel && sel.value) || DEFAULT_ASSISTANT_VOICE;
+        }}
+
+        function setAssistantStatus(state, label) {{
+            const el = document.getElementById('assistantStatus');
+            if (!el) return;
+            el.className = 'assistant-status ' + (state || '');
+            el.innerText = label || state || 'CHECKING…';
+        }}
+
+        function appendAssistantMessage(role, text) {{
+            const log = document.getElementById('assistantLog');
+            if (!log) return null;
+            const bubble = document.createElement('div');
+            bubble.className = 'msg ' + (role === 'user' ? 'user' : 'agent');
+            bubble.innerText = text || '';
+            log.appendChild(bubble);
+            log.scrollTop = log.scrollHeight;
+            return bubble;
+        }}
+
+        function appendAssistantHint(text) {{
+            const log = document.getElementById('assistantLog');
+            if (!log) return null;
+            const hint = document.createElement('div');
+            hint.className = 'msg-hint';
+            hint.innerText = text;
+            log.appendChild(hint);
+            log.scrollTop = log.scrollHeight;
+            return hint;
+        }}
+
+        async function fetchAssistantStatus() {{
+            try {{
+                const res = await fetch('/api/assistant');
+                const data = await res.json();
+                assistantOnline = Boolean(data.available);
+                if (assistantOnline) {{
+                    setAssistantStatus('online', 'ONLINE');
+                }} else if (data.status === 'disabled') {{
+                    setAssistantStatus('offline', 'DISABLED');
+                }} else {{
+                    setAssistantStatus('offline', 'OFFLINE');
+                }}
+                if (data.voices && data.voices.length) {{
+                    const sel = document.getElementById('assistantVoice');
+                    if (sel && sel.options.length !== data.voices.length) {{
+                        const saved = sel.value || DEFAULT_ASSISTANT_VOICE;
+                        sel.innerHTML = '';
+                        data.voices.forEach(v => {{
+                            const opt = document.createElement('option');
+                            opt.value = v.id;
+                            opt.textContent = v.name;
+                            sel.appendChild(opt);
+                        }});
+                        sel.value = saved;
+                    }}
+                }}
+                if (data.voice) {{
+                    const sel = document.getElementById('assistantVoice');
+                    if (sel && !sel.dataset.touched) sel.value = data.voice;
+                }}
+                return data;
+            }} catch (e) {{
+                assistantOnline = false;
+                setAssistantStatus('offline', 'UNREACHABLE');
+                return null;
+            }}
+        }}
+
+        function assistantAudioEl() {{
+            return document.getElementById('assistantAudio');
+        }}
+
+        // Pause the mix while the assistant talks, then put it back.
+        function duckMixForSpeech(isSpeaking) {{
+            const mix = document.getElementById('mobileAudioStream');
+            const badge = document.getElementById('assistantSpeaking');
+            if (badge) badge.hidden = !isSpeaking;
+            if (!mix) return;
+            if (isSpeaking) {{
+                if (!mix.paused) {{
+                    mix.dataset.duckedByAssistant = '1';
+                    mix.pause();
+                }}
+            }} else if (mix.dataset.duckedByAssistant === '1') {{
+                delete mix.dataset.duckedByAssistant;
+                mix.play().catch(() => {{}});
+            }}
+        }}
+
+        function splitForSpeech(text) {{
+            // Piper is slow on very long input, and Safari caps URL length.
+            // Speak sentence-sized chunks back to back instead.
+            const clean = (text || '').replace(/\\s+/g, ' ').trim();
+            if (!clean) return [];
+            const parts = clean.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [clean];
+            const chunks = [];
+            let current = '';
+            for (const part of parts) {{
+                if ((current + part).length > 240 && current) {{
+                    chunks.push(current.trim());
+                    current = part;
+                }} else {{
+                    current += ' ' + part;
+                }}
+            }}
+            if (current.trim()) chunks.push(current.trim());
+            return chunks;
+        }}
+
+        // ------------------------------------------------------------------
+        // SPEECH UNLOCK (mobile autoplay policy)
+        //
+        // A phone only lets audio start inside a real tap. The model takes
+        // several seconds to answer, so by the time the reply is ready that
+        // tap is long gone and `play()` rejects with NotAllowedError, leaving
+        // a text-only reply. Answering the tap with a mute priming clip marks
+        // the element as user-activated, so later programmatic playback (the
+        // actual spoken reply) is allowed. Every tap on the assistant tab also
+        // re-primes, which keeps it working after a reload or a long pause.
+        // ------------------------------------------------------------------
+        const SILENT_WAV = 'data:audio/wav;base64,UklGRkQDAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YSADAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==';
+        let assistantAudioUnlocked = false;
+        let assistantSpeechUrl = '';
+        let assistantSpeechToken = 0;
+        let assistantLastPrimeAt = 0;
+        let assistantSpeaking = false;
+
+        function unlockAssistantAudio() {{
+            const el = assistantAudioEl();
+            if (!el) return Promise.resolve(false);
+            // Never interrupt a reply that is already speaking.
+            if (assistantSpeaking) return Promise.resolve(true);
+            if (assistantAudioUnlocked && Date.now() - assistantLastPrimeAt < 60000) {{
+                return Promise.resolve(true);
+            }}
+            // A phone fires pointerdown and touchstart for the same tap; only
+            // the first one needs to prime the element.
+            if (Date.now() - assistantLastPrimeAt < 600) {{
+                return Promise.resolve(assistantAudioUnlocked);
+            }}
+            assistantLastPrimeAt = Date.now();
+            return new Promise(resolve => {{
+                const restore = () => {{
+                    el.removeEventListener('playing', onPlaying);
+                    el.removeEventListener('error', onError);
+                }};
+                const onPlaying = () => {{
+                    restore();
+                    // Release the element at once; the priming clip has no
+                    // audible content and must not delay the real reply.
+                    try {{ el.pause(); }} catch (e) {{}}
+                    assistantAudioUnlocked = true;
+                    resolve(true);
+                }};
+                const onError = () => {{
+                    restore();
+                    assistantAudioUnlocked = false;
+                    resolve(false);
+                }};
+                el.addEventListener('playing', onPlaying);
+                el.addEventListener('error', onError);
+                try {{
+                    // The priming clip must not duck the mix or show the
+                    // speaking badge, so mute any reply handler for its run.
+                    el.onplay = null;
+                    el.src = SILENT_WAV;
+                    el.play().then(() => {{
+                        // Some browsers resolve without firing `playing`.
+                        if (!assistantAudioUnlocked) {{
+                            restore();
+                            try {{ el.pause(); }} catch (e) {{}}
+                            assistantAudioUnlocked = true;
+                        }}
+                        resolve(true);
+                    }}).catch(() => {{
+                        restore();
+                        assistantAudioUnlocked = false;
+                        resolve(false);
+                    }});
+                }} catch (e) {{
+                    restore();
+                    resolve(false);
+                }}
+            }});
+        }}
+
+        function stopAssistantSpeech() {{
+            assistantSpeechToken += 1;
+            assistantSpeaking = false;
+            const el = assistantAudioEl();
+            if (el) {{
+                try {{ el.pause(); }} catch (e) {{}}
+                el.onplay = null;
+            }}
+            duckMixForSpeech(false);
+        }}
+
+        function speakAssistantReply(text, bubble) {{
+            const speak = document.getElementById('assistantSpeak');
+            if (!speak || !speak.checked) return;
+            const audioEl = assistantAudioEl();
+            if (!audioEl) return;
+
+            const chunks = splitForSpeech(text);
+            if (!chunks.length) return;
+            const token = ++assistantSpeechToken;
+            let index = 0;
+            assistantSpeaking = true;
+
+            const finish = () => {{
+                if (token !== assistantSpeechToken) return;
+                assistantSpeaking = false;
+                duckMixForSpeech(false);
+            }};
+
+            const offerReplay = (retry) => {{
+                if (token !== assistantSpeechToken || !bubble) return;
+                if (bubble.querySelector('.assistant-replay')) return;
+                const replay = document.createElement('button');
+                replay.className = 'assistant-replay';
+                replay.type = 'button';
+                replay.innerText = '▶ Speak reply';
+                // The retry runs inside this tap, so playback is allowed.
+                replay.onclick = () => {{
+                    replay.remove();
+                    retry();
+                }};
+                bubble.appendChild(document.createElement('br'));
+                bubble.appendChild(replay);
+            }};
+
+            const playNext = () => {{
+                if (token !== assistantSpeechToken) return;
+                if (index >= chunks.length) {{
+                    finish();
+                    return;
+                }}
+                const body = JSON.stringify({{
+                    text: chunks[index],
+                    voice: assistantVoiceChoice(),
+                }});
+                index += 1;
+                fetch('/api/assistant/speech', {{
+                    method: 'POST',
+                    headers: {{ 'Content-Type': 'application/json' }},
+                    body: body,
+                }}).then(res => {{
+                    if (!res.ok) throw new Error('speech ' + res.status);
+                    return res.blob();
+                }}).then(blob => {{
+                    if (token !== assistantSpeechToken) return null;
+                    if (assistantSpeechUrl) URL.revokeObjectURL(assistantSpeechUrl);
+                    assistantSpeechUrl = URL.createObjectURL(blob);
+                    audioEl.onended = () => {{
+                        if (token !== assistantSpeechToken) return;
+                        playNext();
+                    }};
+                    audioEl.onerror = () => {{
+                        if (token !== assistantSpeechToken) return;
+                        finish();
+                    }};
+                    audioEl.src = assistantSpeechUrl;
+                    return audioEl.play().then(() => {{
+                        assistantAudioUnlocked = true;
+                    }}).catch(err => {{
+                        // Autoplay was blocked (no tap, or the unlock did not
+                        // stick). Stop the queue and surface a one-tap retry so
+                        // the reply is never silently text-only.
+                        if (token !== assistantSpeechToken) return;
+                        assistantAudioUnlocked = err && err.name === 'NotAllowedError'
+                            ? false
+                            : assistantAudioUnlocked;
+                        assistantSpeaking = false;
+                        duckMixForSpeech(false);
+                        offerReplay(() => speakAssistantReply(text, bubble));
+                    }});
+                }}).catch(() => {{
+                    if (token !== assistantSpeechToken) return;
+                    finish();
+                }});
+            }};
+
+            audioEl.onplay = () => duckMixForSpeech(true);
+            duckMixForSpeech(true);
+            playNext();
+        }}
+
+        function resetAssistantChat() {{
+            assistantSession = '';
+            try {{ localStorage.removeItem('mpAssistantSession'); }} catch (e) {{}}
+            const log = document.getElementById('assistantLog');
+            if (log) {{
+                log.innerHTML = '';
+                appendAssistantHint('New chat started with MP Harmony.');
+            }}
+            stopAssistantSpeech();
+            const audioEl = assistantAudioEl();
+            if (audioEl) {{
+                try {{ audioEl.pause(); }} catch (e) {{}}
+                audioEl.removeAttribute('src');
+            }}
+            if (assistantSpeechUrl) {{
+                try {{ URL.revokeObjectURL(assistantSpeechUrl); }} catch (e) {{}}
+                assistantSpeechUrl = '';
+            }}
+            duckMixForSpeech(false);
+        }}
+
+        function setAssistantBusy(busy) {{
+            assistantBusy = busy;
+            const btn = document.getElementById('assistantSend');
+            if (btn) {{
+                btn.disabled = busy;
+                btn.innerText = busy ? '…' : 'Send';
+            }}
+        }}
+
+        async function sendAssistantMessage() {{
+            if (assistantBusy) return;
+            const input = document.getElementById('assistantInput');
+            if (!input) return;
+            const message = input.value.trim();
+            if (!message) return;
+
+            // The send itself is a gesture. Unlock playback now so the reply
+            // can be spoken when it arrives several seconds from now.
+            unlockAssistantAudio();
+
+            if (!assistantOnline) {{
+                const status = await fetchAssistantStatus();
+                if (!status || !status.available) {{
+                    appendAssistantHint(
+                        'MP Harmony Agent is not running. Start it from the manager: ' +
+                        'AI Assistant & Local LLM Servers Suite, then option 4 (Manage MP Harmony AI Agent).'
+                    );
+                    return;
+                }}
+            }}
+
+            input.value = '';
+            input.style.height = 'auto';
+            appendAssistantMessage('user', message);
+            const bubble = appendAssistantMessage('agent', '▍ thinking…');
+            setAssistantBusy(true);
+
+            let reply = '';
+            let started = false;
+            try {{
+                const res = await fetch('/api/assistant/chat', {{
+                    method: 'POST',
+                    headers: {{ 'Content-Type': 'application/json' }},
+                    body: JSON.stringify({{
+                        message: message,
+                        session: assistantSessionId(),
+                    }}),
+                }});
+                if (!res.ok || !res.body) {{
+                    let detail = '';
+                    try {{ detail = (await res.json()).error || ''; }} catch (e) {{}}
+                    throw new Error(detail || ('HTTP ' + res.status));
+                }}
+
+                const reader = res.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+
+                while (true) {{
+                    const chunk = await reader.read();
+                    if (chunk.done) break;
+                    buffer += decoder.decode(chunk.value, {{ stream: true }});
+                    const frames = buffer.split('\\n\\n');
+                    buffer = frames.pop();
+                    for (const frame of frames) {{
+                        for (const line of frame.split('\\n')) {{
+                            const trimmed = line.trim();
+                            if (!trimmed.startsWith('data:')) continue;
+                            const payload = trimmed.slice(5).trim();
+                            if (!payload || payload === '[DONE]') continue;
+                            let obj;
+                            try {{ obj = JSON.parse(payload); }} catch (e) {{ continue; }}
+                            const delta = obj.choices && obj.choices[0] &&
+                                obj.choices[0].delta && obj.choices[0].delta.content;
+                            if (delta) {{
+                                if (!started) {{
+                                    started = true;
+                                    bubble.innerText = '';
+                                }}
+                                reply += delta;
+                                bubble.innerText = reply;
+                                const log = document.getElementById('assistantLog');
+                                if (log) log.scrollTop = log.scrollHeight;
+                            }}
+                        }}
+                    }}
+                }}
+            }} catch (err) {{
+                bubble.classList.add('error');
+                bubble.innerText = 'Could not reach MP Harmony: ' + (err.message || err);
+                setAssistantBusy(false);
+                return;
+            }}
+
+            if (!reply.trim()) {{
+                bubble.classList.add('error');
+                bubble.innerText = 'MP Harmony returned no text. Check the agent console for tool output.';
+            }} else {{
+                bubble.innerText = reply;
+                speakAssistantReply(reply, bubble);
+            }}
+            setAssistantBusy(false);
+        }}
+
+        window.addEventListener('DOMContentLoaded', () => {{
+            const savedTab = (location.hash || '').replace('#', '');
+            let storedTab = '';
+            try {{ storedTab = localStorage.getItem('mpCompanionTab') || ''; }} catch (e) {{}}
+            showTab(savedTab === 'assistant' || storedTab === 'assistant' ? 'assistant' : 'player');
+
+            // Prime the reply element on the first tap anywhere in the
+            // assistant panel. Phones only allow audio from a user gesture,
+            // and the reply arrives long after the send tap has expired.
+            const assistantPanel = document.getElementById('panelAssistant');
+            if (assistantPanel) {{
+                const prime = () => {{ unlockAssistantAudio(); }};
+                assistantPanel.addEventListener('pointerdown', prime);
+                assistantPanel.addEventListener('touchstart', prime, {{ passive: true }});
+            }}
+
+            const voiceSel = document.getElementById('assistantVoice');
+            if (voiceSel) {{
+                voiceSel.addEventListener('change', () => {{ voiceSel.dataset.touched = '1'; }});
+            }}
+            const speakBox = document.getElementById('assistantSpeak');
+            if (speakBox) {{
+                speakBox.addEventListener('change', () => {{
+                    if (!speakBox.checked) stopAssistantSpeech();
+                }});
+            }}
+            const input = document.getElementById('assistantInput');
+            if (input) {{
+                input.addEventListener('input', () => {{
+                    input.style.height = 'auto';
+                    input.style.height = Math.min(130, input.scrollHeight) + 'px';
+                }});
+                input.addEventListener('keydown', (ev) => {{
+                    // Enter sends, Shift+Enter makes a new line (matches the TUI).
+                    if (ev.key === 'Enter' && !ev.shiftKey) {{
+                        ev.preventDefault();
+                        sendAssistantMessage();
+                    }}
+                }});
+            }}
+            fetchAssistantStatus();
+            setInterval(() => {{
+                if (!document.getElementById('panelAssistant').hidden) fetchAssistantStatus();
+            }}, 20000);
+        }});
     </script>
 </body>
 </html>
@@ -1851,7 +3657,9 @@ class CompanionHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
             self.end_headers()
-        elif url.path in ("/api/status", "/api/theme", "/api/eq"):
+        elif url.path in ("/api/status", "/api/theme", "/api/eq", "/api/autoplay",
+                          "/api/themes", "/api/set_theme", "/api/playlist",
+                          "/api/assistant", "/api/assistant/speech"):
             self.send_response(200)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Access-Control-Allow-Origin", "*")
@@ -1881,11 +3689,18 @@ class CompanionHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(json.dumps(eq_data).encode("utf-8"))
         elif url.path == "/api/status":
             status = get_playback_status(CLI_THEME)
+            status["autoplay"] = autoplay_state()
             self.send_response(200)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(status).encode("utf-8"))
+        elif url.path == "/api/autoplay":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(json.dumps(autoplay_state()).encode("utf-8"))
         elif url.path == "/api/theme":
             theme = get_theme_palette(CLI_THEME)
             self.send_response(200)
@@ -1893,65 +3708,154 @@ class CompanionHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(theme).encode("utf-8"))
+        elif url.path == "/api/themes":
+            payload = {
+                "current": get_current_theme_id(CLI_THEME),
+                "themes": available_themes(),
+            }
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(json.dumps(payload).encode("utf-8"))
+        elif url.path == "/api/set_theme":
+            requested = parsed_query.get("theme", [""])[0]
+            chosen = set_web_theme(requested) if requested else None
+            success = chosen is not None
+            payload = {
+                "success": success,
+                "theme": chosen or get_current_theme_id(CLI_THEME),
+                "palette": get_theme_palette(CLI_THEME) if success else {},
+            }
+            self.send_response(200 if success else 400)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(json.dumps(payload).encode("utf-8"))
+        elif url.path == "/api/playlist":
+            payload = get_mini_playlist()
+            payload["shuffle"] = bool(load_stream_session().get("shuffle", False))
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(json.dumps(payload).encode("utf-8"))
+        elif url.path == "/api/assistant":
+            payload = assistant_status()
+            if payload.get("available"):
+                payload["voices"] = assistant_voices()
+                payload["enabled"] = True
+            else:
+                payload["voices"] = assistant_voices()
+                payload["enabled"] = assistant_enabled()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(json.dumps(payload).encode("utf-8"))
+        elif url.path == "/api/assistant/speech":
+            self._serve_assistant_speech(parsed_query)
         elif url.path == "/api/stream":
             file_path = parsed_query.get("file", [""])[0]
             if file_path and os.path.isfile(file_path):
-                try:
-                    file_size = os.path.getsize(file_path)
-                    range_header = self.headers.get("Range")
-                    
-                    ext = Path(file_path).suffix.lower()
-                    content_type = "audio/flac" if ext == ".flac" else ("audio/wav" if ext == ".wav" else "audio/mpeg")
-
-                    if range_header:
-                        m = re.match(r'bytes=(\d+)-(\d*)', range_header)
-                        if m:
-                            start = int(m.group(1))
-                            end = int(m.group(2)) if m.group(2) else file_size - 1
-                            if start >= file_size:
-                                self.send_response(416)
-                                self.send_header("Content-Range", f"bytes */{file_size}")
-                                self.end_headers()
-                                return
-                            length = end - start + 1
-                            self.send_response(206)
-                            self.send_header("Content-Type", content_type)
-                            self.send_header("Content-Range", f"bytes {start}-{end}/{file_size}")
-                            self.send_header("Content-Length", str(length))
-                            self.send_header("Accept-Ranges", "bytes")
-                            self.send_header("Access-Control-Allow-Origin", "*")
-                            self.end_headers()
-
-                            with open(file_path, "rb") as f:
-                                f.seek(start)
-                                remaining = length
-                                chunk_size = 65536
-                                while remaining > 0:
-                                    to_read = min(chunk_size, remaining)
-                                    data = f.read(to_read)
-                                    if not data:
-                                        break
-                                    self.wfile.write(data)
-                                    remaining -= len(data)
-                            return
-
-                    # Standard full stream / fallback request
-                    self.send_response(200)
-                    self.send_header("Content-Type", content_type)
-                    self.send_header("Content-Length", str(file_size))
-                    self.send_header("Accept-Ranges", "bytes")
-                    self.send_header("Access-Control-Allow-Origin", "*")
-                    self.end_headers()
-                    with open(file_path, "rb") as f:
-                        shutil.copyfileobj(f, self.wfile)
-                    return
-                except Exception:
-                    pass
+                self._serve_audio_stream(file_path)
+                return
             self.send_response(404)
             self.end_headers()
         else:
             self.send_response(404)
             self.end_headers()
+
+    # --------------------------------------------------------------------------
+    # AUDIO STREAMING
+    #
+    # Phones and tablets pull the whole mix over HTTP and seek within it. Two
+    # things matter for correctness:
+    #   * `bytes=start-` must be honoured for the whole tail, otherwise the
+    #     element receives a truncated body and restarts from the same offset.
+    #   * A client that disconnects mid-transfer raises BrokenPipeError, which
+    #     is normal and must never be reported as a server fault.
+    # --------------------------------------------------------------------------
+    STREAM_CHUNK = 65536
+
+    def _serve_audio_stream(self, file_path: str) -> None:
+        try:
+            file_size = os.path.getsize(file_path)
+            content_type = AUDIO_CONTENT_TYPES.get(Path(file_path).suffix.lower(), "audio/mpeg")
+            start, end = self._parse_range_header(file_size)
+
+            if start is None:
+                self.send_response(416)
+                self.send_header("Content-Range", f"bytes */{file_size}")
+                self.send_header("Content-Length", "0")
+                self.send_header("Accept-Ranges", "bytes")
+                self.end_headers()
+                return
+
+            length = end - start + 1
+            if start == 0 and end == file_size - 1:
+                self.send_response(200)
+                self.send_header("Content-Length", str(file_size))
+            else:
+                self.send_response(206)
+                self.send_header("Content-Range", f"bytes {start}-{end}/{file_size}")
+                self.send_header("Content-Length", str(length))
+            self.send_header("Content-Type", content_type)
+            self.send_header("Accept-Ranges", "bytes")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+
+            with open(file_path, "rb") as f:
+                f.seek(start)
+                remaining = length
+                while remaining > 0:
+                    data = f.read(min(self.STREAM_CHUNK, remaining))
+                    if not data:
+                        break
+                    self.wfile.write(data)
+                    remaining -= len(data)
+        except (BrokenPipeError, ConnectionResetError):
+            # The phone scrubbed away or closed the tab: not an error.
+            self.close_connection = True
+        except OSError:
+            try:
+                self.send_error(404)
+            except Exception:
+                pass
+
+    def _parse_range_header(self, file_size: int) -> Tuple[Optional[int], int]:
+        """Return (start, end) for the requested bytes, or (None, 0) if invalid.
+
+        A missing or unparsable header means "send the whole file".
+        """
+        raw = (self.headers.get("Range") or "").strip()
+        if not raw:
+            return 0, file_size - 1
+
+        m = re.match(r'bytes=(\d*)-(\d*)$', raw)
+        if not m or (not m.group(1) and not m.group(2)):
+            return 0, file_size - 1
+
+        try:
+            if not m.group(1):
+                # Suffix form, e.g. "bytes=-65536" = last 64 KiB.
+                suffix = int(m.group(2))
+                if suffix <= 0:
+                    return None, 0
+                return max(0, file_size - suffix), file_size - 1
+
+            start = int(m.group(1))
+            end = int(m.group(2)) if m.group(2) else file_size - 1
+        except ValueError:
+            return 0, file_size - 1
+
+        if start >= file_size:
+            return None, 0
+        return start, min(end, file_size - 1)
 
     def do_POST(self):
         url = urllib.parse.urlparse(self.path)
@@ -1964,12 +3868,165 @@ class CompanionHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps({"success": success, "action": action}).encode("utf-8"))
+        elif url.path == "/api/assistant/chat":
+            self._proxy_assistant_chat()
+        elif url.path == "/api/assistant/speech":
+            self._serve_assistant_speech()
         else:
             self.send_response(404)
             self.end_headers()
 
+    def _serve_assistant_speech(self, parsed_query=None) -> None:
+        """Proxy MP Harmony's TTS back to the phone as a WAV body."""
+        query = parsed_query or {}
+        text = query.get("text", [""])[0]
+        voice = query.get("voice", [""])[0]
+        if self.command == "POST":
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                data = json.loads(self.rfile.read(length).decode("utf-8")) if length else {}
+            except Exception:
+                data = {}
+            text = str(data.get("text", text) or "")
+            voice = str(data.get("voice", voice) or "")
+        text = text.strip()
+        if not text:
+            self.send_response(400)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"error":"No text supplied"}')
+            return
+
+        code, audio = assistant_request(
+            "/v1/audio/speech",
+            {"input": text, "voice": voice or "stephen_hawking_matrix"},
+            timeout=120.0,
+        )
+        if code == 200 and audio:
+            self.send_response(200)
+            self.send_header("Content-Type", "audio/wav")
+            self.send_header("Content-Length", str(len(audio)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(audio)
+        else:
+            self.send_response(502)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(b'{"error":"Speech synthesis failed"}')
+
+    def _proxy_assistant_chat(self) -> None:
+        """Stream MP Harmony's SSE reply straight through to the phone.
+
+        Rewriting the stream would lose tokens from the agent's final channel,
+        so the bytes are forwarded as they arrive and only the terminating
+        [DONE] frame is checked for.
+        """
+        if not assistant_enabled():
+            self.send_response(503)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"error":"MP Assistant is disabled"}')
+            return
+
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+            data = json.loads(self.rfile.read(length).decode("utf-8")) if length else {}
+        except Exception:
+            data = {}
+
+        message = str(data.get("message", "")).strip()
+        session_id = str(data.get("session", "") or "web-companion")
+        if not message:
+            self.send_response(400)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"error":"No message supplied"}')
+            return
+
+        payload = {
+            "model": "mp-harmony-agent",
+            "stream": True,
+            "messages": [{"role": "user", "content": message}],
+            "user": session_id,
+        }
+        req = urllib.request.Request(
+            assistant_url() + "/v1/chat/completions",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "text/event-stream",
+                "X-Session-Id": session_id,
+            },
+            method="POST",
+        )
+        try:
+            upstream = urllib.request.urlopen(req, timeout=ASSISTANT_TIMEOUT)
+        except Exception as err:
+            self.send_response(502)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(json.dumps({
+                "error": "MP Harmony Agent is not answering on port 11435.",
+                "detail": str(err),
+            }).encode("utf-8"))
+            return
+
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache, no-transform")
+        self.send_header("X-Accel-Buffering", "no")
+        self.send_header("Connection", "close")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.close_connection = True
+
+        try:
+            while True:
+                line = upstream.readline()
+                if not line:
+                    break
+                self.wfile.write(line)
+                self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            # The phone navigated away or switched tabs; that is not an error.
+            pass
+        except Exception:
+            pass
+        finally:
+            try:
+                upstream.close()
+            except Exception:
+                pass
+
     def log_message(self, format, *args):
         pass
+
+
+class CompanionServer(http.server.ThreadingHTTPServer):
+    """Same threading server, but with a backlog sized for a polling client.
+
+    The stdlib default is 5 pending connections. The dashboard polls several
+    endpoints per second and mobile browsers open parallel range requests for
+    audio, so bursts are normal rather than exceptional.
+    """
+    daemon_threads = True
+    allow_reuse_address = True
+    request_queue_size = 128
+
+    def handle_error(self, request, client_address) -> None:
+        """A client hanging up is normal, not a server fault.
+
+        Phones close tabs, scrub, and time out mid-poll constantly. Only real
+        server-side failures should reach the journal.
+        """
+        exc = sys.exc_info()[1]
+        if isinstance(exc, (BrokenPipeError, ConnectionResetError, ConnectionAbortedError)):
+            return
+        super().handle_error(request, client_address)
 
 
 def main():
@@ -1981,7 +4038,20 @@ def main():
     parser.add_argument("--host", "-H", type=str, default=default_host)
     parser.add_argument("--port", "-p", type=int, default=default_port)
     parser.add_argument("--theme", "-t", type=str, default=None)
+    parser.add_argument("--stream-status", action="store_true",
+                        help="Print the resolved stream queue as JSON and exit")
     args = parser.parse_args()
+
+    if args.stream_status:
+        playlist = scan_playlist_files()
+        track, position = _pick_start_track(playlist)
+        print(json.dumps({
+            "playlist_size": len(playlist),
+            "track": track or "",
+            "position": round(position, 2),
+            "listening": "HTTP stream only (no local audio output)",
+        }, indent=2))
+        return 0
 
     CLI_THEME = args.theme
     active_theme = get_theme_palette(CLI_THEME)
@@ -1990,7 +4060,7 @@ def main():
 
     server_address = (args.host, args.port)
     try:
-        httpd = http.server.ThreadingHTTPServer(server_address, CompanionHandler)
+        httpd = CompanionServer(server_address, CompanionHandler)
     except OSError as err:
         if err.errno in (98, 48, 10048):
             print(f"\n======================================================================")
@@ -2002,13 +4072,30 @@ def main():
             return 0
         raise
 
+    # Resolve the stream queue in the background so the HTTP server is
+    # reachable immediately. This only catalogs files; it never plays anything.
+    stream_thread = start_autoplay_worker()
+
     print(f"\n======================================================================")
     print(f"  🌌 MP MIX ARCHIVE MANAGER — MOBILE WEB COMPANION")
     print(f"======================================================================")
     print(f"  • Active Theme:   {active_theme['name']} ({active_theme['id']})")
     print(f"  • Local Machine:  http://localhost:{args.port}")
     print(f"  • Phone / Tablet: http://{host_display}:{args.port}")
+    print(f"  • Audio Output:   STREAM ONLY (no local device)")
     print(f"======================================================================\n")
+
+    def _report_stream_queue() -> None:
+        stream_thread.join()
+        state = autoplay_state()
+        if state.get("status") == "ready":
+            print(f"  ▶ STREAM QUEUE READY: {state.get('detail', '')}", flush=True)
+            print(f"  • First mix:      {state.get('track', '')}", flush=True)
+        else:
+            print(f"  ⏹ NO STREAM QUEUE: {state.get('detail', '')}", flush=True)
+        print(f"======================================================================\n", flush=True)
+
+    threading.Thread(target=_report_stream_queue, name="mp-companion-queue-report", daemon=True).start()
 
     print("Press Ctrl+C to stop the companion server.\n")
     try:

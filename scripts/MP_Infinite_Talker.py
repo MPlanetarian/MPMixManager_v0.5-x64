@@ -4,7 +4,7 @@
 # MP_Infinite_Talker.py - Self-Executing Python Wrapper (WAN2GP Environment)
 # ==============================================================================
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-for _cfg in "$SCRIPT_DIR/config.env" "$SCRIPT_DIR/../config.env" "$PWD/config.env" "/x/MP_Mix_Manager_v0.3/config.env" "X:/MP_Mix_Manager_v0.3/config.env" "$HOME/MP_Mix_Manager_v0.3/config.env"; do
+for _cfg in "$SCRIPT_DIR/config.env" "$SCRIPT_DIR/../config.env" "$PWD/config.env"; do
     if [ -f "$_cfg" ]; then
         source "$_cfg" 2>/dev/null || true
         break
@@ -104,10 +104,16 @@ def load_config_env():
         Path(__file__).resolve().parent / "config.env",
         Path(__file__).resolve().parent.parent / "config.env",
         Path.cwd() / "config.env",
-        Path("/x/MP_Mix_Manager_v0.3/config.env"),
-        Path("/var/home/mplanetarian/MP_Mix_Manager_v0.3/config.env"),
         Path("D:/DATA_DRIVE_MOVED/config.env"),
     ]
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
+        from mp_install_dir import find_install_dir
+        root = find_install_dir()
+        if root:
+            possible_cfgs.insert(0, Path(root) / "config.env")
+    except Exception:
+        pass
     for cfg in possible_cfgs:
         if cfg.exists():
             try:

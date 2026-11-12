@@ -1,9 +1,9 @@
-# MP Mix Manager 0.4.2 Stable (Liquid) by Dreamworlds Productions (MPlanetarian)
+# MP Mix Manager 0.5.0 Stable (Sensorium) by Dreamworlds Productions (MPlanetarian)
 
-> 📅 **Last Updated:** November 10, 2026 • **Latest Release:** `v0.4.2 Stable (Liquid)`
+> 📅 **Last Updated:** November 12, 2026 • **Latest Release:** `v0.5.0 Stable (Sensorium)`
 
-[![Last Updated](https://img.shields.io/badge/Last%20Updated-November%2010%2C%202026-brightgreen.svg)]()
-[![Version](https://img.shields.io/badge/Version-0.4.2%20Stable%20(Liquid)-f72585.svg)](VERSION)
+[![Last Updated](https://img.shields.io/badge/Last%20Updated-November%2012%2C%202026-brightgreen.svg)]()
+[![Version](https://img.shields.io/badge/Version-0.5.0%20Stable%20(Sensorium)-f72585.svg)](VERSION)
 [![Liquid Glass Player](https://img.shields.io/badge/Liquid%20Glass%20Player-OpenGL%20%7C%20Vulkan%20%7C%20Metal-00f0ff.svg)](MP_Audio_Player_Liquid_Glass_OpenGL.py)
 [![MP Liquid Visualizer](https://img.shields.io/badge/MP%20Liquid%20Visualizer-Vulkan%203D%20Audio--Reactive-ff007f.svg)](MP_Liquid_Visualizer.py)
 [![MIDI Controller](https://img.shields.io/badge/Hardware%20MIDI-Traktor%20Kontrol%20S4%20hw%3A0%2C0-00ffcc.svg)](docs/TRAKTOR_KONTROL_S4_USER_GUIDE.md)
@@ -21,15 +21,15 @@
 [![Congen](https://img.shields.io/badge/Congen%20v1.1-KDE%20Connect%2018--Theme%20Workstation%20Bridge-1D99F3.svg)](Congen/README.md)
 [![License](https://img.shields.io/badge/License-MIT-purple.svg)](LICENSE)
 
-![MP Mix Manager 0.4.2 Screenshot (MP Liquid Player) ](004.png)
+![MP Mix Manager 0.5.0 Screenshot (MP Liquid Player) ](004.png)
 
 An enterprise-grade workstation orchestration console and media management suite designed for high-resolution audio production, multi-hour DJ mix archiving, automated 32-bit FLAC mastering, 31,000+ track SMB network streaming, Traktor Pro playlist extraction, live tracklist tracking, YouTube & AI Talking-Head video synthesis, automated multi-period intelligence reporting, system maintenance, and AI workflow control across **Linux (Bazzite / SteamOS / Fedora / Ubuntu)**, **macOS (Latest Sequoia / Sonoma, Apple Silicon M1–M4 & Intel)**, **Microsoft Windows 10 & 11**, and **FreeBSD (14.x / 15-CURRENT)**.
 
-![MP Mix Manager 0.4.2 Screenshot (MP Liquid Player) ](002.png)
+![MP Mix Manager 0.5.0 Screenshot (MP Liquid Player) ](002.png)
 
 > [!TIP]
-> ### 🌟 Welcome to MP Mix Manager v0.4.2 Stable (Liquid)
-> **November 8, 2026. Welcome from MPlanetarian.** This is the stable Liquid release. Thank you for running MP Mix Manager, MP Gui, and the Liquid Transparent Audio Player. The manager, the Liquid Player, and the music library share one glass desktop, and the macOS build in this release is the one on this page.
+> ### 🌟 Welcome to MP Mix Manager v0.5.0 Stable (Sensorium)
+> **November 12, 2026. Welcome from MPlanetarian.** This is the stable Sensorium release. Thank you for running MP Mix Manager, MP Gui, and the Liquid Transparent Audio Player. The manager, the Liquid Player, and the music library share one glass desktop, and the macOS build in this release is the one on this page.
 >
 > New in this release:
 > - 🪟 **[MP Mix Manager GUI](MP_Gui.sh):** The full manager inside the Liquid Glass window. Main menu option **36**, the **MP** row, or `./MP_Gui.sh`. It opens on **Retro Linux Memories** and can sit beside the Liquid Player.
@@ -46,12 +46,12 @@ An enterprise-grade workstation orchestration console and media management suite
 
 ## 📑 Table of Contents
 
-![MP Mix Manager 0.4.2 Screenshot (MP Audio CLI Player) ](003.png)
+![MP Mix Manager 0.5.0 Screenshot (MP Audio CLI Player) ](003.png)
 
 - [📅 Updates since the November 8, 2026 stable release](#-updates-since-the-november-8-2026-stable-release)
 - [🚀 What's New in v0.4.2 Stable (Liquid)](#-whats-new-in-v042-stable-liquid)
 - [🍏 macOS fixes in v0.4.2 Stable (Liquid)](#-macos-fixes-in-v042-stable-liquid)
-- [🎉 Download & Experience v0.4.2 Stable (Liquid)](#-download--experience-v042-stable-liquid)
+- [🎉 Download & Experience v0.5.0 Stable (Sensorium)](#-download--experience-v050-stable-sensorium)
 - [🚀 What's New in v0.4.0 Stable](#-whats-new-in-v040-stable)
 - [🔥 Core v0.4 Architecture Highlights](#-core-v04-architecture-highlights)
 - [🪟 Spotlight: MP Liquid Glass Audio Player (OpenGL • Vulkan • Apple Silicon Metal)](#-spotlight-mp-liquid-glass-audio-player-opengl--vulkan--apple-silicon-metal)
@@ -83,7 +83,7 @@ An enterprise-grade workstation orchestration console and media management suite
 ## 📅 Updates since the November 8, 2026 stable release
 
 > [!IMPORTANT]
-> **The version is still `0.4.2 Stable (Liquid)`.** This page was brought up to date on November 10, 2026. The tables below are the features and fixes added after the November 8 notes were published. The November 8 set stays under [What's New in v0.4.2 Stable (Liquid)](#-whats-new-in-v042-stable-liquid).
+> **The version is now `0.5.0 Stable (Sensorium)`.** This page was brought up to date on November 10, 2026. The tables below are the features and fixes added after the November 8 notes were published. The November 8 set stays under [What's New in v0.4.2 Stable (Liquid)](#-whats-new-in-v042-stable-liquid).
 
 ### Added
 
@@ -188,13 +188,13 @@ The [v0.4.0 Stable notes](#-whats-new-in-v040-stable) below still describe the L
 
 ---
 
-## 🎉 Download & Experience v0.4.2 Stable (Liquid)
+## 🎉 Download & Experience v0.5.0 Stable (Sensorium)
 
 > [!TIP]
 > ### 🚀 Ready to Experience the Future of High-Resolution Desktop Audio?
-> **MP Mix Manager v0.4.2 Stable (Liquid)** is the current release. It keeps the 32-bit FLAC archive, the SMB music library, and the Liquid Glass desktop, and adds the Manager GUI, Retro Linux Memories, Favorites, and the playlist fixes above.
+> **MP Mix Manager v0.5.0 Stable (Sensorium)** is the current release. It keeps the 32-bit FLAC archive, the SMB music library, and the Liquid Glass desktop, and adds the Manager GUI, Retro Linux Memories, Favorites, and the playlist fixes above.
 >
-> 💎 **Top 5 Reasons to Download & Run v0.4.2 Today:**
+> 💎 **Top 5 Reasons to Download & Run v0.5.0 Today:**
 > 1. 🪟 **MP Mix Manager GUI:** Run the whole manager in the Liquid Glass window, with Retro Linux Memories as the starting theme, beside the Liquid Player.
 > 2. ⭐ **Favorites and library switching:** Mark mixes and tracks with **`H`**, open them with **`3`**, switch Mix Archive and Music with **`1`** and **`2`**, and clear a playlist with **`D`** twice without deleting files.
 > 3. 🎧 **SMB playlists that complete:** Generate a playlist per share plus one combined list. A share that does not answer no longer hangs the refresh or wipes a playlist you already have.
@@ -204,8 +204,8 @@ The [v0.4.0 Stable notes](#-whats-new-in-v040-stable) below still describe the L
 > ### ⚡ Quick 3-Step Setup:
 > ```bash
 > # 1. Clone or download the repository
-> git clone https://github.com/MPlanetarian/MPMixManager_v0.4-x64.git
-> cd MPMixManager_v0.4-x64
+> git clone https://github.com/MPlanetarian/MPMixManager_v0.5-x64.git
+> cd MPMixManager_v0.5-x64
 >
 > # 2. Run the automated installer (Linux / macOS / FreeBSD)
 > chmod +x install.sh && ./install.sh
@@ -216,7 +216,7 @@ The [v0.4.0 Stable notes](#-whats-new-in-v040-stable) below still describe the L
 > # On macOS: double-click manager_macos.command
 > ```
 >
-> **🎧 Test Drive v0.4.2 Immediately:**
+> **🎧 Test Drive v0.5.0 Immediately:**
 > - Launch **MP Mix Manager GUI**: Press **`MP`** or option **`36`**, or run `./MP_Gui.sh` or `mix-archive-manager gui`.
 > - Launch **MP Liquid Glass Player**: Press option **`3`**, press **`L`**, or run `mix-archive-manager --liquid`. From the GUI, **`L`** opens the player beside it.
 > - In the player: **`1`** Mix Archive, **`2`** Music, **`3`** Favorites, **`H`** mark or unmark, **`D`** then **`D`** to clear the playlist.
@@ -539,7 +539,75 @@ flowchart TD
 - 🌐 **Zero Dependencies**: Powered by Python's built-in standard library HTTP server (`mix_web_companion.py`) — requires no external Node.js, Flask, or heavy web frameworks.
 - 🎨 **Responsive Dreamworlds UI**: Tailored dark neon palette optimized for OLED mobile displays in low-light DJ booths and studio environments.
 - 🎛️ **Full Remote Control**: Play, pause, skip, seek, mute, adjust master volume, inspect now-playing audio bit depth/sample rate, and browse the mix archive catalog over local Wi-Fi.
+- 🧠 **MP Assistant tab**: The page header has two tabs — **MP Liquid Player** and **MP Assistant**. The assistant tab is a live prompt for the **MP Harmony Agent**, with spoken replies in Stephen Hawking's voice by default. The mix keeps playing while you talk to it; the mix is briefly ducked while a reply speaks, then resumes.
+- ▶️ **Automatic Playback on Service Start**: A systemd-started companion resumes the mix and the exact second it was last playing, then verifies audio is genuinely flowing before reporting success.
 - 🔒 **Local Network Isolation**: Binds securely to your local LAN IP (`http://<WORKSTATION-IP>:8888`) with optional trusted-host verification.
+
+#### 🧠 MP Assistant Tab
+
+The **MP Assistant** tab is the mobile front end for the **MP Harmony Agent**. The agent
+binds `127.0.0.1:11435`, so a phone cannot reach it directly; the companion proxies the
+agent's OpenAI-compatible API on its own port. That means the phone only ever talks to
+`http://<WORKSTATION-IP>:8888`, and speech uses the same origin as playback.
+
+- **Start the agent first**: Manager option **33** → **4** (Manage MP Harmony AI Agent), or
+  `scripts/manage_harmony_agent.sh`. The tab badge reads **ONLINE** when it answers and
+  **OFFLINE** with a hint when it does not.
+- **Voice**: replies are spoken in **Stephen Hawking** by default
+  (`stephen_hawking_matrix`), matching the agent's current voice. Pick another Matrix voice
+  from the selector to override it for the session.
+- **Mobile autoplay**: phones only allow audio to start inside a tap, and the model can take
+  ten seconds or more to answer, by which point that tap has expired. The tab therefore primes
+  the reply element with a silent clip on every tap (and on send), so the spoken reply is
+  allowed to start later. If a browser still refuses playback, a **▶ Speak reply** button is
+  added to that bubble and replays the answer inside your tap.
+- **Playback continues**: switching tabs only hides a panel, so the mix keeps streaming.
+  While a spoken reply plays the mix is paused and resumes when the clip ends. Untick
+  **🔊 Speak replies** to keep the assistant text-only.
+- **Sessions**: each browser gets its own agent conversation, remembered across reloads.
+  **↺ New chat** clears it.
+- **Endpoints**: `GET /api/assistant` (status + voices), `GET /api/assistant/speech?text=…&voice=…`
+  (WAV proxy), `POST /api/assistant/chat` (SSE passthrough).
+- **Settings**: `MP_ASSISTANT_ENABLED`, `MP_ASSISTANT_URL`, and `MP_ASSISTANT_TIMEOUT` in
+  `config.env`.
+
+
+#### Automatic Playback & Resume
+
+The companion never decodes audio itself — phones and tablets pull the HTTP stream
+(`/api/stream`). On service start it makes sure an **MP Audio Player** daemon is
+playing the right track so the stream has a live position to serve.
+
+- **Resume to the second**: `~/.config/mix-manager/playback_resume.json` stores the
+  last track and position. On start the companion seeks there and confirms the
+  position matches the saved value (not just that "playing" is reported).
+- **Verification**: after issuing play it polls the player until the requested track
+  is loaded, the state is `playing`, the audio engine reports no error, and the
+  position has advanced from the seek point. Only then does it log
+  `▶ AUTOPLAY CONFIRMED`. Otherwise `/api/autoplay` and the web UI show a warning.
+- **Empty playlist is a no-op**: if there is nothing to play, no player daemon is
+  started at all.
+- **Playback survives restarts**: the player daemon runs in its own transient
+  systemd scope, so `systemctl --user restart mp-web-companion` does not interrupt
+  the music.
+
+Configuration (`config.env`):
+
+| Setting | Default | Purpose |
+| --- | --- | --- |
+| `WEB_COMPANION_AUTOPLAY` | `true` | Start/resume playback when the service starts |
+| `WEB_COMPANION_MODE` | `MIX_ARCHIVE` | `MIX_ARCHIVE` (newest archive audio) or `MUSIC` (saved DJ tracks playlist) |
+| `WEB_COMPANION_PLAYLIST` | _unset_ | Explicit `.m3u`/`.m3u8`/`.json` playlist; overrides the mode |
+
+Diagnostics:
+
+```bash
+./mix_web_companion.sh status
+python3 scripts/mix_web_companion.py --autoplay-status   # decision, no playback
+python3 scripts/mix_web_companion.py --autoplay          # play/resume once, then exit
+./mix_web_companion.sh start --no-autoplay               # serve the UI only
+curl -s http://localhost:8888/api/autoplay | python3 -m json.tool
+```
 
 ---
 
@@ -830,7 +898,7 @@ For a fresh, step-by-step installation guide from a clean Bazzite Linux setup, s
 
 ```bash
 
-git clone https://github.com/MPlanetarian/MPMixManager_v0.4-x64
+git clone https://github.com/MPlanetarian/MPMixManager_v0.5-x64
 
 1. Install the Python Dependencies
 pip3 install sounddevice <--- (Enables Audio Devices)
@@ -838,7 +906,7 @@ python3 -m pip install PyOpenGL <--- YOU MUST INSTALL THESE TO USE MP LIQUID GUI
 python3 -m pip install numpy 
 
 2. Install the MP Mix Archive Manager Software
-cd ~/MPMixManager_v0.4-x64
+cd ~/MPMixManager_v0.5-x64
 chmod +x install.sh
 ./install.sh
 ```
@@ -890,7 +958,7 @@ brew install --cask vlc audacity strawberry musicbrainz-picard gimp reaper fooba
 #### Running on macOS
 1. Run the installer:
    ```bash
-   cd ~/MPMixManager_v0.4-x64
+   cd ~/MPMixManager_v0.5-x64
    chmod +x install.sh
    ./install.sh
    ```
@@ -920,8 +988,8 @@ Install recommended utilities using `winget` in PowerShell:
 winget install Gyan.FFmpeg Rclone.Rclone jqlang.jq
 winget install VideoLAN.VLC
 ```
-Download & install MP Mix Manager 0.4.2 (GitHub Only)
-1. git clone https://github.com/MPlanetarian/MPMixManager_v0.4-x64.git "MP Mix Manager"
+Download & install MP Mix Manager 0.5.0 (GitHub Only)
+1. git clone https://github.com/MPlanetarian/MPMixManager_v0.5-x64.git "MP Mix Manager"
 2. Run MP Mix Manager.exe
 
 Starter Tip: Configure your Mix Archive & Music Folders first. 
@@ -976,7 +1044,7 @@ pkg install -y bash python3 ffmpeg sox flac rclone jq btop git py311-mutagen py3
 
 #### Running on FreeBSD
 ```bash
-cd ~/MPMixManager_v0.4-x64
+cd ~/MPMixManager_v0.5-x64
 chmod +x manager_freebsd.sh install.sh
 ./manager_freebsd.sh
 ```
@@ -1052,7 +1120,7 @@ mix-archive-manager --help            # Display full CLI options and flag refere
 mix-archive-manager --version         # Print version and build number
 mix-archive-manager update            # Check for updates and pull latest git revisions
 
-# MP Mix Manager GUI and MP Liquid Glass Player (v0.4.2)
+# MP Mix Manager GUI and MP Liquid Glass Player (v0.5.0)
 ./MP_Gui.sh                                          # Manager inside Liquid Glass (Retro Linux Memories)
 ./MP_Gui.sh --keep-theme                             # GUI without changing the saved theme
 mix-archive-manager gui                              # Same GUI from the command line (also: 36, mp-gui, MP)
@@ -1113,7 +1181,7 @@ mix-archive-manager --backup          # Run automated multi-cloud backup to Goog
 ## 📂 Repository & Codebase Layout
 
 ```
-MPMixManager_v0.4-x64/
+MPMixManager_v0.5-x64/
 ├── Mix_Archive_Manager.sh       # Master interactive console (options 0–38, plus the MP GUI row)
 ├── MP_Gui.sh                    # MP Mix Manager GUI — Liquid Glass host with --manager
 ├── .probe_mgr.sh                # Ultra-compact zero-fork telemetry & probe engine (264 lines)
@@ -1277,7 +1345,7 @@ MPMixManager_v0.4-x64/
 ├── assets/                      # Artwork templates, promo contact book, publishing calendars
 ├── config.env                   # Active user configuration overrides
 ├── config.env.example           # Configuration template
-├── VERSION                      # Semantic version file (0.4.2 Stable (Liquid))
+├── VERSION                      # Semantic version file (0.5.0 Stable (Sensorium))
 ├── README.md                    # System documentation & feature matrix
 └── CHANGELOG.md                 # Complete release history and audit log
 ```

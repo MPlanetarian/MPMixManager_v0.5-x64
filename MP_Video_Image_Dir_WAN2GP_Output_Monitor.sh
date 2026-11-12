@@ -10,7 +10,7 @@ while [ -h "$_SOURCE" ]; do
 done
 SCRIPT_DIR="$(cd -P "$(dirname "$_SOURCE")" >/dev/null 2>&1 && pwd)"
 
-for _cfg in "$SCRIPT_DIR/config.env" "$SCRIPT_DIR/../config.env" "$PWD/config.env" "$HOME/MP_Mix_Manager_v0.3/config.env" "/var/home/mplanetarian/MP_Mix_Manager_v0.3/config.env"; do
+for _cfg in "$SCRIPT_DIR/config.env" "$SCRIPT_DIR/../config.env" "$PWD/config.env"; do
     if [ -f "$_cfg" ]; then
         source "$_cfg" 2>/dev/null || true
         break
@@ -19,7 +19,15 @@ done
 
 PY_SCRIPT="$SCRIPT_DIR/MP_Video_Image_Dir_WAN2GP_Output_Monitor.py"
 [ ! -f "$PY_SCRIPT" ] && PY_SCRIPT="$SCRIPT_DIR/scripts/MP_Video_Image_Dir_WAN2GP_Output_Monitor.py"
-[ ! -f "$PY_SCRIPT" ] && PY_SCRIPT="$HOME/MP_Mix_Manager_v0.3/scripts/MP_Video_Image_Dir_WAN2GP_Output_Monitor.py"
-[ ! -f "$PY_SCRIPT" ] && PY_SCRIPT="/var/home/mplanetarian/MP_Mix_Manager_v0.3/scripts/MP_Video_Image_Dir_WAN2GP_Output_Monitor.py"
+if [ ! -f "$PY_SCRIPT" ]; then
+    _lib="$SCRIPT_DIR/lib/mp_install_dir.sh"
+    [ ! -f "$_lib" ] && _lib="$HOME/.config/mix-manager/lib/mp_install_dir.sh"
+    if [ -f "$_lib" ]; then
+        # shellcheck source=/dev/null
+        . "$_lib"
+        _root="$(mp_find_install_dir 2>/dev/null || true)"
+        [ -n "$_root" ] && PY_SCRIPT="$_root/scripts/MP_Video_Image_Dir_WAN2GP_Output_Monitor.py"
+    fi
+fi
 
 exec python3 "$PY_SCRIPT" "$@"

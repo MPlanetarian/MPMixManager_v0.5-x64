@@ -6,8 +6,8 @@ When a user runs MP Mix Manager or MP Audio Player for the very first time:
 1. Installs four desktop shortcuts: MP Liquid Player, MP Mix Manager, MP Gui,
    and MP Liquid Visualizer.
 2. Sets the Liquid Glass Audio Player as the Default Audio Player in config.
-3. Displays the welcome installer message for 0.4.2 (Liquid) - [Stable Release]
-   from MPlanetarian: features added since 0.4.1, five tips, a Mix Archive and
+3. Displays the welcome installer message for 0.5.0 (Sensorium) - [Stable Release]
+   from MPlanetarian: features added since 0.4.2, five tips, a Mix Archive and
    Music Folder quick start, and a thank-you.
 4. Marks the first-run reward as completed in ~/.config/mix-manager/.liquid_glass_welcomed.
 """
@@ -37,8 +37,8 @@ ICON_SVG = ASSETS_DIR / "mp_liquid_glass_icon.svg"
 LAUNCHER_SCRIPT = ROOT / "scripts" / "launch_liquid_glass.sh"
 
 USER_DESKTOP = Path.home() / "Desktop"
-DESKTOP_SHORTCUT = USER_DESKTOP / "MP_Liquid.desktop"
-APPS_SHORTCUT = Path.home() / ".local" / "share" / "applications" / "MP_Liquid.desktop"
+DESKTOP_SHORTCUT = USER_DESKTOP / "MP Liquid Player.desktop"
+APPS_SHORTCUT = Path.home() / ".local" / "share" / "applications" / "MP Liquid Player.desktop"
 
 
 def is_welcomed() -> bool:
@@ -82,6 +82,29 @@ def install_reward_desktop_shortcut():
     if LAUNCHER_SCRIPT.exists():
         shutil.copy2(LAUNCHER_SCRIPT, target_launcher)
         target_launcher.chmod(0o755)
+
+    # 3b. Record this install and publish the path resolver, so a copied
+    #     launcher and the desktop entries can find the tree again.
+    install_dir_file = CONFIG_DIR / "install_dir"
+    try:
+        install_dir_file.write_text(str(ROOT) + "\n", encoding="utf-8")
+    except Exception:
+        pass
+    resolver = ROOT / "scripts" / "lib" / "mp_install_dir.sh"
+    if resolver.is_file():
+        try:
+            lib_dir = CONFIG_DIR / "lib"
+            lib_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(resolver, lib_dir / "mp_install_dir.sh")
+        except Exception:
+            pass
+    helper = ROOT / "bin" / "mp-desktop-exec"
+    if helper.is_file():
+        try:
+            (local_bin / "mp-desktop-exec").unlink(missing_ok=True)
+            (local_bin / "mp-desktop-exec").symlink_to(helper)
+        except Exception:
+            pass
 
     # 4. Desktop and application-menu shortcuts for this install.
     ensure_desktop_shortcuts(ROOT)
@@ -259,10 +282,10 @@ def show_welcome_message(wait_for_input=True):
 
     w = 78
     title = "✦ WELCOME TO MP MIX MANAGER ✦"
-    version = "0.4.2 (Liquid) - [Stable Release]"
+    version = "0.5.0 (Sensorium) - [Stable Release]"
     sub = "Welcome Installer Message from MPlanetarian"
 
-    features_since_041 = [
+    features_since_042 = [
         "Shared system tray. One icon for MP Mix Manager, MP Gui, and MP Liquid Player. Right-click it to launch any of them, or choose Close MP Mix Manager to close all of them.",
         "Favorites. Press H to mark or unmark the selected mix or track. Press 3, or the Favorites button, to open the Favorites playlist. The audio files are not rewritten.",
         "Drag and drop. Drop audio files, or an M3U playlist, onto the Liquid Player and they join the list that is open.",
@@ -313,9 +336,9 @@ def show_welcome_message(wait_for_input=True):
         f"  {BOLD}{GOLD}MPlanetarian - Ecology of the Earth (Cosmic Dreamworlds Remake){NC}",
         f"  {WHITE}The track and its art are in MP_SAMPLES. Press play when you are ready.{NC}",
         "",
-        f"  {BOLD}{MINT}What's new since 0.4.1{NC}",
-        f"  {DIM}{WHITE}Read each item below. These are the features added after 0.4.1.{NC}",
-        *_welcome_items(features_since_041, WHITE, NC, lambda _i, _item: "• "),
+        f"  {BOLD}{MINT}What's new since 0.4.2{NC}",
+        f"  {DIM}{WHITE}Read each item below. These are the features added after 0.4.2.{NC}",
+        *_welcome_items(features_since_042, WHITE, NC, lambda _i, _item: "• "),
         "",
         f"  {BOLD}{MINT}Five tips{NC}",
         *_welcome_items(tips, WHITE, NC, lambda i, _item: f"Tip {i}. "),

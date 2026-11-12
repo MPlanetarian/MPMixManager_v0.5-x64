@@ -89,14 +89,20 @@ console = Console()
 
 
 def find_project_root() -> Path:
-    """Find the root directory of MP_Mix_Manager_v0.3."""
+    """Find the MP Mix Manager install tree, without a hard-coded path."""
     candidates = [
         Path.cwd(),
         Path(__file__).resolve().parent,
         Path(__file__).resolve().parent.parent,
-        Path.home() / "MP_Mix_Manager_v0.3",
-        Path("/var/home/mplanetarian/MP_Mix_Manager_v0.3"),
     ]
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
+        from mp_install_dir import find_install_dir
+        found = find_install_dir()
+        if found:
+            candidates.insert(0, found)
+    except Exception:
+        pass
     for c in candidates:
         if (c / "Mix_Archive_Manager.sh").is_file() or (c / "config.env").is_file():
             return c

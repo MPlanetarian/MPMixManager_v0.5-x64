@@ -868,8 +868,19 @@ run_report_now_menu() {
 }
 
 generate_hawking_video_report_menu() {
-    local inftlk_py="/var/home/mplanetarian/MP_Mix_Manager_v0.3/scripts/MP_Infinite_Talker.py"
-    [ ! -f "$inftlk_py" ] && inftlk_py="$SCRIPT_DIR/scripts/MP_Infinite_Talker.py"
+    local inftlk_py="$SCRIPT_DIR/scripts/MP_Infinite_Talker.py"
+    [ ! -f "$inftlk_py" ] && inftlk_py="$SCRIPT_DIR/MP_Infinite_Talker.py"
+    if [ ! -f "$inftlk_py" ]; then
+        local _lib="$SCRIPT_DIR/lib/mp_install_dir.sh"
+        [ ! -f "$_lib" ] && _lib="$HOME/.config/mix-manager/lib/mp_install_dir.sh"
+        if [ -f "$_lib" ]; then
+            # shellcheck source=/dev/null
+            . "$_lib"
+            local _root
+            _root="$(mp_find_install_dir 2>/dev/null || true)"
+            [ -n "$_root" ] && inftlk_py="$_root/scripts/MP_Infinite_Talker.py"
+        fi
+    fi
     [ ! -f "$inftlk_py" ] && inftlk_py="$MP_REPORTER_DIR/scripts/MP_Infinite_Talker.py"
 
     while true; do

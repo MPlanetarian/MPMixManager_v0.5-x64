@@ -3,7 +3,8 @@ Type=Application
 Name=MP Mix Archive Manager
 GenericName=Music Archive Manager
 Comment=Launch MP Mix Archive Manager in Konsole
-Exec=/var/home/mplanetarian/.local/bin/launch-manager
+# The install tree is resolved at launch, so no versioned path is stored here.
+Exec=sh -c "exec \\"\\$HOME/.local/bin/mp-desktop-exec\\" bin/launch-manager"
 Icon=utilities-terminal
 Terminal=false
 Categories=AudioVideo;Audio;Utility;

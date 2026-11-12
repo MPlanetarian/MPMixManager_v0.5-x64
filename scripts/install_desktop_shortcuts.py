@@ -219,11 +219,55 @@ def _windows_special_folder(name: str) -> Path | None:
     return None
 
 
+def _exec_escape(text: str) -> str:
+    """Escape text for the quoted argument of a .desktop Exec key.
+
+    An Exec value is parsed twice. First the key file unescapes ``\\\\`` to one
+    backslash, then the Exec parser treats ``\\\\"``, ``\\\\$``, ``\\\\``` and
+    ``\\\\\\\\`` as the literal character that follows. A single backslash before
+    ``"`` or ``$`` is not an escape at that layer, so GLib refuses to load the
+    whole entry. That is what made every shortcut fail to open: the file passed
+    desktop-file-validate, but clicking the icon did nothing.
+
+    Every shell metacharacter that must survive therefore needs two backslashes
+    in the file. ``$HOME`` is kept so no user path is baked into the entry.
+    """
+    return (
+        text.replace("\\", "\\\\")
+        .replace('"', '\\\\"')
+        .replace("$", "\\\\$")
+        .replace("`", "\\\\`")
+    )
+
+
 def linux_desktop_entry(name: str, spec: dict, root: Path) -> str:
+    """A Linux .desktop entry that resolves the install tree at launch.
+
+    The tree is located through ~/.local/bin/mp-desktop-exec and the path
+    resolver, so moving or renaming this install does not break the shortcut.
+    """
     script = Path(spec["script"])
-    exec_line = "bash " + _desktop_quote(str(script))
+    try:
+        script_name = str(script.relative_to(root))
+    except ValueError:
+        script_name = script.name
+    inner = f'exec "$HOME/.local/bin/mp-desktop-exec" {script_name}'
+    exec_line = f'sh -c "{_exec_escape(inner)}"'
+    # TryExec is checked against PATH before the entry is offered. A desktop
+    # session's PATH is only /usr/local/sbin:/usr/local/bin:/usr/bin, which does
+    # not contain ~/.local/bin, so a bare "mp-desktop-exec" here makes GLib
+    # treat the whole entry as unloadable. Point at the published helper
+    # directly; install.sh always links it there.
+    try_exec = Path.home() / ".local" / "bin" / "mp-desktop-exec"
     icon = spec.get("icon")
-    icon_value = str(icon) if icon else "mp_liquid_glass_icon"
+    # Name-only icon lookup. install_desktop_shortcuts copies the PNG/SVG into
+    # the user's hicolor theme, so the shortcut keeps working if the tree moves.
+    if icon and Path(icon).name == "mp_liquid_glass_icon.png":
+        icon_value = "mp_liquid_glass_icon"
+    elif icon:
+        icon_value = str(icon)
+    else:
+        icon_value = "mp_liquid_glass_icon"
     terminal = "true" if spec.get("terminal") else "false"
     return (
         "[Desktop Entry]\n"
@@ -232,8 +276,8 @@ def linux_desktop_entry(name: str, spec: dict, root: Path) -> str:
         f"Name={name}\n"
         f"GenericName={name}\n"
         f"Comment={spec['comment']}\n"
-        f"Path={root}\n"
         f"Exec={exec_line}\n"
+        f"TryExec={try_exec}\n"
         f"Icon={icon_value}\n"
         f"Terminal={terminal}\n"
         f"Categories={spec['categories']}\n"
@@ -297,9 +341,9 @@ def mac_info_plist(name: str, icon_name: str | None = None) -> str:
         "\t<key>CFBundleInfoDictionaryVersion</key>\n"
         "\t<string>6.0</string>\n"
         "\t<key>CFBundleShortVersionString</key>\n"
-        "\t<string>0.4.2</string>\n"
+        "\t<string>0.5.0</string>\n"
         "\t<key>CFBundleVersion</key>\n"
-        "\t<string>0.4.2</string>\n"
+        "\t<string>0.5.0</string>\n"
         "\t<key>LSMinimumSystemVersion</key>\n"
         "\t<string>11.0</string>\n"
         "\t<key>NSHighResolutionCapable</key>\n"
@@ -742,6 +786,81 @@ def _delegate_windows_shortcuts(
     )
 
 
+def _install_linux_icon(root: Path) -> None:
+    """Copy the shared PNG/SVG into the user's hicolor theme.
+
+    Linux entries use the icon name, not a path, so the shortcut keeps its
+    image when the install tree is moved or renamed.
+    """
+    icons = Path.home() / ".local" / "share" / "icons"
+    sizes = {
+        "16x16": 16,
+        "32x32": 32,
+        "48x48": 48,
+        "64x64": 64,
+        "128x128": 128,
+        "256x256": 256,
+        "512x512": 512,
+    }
+    png = root / "assets" / "mp_liquid_glass_icon.png"
+    svg = root / "assets" / "mp_liquid_glass_icon.svg"
+    try:
+        if png.is_file():
+            for size in sizes:
+                target = icons / "hicolor" / size / "apps"
+                target.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(png, target / "mp_liquid_glass_icon.png")
+            scalable = icons / "hicolor" / "scalable" / "apps"
+            scalable.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(png, icons / "mp_liquid_glass_icon.png")
+        if svg.is_file():
+            scalable = icons / "hicolor" / "scalable" / "apps"
+            scalable.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(svg, scalable / "mp_liquid_glass_icon.svg")
+            shutil.copy2(svg, icons / "mp_liquid_glass_icon.svg")
+    except OSError:
+        pass
+    updater = shutil.which("gtk-update-icon-cache")
+    if updater:
+        try:
+            subprocess.run(
+                [updater, "-f", "-t", str(icons / "hicolor")],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=10,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            pass
+
+
+def _publish_linux_helpers(root: Path) -> None:
+    """Keep ~/.local/bin/mp-desktop-exec and the path resolver current.
+
+    Desktop entries call the helper, so it must be findable on PATH and must
+    be able to locate this tree even after the tree is moved or renamed.
+    """
+    local_bin = Path.home() / ".local" / "bin"
+    config_lib = Path.home() / ".config" / "mix-manager" / "lib"
+    try:
+        local_bin.mkdir(parents=True, exist_ok=True)
+        config_lib.mkdir(parents=True, exist_ok=True)
+        helper = root / "bin" / "mp-desktop-exec"
+        link = local_bin / "mp-desktop-exec"
+        if helper.is_file():
+            if link.is_symlink() or link.exists():
+                link.unlink()
+            link.symlink_to(helper)
+        resolver = root / "scripts" / "lib" / "mp_install_dir.sh"
+        if resolver.is_file():
+            shutil.copy2(resolver, config_lib / "mp_install_dir.sh")
+        (Path.home() / ".config" / "mix-manager" / "install_dir").write_text(
+            str(root) + "\n", encoding="utf-8"
+        )
+    except OSError:
+        pass
+
+
 def install_desktop_shortcuts(
     root: Path | None = None,
     platform_name: str | None = None,
@@ -818,6 +937,8 @@ def install_desktop_shortcuts(
         if icon_workspace is not None:
             icon_workspace.cleanup()
     if platform_name == "linux":
+        _install_linux_icon(root)
+        _publish_linux_helpers(root)
         updater = shutil.which("update-desktop-database")
         if updater:
             try:
@@ -852,6 +973,36 @@ def _mac_shortcut_icons_present(desktop: Path) -> bool:
     return True
 
 
+def linux_shortcut_is_healthy(path: Path) -> bool:
+    """True when a .desktop file has an Exec line that a desktop can load.
+
+    GLib rejects an entry outright when Exec carries a single backslash before
+    "$" or '"'. Those files still pass desktop-file-validate, so a plain
+    existence check is not enough to know a shortcut works.
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    exec_lines = [line for line in text.splitlines() if line.startswith("Exec=")]
+    if not exec_lines:
+        return False
+    for line in exec_lines:
+        value = line[len("Exec="):]
+        if '\\$' in value.replace('\\\\$', ""):
+            return False
+        if '\\"' in value.replace('\\\\"', ""):
+            return False
+    for line in text.splitlines():
+        if line.startswith("TryExec="):
+            value = line[len("TryExec="):]
+            # TryExec never expands "$HOME", and a bare name is absent from a
+            # desktop session's PATH, so both forms make the entry unloadable.
+            if "$" in value or "/" not in value:
+                return False
+    return True
+
+
 def desktop_shortcuts_present(desktop: Path, platform_name: str) -> bool:
     if platform_name == "macos":
         targets = shortcut_targets(ROOT)
@@ -863,7 +1014,13 @@ def desktop_shortcuts_present(desktop: Path, platform_name: str) -> bool:
                 return False
         return _mac_shortcut_icons_present(desktop)
     suffix = { "windows": ".lnk" }.get(platform_name, ".desktop")
-    return all((desktop / f"{name}{suffix}").is_file() for name in SHORTCUT_NAMES)
+    for name in SHORTCUT_NAMES:
+        path = desktop / f"{name}{suffix}"
+        if not path.is_file():
+            return False
+        if platform_name == "linux" and not linux_shortcut_is_healthy(path):
+            return False
+    return True
 
 
 def ensure_installed(root: Path | None = None) -> bool:

@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+# ==============================================================================
+# Helper: mp-desktop-exec
+# Purpose: Launch an MP Mix Manager script from a .desktop entry (or a shell)
+#          without baking a user name or version-numbered install path into it.
+#
+# Usage:
+#   mp-desktop-exec <script-name> [args...]
+#
+# <script-name> is looked up, in order, at:
+#   <install>/<name>, <install>/scripts/<name>, <install>/bin/<name>
+#
+# The install tree is resolved by scripts/lib/mp_install_dir.sh, so a copied
+# launcher, a moved tree, or a new version number all keep working.
+# ==============================================================================
+
+_RESOLVED_SRC="${BASH_SOURCE[0]}"
+while [ -h "$_RESOLVED_SRC" ]; do
+    _RESOLVED_DIR="$(cd -P "$(dirname "$_RESOLVED_SRC")" >/dev/null 2>&1 && pwd)"
+    _RESOLVED_SRC="$(readlink "$_RESOLVED_SRC")"
+    [[ $_RESOLVED_SRC != /* ]] && _RESOLVED_SRC="$_RESOLVED_DIR/$_RESOLVED_SRC"
+done
+_SELF_DIR="$(cd -P "$(dirname "$_RESOLVED_SRC")" >/dev/null 2>&1 && pwd)"
+# The physical tree this helper came from: this file lives in <tree>/bin.
+_OWN_TREE="$(dirname "$_SELF_DIR")"
+unset _RESOLVED_SRC _RESOLVED_DIR
+
+# Locate the resolver library beside this script, in the tree, or in the
+# per-user copy that install.sh writes.
+for _lib in \
+    "$_SELF_DIR/lib/mp_install_dir.sh" \
+    "$_SELF_DIR/../scripts/lib/mp_install_dir.sh" \
+    "$HOME/.config/mix-manager/lib/mp_install_dir.sh"; do
+    if [ -f "$_lib" ]; then
+        # shellcheck source=/dev/null
+        . "$_lib"
+        break
+    fi
+done
+unset _lib _SELF_DIR
+
+if ! command -v mp_find_install_dir >/dev/null 2>&1; then
+    echo "mp-desktop-exec: install directory resolver not found." >&2
+    exit 1
+fi
+
+if [ "$#" -lt 1 ]; then
+    echo "Usage: mp-desktop-exec <script-name> [args...]" >&2
+    exit 64
+fi
+
+_name="$1"
+shift
+
+# Prefer the tree this helper physically lives in. ~/.local/bin/mp-desktop-exec
+# is a symlink into an install, so resolving it names the tree to launch.
+_root=""
+if [ -n "${_OWN_TREE:-}" ] && [ -f "$_OWN_TREE/Mix_Archive_Manager.sh" ]; then
+    _root="$_OWN_TREE"
+fi
+unset _OWN_TREE
+if [ -z "$_root" ]; then
+    _root="$(mp_find_install_dir 2>/dev/null || true)"
+fi
+if [ -z "$_root" ]; then
+    echo "mp-desktop-exec: could not find an MP Mix Manager install." >&2
+    exit 1
+fi
+
+# Run from the install tree, which is what Path= in the old entries did.
+cd "$_root" 2>/dev/null || true
+
+for _cand in "$_root/$_name" "$_root/scripts/$_name" "$_root/bin/$_name"; do
+    if [ -f "$_cand" ]; then
+        if [ -x "$_cand" ]; then
+            exec "$_cand" "$@"
+        fi
+        exec bash "$_cand" "$@"
+    fi
+done
+
+echo "mp-desktop-exec: '$_name' was not found in $_root." >&2
+exit 1

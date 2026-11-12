@@ -245,11 +245,17 @@ mix_config_file() {
     local candidate
     local script_parent
     script_parent="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd || true)"
+    local _lib="$script_parent/scripts/lib/mp_install_dir.sh"
+    [ ! -f "$_lib" ] && _lib="$HOME/.config/mix-manager/lib/mp_install_dir.sh"
+    local _root=""
+    if [ -f "$_lib" ]; then
+        # shellcheck source=/dev/null
+        . "$_lib"
+        command -v mp_find_install_dir >/dev/null 2>&1 && _root="$(mp_find_install_dir 2>/dev/null || true)"
+    fi
     for candidate in \
         "$script_parent/config.env" \
-        "$HOME/MP_Mix_Manager_v0.3/config.env" \
-        "/var/home/mplanetarian/MP_Mix_Manager_v0.3/config.env" \
-        "/home/mplanetarian/MP_Mix_Manager_v0.3/config.env"
+        "${_root:+$_root/config.env}"
     do
         [[ -f "$candidate" ]] && { printf '%s\n' "$candidate"; return 0; }
     done

@@ -2,6 +2,7 @@
 """First install creates four named desktop shortcuts on every platform."""
 
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -20,8 +21,10 @@ from install_desktop_shortcuts import (  # noqa: E402
     desktop_shortcuts_present,
     ensure_installed,
     install_desktop_shortcuts,
+    linux_desktop_entry,
     mac_bundle_identifier,
     mac_finder_icon_present,
+    shortcut_targets,
 )
 
 
@@ -147,6 +150,106 @@ class TestDesktopShortcuts(unittest.TestCase):
                 self.assertTrue(mac_finder_icon_present(desktop / "MP Mix Manager.command"))
                 self.assertTrue(mac_finder_icon_present(apps / "MP Mix Manager.command"))
             self.assertTrue(desktop_shortcuts_present(desktop, "macos"))
+
+    def test_linux_desktop_exec_survives_the_two_pass_keyfile_parse(self):
+        """The Exec line must launch, not just pass desktop-file-validate.
+
+        An Exec value is unescaped twice: once as a key-file string, then as
+        the argument list. A single backslash before "$" or '"' validates but
+        makes GLib refuse the entry, so the icon does nothing when clicked.
+        """
+        for name in SHORTCUT_NAMES:
+            spec = shortcut_targets(ROOT)[name]
+            text = linux_desktop_entry(name, spec, ROOT)
+            exec_line = next(
+                line[len("Exec="):] for line in text.splitlines() if line.startswith("Exec=")
+            )
+            with self.subTest(shortcut=name):
+                # Two backslashes are required before $ and " in the file.
+                self.assertNotIn('\\$', exec_line.replace('\\\\$', ""))
+                self.assertNotIn('\\"', exec_line.replace('\\\\"', ""))
+                self.assertIn('\\\\$HOME/.local/bin/mp-desktop-exec\\\\"', exec_line)
+                # And the entry must survive an independent parse.
+                with tempfile.TemporaryDirectory() as tmp:
+                    path = Path(tmp) / f"{name}.desktop"
+                    path.write_text(text, encoding="utf-8")
+                    parsed = subprocess.run(
+                        ["desktop-file-validate", str(path)],
+                        capture_output=True,
+                        text=True,
+                    )
+                    errors = [
+                        line
+                        for line in parsed.stderr.splitlines()
+                        if "error:" in line and "Categories" not in line
+                    ]
+                    self.assertEqual(errors, [], f"{name} has an invalid Exec line")
+
+    def test_desktop_shortcuts_present_rejects_a_broken_exec(self):
+        """A shortcut that exists but cannot load counts as missing."""
+        from install_desktop_shortcuts import linux_shortcut_is_healthy
+
+        with tempfile.TemporaryDirectory() as tmp:
+            desktop = Path(tmp)
+            broken = (
+                "[Desktop Entry]\n"
+                "Type=Application\n"
+                "Name=MP Gui\n"
+                'Exec=sh -c "exec \\"\\$HOME/.local/bin/mp-desktop-exec\\" MP_Gui.sh"\n'
+                "TryExec=mp-desktop-exec\n"
+                "Terminal=false\n"
+            )
+            for name in SHORTCUT_NAMES:
+                (desktop / f"{name}.desktop").write_text(broken, encoding="utf-8")
+            self.assertFalse(
+                desktop_shortcuts_present(desktop, "linux"),
+                "a shortcut with an unloadable Exec must be treated as absent",
+            )
+            self.assertFalse(linux_shortcut_is_healthy(desktop / f"{SHORTCUT_NAMES[0]}.desktop"))
+
+    def test_linux_try_exec_is_absolute_not_a_bare_name(self):
+        """TryExec must not rely on PATH.
+
+        A desktop session's PATH is /usr/local/sbin:/usr/local/bin:/usr/bin,
+        which does not include ~/.local/bin. A bare name there fails the
+        TryExec check, and GLib then refuses to load the entry at all.
+        """
+        for name in SHORTCUT_NAMES:
+            spec = shortcut_targets(ROOT)[name]
+            text = linux_desktop_entry(name, spec, ROOT)
+            try_exec = next(
+                line[len("TryExec="):]
+                for line in text.splitlines()
+                if line.startswith("TryExec=")
+            )
+            with self.subTest(shortcut=name):
+                self.assertTrue(try_exec.startswith("/"), try_exec)
+                self.assertNotIn("$", try_exec)
+
+    def test_shipped_desktop_files_do_not_use_single_backslash_escapes(self):
+        """Every checked-in .desktop file must avoid the broken escaping."""
+        shipped = sorted(ROOT.glob("*.desktop")) + sorted((ROOT / "desktop").glob("*.desktop"))
+        for path in shipped:
+            text = path.read_text(encoding="utf-8")
+            if "mp-desktop-exec" not in text:
+                continue
+            exec_line = next(
+                line[len("Exec="):] for line in text.splitlines() if line.startswith("Exec=")
+            )
+            with self.subTest(path=path.name):
+                self.assertNotIn('\\$', exec_line.replace('\\\\$', ""), path.name)
+                self.assertNotIn('\\"', exec_line.replace('\\\\"', ""), path.name)
+                # A bare TryExec makes GLib hide the entry from the desktop.
+                try_exec = [
+                    line[len("TryExec="):]
+                    for line in text.splitlines()
+                    if line.startswith("TryExec=")
+                ]
+                for value in try_exec:
+                    self.assertFalse(
+                        ("/" not in value) or ("$" in value),
+                        f"{path.name}: TryExec={value} cannot resolve in a desktop session",
+                    )
 
     def test_windows_install_links_the_four_launchers(self):
         created = []

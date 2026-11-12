@@ -26,7 +26,7 @@ def _get_app_version() -> str:
                 return cand.read_text(encoding="utf-8").strip()
             except Exception:
                 pass
-    return "0.4.2 Stable (Liquid)"
+    return "0.5.0 Stable (Sensorium)"
 
 VERSION = _get_app_version()
 from reportlab.pdfgen import canvas

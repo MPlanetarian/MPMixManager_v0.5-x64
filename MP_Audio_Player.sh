@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # MP_Audio_Player.sh - Shell Launcher for MP Audio Player
-# Part of MP_Mix_Manager_v0.4
+# Part of MP_Mix_Manager_v0.5
 # ==============================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

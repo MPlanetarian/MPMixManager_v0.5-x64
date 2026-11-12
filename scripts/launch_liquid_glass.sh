@@ -16,23 +16,33 @@ SCRIPT_DIR="$(cd -P "$(dirname "$_RESOLVED_SRC")" >/dev/null 2>&1 && pwd)"
 BASE_DIR="$(dirname "$SCRIPT_DIR")"
 [ ! -f "$BASE_DIR/MP_Audio_Player_Liquid_Glass_OpenGL.py" ] && [ ! -f "$BASE_DIR/MP_Audio_Player_Liquid_Glass.py" ] && BASE_DIR="$SCRIPT_DIR"
 
-# Fallback candidate search when script is copied to ~/.local/bin/launch-liquid-glass
+# Fallback candidate search when script is copied to ~/.local/bin/launch-liquid-glass.
+# Resolve the install tree by looking for the player, so no user name or
+# version-numbered directory is baked in here.
 if [ ! -f "$BASE_DIR/MP_Audio_Player_Liquid_Glass_OpenGL.py" ] && [ ! -f "$BASE_DIR/MP_Audio_Player_Liquid_Glass.py" ]; then
-    for _c in \
-        "${MP_MIX_MANAGER_DIR:-}" \
-        "$PWD" \
-        "/var/home/mplanetarian/MP_Mix_Manager_v0.4" \
-        "$HOME/MP_Mix_Manager_v0.4" \
-        "/home/mplanetarian/MP_Mix_Manager_v0.4" \
-        "/var/home/mplanetarian/MP_Mix_Manager_v0.3" \
-        "$HOME/MP_Mix_Manager_v0.3"; do
-        if [ -n "$_c" ] && { [ -f "$_c/MP_Audio_Player_Liquid_Glass_OpenGL.py" ] || [ -f "$_c/MP_Audio_Player_Liquid_Glass.py" ] || [ -f "$_c/MP_Audio_Player_Liquid_Glass_macOS.py" ]; }; then
-            BASE_DIR="$_c"
-            break
-        fi
+    for _lib in \
+        "$SCRIPT_DIR/lib/mp_install_dir.sh" \
+        "$SCRIPT_DIR/scripts/lib/mp_install_dir.sh" \
+        "$HOME/.config/mix-manager/lib/mp_install_dir.sh"; do
+        [ -f "$_lib" ] && . "$_lib" && break
     done
+    _found=""
+    if command -v mp_find_install_dir >/dev/null 2>&1; then
+        _found="$(mp_find_install_dir MP_Audio_Player_Liquid_Glass_OpenGL.py 2>/dev/null || true)"
+        [ -z "$_found" ] && _found="$(mp_find_install_dir MP_Audio_Player_Liquid_Glass.py 2>/dev/null || true)"
+    fi
+    # A copied launcher has no library beside it. Take the newest tree in $HOME.
+    if [ -z "$_found" ]; then
+        for _c in $(ls -d "$HOME"/MP*ix*anager* 2>/dev/null | sort -rV); do
+            if [ -f "$_c/MP_Audio_Player_Liquid_Glass_OpenGL.py" ] || [ -f "$_c/MP_Audio_Player_Liquid_Glass.py" ] || [ -f "$_c/MP_Audio_Player_Liquid_Glass_macOS.py" ]; then
+                _found="$_c"
+                break
+            fi
+        done
+    fi
+    [ -n "$_found" ] && BASE_DIR="$_found"
 fi
-unset _RESOLVED_SRC _RESOLVED_DIR _c
+unset _RESOLVED_SRC _RESOLVED_DIR _c _found _lib
 
 CONFIG_FILE="$HOME/.config/mix-manager/config.env"
 [ ! -f "$CONFIG_FILE" ] && CONFIG_FILE="$BASE_DIR/config.env"

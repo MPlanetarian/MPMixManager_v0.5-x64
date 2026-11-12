@@ -27,7 +27,7 @@ if [ -z "${VERSION:-}" ]; then
     elif [ -f "$SCRIPT_DIR/../VERSION" ]; then
         VERSION="$(head -n 1 "$SCRIPT_DIR/../VERSION" | tr -d '\r\n')"
     else
-        VERSION="0.4.2 Stable (Liquid)"
+        VERSION="0.5.0 Stable (Sensorium)"
     fi
 fi
 export VERSION
@@ -181,19 +181,26 @@ migrate_installation_path() {
     ln -sf "$target_dir/bin/list-midi-devices" "$HOME/.local/bin/list-midi-devices" 2>/dev/null || true
     ln -sf "$target_dir/Cut_Video.sh" "$HOME/.local/bin/cut-video" 2>/dev/null || true
     ln -sf "$target_dir/Mix_Archive_Manager.sh" "$HOME/manager.sh" 2>/dev/null || true
-    
+    ln -sf "$target_dir/bin/mp-desktop-exec" "$HOME/.local/bin/mp-desktop-exec" 2>/dev/null || true
+
+    # Record the new tree and publish the path resolver, so the launchers and
+    # desktop entries keep resolving after a migration.
+    mkdir -p "$HOME/.config/mix-manager/lib" 2>/dev/null || true
+    printf '%s\n' "$target_dir" > "$HOME/.config/mix-manager/install_dir" 2>/dev/null || true
+    if [ -f "$target_dir/scripts/lib/mp_install_dir.sh" ]; then
+        cp -f "$target_dir/scripts/lib/mp_install_dir.sh" "$HOME/.config/mix-manager/lib/mp_install_dir.sh" 2>/dev/null || true
+    fi
+
     # Desktop Shortcut Updates
     if [ "$OS_TYPE" = "macos" ]; then
         if [ -d "$HOME/Desktop" ]; then
             ln -sf "$target_dir/manager_macos.command" "$HOME/Desktop/Mix Archive Manager.command" 2>/dev/null || true
         fi
     elif [ "$OS_TYPE" = "linux" ] || [ "$OS_TYPE" = "freebsd" ]; then
-        local desktop_file="$HOME/.local/share/applications/Mix_Archive_Manager.desktop"
-        if [ -f "$desktop_file" ]; then
-            sed -i "s|elif \[ -x \".*Mix_Archive_Manager.sh\" \]|elif [ -x \"$target_dir/Mix_Archive_Manager.sh\" ]|g" "$desktop_file" 2>/dev/null || true
-        fi
-        if [ -f "$HOME/Desktop/Mix_Archive_Manager.desktop" ]; then
-            sed -i "s|elif \[ -x \".*Mix_Archive_Manager.sh\" \]|elif [ -x \"$target_dir/Mix_Archive_Manager.sh\" ]|g" "$HOME/Desktop/Mix_Archive_Manager.desktop" 2>/dev/null || true
+        # The shortcuts now resolve the tree at launch. Refresh them from this
+        # tree so they point at the migrated install.
+        if command -v python3 >/dev/null 2>&1 && [ -f "$target_dir/scripts/install_desktop_shortcuts.py" ]; then
+            python3 "$target_dir/scripts/install_desktop_shortcuts.py" --root "$target_dir" >/dev/null 2>&1 || true
         fi
         command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
     fi

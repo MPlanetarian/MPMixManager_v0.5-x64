@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # kill_all_mp_audio_players.sh - Terminate all MP Audio Player instances
-# Part of MP_Mix_Manager_v0.4
+# Part of MP_Mix_Manager_v0.5
 #
 # Terminates all running MP Audio Player instances:
 #  - MP_Audio_Player.py (Standalone GUI, Terminal UI, Mini/Micro Player, Daemon)

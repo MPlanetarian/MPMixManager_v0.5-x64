@@ -16,7 +16,7 @@ def _get_app_version() -> str:
         if c.is_file():
             try: return c.read_text(encoding="utf-8").strip()
             except Exception: pass
-    return "0.4.2 Stable (Liquid)"
+    return "0.5.0 Stable (Sensorium)"
 
 VERSION = _get_app_version()
 
@@ -2426,11 +2426,18 @@ def _audio_player_daemon_pids() -> List[int]:
         if pid == me:
             continue
         try:
-            cmd = (entry / "cmdline").read_bytes().replace(b"\x00", b" ").decode("utf-8", "ignore")
+            raw = (entry / "cmdline").read_bytes()
         except OSError:
             continue
-        if "MP_Audio_Player" in cmd and "--daemon" in cmd:
-            found.append(pid)
+        argv = [a.decode("utf-8", "ignore") for a in raw.split(b"\x00") if a]
+        # Match on real argv, not a substring of the whole command line. A
+        # shell running `pgrep -f "MP_Audio_Player.py --daemon"` mentions the
+        # same text but has a single `-c` argument, and must not be killed.
+        if not any(a.endswith("MP_Audio_Player.py") for a in argv):
+            continue
+        if "--daemon" not in argv:
+            continue
+        found.append(pid)
     return found
 
 def _choose_daemon_owner(pids: List[int], prefer_pid: Optional[int] = None, pid_file_pid: Optional[int] = None, ipc_pid: Optional[int] = None) -> Optional[int]:

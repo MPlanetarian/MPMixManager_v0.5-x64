@@ -7,9 +7,80 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Changed
+- **Launchers and desktop shortcuts resolve the install tree instead of hard-coding a path** (`scripts/lib/mp_install_dir.sh`, `scripts/lib/mp_install_dir.py`, `bin/mp-desktop-exec`, `Mix_Archive_Manager.sh`, `scripts/launch_liquid_glass.sh`, `scripts/launch-liquid-glass`, `bin/mix-archive-manager`, `bin/launch-manager`, `bin/launch-manager-fullscreen`, `install.sh`, `manage_installation_config.sh`, `scripts/install_desktop_shortcuts.py`, `scripts/liquid_glass_reward.py`):
+  - Nothing points at `/var/home/<user>/MP_Mix_Manager_v0.x` or any other version-numbered directory any more.
+  - The install tree is found from `$MP_MIX_MANAGER_DIR`, then `~/.config/mix-manager/install_dir` (written by `install.sh` and by the migration menu), then the `~/.local/bin` launcher symlinks, then the newest matching tree under `$HOME` and `/opt`. Every candidate is verified with a marker file, so a stale symlink or a backup copy cannot win.
+  - `Mix_Archive_Manager.sh` now follows its own symlink, so `manager` and `~/.local/bin/mix-archive-manager` report the tree they really point into.
+  - Linux `.desktop` entries call `mp-desktop-exec` and use the icon name, so a moved or renamed tree keeps its shortcut and icon.
+  - The Liquid Player launcher, MP Gui, the audio and WAN2GP output monitors, the alarm clock, and the KDE Connect helpers use the same resolver.
+
+### Added
+- **Path resolver library** (`scripts/lib/mp_install_dir.sh`, `scripts/lib/mp_install_dir.py`) with the same lookup order in shell and Python.
+- **`mp-desktop-exec` helper** (`bin/mp-desktop-exec`) that launches a named script from the resolved tree, for desktop entries and shell aliases.
+- **`tests/test_install_dir_resolution.py`** covering resolver lookup, moved and renamed trees, and the desktop entries.
+
+## [0.5.0 Stable (Sensorium)] - 2026-11-12
+
+### Fixed
+- **Desktop shortcuts now open when clicked** (`scripts/install_desktop_shortcuts.py`, `MP_Liquid.desktop`, `Mix_Archive_Manager.desktop`, `desktop/*.desktop`, `tests/test_desktop_shortcuts.py`):
+  - The `Exec=` line wrote `\"` and `\$` for its quoted arguments. Neither is a valid escape in a Desktop Entry `Exec` value, so GLib refused to load the entry. `desktop-file-validate` accepted the file, which is why the breakage was not caught, but clicking any of the four icons did nothing.
+  - An `Exec` value is unescaped twice, once as a key-file string and once as an argument list. Shell metacharacters now carry two backslashes so `$HOME` still expands at launch.
+  - `TryExec=mp-desktop-exec` was a bare name, but a desktop session's `PATH` is only `/usr/local/sbin:/usr/local/bin:/usr/bin` and does not contain `~/.local/bin`. A failed `TryExec` also makes GLib treat the entry as unloadable, so the key now points at the published helper by absolute path. The shipped `.desktop` files omit `TryExec` instead of baking a user name in.
+  - `desktop_shortcuts_present` now checks that each shortcut has a loadable `Exec` and a resolvable `TryExec`, so a broken shortcut from an earlier run is repaired on the next launch instead of being counted as present.
+  - `tests/test_desktop_shortcuts.py` covers both failures, so a shortcut that validates but cannot load now fails the suite.
+- **Web Companion no longer loops the same fragment of a mix** (`scripts/mix_web_companion.py`, `tests/test_web_companion_stream.py`):
+  - `/api/stream` now honours the open-ended range form `bytes=start-` (and `bytes=-suffix`). Previously only `bytes=start-end` matched, so a phone scrubbing a track was handed a body from offset 0 and replayed the same opening seconds.
+  - The 100 ms `/api/eq` poll no longer seeks the phone's `<audio>` element. It used to force `currentTime` back to the player's `position_sec` even while that position was frozen, which trapped playback in a repeating loop of the same few seconds.
+  - Progress, position, and duration now come from the phone's own audio clock while streaming, so the bar tracks real playback.
+  - A phone that disconnects mid-transfer no longer produces `BrokenPipeError` tracebacks; the connection is simply closed.
+  - Zero-byte files (interrupted conversions) are excluded from the stream queue, since they would stall the client on an empty body.
+  - Fixed a duration-cache bug that returned the cached file size instead of the cached duration.
+
+### Added
+- **MP Assistant tab in the Web Companion** (`scripts/mix_web_companion.py`, `tests/test_web_companion_assistant.py`):
+  - The page header now has two tabs: **MP Liquid Player** and **MP Assistant**. Switching tabs only hides a panel, so a mix keeps streaming while the assistant is open.
+  - The assistant tab is a live prompt for the **MP Harmony Agent**, streaming replies token by token into the transcript.
+  - Replies are spoken through the agent's TTS proxy (`GET /api/assistant/speech`), defaulting to **Stephen Hawking** (`stephen_hawking_matrix`), with a voice selector for the other Matrix voices.
+  - The mix is paused while a spoken reply plays and resumes when the clip ends. Unticking **🔊 Speak replies** keeps it text-only.
+  - **Fixed: replies arrived as text only on phones.** Mobile browsers only allow audio inside a user gesture, and the model takes ~10s to answer, so the tap that sent the prompt had expired before `play()` ran and the browser rejected it with `NotAllowedError`. The reply element is now primed with a silent clip on every tap in the assistant tab (and on send), which authorises the real reply to start later. If a browser still refuses, a **▶ Speak reply** button is attached to that bubble and replays the answer inside the tap. Verified against Chrome's strict `user-gesture-required` autoplay policy.
+  - The reply `<audio>` element is no longer `display: none`, which iOS Safari can treat as unplayable; it is laid out off-screen instead.
+  - A **🔊 Speaking…** badge shows while a reply is playing, and stale speech is cancelled when the voice is muted or a new chat is started.
+  - Because the agent binds `127.0.0.1:11435`, the companion proxies its OpenAI-compatible API (`GET /api/assistant`, `POST /api/assistant/chat`) so a phone only talks to port 8888.
+  - Each browser gets an isolated agent session that survives reloads; **↺ New chat** clears it.
+  - The selected tab is remembered in `localStorage` and is deep-linkable (`#assistant`).
+  - New settings: `MP_ASSISTANT_ENABLED`, `MP_ASSISTANT_URL`, `MP_ASSISTANT_TIMEOUT`.
+- **Web Companion theme switching** (`scripts/mix_web_companion.py`, `tests/test_web_companion_autoplay.py`):
+  - The page header has a theme dropdown listing every palette the manager offers.
+  - Choosing a theme applies it immediately and persists it to `~/.config/mix-manager/web_companion_theme`, which takes precedence over the manager theme for the companion only.
+  - New endpoints: `GET /api/themes` (available palettes and the active one) and `GET /api/set_theme?theme=<id|name|alias>` (validates and applies).
+  - Deleting `web_companion_theme` makes the companion follow the manager theme again.
+- **Web Companion mini playlist** (`scripts/mix_web_companion.py`, `tests/test_web_companion_autoplay.py`):
+  - Shows exactly three mixes: the current one plus the next two, in the active theme.
+  - Tapping an entry plays that mix (`POST /api/control?action=select_index&index=N`).
+  - New endpoint `GET /api/playlist` returns the three-track window plus the total queue size.
+
+### Changed
+- **Version bump to `0.5.0 Stable (Sensorium)`.** `VERSION` now reads `0.5.0 Stable (Sensorium)`. Current-release fallbacks, headers, badges, installers, launcher resources, and desktop entries that named `0.4.0`, `0.4.1`, or `0.4.2 Stable (Liquid)` now name `0.5.0 Stable (Sensorium)`. The macOS `CFBundleShortVersionString`/`CFBundleVersion` values are `0.5.0`, and the Windows launcher resource is `0,5,0,0`.
+- **First-run welcome** (`scripts/liquid_glass_reward.py`) greets `0.5.0 (Sensorium) - [Stable Release]` and lists the features added since `0.4.2`.
+- **Repository paths** in `README.md`, `INSTALL_BAZZITE.md`, and `scripts/launch-liquid-glass` point at `MPMixManager_v0.5-x64`. The 0.4 path stays as a fallback in the launcher.
+- **Web Companion is now a pure HTTP streamer** (`scripts/mix_web_companion.py`):  - Removed all local-player code. The service no longer spawns `MP_Audio_Player.py --daemon`, sends IPC commands to it, or opens a sound device. This was the cause of audio starting on the host machine when the companion restarted.
+  - The companion keeps its own stream queue and position state in `~/.config/mix-manager/web_companion_stream.json`, and the browser reports track changes via `action=track_ended`.
+  - Removed settings `WEB_COMPANION_AUTOPLAY`, `WEB_COMPANION_MODE`, `WEB_COMPANION_PLAYLIST` and flags `--no-autoplay`, `--autoplay`, `--autoplay-status` in favour of `--stream-status`.
+  - `/api/status` reports `player: "Web Stream"` and includes `queue_len`/`queue_position`.
+
+- **Web Companion resource and connection hardening** (`scripts/mix_web_companion.py`, `tests/test_web_companion_autoplay.py`):
+  - The stream queue is cached for 30 seconds instead of being re-walked on every request. The dashboard polls several endpoints per second, and uncached scans pushed the service to a 1.4 GB peak; it now idles around 30 MB.
+  - The listen backlog is raised from the stdlib default of 5 to 128, so a burst of dashboard polls and parallel audio range requests is no longer dropped.
+  - Client disconnects are no longer written to the journal as server faults. Phones close tabs, scrub, and time out mid-request constantly, and each one previously produced a `BrokenPipeError` traceback.
+
+---
+
 ## [0.4.2 Stable (Liquid)] - 2026-11-08
 
-Current release. `0.4.1 Stable (Liquid)` was the in-tree version label before this release and was not published with its own notes. The October 24, 2026 feature set remains under [0.4.0 Stable](#040-stable---2026-10-24).
+Previous release. `0.4.1 Stable (Liquid)` was the in-tree version label before this release and was not published with its own notes. The October 24, 2026 feature set remains under [0.4.0 Stable](#040-stable---2026-10-24).
 
 ### Added
 - **MP Harmony AI Assistant** (`scripts/launch_mp_harmony.sh`, `Mix_Archive_Manager.sh`):
