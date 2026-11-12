@@ -8,9 +8,15 @@ Translates MIDI Mode signals (Pitch Faders, Buttons, Encoders, Volume Sliders) t
 """
 
 from __future__ import annotations
-import os, sys, time, json, socket, subprocess, threading, signal, select, argparse
+import os, sys, time, json, socket, subprocess, threading, signal, select, argparse, shutil
 from pathlib import Path
 from typing import Optional, Dict, Any, Tuple, List
+
+IS_FREEBSD = sys.platform.startswith("freebsd")
+
+# FreeBSD has no ALSA. MIDI controllers appear as /dev/midi* (umidi(4)) or
+# /dev/umidi*; amidi and /dev/snd/midi* only exist on Linux.
+FREEBSD_MIDI_GLOBS = ("/dev/umidi*", "/dev/midi*")
 
 CONFIG_DIR = Path.home() / ".config" / "mix-manager"
 CONFIG_DIR.mkdir(parents=True, exist_ok=True)
@@ -90,6 +96,19 @@ def is_player_running() -> bool:
     return False
 
 
+def freebsd_midi_devices() -> List[str]:
+    """MIDI character devices on FreeBSD (umidi(4)). ALSA paths never exist."""
+    import glob
+    if not IS_FREEBSD:
+        return []
+    found: List[str] = []
+    for pattern in FREEBSD_MIDI_GLOBS:
+        for path in sorted(glob.glob(pattern)):
+            if path not in found:
+                found.append(path)
+    return found
+
+
 def detect_traktor_s4_port() -> Tuple[bool, str, str]:
     """
     Detect Traktor Kontrol S4 hardware port.
@@ -126,19 +145,30 @@ def detect_traktor_s4_port() -> Tuple[bool, str, str]:
     except Exception:
         pass
 
-    # 3. Check amidi -l
-    try:
-        res = subprocess.run(["amidi", "-l"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=2)
-        for line in res.stdout.splitlines():
-            if "Traktor Kontrol S4" in line or "Traktor" in line:
-                parts = line.split()
-                if len(parts) >= 2 and parts[1].startswith("hw:"):
-                    port = parts[1]
-                detected = True
-                details = line.strip()
-                return detected, port, details
-    except Exception:
-        pass
+    # 3. Check amidi -l (Linux only: FreeBSD has no ALSA/amidi)
+    if shutil.which("amidi"):
+        try:
+            res = subprocess.run(["amidi", "-l"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=2)
+            for line in res.stdout.splitlines():
+                if "Traktor Kontrol S4" in line or "Traktor" in line:
+                    parts = line.split()
+                    if len(parts) >= 2 and parts[1].startswith("hw:"):
+                        port = parts[1]
+                    detected = True
+                    details = line.strip()
+                    return detected, port, details
+        except Exception:
+            pass
+
+    # 3b. FreeBSD: /dev/umidi* (umidi(4)) replaces ALSA rawmidi.
+    for dev in freebsd_midi_devices():
+        try:
+            detected = True
+            details = f"Traktor Kontrol S4 ({dev})"
+            port = dev
+            return detected, port, details
+        except Exception:
+            pass
 
     # 4. Check rawmidi character device
     if os.path.exists("/dev/snd/midiC0D0"):
@@ -172,6 +202,12 @@ class TraktorS4MidiController:
         self.shift_active = False
 
     def _get_rawmidi_device_path(self, port: str) -> Optional[str]:
+        if IS_FREEBSD:
+            # FreeBSD hands MIDI back as /dev/umidi*; there is no /dev/snd tree.
+            if port.startswith("/dev/"):
+                return port if os.path.exists(port) else None
+            devices = freebsd_midi_devices()
+            return devices[0] if devices else None
         if port.startswith("hw:"):
             parts = port[3:].split(",")
             if len(parts) == 2:
@@ -558,7 +594,22 @@ class TraktorS4MidiController:
     def run_amidi_stream(self, monitor_mode: bool = False):
         """
         Fallback MIDI stream reader using 'amidi -p <port> --dump'.
+
+        amidi is ALSA-only. FreeBSD has no ALSA and no amidi, so the old code
+        raised FileNotFoundError and killed the daemon at startup. Stand by
+        politely instead, and say why.
         """
+        if IS_FREEBSD or not shutil.which("amidi"):
+            reason = "FreeBSD has no ALSA/amidi" if IS_FREEBSD else "amidi is not installed"
+            msg = f"{reason}; no MIDI device to stream from. Waiting in standby."
+            log(msg)
+            self.update_state("standby", msg)
+            if monitor_mode:
+                print(f"  {YELLOW}{msg}{NC}")
+            while self.running:
+                time.sleep(0.5)
+            return
+
         cmd = ["amidi", "-p", self.port, "--dump"]
         log(f"Starting amidi process: {' '.join(cmd)}")
         self.update_state("running", f"Listening via amidi on {self.port}")
@@ -605,7 +656,7 @@ class TraktorS4MidiController:
             print(f"{BOLD}{WHITE}   🎛️  TRAKTOR KONTROL S4 HARDWARE MIDI LIVE MONITOR / TEST CONSOLE{NC}")
             print(f"{BOLD}{MAGENTA}========================================================================{NC}")
             print(f"  Hardware Port   : {BOLD}{CYAN}{self.port}{NC}")
-            print(f"  ALSA Device     : {BOLD}{CYAN}{self.rawmidi_dev or 'amidi stream'}{NC}")
+            print(f"  {'MIDI Device' if IS_FREEBSD else 'ALSA Device'}     : {BOLD}{CYAN}{self.rawmidi_dev or ('umidi stream' if IS_FREEBSD else 'amidi stream')}{NC}")
             print(f"  Audio Player IPC: {BOLD}{GREEN if is_player_running() else YELLOW}{'Connected' if is_player_running() else 'Waiting for player'}{NC}")
             print(f"  MIDI Mode Hint  : Press {BOLD}{YELLOW}SHIFT + BROWSE{NC} (MK1) or {BOLD}{YELLOW}SHIFT + PREVIEW{NC} (MK2) on S4")
             print(f"  Exit Monitor    : Press {BOLD}Ctrl+C{NC}\n")
@@ -688,7 +739,10 @@ def print_status():
 
     print(f"\n{BOLD}{MAGENTA}=== TRAKTOR KONTROL S4 MIDI HARDWARE STATUS ==={NC}\n")
     print(f"  Device Name          : {BOLD}{WHITE}{DEFAULT_DEVICE_NAME}{NC}")
-    print(f"  Hardware Port        : {BOLD}{CYAN}{port}{NC} {DIM}(ALSA Rawmidi: /dev/snd/midiC0D0){NC}")
+    if IS_FREEBSD:
+        print(f"  MIDI Port            : {BOLD}{CYAN}{port}{NC} {DIM}(umidi(4): /dev/umidi* or /dev/midi*){NC}")
+    else:
+        print(f"  Hardware Port        : {BOLD}{CYAN}{port}{NC} {DIM}(ALSA Rawmidi: /dev/snd/midiC0D0){NC}")
     if detected:
         print(f"  Hardware Connection  : {BOLD}{GREEN}✓ Detected & Connected{NC} {DIM}({details}){NC}")
     else:
@@ -721,6 +775,17 @@ def print_user_guide():
             pass
 
     # Fallback built-in guide
+    if IS_FREEBSD:
+        midi_port_help = (
+            f"   • FreeBSD exposes MIDI controllers through umidi(4) as {BOLD}{CYAN}/dev/umidi*{NC}\n"
+            f"     (or {BOLD}{CYAN}/dev/midi*{NC}). There is no ALSA and no amidi on FreeBSD.\n"
+            f"   • To verify in terminal: run '{BOLD}ls /dev/umidi* /dev/midi*{NC}'.\n\n"
+        )
+    else:
+        midi_port_help = (
+            f"   • The Traktor Kontrol S4 connects via ALSA hardware port {BOLD}{CYAN}hw:0,0{NC} (or /dev/snd/midiC0D0).\n"
+            f"   • To verify in terminal: run '{BOLD}amidi -l{NC}'.\n\n"
+        )
     print(f"""
 {BOLD}{MAGENTA}========================================================================{NC}
 {BOLD}{WHITE}   🎛️  TRAKTOR KONTROL S4 GETTING STARTED GUIDE (v0.4.3){NC}
@@ -731,11 +796,8 @@ def print_user_guide():
    • Traktor Kontrol S4 MK2: Hold {BOLD}{YELLOW}SHIFT{NC} and press {BOLD}{YELLOW}PREVIEW{NC} button.
    • Confirmation: The two Loop Size Displays on the S4 will read {BOLD}{GREEN}ON{NC}.
 
-2. HARDWARE ALSA PORT:
-   • The Traktor Kontrol S4 connects via ALSA hardware port {BOLD}{CYAN}hw:0,0{NC} (or /dev/snd/midiC0D0).
-   • To verify in terminal: run '{BOLD}amidi -l{NC}'.
-
-3. PITCH CONTROLS (LEFT & RIGHT DECKS):
+2. HARDWARE MIDI PORT:
+{midi_port_help}3. PITCH CONTROLS (LEFT & RIGHT DECKS):
    • Moving either Tempo/Pitch Fader adjusts the MP Audio Player DJ Pitch in real-time.
    • Range: {BOLD}-20% to +20%{NC} with rock-solid deadzone center snap at 0%.
    • Pitch Bend [+] / [-] buttons: Micro-nudge pitch up or down by 1%.
