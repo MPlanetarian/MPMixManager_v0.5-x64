@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # MP_Mix_Manager_v0.3 - Cross-Platform Automated Installer
-# Supports Linux (Bazzite / SteamOS / Fedora / Ubuntu), macOS, and Windows
+# Supports Linux (Bazzite / SteamOS / Fedora / Ubuntu), macOS, Windows, and FreeBSD
+#
+# Reinstall / factory reset:
+#   ./install.sh --reinstall                  Ask what to keep, then reinstall
+#   ./install.sh --reinstall --yes            Keep everything and reinstall
+#   ./install.sh --reinstall --fresh --yes    Wipe all config and reinstall
 # ==============================================================================
 set -euo pipefail
 
@@ -32,6 +37,93 @@ if [ -z "${VERSION:-}" ]; then
     fi
 fi
 export VERSION
+
+# 0. Optional Reinstall / Factory Reset
+REINSTALL=0
+REINSTALL_ARGS=()
+for _arg in "$@"; do
+    case "$_arg" in
+        --reinstall|--re-install|--factory-reset|--reset)
+            REINSTALL=1
+            ;;
+        --help|-h)
+            echo -e "${BOLD}MP Mix Manager Installer${NC}"
+            echo ""
+            echo "Usage: ./install.sh [options] [-- reinstall options]"
+            echo ""
+            echo "Options:"
+            echo "  --install                 Normal install (default)"
+            echo "  --reinstall               Wipe this user's configuration and reinstall"
+            echo "                            from a first-install state"
+            echo "  --preserve-playlists      Reinstall: keep playlists and favorites"
+            echo "  --preserve-music-folders  Reinstall: keep music folder config"
+            echo "  --preserve-archive-config Reinstall: keep mix archive folder config"
+            echo "  --fresh                   Reinstall: preserve nothing"
+            echo "  --yes, -y                 Reinstall: do not prompt; preserve all"
+            echo "  --dry-run                 Reinstall: show what would change"
+            echo "  -h, --help                Show this help"
+            echo ""
+            echo "Converted audio files are never deleted by a reinstall."
+            echo "Run ./scripts/reinstall_mp_manager.sh --help for the full option list."
+            exit 0
+            ;;
+        --install)
+            # Explicit normal install. Nothing to do; the script proceeds.
+            ;;
+        --preserve-playlists|--preserve-music-folders|--preserve-archive-config|\
+        --no-preserve-playlists|--no-preserve-music-folders|--no-preserve-archive-config|\
+        --keep-playlists|--keep-music-folders|--keep-archive-config|--no-preserve|\
+        --fresh|--yes|-y|--dry-run)
+            REINSTALL_ARGS+=("$_arg")
+            ;;
+        *)
+            echo -e "${RED}Unknown option: $_arg${NC}" >&2
+            echo "Run ./install.sh --help to see the available options." >&2
+            exit 1
+            ;;
+    esac
+done
+unset _arg
+
+if [ "$REINSTALL" -eq 1 ]; then
+    echo -e "${BOLD}${MAGENTA}================================================================================${NC}"
+    echo -e "${BOLD}${MAGENTA}        MP Mix Archive Manager Reinstall (MP_Mix_Manager_v${VERSION#v})          ${NC}"
+    echo -e "${BOLD}${MAGENTA}          Linux • macOS • Windows 10 & 11 • FreeBSD                              ${NC}"
+    echo -e "${BOLD}${MAGENTA}================================================================================${NC}"
+    echo ""
+    _reinstall_script="$SCRIPT_DIR/scripts/reinstall_mp_manager.sh"
+    if [ ! -f "$_reinstall_script" ]; then
+        echo -e "${RED}Error: scripts/reinstall_mp_manager.sh was not found.${NC}" >&2
+        exit 1
+    fi
+    set +e
+    if [ ${#REINSTALL_ARGS[@]} -gt 0 ]; then
+        MP_REINSTALL_FROM_INSTALLER=1 bash "$_reinstall_script" --root "$SCRIPT_DIR" "${REINSTALL_ARGS[@]}"
+    else
+        MP_REINSTALL_FROM_INSTALLER=1 bash "$_reinstall_script" --root "$SCRIPT_DIR"
+    fi
+    _reinstall_rc=$?
+    set -e
+    if [ "$_reinstall_rc" -eq 10 ]; then
+        echo -e "\n${YELLOW}Reinstall cancelled. The existing installation was left alone.${NC}"
+        exit 0
+    elif [ "$_reinstall_rc" -ne 0 ]; then
+        echo -e "\n${RED}Reinstall stopped. No further changes were made.${NC}" >&2
+        exit 1
+    fi
+    echo -e "${BOLD}${BLUE}Reinstalling the program around the fresh configuration...${NC}"
+    echo ""
+    if [ ${#REINSTALL_ARGS[@]} -gt 0 ]; then
+        for _arg in "${REINSTALL_ARGS[@]}"; do
+            if [ "$_arg" = "--dry-run" ]; then
+                echo -e "${YELLOW}Dry run only: the program was not reinstalled.${NC}"
+                exit 0
+            fi
+        done
+    fi
+    unset _arg
+fi
+unset _reinstall_script _reinstall_rc 2>/dev/null || true
 
 echo -e "${BOLD}${MAGENTA}================================================================================${NC}"
 echo -e "${BOLD}${MAGENTA}        MP Mix Archive Manager Installer (MP_Mix_Manager_v${VERSION#v})           ${NC}"
@@ -151,6 +243,52 @@ if [ ${#MISSING_TOOLS[@]} -gt 0 ]; then
         echo -e "${YELLOW}      To install missing dependencies on Linux, run:${NC}"
         echo -e "${CYAN}      brew install ${MISSING_TOOLS[*]}${NC}  (or use your system package manager)"
     fi
+fi
+echo ""
+
+# 4b. Check the Python GTK stack used by MP Gui, the Liquid Glass players,
+#     and the MP Liquid Visualizer. Installer scripts cannot always install
+#     these, so report exactly what is missing and which command fixes it.
+echo -e "${BOLD}${BLUE}[4/7] Checking Python GTK / GPU Stack (MP Gui & Liquid Glass)...${NC}"
+if command -v python3 >/dev/null 2>&1; then
+    MP_GTK_MISSING="$(python3 - <<'PY' 2>/dev/null
+import importlib
+missing = []
+for mod, label in (("gi", "PyGObject"), ("numpy", "NumPy")):
+    try:
+        importlib.import_module(mod)
+    except Exception:
+        missing.append(label)
+print(", ".join(missing))
+PY
+)"
+    if [ -n "${MP_GTK_MISSING:-}" ]; then
+        echo -e "      [${RED}MISSING${NC}] ${BOLD}${MP_GTK_MISSING}${NC} for the python3 on PATH"
+        echo -e "${YELLOW}      MP Gui and MP Liquid Player will not open until this is installed.${NC}"
+        if [ "$HOST_OS" = "macos" ]; then
+            echo -e "${CYAN}      brew install pygobject3 numpy${NC}"
+        elif [ "$HOST_OS" = "freebsd" ]; then
+            echo -e "${CYAN}      pkg install -y py311-gobject3 py311-numpy vte3${NC}"
+        elif [ "$HOST_OS" = "windows" ] || [ "$HOST_OS" = "wsl" ]; then
+            echo -e "${CYAN}      python -m pip install PyGObject numpy${NC}"
+            echo -e "${DIM}      PyGObject on Windows also needs the GTK3 runtime from gvsbuild.${NC}"
+        else
+            echo -e "${CYAN}      Fedora/Bazzite: sudo dnf install python3-gobject python3-numpy vte291-gtk4${NC}"
+            echo -e "${CYAN}      Debian/Ubuntu: sudo apt install python3-gi python3-numpy gir1.2-vte-2.91${NC}"
+            echo -e "${DIM}      Arch: sudo pacman -S python-gobject python-numpy vte3${NC}"
+        fi
+    else
+        echo -e "      [${GREEN}FOUND${NC}] PyGObject and NumPy for the python3 on PATH"
+    fi
+    # VTE is what puts a live terminal inside the glass window.
+    if command -v python3 >/dev/null 2>&1 && ! python3 -c "import gi; gi.require_version('Vte','2.91')" >/dev/null 2>&1; then
+        echo -e "      [${YELLOW}OPTIONAL${NC}] VTE 2.91 typelib not found. The glass window still opens,"
+        echo -e "                 but the embedded terminal falls back to a plain pane."
+        echo -e "${DIM}                 Fedora/Bazzite: sudo dnf install vte291-gtk4${NC}"
+        echo -e "${DIM}                 Debian/Ubuntu: sudo apt install gir1.2-vte-2.91${NC}"
+    fi
+else
+    echo -e "      [${RED}MISSING${NC}] python3 was not found on PATH"
 fi
 echo ""
 

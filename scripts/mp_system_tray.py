@@ -4,7 +4,8 @@
 Right-click the icon to launch any of the three, or to close the console
 manager and everything that belongs to it (the GUI, the Liquid Player,
 playback, and the visualizer). The icon stays while at least one of the
-three is open. A second launch focuses the window that is already open.
+three is open. MP Gui and MP Liquid Player open up to four windows; a fifth
+launch focuses a window that is already open.
 """
 
 from __future__ import annotations
@@ -23,15 +24,32 @@ ROLE_MANAGER = "manager"
 ROLE_GUI = "gui"
 ROLE_LIQUID = "liquid"
 
+# MP Gui and MP Liquid Player are capped at four windows. The console manager
+# is not: it is one window and the tray only ever focuses it.
+try:
+    import mp_instance_limit as instance_limit
+except ImportError:  # pragma: no cover - the tray lives beside the helper
+    instance_limit = None
+
+try:
+    import mp_web_service as web_service
+except ImportError:  # pragma: no cover - the tray lives beside the helper
+    web_service = None  # type: ignore[assignment]
+
 MENU_LAUNCH_GUI = "Launch MP Gui"
 MENU_LAUNCH_LIQUID = "Launch MP Liquid Player"
 MENU_LAUNCH_MANAGER = "Launch MP Mix Manager"
 MENU_CLOSE_ALL = "Close MP Mix Manager (Closes everything)"
+# Label is filled in from the live service state: Stop while the companion is
+# serving, Start while it is not. Several dashboards may be connected, which is
+# why the label is re-read whenever the menu is opened.
+MENU_WEB_AUDIO = "Start / Stop MP Web Audio"
 
 MENU_ENTRIES = (
     ("launch-gui", MENU_LAUNCH_GUI),
     ("launch-liquid", MENU_LAUNCH_LIQUID),
     ("launch-manager", MENU_LAUNCH_MANAGER),
+    ("web-audio", MENU_WEB_AUDIO),
     ("close-all", MENU_CLOSE_ALL),
 )
 
@@ -54,8 +72,19 @@ LIQUID_HOSTS = (
     "MP_Audio_Player_Liquid_Glass_OpenGL_macOS.py",
 )
 
+# MP Gui and MP Liquid Player may have at most four windows. Launching a fifth
+# focuses a window instead, which also covers the tray menu staying open.
+MAX_CAPPED_INSTANCES = 4
+
 ABSENT_QUIT_SECONDS = 8
 LAUNCH_GRACE_SECONDS = 20
+
+# The Web Companion's "Close All" button closes the three apps but must keep
+# the icon up. A tray started by a shortcut (not the autostart entry) normally
+# quits once nothing is open, so the companion drops this marker first and the
+# poll loop below honours it until the dashboard is done with the icon.
+KEEPALIVE_FILE = "mp_system_tray.keepalive"
+KEEPALIVE_SECONDS = 60
 
 _WRAPPERS = {"setsid", "nohup", "nice", "stdbuf", "timeout"}
 _INTERPRETERS = {"bash", "sh", "dash", "python", "python3"}
@@ -202,6 +231,27 @@ def config_dir() -> Path:
     if override:
         return Path(override)
     return Path.home() / ".config" / "mix-manager"
+
+
+def keepalive_path(config: Path | None = None) -> Path:
+    return (config or config_dir()) / KEEPALIVE_FILE
+
+
+def request_keepalive(config: Path | None = None) -> Path:
+    """Ask a running tray to stay up even with no app open."""
+    path = keepalive_path(config)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f"{time.time():.0f}\n", encoding="utf-8")
+    return path
+
+
+def keepalive_active(config: Path | None = None) -> bool:
+    path = keepalive_path(config)
+    try:
+        stamp = float(path.read_text(encoding="utf-8").strip() or 0)
+    except (OSError, ValueError):
+        return False
+    return (time.time() - stamp) < KEEPALIVE_SECONDS
 
 
 def icon_file(base: Path) -> Path:
@@ -356,14 +406,70 @@ def manager_pids(
     return found
 
 
+def role_instance_count(
+    role: str,
+    processes: list[ProcessInfo] | None = None,
+    self_pids: set[int] | None = None,
+) -> int:
+    """Live windows for MP Gui or MP Liquid Player, launch claims included.
+
+    The shared limiter is authoritative. The process-table count is the
+    fallback when the helper cannot be imported.
+    """
+    cap_role = {ROLE_GUI: "gui", ROLE_LIQUID: "player"}.get(role)
+    if cap_role is None:
+        return 0
+    if instance_limit is not None:
+        try:
+            return instance_limit.instance_count(cap_role)
+        except Exception:
+            pass
+    table = processes if processes is not None else read_proc_table()
+    by_pid = index_processes(table)
+    return sum(
+        1
+        for proc in table
+        if (proc.pid not in (self_pids or set()))
+        and classify_process(proc, by_pid, self_pids) == role
+    )
+
+
+def capped_role_at_limit(
+    role: str,
+    processes: list[ProcessInfo] | None = None,
+    self_pids: set[int] | None = None,
+    counts: dict[str, int] | None = None,
+) -> bool:
+    if role not in (ROLE_GUI, ROLE_LIQUID):
+        return False
+    if counts is not None:
+        return counts.get(role, 0) >= MAX_CAPPED_INSTANCES
+    return role_instance_count(role, processes, self_pids) >= MAX_CAPPED_INSTANCES
+
+
 def launch_plan(
     role: str,
     base: Path,
     running: set[str],
     platform_name: str | None = None,
+    processes: list[ProcessInfo] | None = None,
+    self_pids: set[int] | None = None,
+    counts: dict[str, int] | None = None,
 ) -> dict[str, object]:
     title = FOCUS_TITLES[role]
-    if role in running:
+    # MP Gui and MP Liquid Player open new windows up to the cap. Only the
+    # fifth launch focuses instead. The console manager is one window, so its
+    # plan stays focus-first.
+    if role in (ROLE_GUI, ROLE_LIQUID):
+        if capped_role_at_limit(role, processes, self_pids, counts):
+            return {
+                "action": "focus",
+                "title": title,
+                "argv": [],
+                "limit": True,
+                "cap": MAX_CAPPED_INSTANCES,
+            }
+    elif role in running:
         return {"action": "focus", "title": title, "argv": []}
     host = platform_name or sys.platform
     if role == ROLE_GUI:
@@ -863,24 +969,85 @@ MENU_BAR_LABEL = "com.mplanetarian.mp-mix-manager-tray"
 _MENU_ACTIONS = {ident for ident, _label in MENU_ENTRIES}
 
 
+def announce_limit(role: str) -> None:
+    """Tell the user four windows are already open."""
+    if instance_limit is not None:
+        cap_role = {ROLE_GUI: "gui", ROLE_LIQUID: "player"}.get(role)
+        if cap_role is not None:
+            try:
+                instance_limit.notify_limit(cap_role)
+                return
+            except Exception:
+                pass
+    print(
+        f"{FOCUS_TITLES[role]} is already open {MAX_CAPPED_INSTANCES} times.",
+        file=sys.stderr,
+    )
+
+
+def _launch_role(base: Path, role: str) -> int:
+    processes = read_proc_table()
+    self_pids = {os.getpid()}
+    running = roles_present(processes, self_pids)
+    plan = launch_plan(role, base, running, processes=processes, self_pids=self_pids)
+    if plan.get("limit"):
+        announce_limit(role)
+    if plan["action"] == "focus":
+        focus_window(str(plan["title"]))
+        return 0
+    spawn_argv(list(plan["argv"]), base, config_dir() / "mp_system_tray.log")
+    return 0
+
+
+def web_audio_label() -> str:
+    """Live menu label: Stop while serving, Start while not."""
+    if web_service is None:
+        return MENU_WEB_AUDIO
+    try:
+        return web_service.menu_label()
+    except Exception:
+        return MENU_WEB_AUDIO
+
+
+def web_audio_running() -> bool:
+    if web_service is None:
+        return False
+    try:
+        return bool(web_service.companion_running())
+    except Exception:
+        return False
+
+
+def toggle_web_audio() -> dict:
+    """Start or stop the MP Web Companion. Linux only for now."""
+    if web_service is None:
+        return {"supported": False, "action": "unavailable"}
+    try:
+        return web_service.toggle_companion()
+    except Exception as exc:
+        return {"supported": True, "action": "error", "detail": str(exc)}
+
+
 def perform_menu_action(base: Path, action_id: str) -> int:
     if action_id not in _MENU_ACTIONS:
         return 2
     if action_id == "close-all":
         shutdown_suite(base)
         return 0
+    if action_id == "web-audio":
+        result = toggle_web_audio()
+        if not result.get("supported"):
+            print(
+                f"Start/Stop MP Web Audio is not available on {result.get('platform', sys.platform)}.",
+                file=sys.stderr,
+            )
+        return 0 if result.get("supported") else 1
     role = {
         "launch-gui": ROLE_GUI,
         "launch-liquid": ROLE_LIQUID,
         "launch-manager": ROLE_MANAGER,
     }[action_id]
-    running = roles_present(read_proc_table(), {os.getpid()})
-    plan = launch_plan(role, base, running)
-    if plan["action"] == "focus":
-        focus_window(str(plan["title"]))
-        return 0
-    spawn_argv(list(plan["argv"]), base, config_dir() / "mp_system_tray.log")
-    return 0
+    return _launch_role(base, role)
 
 
 def format_roles(roles: set[str]) -> str:
@@ -1327,25 +1494,46 @@ def run_tray(base: Path, config: Path, stay: bool = False) -> int:
             shutdown_suite(base)
             app.quit()
             return
+        if action_id == "web-audio":
+            # The label is refreshed in aboutToShow, so this is always the
+            # action the user just read.
+            toggle_web_audio()
+            return
         role = {
             "launch-gui": ROLE_GUI,
             "launch-liquid": ROLE_LIQUID,
             "launch-manager": ROLE_MANAGER,
         }[action_id]
-        running = roles_present(read_proc_table(), {os.getpid()})
-        plan = launch_plan(role, base, running)
+        processes = read_proc_table()
+        self_pids = {os.getpid()}
+        running = roles_present(processes, self_pids)
+        plan = launch_plan(role, base, running, processes=processes, self_pids=self_pids)
         remember_launch()
+        if plan.get("limit"):
+            announce_limit(role)
         if plan["action"] == "focus":
             focus_window(str(plan["title"]))
             return
         spawn_argv(list(plan["argv"]), base, log_path)
 
+    web_audio_action = None
     for action_id, label in MENU_ENTRIES:
         if action_id == "close-all":
             menu.addSeparator()
         action = QAction(label, menu)
         action.triggered.connect(lambda checked=False, ident=action_id: dispatch(ident))
         menu.addAction(action)
+        if action_id == "web-audio":
+            web_audio_action = action
+
+    def refresh_web_audio_label() -> None:
+        # Read the state when the menu opens, so "Stop" is shown only while the
+        # companion is actually serving.
+        if web_audio_action is not None:
+            web_audio_action.setText(web_audio_label())
+
+    menu.aboutToShow.connect(refresh_web_audio_label)
+    refresh_web_audio_label()
 
     tray.setContextMenu(menu)
 
@@ -1364,6 +1552,11 @@ def run_tray(base: Path, config: Path, stay: bool = False) -> int:
             return
         running = roles_present(read_proc_table(), {os.getpid()})
         if running:
+            state["absent_since"] = None
+            return
+        # A Close All from the Web Companion closes the apps on purpose and
+        # wants the icon to remain for relaunching them.
+        if keepalive_active(config):
             state["absent_since"] = None
             return
         now = time.time()
@@ -1403,6 +1596,9 @@ def main_darwin(args: list[str]) -> int:
         return perform_menu_action(base, action_id)
     if "--install" in args:
         return install_macos_tray(base)
+    if "--keepalive" in args:
+        request_keepalive(config)
+        return 0
     return run_macos_tray(base, config, stay="--stay" in args)
 
 
@@ -1425,6 +1621,13 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if TrayLock.held(lock_path) else 1
     if "--install" in args:
         return install_tray(default_base_dir())
+    if "--keepalive" in args:
+        request_keepalive(config)
+        return 0
+    if "--action" in args:
+        index = args.index("--action")
+        action_id = args[index + 1] if index + 1 < len(args) else ""
+        return perform_menu_action(default_base_dir(), action_id)
     lock = TrayLock(lock_path)
     if not lock.acquire():
         return 0

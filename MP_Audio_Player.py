@@ -98,7 +98,28 @@ DAEMON_LOCK_FILE = CONFIG_DIR / "mp_player.lock"
 RESUME_STATE_FILE = CONFIG_DIR / "playback_resume.json"
 _DAEMON_LOCK_FH = None
 
-AUDIO_EXTENSIONS = ('.flac', '.wav', '.mp3', '.ogg', '.m4a', '.aac', '.aiff', '.wma')
+try:
+    from audio_formats import (
+        AUDIO_EXTENSIONS, AUDIO_EXTENSION_SET, is_lossless_path,
+        kdialog_audio_filter, macos_audio_file_types, prefers_ffmpeg,
+        windows_audio_filter, zenity_audio_filter,
+    )
+except ImportError:
+    try:
+        from scripts.audio_formats import (
+            AUDIO_EXTENSIONS, AUDIO_EXTENSION_SET, is_lossless_path,
+            kdialog_audio_filter, macos_audio_file_types, prefers_ffmpeg,
+            windows_audio_filter, zenity_audio_filter,
+        )
+    except ImportError:
+        AUDIO_EXTENSIONS = ('.flac', '.wav', '.mp3', '.ogg', '.m4a', '.aac', '.aiff', '.wma')
+        AUDIO_EXTENSION_SET = frozenset(AUDIO_EXTENSIONS)
+        def is_lossless_path(path): return os.path.splitext(str(path))[1].lower() in {'.flac', '.wav', '.aiff', '.aif', '.alac', '.ape', '.wv', '.tta', '.tak', '.dsf', '.dff'}
+        def prefers_ffmpeg(path): return os.path.splitext(str(path))[1].lower() not in (".flac", ".wav", ".aiff", ".aif", ".ogg", ".mp3", ".caf", ".au")
+        def macos_audio_file_types(): return ["public.audio"] + [e.lstrip(".") for e in AUDIO_EXTENSIONS]
+        def kdialog_audio_filter(): return "*.flac *.wav *.mp3 *.ogg *.aac *.m4a *.aiff | Audio Files (All types)"
+        def zenity_audio_filter(): return "Audio Files (All types) | *.flac *.wav *.mp3 *.ogg *.aac *.m4a *.aiff"
+        def windows_audio_filter(): return "Audio Files (All types)|*.flac;*.wav;*.mp3;*.ogg;*.aac;*.m4a|All Files (*.*)|*.*"
 UNICODE_BLOCKS = [' ', ' ', '▂', '▃', '▄', '▅', '▆', '▇', '█']
 _PRISM_LEVELS_FULL = (" ", "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█")
 _PRISM_LEVELS_LIMITED = (" ", "▄", "▄", "▄", "▄", "█", "█", "█", "█")
@@ -115,7 +136,17 @@ def meter_peak_glyph() -> str: return "\u2500" if _use_limited_console_glyphs() 
 def meter_level_char(frac: float, peak_here: bool) -> str:
     return "█" if frac >= 1.0 else (prism_level_glyph(max(1, min(8, int(frac * 8)))) if frac > 0.0 else (meter_peak_glyph() if peak_here else " "))
 
-_STARDUST_SAFE = {"✦": "•", "✧": "°", "⋆": "·", "◆": "•", "╵": "│", "▔": "─", "⠄": "·", "⠂": ".", "⠁": ".", "⠈": "'", "⡀": ".", "≈": "~", "≋": "~", "∿": "~", "∽": "~", "›": ">", "»": ">"}
+_STARDUST_SAFE = {
+    "✦": "•", "✧": "°", "⋆": "·", "◆": "•", "◇": "o", "╵": "│", "▔": "─",
+    "⠄": "·", "⠂": ".", "⠁": ".", "⠈": "'", "⡀": ".", "≈": "~", "≋": "~",
+    "∿": "~", "∽": "~", "›": ">", "»": ">",
+    # Rainbow mandala / plasma / wormhole glyphs.
+    "✺": "*", "✷": "*", "✸": "*", "✹": "*", "✻": "*", "❋": "*", "❖": "*",
+    "✱": "*", "✳": "*", "✴": "*", "⁂": "*", "⁕": "*", "⍟": "*", "⎈": "*",
+    "⬢": "*", "⬡": "o", "◈": "<>", "◉": "O", "◎": "o", "◌": ".",
+    "⌬": "o", "╱": "/", "╲": "\\", "┃": "|", "┊": "|", "╎": "|",
+    "━": "-", "═": "=", "▪": ".",
+}
 def console_symbol(ch: str) -> str: return _STARDUST_SAFE.get(ch, ch) if _use_limited_console_glyphs() else ch
 
 # Precomputed high-efficiency rainbow color tables for Stream of Frequency visualizer (360 degrees of hue)
@@ -124,6 +155,69 @@ _RAINBOW_ANSI_BOLD = tuple(f"\033[1;38;2;{r};{g};{b}m" for r, g, b in _RAINBOW_R
 _RAINBOW_ANSI_NORMAL = tuple(f"\033[38;2;{r};{g};{b}m" for r, g, b in _RAINBOW_RGB_TABLE)
 _RAINBOW_ANSI_DIM = tuple(f"\033[38;2;{r//2};{g//2};{b//2}m" for r, g, b in _RAINBOW_RGB_TABLE)
 _RAINBOW_ANSI_FAINT = tuple(f"\033[38;2;{max(20, int(r*0.35))};{max(20, int(g*0.35))};{max(20, int(b*0.35))}m" for r, g, b in _RAINBOW_RGB_TABLE)
+
+# A unit circle sampled once, so the full-field effects do no trigonometry for
+# ring and spiral points. 1440 steps divides the common step counts evenly.
+_FX_RING_RES = 1440
+_FX_COS_T = tuple(math.cos(2.0 * math.pi * i / _FX_RING_RES) for i in range(_FX_RING_RES))
+_FX_SIN_T = tuple(math.sin(2.0 * math.pi * i / _FX_RING_RES) for i in range(_FX_RING_RES))
+
+
+@functools.lru_cache(maxsize=4)
+def _fx_ansi_table(bold: bool = False) -> Tuple[Tuple[str, ...], ...]:
+    """[hue 0..359][brightness 0..12] TrueColor escapes, built once.
+
+    The full-field effects colour every lit cell every frame. A table lookup
+    costs two list indexes instead of a colorsys call and an f-string.
+    """
+    table = []
+    for r, g, b in _RAINBOW_RGB_TABLE:
+        row = []
+        for q in range(13):
+            v = q / 12.0
+            rr, gg, bb = int(round(r * v)), int(round(g * v)), int(round(b * v))
+            row.append(f"\033[{'1;' if bold else ''}38;2;{rr};{gg};{bb}m")
+        table.append(tuple(row))
+    return tuple(table)
+
+
+@functools.lru_cache(maxsize=32)
+def _fx_ring_lut(steps: int) -> Tuple[Tuple[float, float, str], ...]:
+    """(cos, sin, edge glyph) for a ring of `steps` points, cached.
+
+    The glyph follows the tangent: the sides of an ellipse are vertical, the
+    crown and trough are horizontal, and the four quadrants slope.
+    """
+    steps = max(4, int(steps))
+    out = []
+    for i in range(steps):
+        cos_t = _FX_COS_T[(i * _FX_RING_RES) // steps % _FX_RING_RES]
+        sin_t = _FX_SIN_T[(i * _FX_RING_RES) // steps % _FX_RING_RES]
+        if abs(cos_t) > 0.90:
+            glyph = "│"
+        elif abs(sin_t) > 0.90:
+            glyph = "─"
+        elif cos_t * sin_t > 0.0:
+            glyph = "╲"
+        else:
+            glyph = "╱"
+        out.append((cos_t, sin_t, glyph))
+    return tuple(out)
+
+
+@functools.lru_cache(maxsize=16384)
+def _rainbow_fx_ansi(hue_idx: int, value_q: int, bold: bool = False) -> str:
+    """Cached TrueColor rainbow ANSI for a hue and a 0..12 brightness level.
+
+    The three new full-field effects paint thousands of cells per frame. Building
+    an escape sequence with colorsys for every cell is too slow, so the hue is an
+    index into the precomputed rainbow table and the brightness is quantised to
+    twelve steps and memoised.
+    """
+    r, g, b = _RAINBOW_RGB_TABLE[int(hue_idx) % 360]
+    v = max(0, min(12, int(value_q))) / 12.0
+    r, g, b = int(round(r * v)), int(round(g * v)), int(round(b * v))
+    return f"\033[{'1;' if bold else ''}38;2;{r};{g};{b}m"
 
 _DUST_CHOICES_LIM = {"hot": ["•", "°", "·", "˙", "+"], "mid": ["•", "°", "·", "˙", ".", "*"], "low": ["·", "˙", ".", "*", "'", ","]}
 _DUST_CHOICES_FULL = {"hot": ["✦", "✧", "⋆", "•", "°"], "mid": ["•", "°", "·", "˙", "⠄", "⠂"], "low": ["·", "˙", "⠄", "⠂", "⠁", "⠈", "⡀"]}
@@ -179,18 +273,20 @@ except Exception:
 
 try:
     from liquid_audio_drop import (
-        audio_track_items, is_drop_manifest, kdialog_audio_filter, prefers_ffmpeg,
-        read_drop_manifest, windows_audio_filter, zenity_audio_filter, DROP_OSC_PREFIX,
+        audio_track_items, is_drop_manifest,
+        read_drop_manifest, DROP_OSC_PREFIX,
     )
 except Exception:
     DROP_OSC_PREFIX = b"\x1b]5221;"
     def audio_track_items(paths): return []
     def is_drop_manifest(path): return False
     def read_drop_manifest(path): return {"paths": [], "truncated": False, "rejected": True}
-    def prefers_ffmpeg(path): return os.path.splitext(str(path))[1].lower() in (".m4a", ".aac", ".wma", ".alac")
-    def kdialog_audio_filter(): return "*.flac *.wav *.mp3 *.ogg *.aac *.m4a *.aiff | Audio Files (All types)"
-    def zenity_audio_filter(): return "Audio Files (All types) | *.flac *.wav *.mp3 *.ogg *.aac *.m4a *.aiff"
-    def windows_audio_filter(): return "Audio Files (All types)|*.flac;*.wav;*.mp3;*.ogg;*.aac;*.m4a|All Files (*.*)|*.*"
+
+try:
+    from scripts import dsdiff_reader
+except ImportError:
+    try: import dsdiff_reader
+    except ImportError: dsdiff_reader = None
 
 def parse_env_file(filepath: Path) -> Dict[str, str]:
     env = {}
@@ -459,6 +555,24 @@ def launch_liquid_glass_tracklist(
             return False
 
 
+def export_tracklist_file(target_tracklist: Union[str, Path, None], fmt: str = "html",
+                          base_dir: Optional[Path] = None,
+                          output_dir: Optional[Union[str, Path]] = None) -> Tuple[bool, str]:
+    """Export a tracklist as HTML or TEXT into the program folder's TRACKLIST_EXPORTS."""
+    if not target_tracklist or not (tl := Path(target_tracklist).expanduser().resolve()).is_file():
+        return False, "Tracklist file not found"
+    base = Path(base_dir) if base_dir else get_base_dir()
+    try:
+        scripts_dir = str(base / "scripts")
+        if scripts_dir not in sys.path:
+            sys.path.insert(0, scripts_dir)
+        from tracklist_export import export_tracklist
+        saved = export_tracklist(tl, fmt, base_dir=base, output_dir=output_dir)
+        return True, str(saved)
+    except Exception as exc:
+        return False, str(exc)
+
+
 def open_tracklist_window(target_tracklist: Union[str, Path, None], audio_path: Optional[Union[str, Path]] = None, theme: Optional[str] = None) -> bool:
     if not target_tracklist or not (tl := Path(target_tracklist).expanduser().resolve()).is_file(): return False
     base = get_base_dir()
@@ -618,7 +732,8 @@ def choose_audio_file_gui() -> Optional[str]:
         except Exception: pass
     elif sys.platform == "darwin":
         try:
-            if res := subprocess.run(["osascript", "-e", 'choose file of type {"public.audio", "wav", "flac", "mp3", "ogg", "aac", "m4a"} with prompt "Open Audio File in MP Audio Player"'], capture_output=True, text=True, timeout=120).stdout.strip():
+            types = ", ".join(f'"{t}"' for t in macos_audio_file_types())
+            if res := subprocess.run(["osascript", "-e", f'choose file of type {{{types}}} with prompt "Open Audio File in MP Audio Player"'], capture_output=True, text=True, timeout=120).stdout.strip():
                 p = subprocess.run(["osascript", "-e", f'POSIX path of "{res}"'], capture_output=True, text=True, timeout=10).stdout.strip()
                 if p and os.path.isfile(p): return p
             return ""
@@ -826,6 +941,14 @@ class FavoritesStore:
 
     def tracks(self) -> List[Dict[str, Any]]:
         return [dict(track) for track in self._tracks]
+
+    def clear(self) -> int:
+        """Empty the Favorites playlist. The audio files are left untouched."""
+        removed = len(self._tracks)
+        self._tracks, self._keys = [], set()
+        if removed:
+            self.save()
+        return removed
 
     def __len__(self) -> int:
         return len(self._tracks)
@@ -1092,14 +1215,119 @@ class FFmpegAudioSource(AudioSource):
     def tell(self) -> int: return self._current_frame
     def total_frames(self) -> int: return self.frames
     def close(self):
-        if self.proc:
-            try: self.proc.terminate(); self.proc.wait(timeout=0.3)
+        proc, self.proc = self.proc, None
+        if proc:
+            try: proc.terminate(); proc.wait(timeout=0.3)
             except Exception:
-                try: self.proc.kill()
+                try: proc.kill(); proc.wait(timeout=0.3)
                 except Exception: pass
-            self.proc = None
+            # Release the pipe handles so a track change does not leak them.
+            for pipe in (proc.stdout, proc.stderr):
+                try:
+                    if pipe: pipe.close()
+                except Exception: pass
+
+class DSDiffAudioSource(AudioSource):
+    """Play a DSDIFF (.dff) file, which FFmpeg cannot demux but can decode.
+
+    The payload is re-blocked into DSF on the fly by dsdiff_reader and piped to
+    FFmpeg with -f dsf. Seeking restarts the pipe from the matching block, so
+    scrubbing works without writing a converted copy to disk.
+    """
+
+    def __init__(self, path: str, target_samplerate: int = 0):
+        _ensure_audio_backends()
+        self.path, self.proc, self._current_frame = str(path), None, 0
+        self._feeder: Optional[threading.Thread] = None
+        try:
+            self.info = dsdiff_reader.read_info(self.path)
+        except Exception as exc:
+            raise RuntimeError(str(exc)) from exc
+        if self.info.is_compressed:
+            raise RuntimeError(f"{Path(self.path).name} uses DST compression, which FFmpeg cannot decode")
+        self.channels = max(1, min(2, self.info.channels))
+        # The DSF copy FFmpeg sees is 1-bit DSD; its "sample rate" is the DSD
+        # bit rate. Decode straight to 44.1 kHz like the other FFmpeg paths.
+        self.samplerate = target_samplerate or 44100
+        self.frames = int(self.info.duration * self.samplerate)
+        self._start_pipe(0)
+
+    def _block_frame(self) -> int:
+        return dsdiff_reader.DSF_BLOCK_SIZE
+
+    def _start_pipe(self, start_frame: int):
+        self.close()
+        start_sec = (float(start_frame) / self.samplerate) if self.samplerate > 0 else 0.0
+        total = max(1, dsdiff_reader.block_count(self.info))
+        start_block = min(total - 1, max(0, int(start_sec * self.samplerate / dsdiff_reader.DSF_BLOCK_SIZE)))
+        cmd = ["ffmpeg", "-v", "error", "-f", "dsf", "-i", "pipe:0", "-vn",
+               "-f", "f32le", "-ac", "2", "-ar", str(self.samplerate), "pipe:1"]
+        try:
+            self.proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                         stderr=subprocess.DEVNULL, bufsize=131072)
+        except Exception as exc:
+            try: mp_log_error("MP_Audio_Player", f"Failed starting DSDIFF reader: {self.path}", exc)
+            except Exception: pass
+            return
+        self._current_frame = start_block * self._block_frame()
+        self._feeder = threading.Thread(target=self._feed, args=(start_block,), daemon=True,
+                                        name="DSDiffFeeder")
+        self._feeder.start()
+
+    def _feed(self, start_block: int):
+        """Push the re-blocked DSF into FFmpeg without deadlocking on a full pipe."""
+        proc = self.proc
+        if not proc or not proc.stdin:
+            return
+        try:
+            for chunk in dsdiff_reader.iter_dsf_stream(self.path, self.info, start_block=start_block):
+                if proc is not self.proc or proc.poll() is not None:
+                    break
+                proc.stdin.write(chunk)
+            try: proc.stdin.close()
+            except Exception: pass
+        except Exception:
+            # A closed stdin means FFmpeg exited (track change or stop); the
+            # reader thread sees EOF and the engine moves on.
+            try: proc.stdin.close()
+            except Exception: pass
+
+    def read(self, frames: int) -> np.ndarray:
+        if not self.proc or not self.proc.stdout: return np.zeros((0, 2), dtype=np.float32)
+        try:
+            if not (raw := self.proc.stdout.read(frames * 8)): return np.zeros((0, 2), dtype=np.float32)
+            arr = np.frombuffer(raw, dtype=np.float32)
+            nf = len(arr) // 2
+            self._current_frame += nf
+            return arr[:nf * 2].reshape((nf, 2))
+        except Exception: return np.zeros((0, 2), dtype=np.float32)
+
+    def seek(self, frame: int):
+        self._start_pipe(max(0, int(frame)))
+    def tell(self) -> int: return self._current_frame
+    def total_frames(self) -> int: return self.frames
+    def close(self):
+        proc, self.proc = self.proc, None
+        if proc:
+            try:
+                if proc.stdin: proc.stdin.close()
+            except Exception: pass
+            try: proc.terminate(); proc.wait(timeout=1.0)
+            except Exception:
+                try: proc.kill(); proc.wait(timeout=1.0)
+                except Exception: pass
+            for pipe in (proc.stdout, proc.stderr):
+                try:
+                    if pipe: pipe.close()
+                except Exception: pass
+        self._feeder = None
 
 def open_audio_source(path: str) -> AudioSource:
+    if dsdiff_reader is not None and dsdiff_reader.is_dsdiff(path):
+        try: return DSDiffAudioSource(path)
+        except Exception as exc:
+            try: mp_log_error("MP_Audio_Player", f"DSDIFF reader failed, trying FFmpeg: {path}", exc)
+            except Exception: pass
     order = (FFmpegAudioSource, SoundFileAudioSource) if prefers_ffmpeg(path) else (SoundFileAudioSource, FFmpegAudioSource)
     last_exc: Exception = RuntimeError(f"No audio backend could open {path}")
     for cls in order:
@@ -1764,7 +1992,9 @@ class AudioEngine:
     def _sync_state_file(self):
         try:
             tmp = STATE_FILE.with_name(f".{STATE_FILE.name}.{os.getpid()}.tmp")
-            tmp.write_text(json.dumps(self.get_status_dict(), default=float), encoding="utf-8")
+            # ensure_ascii=False keeps the EQ bars as real glyphs, matching what
+            # the Manager paints. \uXXXX escapes made bash count six columns per bar.
+            tmp.write_text(json.dumps(self.get_status_dict(), default=float, ensure_ascii=False), encoding="utf-8")
             tmp.replace(STATE_FILE)
             if self.current_track and self.current_track.get("path") and self.duration_sec > 0:
                 pos = round(float(self.position_sec), 2)
@@ -2548,6 +2778,35 @@ def _glass_rev() -> str:
         return "\033[48;2;21;40;64m"
     return "\033[7m"
 
+def _rgb_from_ansi(seq: str) -> Optional[Tuple[int, int, int]]:
+    """Read the first 24-bit foreground or background from an ANSI sequence."""
+    m = re.search(r"\033\[[0-9;]*(?:38|48);2;(\d+);(\d+);(\d+)m", str(seq or ""))
+    return (int(m.group(1)), int(m.group(2)), int(m.group(3))) if m else None
+
+def _selection_bar_ansi(theme_name: str) -> Tuple[str, str]:
+    """Background and foreground for a selected row, taken from the active theme.
+
+    The playlist used to paint a fixed grey bar in the console and reverse video
+    in Liquid Glass, so the selection looked the same on every theme. Every other
+    themed row already uses the palette, so the bar uses the theme's highlight hue
+    and picks black or white text from its luminance to stay readable.
+    """
+    pal = _THEME_PALETTES.get(theme_name, _DEFAULT_PALETTE)
+    rgb = _rgb_from_ansi(pal.get("highlight", ""))
+    if rgb is None:
+        try:
+            script_dir = str(Path(__file__).resolve().parent / "scripts")
+            if script_dir not in sys.path:
+                sys.path.insert(0, script_dir)
+            from liquid_glass_opengl import theme_text_rgb
+            rgb = theme_text_rgb(theme_name)
+        except Exception:
+            rgb = _rgb_from_ansi(COLOR_HOT_PURPLE) or (247, 37, 133)
+    red, green, blue = rgb
+    lum = (red * 299 + green * 587 + blue * 114) // 1000
+    foreground = "\033[1;38;2;0;0;0m" if lum >= 140 else "\033[1;38;2;255;255;255m"
+    return f"\033[48;2;{red};{green};{blue}m", foreground
+
 def _win_apply_glass_colorkey(kernel32, handle) -> None:
     """Paint the default console color with the host's color key so the glass shows through."""
     raw = os.environ.get("MP_LIQUID_GLASS_COLORKEY", "").strip().lstrip("#")
@@ -2814,6 +3073,9 @@ _THEME_ALIASES = {
 class EqualizerVisualizer:
     STYLES = [
         "stream_of_frequency_eq",
+        "rainbow_mandala_eq",
+        "rainbow_wormhole_eq",
+        "rainbow_aurora_eq",
         "stereo_eq",
         "neon_prism_eq",
         "stardust_particles_eq",
@@ -2823,12 +3085,42 @@ class EqualizerVisualizer:
     ]
     STYLE_NAMES = {
         "stream_of_frequency_eq": "Stream of Frequency (Dynamic Spectrogram)",
+        "rainbow_mandala_eq": "Rainbow Mandala Bloom (Kaleidoscopic Spectrum)",
+        "rainbow_wormhole_eq": "Rainbow Wormhole (Hyperspace Plasma Tunnel)",
+        "rainbow_aurora_eq": "Rainbow Aurora Cascade (Holographic Ribbons)",
         "stereo_eq": "Dual Stereo (12-Band)",
         "neon_prism_eq": "Neon Chroma Prism (Thin Hi-Res)",
         "stardust_particles_eq": "Stardust Chroma (Thin Lines & Falling Dust)",
         "master_spectrum": "Master Spectrum (24-Band)",
         "analog_vu": "Analog Studio VU",
         "oscilloscope": "Oscilloscope Waveform",
+    }
+    STYLE_ALIASES = {
+        # Rainbow Mandala Bloom
+        "mandala": "rainbow_mandala_eq",
+        "mandala_eq": "rainbow_mandala_eq",
+        "rainbow_mandala": "rainbow_mandala_eq",
+        "kaleidoscope": "rainbow_mandala_eq",
+        "kaleidoscopic": "rainbow_mandala_eq",
+        "bloom": "rainbow_mandala_eq",
+        "petals": "rainbow_mandala_eq",
+        "rainbow_bloom": "rainbow_mandala_eq",
+        # Rainbow Wormhole
+        "wormhole": "rainbow_wormhole_eq",
+        "wormhole_eq": "rainbow_wormhole_eq",
+        "rainbow_wormhole": "rainbow_wormhole_eq",
+        "tunnel": "rainbow_wormhole_eq",
+        "hyperspace": "rainbow_wormhole_eq",
+        "vortex": "rainbow_wormhole_eq",
+        "plasma": "rainbow_wormhole_eq",
+        # Rainbow Aurora Cascade
+        "aurora": "rainbow_aurora_eq",
+        "aurora_eq": "rainbow_aurora_eq",
+        "rainbow_aurora": "rainbow_aurora_eq",
+        "ribbons": "rainbow_aurora_eq",
+        "cascade": "rainbow_aurora_eq",
+        "holographic": "rainbow_aurora_eq",
+        "curtains": "rainbow_aurora_eq",
     }
     THEMES = [
         "stream_of_frequency",
@@ -2874,6 +3166,7 @@ class EqualizerVisualizer:
         self.style_idx = self.theme_idx = 0
         self.dust_particles, self.last_dust_update, self.dust_rng = [], time.time(), random.Random()
         self._sof_buffer, self._sof_particles, self._sof_last_time, self._sof_rng = None, [], time.time(), random.Random()
+        self._init_rainbow_fx_state()
         selected_theme = theme or default_theme
         try:
             th_file = CONFIG_DIR / "theme"
@@ -2885,21 +3178,57 @@ class EqualizerVisualizer:
         try:
             eq_file = CONFIG_DIR / "eq_style"
             ts = style or default_style
-            if ts and ts in self.STYLES: self.style_idx = self.STYLES.index(ts)
-            elif ts and str(ts).lower() in ("stream", "stream_of_frequency", "stream_of_frequency_eq", "frequency_stream", "frequency_stream_eq", "spectrogram", "dynamic_spectrogram", "river", "rainbow_stream"):
-                self.style_idx = self.STYLES.index("stream_of_frequency_eq")
+            if ts:
+                self.style_idx = self._resolve_style(ts)
             elif eq_file.is_file():
-                seq = eq_file.read_text(encoding="utf-8").strip().lower()
-                if seq in self.STYLES: self.style_idx = self.STYLES.index(seq)
-                elif seq in ("stream", "stream_of_frequency", "stream_of_frequency_eq", "frequency_stream", "frequency_stream_eq", "spectrogram", "dynamic_spectrogram", "river", "rainbow_stream"):
-                    self.style_idx = self.STYLES.index("stream_of_frequency_eq")
-                elif seq in ("neon", "prism", "chroma", "neon_prism"): self.style_idx = self.STYLES.index("neon_prism_eq")
-                elif seq in ("stardust", "particles", "dust", "falling_dust", "stardust_eq", "chroma_dust"): self.style_idx = self.STYLES.index("stardust_particles_eq")
+                self.style_idx = self._resolve_style(eq_file.read_text(encoding="utf-8").strip().lower())
         except Exception: pass
         # The Stream of Frequency theme owns its matching spectrogram effect.
         # A stale persisted eq_style must not override the selected theme.
         if not (style or default_style) and selected_theme and self.theme == "stream_of_frequency":
             self.style_idx = self.STYLES.index("stream_of_frequency_eq")
+
+    @classmethod
+    def _resolve_style(cls, name: Optional[str]) -> int:
+        """Return the STYLES index for a style key or a friendly alias.
+
+        Unknown names fall back to the Stream of Frequency spectrogram, which
+        keeps an existing `eq_style` file working after an effect is renamed.
+        """
+        key = str(name or "").strip().lower()
+        if key in cls.STYLES:
+            return cls.STYLES.index(key)
+        if key in cls.STYLE_ALIASES:
+            return cls.STYLES.index(cls.STYLE_ALIASES[key])
+        if key in ("stream", "stream_of_frequency", "stream_of_frequency_eq", "frequency_stream",
+                   "frequency_stream_eq", "spectrogram", "dynamic_spectrogram", "river", "rainbow_stream"):
+            return cls.STYLES.index("stream_of_frequency_eq")
+        if key in ("neon", "prism", "chroma", "neon_prism"):
+            return cls.STYLES.index("neon_prism_eq")
+        if key in ("stardust", "particles", "dust", "falling_dust", "stardust_eq", "chroma_dust"):
+            return cls.STYLES.index("stardust_particles_eq")
+        return cls.STYLES.index("stream_of_frequency_eq")
+
+    def _init_rainbow_fx_state(self):
+        """Animation state for the three full-field rainbow effects."""
+        rng = random.Random()
+        self._fx_rng = rng
+        # Mandala Bloom: rotating petal rings, radial sparks, spiral trail.
+        self._mandala_rings = []
+        self._mandala_sparks = []
+        self._mandala_last = time.time()
+        self._mandala_rotation = 0.0
+        self._mandala_pulse = 0.0
+        # Wormhole: nested elliptical rings travelling toward the viewer.
+        self._worm_rings = []
+        self._worm_motes = []
+        self._worm_last = time.time()
+        self._worm_phase = 0.0
+        # Aurora: ribbon curtains drifting in a sine lattice.
+        self._aurora_curtains = []
+        self._aurora_embers = []
+        self._aurora_last = time.time()
+        self._aurora_phase = 0.0
 
     @property
     def style(self) -> str: return self.STYLES[self.style_idx]
@@ -2923,6 +3252,23 @@ class EqualizerVisualizer:
         self.style_idx = (self.style_idx + 1) % len(self.STYLES)
         try: (CONFIG_DIR / "eq_style").write_text(self.style, encoding="utf-8")
         except Exception: pass
+
+    def set_style(self, name: str) -> bool:
+        """Select an effect by key or friendly alias, persisting the choice.
+
+        Returns False for an unknown name so a CLI or IPC caller can report it
+        instead of silently landing on the fallback effect.
+        """
+        if not name:
+            return False
+        key = str(name).strip().lower()
+        known = key in self.STYLES or key in self.STYLE_ALIASES or self._resolve_style(key) != 0 or key == self.STYLES[0]
+        if not known:
+            return False
+        self.style_idx = self._resolve_style(key)
+        try: (CONFIG_DIR / "eq_style").write_text(self.style, encoding="utf-8")
+        except Exception: pass
+        return True
 
     def cycle_theme(self):
         self.theme_idx = (self.theme_idx + 1) % len(self.THEMES)
@@ -3578,6 +3924,548 @@ class EqualizerVisualizer:
         lines.append(bot_l)
         return lines
 
+    # ── Shared helpers for the three full-field Rainbow FX visualisers ──
+    def _fx_ensure_state(self):
+        if not hasattr(self, "_fx_rng"):
+            self._init_rainbow_fx_state()
+        _ensure_numpy()
+
+    def _fx_audio(self, status: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        """Normalise player telemetry into the bands and pulse the FX need."""
+        st = status or {}
+
+        def _arr(key: str, fallback) -> np.ndarray:
+            raw = st.get(key)
+            try:
+                arr = np.asarray(raw if raw is not None else fallback, dtype=float)
+            except Exception:
+                arr = np.asarray(fallback, dtype=float)
+            if arr.ndim != 1 or arr.size < 2:
+                arr = np.asarray(fallback, dtype=float)
+            if arr.ndim != 1 or arr.size < 2:
+                arr = np.zeros(24, dtype=float)
+            return np.nan_to_num(np.clip(arr, 0.0, 1.0), nan=0.0)
+
+        zero = [0.0] * 24
+        base = _arr("levels", zero)
+        left = _arr("levels_left", base)
+        right = _arr("levels_right", base)
+        peaks = _arr("peaks", base)
+        mono = 0.5 * (left + right) if left.size == right.size else base
+        n = 16
+        if mono.size > 1:
+            bands = np.interp(np.linspace(0.0, 1.0, n), np.linspace(0.0, 1.0, mono.size), mono)
+            pks = np.interp(np.linspace(0.0, 1.0, n), np.linspace(0.0, 1.0, peaks.size), peaks) if peaks.size > 1 else np.zeros(n)
+        else:
+            bands = pks = np.zeros(n)
+        bands = np.clip(bands, 0.0, 1.0)
+        pks = np.clip(pks, 0.0, 1.0)
+        state = str(st.get("state", "stopped"))
+        rms = float(st.get("rms_level", 0.0) or 0.0)
+        peak_db = float(st.get("peak_db", -60.0) or -60.0)
+        try:
+            pitch = int(st.get("pitch_percent", 0) or 0)
+        except (TypeError, ValueError):
+            pitch = 0
+        speed = max(0.5, min(2.0, 1.0 + pitch / 100.0))
+        energy = float(np.mean(bands)) if bands.size else 0.0
+        pulse = max(0.0, min(1.0, rms * 2.4 + max(0.0, (peak_db + 30.0) / 30.0) * 0.45 + energy * 0.35))
+        return {
+            "st": st, "state": state, "playing": state == "playing", "paused": state == "paused",
+            "bands": bands, "peaks": pks, "rms": rms, "peak_db": peak_db,
+            "speed": speed, "energy": energy, "pulse": pulse,
+            "beat": state == "playing" and (rms > 0.13 or peak_db > -4.5),
+        }
+
+    @staticmethod
+    def _fx_grid(cw: int, height: int) -> Tuple[List[List[str]], List[List[str]]]:
+        return ([[" "] * cw for _ in range(height)], [[""] * cw for _ in range(height)])
+
+    def _fx_lines(self, gc, gcol, inner_w: int, header: str, footer: str) -> List[str]:
+        """Wrap a glyph/colour grid in the same frame every equaliser uses."""
+        inner_w = max(8, int(inner_w))
+        header = _clip_display(header, inner_w)
+        footer = _clip_display(footer, inner_w)
+        limited = _use_limited_console_glyphs()
+        safe = _STARDUST_SAFE
+        top = f"  {self.b_col}╭{header}{'─' * max(0, inner_w - _display_width(header))}╮{NC}"
+        bot = f"  {self.b_col}╰{footer}{'─' * max(0, inner_w - _display_width(footer))}╯{NC}"
+        lines = [top]
+        for r in range(len(gc)):
+            row = gc[r]
+            row_col = gcol[r]
+            parts = []
+            for c, glyph in enumerate(row):
+                if glyph == " ":
+                    parts.append(" ")
+                    continue
+                if limited:
+                    glyph = safe.get(glyph, glyph)
+                parts.append(f"{row_col[c]}{glyph}{NC}")
+            lines.append(f"  {self.b_col}│{NC}{''.join(parts)}{self.b_col}│{NC}")
+        lines.append(bot)
+        return lines
+
+    def _fx_micro_meter(self, style: str, t_now: float, levels) -> str:
+        """A 14-cell rainbow readout for MICRO mode, one glyph per style."""
+        lv = np.asarray(levels if levels is not None else [], dtype=float)
+        n = 14
+        out = []
+        for i in range(n):
+            v = float(lv[i % len(lv)]) if lv.size else 0.0
+            hue = int(((t_now * 0.55 + i * 0.071) % 1.0) * 360)
+            ansi = _rainbow_fx_ansi(hue, 5 + int(min(1.0, v) * 7), v > 0.72)
+            if style == "rainbow_mandala_eq":
+                glyph = "✺" if v > 0.74 else ("✴" if v > 0.48 else ("✳" if v > 0.22 else ("◦" if v > 0.05 else "·")))
+            elif style == "rainbow_wormhole_eq":
+                glyph = "◉" if v > 0.72 else ("◎" if v > 0.44 else ("◌" if v > 0.20 else ("∙" if v > 0.05 else "·")))
+            else:
+                glyph = "✦" if v > 0.74 else ("≋" if v > 0.46 else ("∿" if v > 0.22 else ("~" if v > 0.05 else "·")))
+            out.append(f"{ansi}{console_symbol(glyph)}{NC}")
+        return "".join(out)
+
+    # ── Rainbow Mandala Bloom ─────────────────────────────────────────
+    def _fx_frame_geometry(self, cw: int, height: int) -> Tuple[float, float, float, float]:
+        """Centre and half-extent of the cell grid, in cell units."""
+        cx, cy = (cw - 1) / 2.0, (height - 1) / 2.0
+        return cx, cy, max(0.5, cx), max(0.5, cy)
+
+    def _fx_tangent_glyph(self, cos_t: float, sin_t: float, sx: float, sy: float) -> str:
+        """A line glyph that follows a normalised ellipse at this angle."""
+        dx, dy = abs(sx * sin_t), abs(sy * cos_t)
+        if dy > dx * 2.0:
+            return "│"
+        if dx > dy * 2.0:
+            return "─"
+        return "╲" if cos_t * sin_t > 0.0 else "╱"
+
+    def _fx_plot_ring(self, gc, gcol, cx, cy, sx, sy, steps, lut, hue_i, level_fn, table,
+                      wobble_fn=None, glyph_fn=None):
+        """Plot an ellipse of `steps` points and return the plotted cells."""
+        pts = []
+        height, cw = len(gc), len(gc[0])
+        for i, (cos_t, sin_t, edge) in enumerate(lut):
+            th = 2.0 * math.pi * i / steps
+            wob = 1.0 if wobble_fn is None else wobble_fn(th)
+            r = int(round(cy + sin_t * sy * wob))
+            c = int(round(cx + cos_t * sx * wob))
+            if not (0 <= r < height and 0 <= c < cw):
+                continue
+            gc[r][c] = glyph_fn(i, th, edge) if glyph_fn else edge
+            gcol[r][c] = table[(hue_i + int(i * 360.0 / steps * 0.22)) % 360][level_fn(i, th)]
+            pts.append((r, c))
+        return pts
+
+    def render_rainbow_mandala_eq(self, status: Optional[Dict[str, Any]] = None, width: int = 80, height: int = 7) -> List[str]:
+        """Kaleidoscopic mandala: concentric spectrum wreaths, rosette petals,
+        orbiting sparks and beat shockwaves, all in shifting rainbow hues."""
+        self._fx_ensure_state()
+        a = self._fx_audio(status)
+        inner_w = max(20, width - 6 if width >= 26 else width - 4)
+        H = max(1, int(height))
+        cw = inner_w
+        now = time.time()
+        dt = max(0.004, min(0.12, now - getattr(self, "_mandala_last", now)))
+        self._mandala_last = now
+        spd, playing = a["speed"], a["playing"]
+        bands, peaks, rms, beat, pulse = a["bands"], a["peaks"], a["rms"], a["beat"], a["pulse"]
+        rng = self._fx_rng
+        gc, gcol = self._fx_grid(cw, H)
+        cx, cy, sx, sy = self._fx_frame_geometry(cw, H)
+        hue_base_i = int(((now * 0.11 * spd) % 1.0) * 360)
+        tbl_n, tbl_b = _fx_ansi_table(False), _fx_ansi_table(True)
+        petals = 8 if cw < 56 else (12 if cw < 96 else 16)
+        steps = max(64, cw * 2)
+        lut = _fx_ring_lut(steps)
+        n_rings = max(4, min(12, 4 + H // 2))
+
+        # 1. Concentric spectrum wreaths: each frequency band owns a ring.
+        for k in range(n_rings):
+            band = float(bands[(k * 5 + 1) % len(bands)])
+            peak = float(peaks[(k * 4 + 2) % len(peaks)])
+            ring_r = 0.26 + 0.74 * ((k + 1) / float(n_rings)) + band * 0.05
+            ring_hue_i = (hue_base_i + int(k * 34 + now * 18 * spd)) % 360
+            lvl = min(12, 5 + int(band * 7) + (1 if pulse > 0.55 else 0))
+            wob_amp = 0.030 + 0.045 * band
+            wob_phase = now * 1.35 * spd + k * 0.8
+            table = tbl_b if peak > 0.72 or band > 0.66 else tbl_n
+            self._fx_plot_ring(
+                gc, gcol, cx, cy, sx * ring_r, sy * ring_r, steps, lut, ring_hue_i,
+                lambda i, th, _b=band: min(12, max(3, int(lvl * (0.65 + 0.35 * math.sin(th * 3.0 + wob_phase))))),
+                table,
+                wobble_fn=lambda th, _a=wob_amp, _p=wob_phase: 1.0 + _a * math.sin(th * 3.0 + _p),
+            )
+
+        # 2. Kaleidoscopic rosette: petals are curved lens shapes, not bare spokes,
+        #    so the figure reads as a flower rather than a starburst.
+        for p in range(petals * 2):
+            band = float(bands[(p * 2) % len(bands)])
+            peak = float(peaks[(p * 3 + 1) % len(peaks)])
+            base_ang = p * math.pi / petals
+            swing = 0.34 + 0.16 * math.sin(now * 0.55 * spd + p * 1.7)
+            length = 0.42 + 0.50 * band + 0.04 * pulse
+            petal_hue_i = (hue_base_i + int(p * 360.0 / (petals * 2))) % 360
+            n_steps = max(12, int(length * min(sx, sy) * 3.5) + 14)
+            for j in range(n_steps + 1):
+                t = j / float(n_steps)
+                rr = 0.08 + t * length
+                if rr > 1.0:
+                    break
+                # Curve the petal so it bulges into a pointed lens.
+                ang = base_ang + swing * math.sin(t * math.pi) * (0.35 + 0.65 * t)
+                sin_a, cos_a = math.sin(ang), math.cos(ang)
+                r = int(round(cy + sin_a * sy * rr))
+                c = int(round(cx + cos_a * sx * rr))
+                if not (0 <= r < H and 0 <= c < cw):
+                    continue
+                tip = t > 0.92
+                glyph = ("✺" if peak > 0.85 else "✦") if tip else ("·" if t < 0.3 else ("∙" if t < 0.75 else "✦"))
+                lvl = 12 if tip else 3 + int(t * 8)
+                gc[r][c] = glyph
+                gcol[r][c] = (tbl_b if tip or t > 0.82 else tbl_n)[(petal_hue_i + int(t * 70)) % 360][lvl]
+
+        # 3. Beat shockwaves expanding from the core.
+        waves = self._mandala_rings
+        for w in waves:
+            w["rr"] += w["v"] * dt * spd
+            w["life"] -= dt
+        if beat and playing and (not waves or waves[-1]["rr"] > 0.30):
+            waves.append({"rr": 0.10, "v": 0.85 + rms * 0.9, "life": 1.3, "hue_i": rng.randrange(360), "steps": steps})
+        self._mandala_rings = waves = [w for w in waves if w["life"] > 0.0 and w["rr"] < 1.06][-6:]
+        for w in waves:
+            fade = max(0.0, min(1.0, w["life"] / 1.3))
+            w_steps = max(48, cw)
+            w_lut = _fx_ring_lut(w_steps)
+            circ_r = w["rr"]
+            self._fx_plot_ring(
+                gc, gcol, cx, cy, sx * circ_r, sy * circ_r, w_steps, w_lut,
+                (w["hue_i"] + int(now * 60)) % 360,
+                lambda i, th, _f=fade: max(2, int(11 * _f)),
+                tbl_b if fade > 0.6 else tbl_n,
+                glyph_fn=lambda i, th, edge, _s=w_steps: "✦" if i % max(6, _s // 8) == 0 else "·",
+            )
+
+        # 4. Orbiting sparks on a few independent orbits.
+        sparks = self._mandala_sparks
+        for p in sparks:
+            p["angle"] += p["omega"] * dt * spd
+            p["life"] -= dt
+        if playing:
+            loud = float(np.max(bands)) if bands.size else 0.0
+            while len(sparks) < 4 + int(loud * 10):
+                sparks.append({
+                    "angle": rng.uniform(0.0, 2.0 * math.pi),
+                    "rr": rng.uniform(0.34, 0.98),
+                    "omega": rng.uniform(0.5, 2.6) * (1.0 if rng.random() > 0.5 else -1.0),
+                    "life": rng.uniform(2.0, 5.0),
+                    "hue": rng.uniform(0.0, 1.0),
+                    "glyph": rng.choice(("✦", "✧", "⋆", "✱", "●", "◉")),
+                })
+        self._mandala_sparks = sparks = [p for p in sparks if p["life"] > 0.0][-26:]
+        for p in sparks:
+            r = int(round(cy + math.sin(p["angle"]) * sy * p["rr"]))
+            c = int(round(cx + math.cos(p["angle"]) * sx * p["rr"]))
+            if 0 <= r < H and 0 <= c < cw:
+                hue_i = (hue_base_i + int(p["hue"] * 360) + int(now * 40)) % 360
+                gc[r][c] = p["glyph"]
+                gcol[r][c] = tbl_b[hue_i][12]
+            for trail in (1, 2):
+                tr = int(round(cy + math.sin(p["angle"] - 0.10 * trail * p["omega"]) * sy * p["rr"]))
+                tc = int(round(cx + math.cos(p["angle"] - 0.10 * trail * p["omega"]) * sx * p["rr"]))
+                if 0 <= tr < H and 0 <= tc < cw and gc[tr][tc] == " ":
+                    gc[tr][tc] = "·"
+                    gcol[tr][tc] = tbl_n[(hue_base_i + int(p["hue"] * 360)) % 360][max(2, 7 - trail * 2)]
+
+        # 5. Pulsing core.
+        core_glyph = "✺" if beat else ("✴" if pulse > 0.5 else "✳")
+        core_lvl = 12 if beat else (9 if pulse > 0.4 else 7)
+        for dr, dc, g, lvl in ((0, 0, core_glyph, core_lvl), (-1, 0, "·", 8), (1, 0, "·", 8),
+                               (0, -1, "·", 8), (0, 1, "·", 8)):
+            rr, cc = int(round(cy)) + dr, int(round(cx)) + dc
+            if 0 <= rr < H and 0 <= cc < cw:
+                gc[rr][cc] = g
+                gcol[rr][cc] = tbl_b[(hue_base_i + int(now * 70) + dr * 40 + dc * 25) % 360][lvl]
+
+        header = "── 🌈 RAINBOW MANDALA BLOOM (KALEIDOSCOPIC SPECTRUM) " if inner_w >= 58 else ("── 🌈 MANDALA BLOOM " if inner_w >= 30 else "── 🌈 ")
+        footer = ("── PETALS %d • WREATHS %d • ORBITS %d ────" % (petals, n_rings, len(sparks))) if inner_w >= 52 else "── MANDALA "
+        return self._fx_lines(gc, gcol, inner_w, header, footer)
+
+    # ── Rainbow Wormhole ──────────────────────────────────────────────
+    def render_rainbow_wormhole_eq(self, status: Optional[Dict[str, Any]] = None, width: int = 80, height: int = 7) -> List[str]:
+        """Hyperspace tunnel: nested rings rushing outward, perspective wall
+        beams, spectrum warp spokes and neon motes, in moving rainbow hues."""
+        self._fx_ensure_state()
+        a = self._fx_audio(status)
+        inner_w = max(20, width - 6 if width >= 26 else width - 4)
+        H = max(1, int(height))
+        cw = inner_w
+        now = time.time()
+        dt = max(0.004, min(0.12, now - getattr(self, "_worm_last", now)))
+        self._worm_last = now
+        spd, playing = a["speed"], a["playing"]
+        bands, peaks, rms, beat, pulse = a["bands"], a["peaks"], a["rms"], a["beat"], a["pulse"]
+        rng = self._fx_rng
+        gc, gcol = self._fx_grid(cw, H)
+        cx, cy, sx, sy = self._fx_frame_geometry(cw, H)
+        hue_base_i = int(((now * 0.13 * spd) % 1.0) * 360)
+        tbl_n, tbl_b = _fx_ansi_table(False), _fx_ansi_table(True)
+        flow = (0.30 + 0.55 * pulse + 0.35 * a["energy"]) * spd
+        self._worm_phase = (getattr(self, "_worm_phase", 0.0) + dt * flow) % 1.0
+        phase = self._worm_phase
+        self._worm_flash = max(0.0, getattr(self, "_worm_flash", 0.0) - dt * 2.4)
+        if beat:
+            self._worm_flash = 1.0
+        flash = self._worm_flash
+        steps = max(64, cw * 2)
+        lut = _fx_ring_lut(steps)
+
+        # 1. Perspective tunnel walls: beams from the core through the corners.
+        n_beams = 16
+        for i in range(n_beams):
+            ang = i * 2.0 * math.pi / n_beams + now * 0.18 * spd
+            band = float(bands[(i * 3) % len(bands)])
+            cos_a, sin_a = math.cos(ang), math.sin(ang)
+            beam_hue_i = (hue_base_i + int(i * 360.0 / n_beams)) % 360
+            length = 0.30 + 0.70 * band
+            n_steps = max(10, int(length * max(sx, sy) * 1.4) + 12)
+            for j in range(n_steps + 1):
+                t = j / float(n_steps)
+                rr = 0.04 + t * length
+                if rr > 1.02:
+                    break
+                r = int(round(cy + sin_a * sy * rr))
+                c = int(round(cx + cos_a * sx * rr))
+                if not (0 <= r < H and 0 <= c < cw):
+                    continue
+                glyph = "·" if t < 0.4 else ("∙" if t < 0.78 else "✦")
+                lvl = 3 + int(t * 8)
+                gc[r][c] = glyph
+                gcol[r][c] = (tbl_b if t > 0.86 else tbl_n)[(beam_hue_i + int(t * 50)) % 360][lvl]
+
+        # 2. Nested rings racing outward toward the viewer.
+        n_rings = max(5, min(14, 5 + H))
+        ring_r = 0.0
+        for k in range(n_rings):
+            frac = ((k + phase) % n_rings) / float(n_rings)
+            ring_r = 0.06 + 0.96 * (frac ** 1.5)
+            band = float(bands[int(min(len(bands) - 1, frac * len(bands)))])
+            peak = float(peaks[int(min(len(peaks) - 1, frac * len(peaks)))])
+            ring_hue_i = (hue_base_i + int(frac * 300 + k * 12)) % 360
+            lvl = min(12, 3 + int(frac * 8) + int(band * 3) + int(flash * 2))
+            table = tbl_b if peak > 0.74 or frac > 0.85 else tbl_n
+
+            def _ring_level(i, th, _l=lvl, _b=band):
+                return min(12, max(2, int(_l * (0.55 + 0.45 * (1.0 - abs(math.sin(th * 2.0)))))) + int(_b * 2))
+
+            def _ring_wobble(th, _b=band):
+                return 1.0 + _b * 0.035 * math.sin(th * 3.0 + now * 1.7)
+
+            self._fx_plot_ring(
+                gc, gcol, cx, cy, sx * ring_r, sy * ring_r, steps, lut, ring_hue_i,
+                _ring_level, table, wobble_fn=_ring_wobble,
+            )
+
+        # 3. Spectrum warp spokes from the singularity.
+        n_spokes = len(bands)
+        for i in range(n_spokes):
+            band = float(bands[i])
+            ang = i * 2.0 * math.pi / n_spokes - now * 0.30 * spd
+            length = 0.14 + 0.86 * band
+            cos_a, sin_a = math.cos(ang), math.sin(ang)
+            spoke_hue_i = (hue_base_i + int(i * 360.0 / n_spokes)) % 360
+            n_steps = max(8, int(length * max(sx, sy) * 1.2) + 10)
+            for j in range(n_steps + 1):
+                t = j / float(n_steps)
+                rr = 0.05 + t * length
+                if rr > 1.0:
+                    break
+                r = int(round(cy + sin_a * sy * rr))
+                c = int(round(cx + cos_a * sx * rr))
+                if not (0 <= r < H and 0 <= c < cw):
+                    continue
+                gc[r][c] = "·" if t < 0.55 else ("∙" if t < 0.85 else "✦")
+                gcol[r][c] = (tbl_b if t > 0.9 else tbl_n)[(spoke_hue_i + int(t * 70)) % 360][3 + int(t * 8)]
+
+        # 4. Hyperspace motes rushing outward with rainbow trails.
+        motes = self._worm_motes
+        for p in motes:
+            p["rr"] += p["v"] * dt * spd
+            p["angle"] += p["omega"] * dt * spd
+            p["life"] -= dt
+        if playing:
+            loud = float(np.max(bands)) if bands.size else 0.0
+            while len(motes) < 6 + int(loud * 12):
+                motes.append({
+                    "angle": rng.uniform(0.0, 2.0 * math.pi),
+                    "rr": rng.uniform(0.05, 0.30),
+                    "v": rng.uniform(0.35, 0.85),
+                    "omega": rng.uniform(-0.7, 0.7),
+                    "life": rng.uniform(1.0, 2.4),
+                    "hue": rng.uniform(0.0, 1.0),
+                    "glyph": rng.choice(("✦", "✧", "⋆", "●", "◉", "•")),
+                })
+        self._worm_motes = motes = [p for p in motes if p["life"] > 0.0 and p["rr"] < 1.05][-32:]
+        for p in motes:
+            fade = max(0.0, min(1.0, p["life"] / 2.4))
+            hue_i = (hue_base_i + int(p["hue"] * 360)) % 360
+            cos_a, sin_a = math.cos(p["angle"]), math.sin(p["angle"])
+            for trail in (0, 1, 2):
+                rr = p["rr"] - trail * 0.09
+                if rr <= 0.0:
+                    continue
+                r = int(round(cy + sin_a * sy * rr))
+                c = int(round(cx + cos_a * sx * rr))
+                if not (0 <= r < H and 0 <= c < cw):
+                    continue
+                glyph = p["glyph"] if trail == 0 else "·"
+                lvl = max(2, int((11 if trail == 0 else 6) * fade))
+                gc[r][c] = glyph
+                gcol[r][c] = (tbl_b if trail == 0 and fade > 0.6 else tbl_n)[hue_i][lvl]
+
+        # 5. Event-horizon core.
+        horizon = "◉" if beat else ("◎" if pulse > 0.45 else "◌")
+        for dr, dc, g, lvl in ((0, 0, horizon, 12), (-1, 0, "·", 8), (1, 0, "·", 8), (0, -1, "·", 8), (0, 1, "·", 8),
+                               (-1, -1, "✧", 10), (-1, 1, "✧", 10), (1, -1, "✧", 10), (1, 1, "✧", 10)):
+            rr, cc = int(round(cy)) + dr, int(round(cx)) + dc
+            if 0 <= rr < H and 0 <= cc < cw:
+                gc[rr][cc] = g
+                gcol[rr][cc] = tbl_b[(hue_base_i + int(now * 60) + dr * 40 + dc * 25) % 360][lvl]
+
+        header = "── 🌌 RAINBOW WORMHOLE (HYPERSPACE PLASMA TUNNEL) " if inner_w >= 56 else ("── 🌌 WORMHOLE " if inner_w >= 28 else "── 🌌 ")
+        footer = ("── VELOCITY %.2fx • RINGS %d • MOTES %d ────" % (flow, n_rings, len(motes))) if inner_w >= 52 else "── TUNNEL "
+        return self._fx_lines(gc, gcol, inner_w, header, footer)
+
+    # ── Rainbow Aurora Cascade ────────────────────────────────────────
+    def render_rainbow_aurora_eq(self, status: Optional[Dict[str, Any]] = None, width: int = 80, height: int = 7) -> List[str]:
+        """Holographic aurora: drifting sine ribbon curtains, spectrum poles
+        behind them, a shimmering sky wash and a rising ember shower."""
+        self._fx_ensure_state()
+        a = self._fx_audio(status)
+        inner_w = max(20, width - 6 if width >= 26 else width - 4)
+        H = max(1, int(height))
+        cw = inner_w
+        now = time.time()
+        dt = max(0.004, min(0.12, now - getattr(self, "_aurora_last", now)))
+        self._aurora_last = now
+        spd, playing = a["speed"], a["playing"]
+        bands, peaks, rms, beat, pulse = a["bands"], a["peaks"], a["rms"], a["beat"], a["pulse"]
+        rng = self._fx_rng
+        gc, gcol = self._fx_grid(cw, H)
+        hue_base_i = int(((now * 0.12 * spd) % 1.0) * 360)
+        tbl_n, tbl_b = _fx_ansi_table(False), _fx_ansi_table(True)
+        self._aurora_flash = max(0.0, getattr(self, "_aurora_flash", 0.0) - dt * 2.2)
+        if beat:
+            self._aurora_flash = 1.0
+        flash = self._aurora_flash
+
+        # 1. Sky wash: a soft band of glow high in the frame.
+        haze_h = max(1, int(round(H * 0.34)))
+        wash_phase = now * 1.1 * spd
+        for r in range(haze_h):
+            yf = r / float(max(1, H))
+            row_c, row_col = gc[r], gcol[r]
+            depth_fade = 1.0 - yf / max(0.25, H * 0.34)
+            for c in range(cw):
+                xf = c / float(max(1, cw))
+                f = math.sin(xf * 7.0 + wash_phase) + math.sin(xf * 3.0 - wash_phase * 0.7 + yf * 5.0)
+                val = (f / 2.0 + 1.0) * 0.5 * depth_fade
+                if val < 0.74:
+                    continue
+                row_c[c] = "░" if val < 0.86 else "▒"
+                row_col[c] = tbl_n[(hue_base_i + int(xf * 0.6 * 360) + int(yf * 0.2 * 360)) % 360][max(2, int(val * 6))]
+
+        # 2. Spectrum poles rising from the floor behind the curtains.
+        step = 2 if cw >= 40 else 3
+        band_n = len(bands)
+        for c in range(0, cw, step):
+            band = float(bands[(c // step) % band_n])
+            col_h = int(round(band * H))
+            pole_hue = (hue_base_i + int(c / float(max(1, cw)) * 0.5 * 360)) % 360
+            for j in range(min(col_h, H)):
+                r = H - 1 - j
+                gc[r][c] = "╎" if j % 2 else "┊"
+                gcol[r][c] = tbl_n[(pole_hue + j * 9) % 360][2 + min(5, int(j / max(1, H) * 5))]
+
+        # 3. Ribbon curtains: sine lattice whose amplitude follows the spectrum.
+        curtains = self._aurora_curtains
+        if not curtains:
+            count = max(2, min(4, H - 1))
+            for k in range(count):
+                curtains.append({
+                    "yf": (k + 1.0) / (count + 1.0),
+                    "amp": rng.uniform(0.40, 0.85),
+                    "freq": rng.uniform(0.10, 0.20),
+                    "speed": rng.uniform(0.45, 0.95),
+                    "phase": rng.uniform(0.0, 6.283),
+                    "hue": rng.uniform(0.0, 1.0),
+                })
+        max_r = H - 1
+        for k, cur in enumerate(curtains):
+            band = float(bands[(k * 4 + 1) % len(bands)])
+            peak = float(peaks[(k * 6 + 2) % len(peaks)])
+            amp = cur["amp"] * (0.45 + band * 1.3) * max(0.5, H * 0.30)
+            y0 = cur["yf"] * max_r
+            freq = cur["freq"]
+            ph = now * cur["speed"] * spd + cur["phase"]
+            ph2 = -now * cur["speed"] * 0.65 * spd + cur["phase"] * 1.7
+            band_hue = (hue_base_i + int(cur["hue"] * 360) + int(now * 0.05 * 360)) % 360
+            crest_hits = 0
+            for c in range(cw):
+                wave = (math.sin(c * freq + ph)
+                        + 0.55 * math.sin(c * freq * 2.2 + ph2))
+                y = y0 + amp * wave * 0.55
+                y = 0.0 if y < 0.0 else (float(max_r) if y > max_r else y)
+                top = int(round(y))
+                if not (0 <= top < H):
+                    continue
+                col_hue = (band_hue + int(c / float(max(1, cw)) * 0.5 * 360)) % 360
+                slope = wave
+                gc[top][c] = "─" if abs(slope) < 0.25 else ("╱" if slope > 0.0 else "╲")
+                gcol[top][c] = (tbl_b if band > 0.55 else tbl_n)[col_hue][max(3, min(12, int(5 + band * 6 + flash * 3)))]
+                # One-row-thick shimmer under the crest, only where it is bright.
+                if band > 0.42 and top + 1 < H and gc[top + 1][c] == " ":
+                    gc[top + 1][c] = "·"
+                    gcol[top + 1][c] = tbl_n[(col_hue + 18) % 360][max(2, int(3 + band * 4))]
+                if peak > 0.55 and crest_hits < 4 and (c + k * 5) % 19 == 0 and 0 <= top - 1 < H and gc[top - 1][c] == " ":
+                    gc[top - 1][c] = "✧"
+                    gcol[top - 1][c] = tbl_b[(hue_base_i + int(c * 0.09 * 360)) % 360][11]
+                    crest_hits += 1
+
+        # 4. Ember shower drifting through the curtains.
+        embers = self._aurora_embers
+        for p in embers:
+            p["x"] += p["vx"] * dt
+            p["y"] += p["vy"] * dt
+            p["life"] -= dt
+        if playing:
+            loud = float(np.max(bands)) if bands.size else 0.0
+            while len(embers) < 5 + int(loud * 10):
+                embers.append({
+                    "x": rng.uniform(0.0, max(1.0, cw - 1)),
+                    "y": rng.uniform(0.0, max(0.0, float(max_r))),
+                    "vx": rng.uniform(-0.7, 0.7),
+                    "vy": rng.choice((-1.0, -1.0, 1.0)) * rng.uniform(0.4, 1.2),
+                    "life": rng.uniform(1.2, 2.8),
+                    "hue": rng.uniform(0.0, 1.0),
+                    "glyph": rng.choice(("✦", "✧", "⋆", "•", "°", "∙")),
+                })
+        self._aurora_embers = embers = [
+            p for p in embers if p["life"] > 0.0 and -0.5 < p["y"] < H and -0.5 < p["x"] < cw
+        ][-26:]
+        for p in embers:
+            fade = max(0.0, min(1.0, p["life"] / 2.8))
+            twinkle = 0.55 + 0.45 * math.sin(now * 7.0 + p["hue"] * 9.0)
+            hue_i = (hue_base_i + int(p["hue"] * 360) + int(now * 0.15 * 360)) % 360
+            r = int(round(p["y"]))
+            c = int(round(p["x"]))
+            if 0 <= r < H and 0 <= c < cw:
+                gc[r][c] = p["glyph"]
+                gcol[r][c] = (tbl_b if fade > 0.7 else tbl_n)[hue_i][max(2, int(11 * fade * twinkle))]
+
+        header = "── 🌈 RAINBOW AURORA CASCADE (HOLOGRAPHIC RIBBONS) " if inner_w >= 58 else ("── 🌈 AURORA CASCADE " if inner_w >= 30 else "── 🌈 ")
+        footer = ("── CURTAINS %d • EMBERS %d • SPECTRUM POLES ────" % (len(curtains), len(embers))) if inner_w >= 52 else "── AURORA "
+        return self._fx_lines(gc, gcol, inner_w, header, footer)
+
     def render_vertical_pitch_fader(self, pitch_pct: int, total_lines: int = 10) -> List[str]:
         p, frows = max(-20, min(20, int(pitch_pct))), max(3, total_lines - 2)
         has_hint = frows % 2 == 0
@@ -3625,6 +4513,9 @@ class EqualizerVisualizer:
         pl, pr = np.array(status.get("peaks_left", pk)), np.array(status.get("peaks_right", pk))
         rms, pdb, s = float(status.get("rms_level", 0.0)), float(status.get("peak_db", -60.0)), self.style
         if s == "stream_of_frequency_eq": lines = self.render_stream_of_frequency(status, width, height)
+        elif s == "rainbow_mandala_eq": lines = self.render_rainbow_mandala_eq(status, width, height)
+        elif s == "rainbow_wormhole_eq": lines = self.render_rainbow_wormhole_eq(status, width, height)
+        elif s == "rainbow_aurora_eq": lines = self.render_rainbow_aurora_eq(status, width, height)
         elif s == "neon_prism_eq": lines = self.render_neon_prism_eq(ll, lr, pl, pr, width, height, rms, pdb)
         elif s == "stardust_particles_eq": lines = self.render_stardust_particles_eq(ll, lr, pl, pr, width, height, rms, pdb)
         elif s == "master_spectrum": lines = self.render_master_spectrum(lv, pk, width=width, height=height)
@@ -3990,6 +4881,17 @@ def launch_liquid_glass_player(
         pass
     log_file = log_dir / "liquid_glass.log"
 
+    # MP Liquid Player stops at four windows. The host claims its own slot
+    # before it draws, and this early check only gives a clear message.
+    limiter = _mp_instance_module()
+    if limiter is not None and limiter.at_limit("player"):
+        try:
+            limiter.focus_existing("player")
+            limiter.notify_limit("player")
+        except Exception:
+            pass
+        return False
+
     extra_kwargs = {}
     if sys.platform == "win32":
         extra_kwargs["creationflags"] = 0x00000008 | 0x00000200  # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
@@ -4026,6 +4928,23 @@ def launch_liquid_glass_player(
             except Exception:
                 pass
             return False
+
+
+def _mp_instance_module():
+    """The shared four-window limiter, or None when the helper is missing."""
+    try:
+        import mp_instance_limit
+        return mp_instance_limit
+    except ImportError:
+        pass
+    try:
+        scripts = get_base_dir() / "scripts"
+        if str(scripts) not in sys.path:
+            sys.path.insert(0, str(scripts))
+        import mp_instance_limit
+        return mp_instance_limit
+    except Exception:
+        return None
 
 
 def _mp_gui_is_running() -> bool:
@@ -4101,13 +5020,19 @@ def launch_mp_gui(base_dir: Optional[Path] = None) -> bool:
     """Open MP Gui beside the player, or focus that window if it is already open.
 
     --keep-theme leaves the shared theme file alone so the open Liquid Player keeps its color.
+    MP Gui opens up to four windows. A fifth launch focuses one instead.
     """
-    if _mp_gui_is_running():
+    limiter = _mp_instance_module()
+    if limiter is not None and limiter.at_limit("gui"):
+        try:
+            limiter.notify_limit("gui")
+        except Exception:
+            pass
         if _focus_mp_gui():
             return True
         if _windowed_mp_gui_host():
             _raise_windowed_mp_gui(base_dir or Path(__file__).resolve().parent)
-            return True
+        return True
     base = base_dir or get_base_dir()
     launcher = base / "MP_Gui.sh"
     if not launcher.is_file():
@@ -4246,6 +5171,16 @@ class TerminalPlayerUI:
         self.running, self.inspector_hud_active = True, False
         self.search_mode, self.search_query, self.export_mode, self.export_path = False, "", False, ""
         self._playlist_clear_armed = False
+        # Favorites clear decision window, DJ export and Traktor playlist prompts.
+        self.favorites_clear_confirm = False
+        self.fav_export_mode = ""
+        self.fav_export_dest = ""
+        self.fav_export_name = ""
+        self.traktor_offer_paths: Optional[List[str]] = None
+        self.traktor_offer_name = ""
+        self.traktor_input_mode = ""
+        self.traktor_playlist_name = ""
+        self.traktor_history_id = ""
         self.favorites = FavoritesStore()
         self.mp_visualizer_on = False
         self.mp_visualizer_preset_id = 0
@@ -4493,7 +5428,7 @@ class TerminalPlayerUI:
         info_items = [
             (f" {BOLD}{WHITE}Track Title{NC}", dt),
             (f" {BOLD}{CYAN}Folder / Src{NC}", f"{'SMB Share' if is_net else 'Local Drive'} [{folder}] • Music Library"),
-            (f" {BOLD}{CYAN}Format/Codec{NC}", f"{ext} Lossless • {sr/1000:.1f} kHz • {ch_s}"),
+            (f" {BOLD}{CYAN}Format/Codec{NC}", f"{ext} {'Lossless' if is_lossless_path(tp) else 'Encoded'} • {sr/1000:.1f} kHz • {ch_s}"),
             (f" {BOLD}{CYAN}Time Position{NC}", f"{st.get('position_fmt','00:00')} / {st.get('duration_fmt','00:00')} ({st.get('progress_pct',0):.1f}%)"),
             (f" {BOLD}{CYAN}Volume/Pitch{NC}", f"Volume: {st.get('volume', 85)}%  │  Pitch: {st.get('pitch_percent', 0):+d}%"),
             (f" {BOLD}{CYAN}Audio Engine{NC}", f"Output Rate: {st.get('output_rate', 44100)/1000:.1f} kHz • Device: {st.get('output_device', 'Default Audio Device')}"),
@@ -4674,6 +5609,7 @@ class TerminalPlayerUI:
         self._favorites_button_row = 0
         self._favorites_button_span = (0, 0)
         self._favorites_button_whole_row = False
+        self._fav_export_button = (0, 0, 0)
         self._visualizer_button_row = 0
         self._visualizer_button_span = (0, 0)
         self._playlist_star_rows = {}
@@ -4740,6 +5676,358 @@ class TerminalPlayerUI:
         else:
             self._notify(f"Removed from Favorites: {name}  ({count} saved).", 3.5)
 
+    # ------------------------------------------------------------------
+    # Favorites: export for DJ set preparation and clear confirmation
+    # ------------------------------------------------------------------
+    def _fav_exporter_module(self):
+        scripts = str(Path(__file__).resolve().parent / "scripts")
+        if scripts not in sys.path:
+            sys.path.insert(0, scripts)
+        import MP_Fav_Playlist_Track_Exporter as exporter
+        return exporter
+
+    def _favorites_decision_active(self) -> bool:
+        self._ensure_favorites_decision_state()
+        return bool(
+            self.favorites_clear_confirm
+            or self.fav_export_mode
+            or self.traktor_offer_paths
+            or self.traktor_input_mode
+        )
+
+    def _ensure_favorites_decision_state(self) -> None:
+        """Default the decision-window state for UIs built without __init__."""
+        defaults = {
+            "favorites_clear_confirm": False,
+            "fav_export_mode": "",
+            "fav_export_dest": "",
+            "fav_export_name": "",
+            "fav_export_kind": "local",
+            "traktor_offer_paths": None,
+            "traktor_offer_name": "",
+            "traktor_offer_details": "",
+            "traktor_input_mode": "",
+            "traktor_playlist_name": "",
+            "traktor_history_id": "",
+        }
+        for name, value in defaults.items():
+            if not hasattr(self, name):
+                setattr(self, name, value)
+
+    def _favorites_prompt_line(self) -> str:
+        """Inline hint shown on the prompt row while a Favorites decision is open."""
+        self._ensure_favorites_decision_state()
+        if self.favorites_clear_confirm:
+            return f"  {BOLD}{COLOR_TRAFFIC_RED}Clear Favorites: [Y] Yes, clear it   [N/Esc] Cancel{NC}"
+        if self.fav_export_mode == "choose":
+            return (
+                f"  {BOLD}{COLOR_TRAFFIC_AMBER}Export Favorites — [1] Local folder   "
+                f"[2] SMB share   [Esc] Cancel{NC}"
+            )
+        if self.fav_export_mode == "tracklist_name":
+            return (
+                f"  {BOLD}{COLOR_TRAFFIC_AMBER}Tracklist name: [{self.fav_export_name}█]  "
+                f"(Enter: use this name • Enter on empty: date + 12-character ID • Esc: Cancel){NC}"
+            )
+        if self.fav_export_mode == "dest_path":
+            return (
+                f"  {BOLD}{COLOR_TRAFFIC_AMBER}Local export folder: [{self.fav_export_dest}█]  (Enter: Export • Esc: Cancel){NC}"
+            )
+        if self.fav_export_mode == "smb_path":
+            return (
+                f"  {BOLD}{COLOR_TRAFFIC_AMBER}Folder inside the SMB share: [{self.fav_export_dest}█]  "
+                f"(Enter: Export • empty = share root • Esc: Cancel){NC}"
+            )
+        if self.traktor_offer_paths:
+            return (
+                f"  {BOLD}{COLOR_TRAFFIC_GREEN}Traktor is ready. Create a Traktor playlist for these favorites?   "
+                f"[Y] Yes   [N] No{NC}"
+            )
+        if self.traktor_input_mode == "playlist_name":
+            return (
+                f"  {BOLD}{COLOR_TRAFFIC_GREEN}Traktor playlist name: [{self.traktor_playlist_name}█]  "
+                f"(Enter: Continue • Esc: Cancel){NC}"
+            )
+        if self.traktor_input_mode == "history_id":
+            return (
+                f"  {BOLD}{COLOR_TRAFFIC_GREEN}Traktor history file ID: [{self.traktor_history_id}█]  "
+                f"(Enter: Create playlist • empty = newest history • Esc: Cancel){NC}"
+            )
+        return ""
+
+    def _favorites_decision_box(self, width: int) -> List[str]:
+        """Draw the Favorites decision window over the playlist area."""
+        self._ensure_favorites_decision_state()
+        if self.favorites_clear_confirm:
+            count = len(self._favorites_store())
+            title = "  CLEAR FAVORITES PLAYLIST?  "
+            body = [
+                f"This removes {count} saved favorite track(s) from the playlist.",
+                "The audio files themselves are NOT deleted from disk.",
+                "",
+                "Press [Y] to confirm, or [N] / Esc to keep the playlist.",
+                "After clearing, a Traktor playlist can be created if Traktor is ready.",
+            ]
+            color = COLOR_TRAFFIC_RED
+        elif self.fav_export_mode == "choose":
+            title = "  EXPORT FAVORITES FOR DJ SET PREPARATION  "
+            count = len(self._favorites_store())
+            traktor_note = (
+                "Traktor is ready: a playlist can be created after the copy."
+                if getattr(self, "fav_export_traktor_ready", False)
+                else f"Traktor playlist unavailable: {getattr(self, 'fav_export_traktor_reason', 'not configured')}"
+            )
+            body = [
+                f"{count} favorite track(s) will be copied and a tracklist written.",
+                "Every copy is size-checked and at least one must play back as audio.",
+                "",
+                "[1] Folder on this computer        [2] SMB share        [Esc] Cancel",
+                traktor_note,
+            ]
+            color = COLOR_TRAFFIC_AMBER
+        elif self.fav_export_mode == "tracklist_name":
+            title = "  TRACKLIST FILE NAME  "
+            body = [
+                "Leave empty to name the playlist with the date and a random",
+                "12-character playlist ID, for example MP_Fav_Set_2026-11-12_A1B2C3D4E5F6.",
+                "",
+                "Type a custom name, then press Enter.",
+            ]
+            color = COLOR_TRAFFIC_AMBER
+        elif self.fav_export_mode in ("dest_path", "smb_path"):
+            title = "  EXPORT DESTINATION  "
+            body = [
+                "Local folder on this drive." if self.fav_export_mode == "dest_path"
+                else "Folder inside the configured SMB share.",
+                "Press Enter to start the export, or Esc to cancel.",
+            ]
+            color = COLOR_TRAFFIC_AMBER
+        elif self.traktor_offer_paths:
+            title = "  CREATE A TRAKTOR PLAYLIST?  "
+            body = [
+                f"Traktor History and collection.nml were found.",
+                f"Playlist name: {self.traktor_playlist_name or self.traktor_offer_name}",
+                getattr(self, "traktor_offer_details", ""),
+                "[Y] Create the playlist now        [N] Skip",
+            ]
+            color = COLOR_TRAFFIC_GREEN
+        elif self.traktor_input_mode == "playlist_name":
+            title = "  TRAKTOR PLAYLIST NAME  "
+            body = [
+                "Enter the name Traktor will show in its Playlists folder.",
+                "Press Enter to continue, Esc to cancel.",
+            ]
+            color = COLOR_TRAFFIC_GREEN
+        else:
+            title = "  TRAKTOR HISTORY FILE ID  "
+            body = [
+                "Enter the history file ID, file name or list number.",
+                "Press Enter with an empty value to use the newest history file.",
+            ]
+            color = COLOR_TRAFFIC_GREEN
+        inner = max(30, min(width - 6, 74))
+        short = [text if _display_width(text) <= inner - 4 else _clip_display(text, inner - 4) for text in body]
+        out = [_boxed_rule("┌", title, "┐", inner, color)]
+        for text in short:
+            pad = " " * max(0, inner - 2 - _display_width(text))
+            out.append(f"  {color}│{NC} {text}{pad} {color}│{NC}")
+        out.append(_boxed_rule("└", "", "┘", inner, color))
+        return out
+
+
+    def _fav_default_export_dir(self) -> str:
+        try:
+            exporter = self._fav_exporter_module()
+            cfg = exporter.load_config()
+            return str(Path(exporter._expand(cfg.get("FAV_EXPORT_LOCAL_DIR")) or exporter.DEFAULT_LOCAL_DIR))
+        except Exception:
+            return str(Path("~/Music/MP_Fav_Playlists").expanduser())
+
+    def _favorites_export_begin(self):
+        """Open the DJ export decision window. At least one favorite is required."""
+        store = self._favorites_store()
+        store.load()
+        self._ensure_favorites_decision_state()
+        if not len(store):
+            self.favorites_clear_confirm = False
+            self.fav_export_mode = ""
+            self._notify(
+                "Favorites is empty. Add at least one track with [H] before exporting a DJ set.",
+                5.0,
+            )
+            return
+        try:
+            self.fav_export_traktor_ready, reason = self._fav_exporter_module().traktor_ready()
+        except Exception as exc:
+            self.fav_export_traktor_ready, reason = False, str(exc)
+        self.fav_export_traktor_reason = reason
+        self.fav_export_mode = "choose"
+        self.fav_export_dest = ""
+        self.fav_export_name = ""
+        self._notify(
+            f"DJ export: {len(store)} favorite track(s). Choose 1 for a local folder or 2 for the SMB share. Esc cancels.",
+            8.0,
+        )
+
+    def _favorites_export_choose(self, choice: str):
+        if choice == "1":
+            self.fav_export_kind = "local"
+            self.fav_export_mode = "tracklist_name"
+            self.fav_export_name = ""
+        elif choice == "2":
+            try:
+                exporter = self._fav_exporter_module()
+                if not exporter.smb_configured():
+                    self.fav_export_mode = ""
+                    self._notify(
+                        "The SMB share is not configured. Set FAV_EXPORT_SMB_HOST, FAV_EXPORT_SMB_SHARE, "
+                        "FAV_EXPORT_SMB_USER and FAV_EXPORT_SMB_PASSWORD in config.env.",
+                        8.0,
+                    )
+                    return
+            except Exception as exc:
+                self.fav_export_mode = ""
+                self._notify(f"SMB export is unavailable: {exc}", 6.0)
+                return
+            self.fav_export_kind = "smb"
+            self.fav_export_mode = "tracklist_name"
+            self.fav_export_name = ""
+
+    def _favorites_export_start(self):
+        self.fav_export_mode = ""
+        tracks = self._favorites_store().tracks()
+        if not tracks:
+            self._notify("Favorites is empty. Nothing was exported.", 4.0)
+            return
+        kind = getattr(self, "fav_export_kind", "local")
+        destination = self.fav_export_dest.strip()
+        custom_name = self.fav_export_name.strip()
+        self._notify(f"Exporting {len(tracks)} favorite track(s)... this can take a moment.", 6.0)
+
+        def _worker():
+            try:
+                exporter = self._fav_exporter_module()
+                smb = None
+                if kind == "smb":
+                    settings = exporter.smb_settings()
+                    settings["path"] = destination if destination else settings.get("path", "")
+                    smb = {**settings, "kind": "smb"}
+                result = exporter.export_favorites(
+                    tracks,
+                    destination=destination or self._fav_default_export_dir(),
+                    smb=smb,
+                    tracklist_name=custom_name or None,
+                )
+            except Exception as exc:
+                result = {"ok": False, "errors": [str(exc)], "copied": [], "failed": []}
+            self._favorites_export_finished(result)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _favorites_export_finished(self, result: Dict[str, Any]):
+        copied = len(result.get("copied") or [])
+        failed = len(result.get("failed") or [])
+        if not result.get("ok"):
+            reason = "; ".join((result.get("errors") or ["unknown error"])[:2])
+            self._notify(f"Favorites export failed: {reason}", 9.0)
+            return
+        name = result.get("playlist_name") or "favorites set"
+        try:
+            ready, reason = self._fav_exporter_module().traktor_ready()
+        except Exception as exc:
+            ready, reason = False, str(exc)
+        details = (
+            f"Exported {copied} track(s) to "
+            f"{os.path.basename(str(result.get('dest') or '')) or result.get('dest')}"
+            f"  •  {result.get('playable_files', 0)} verified playable"
+            + (f"  •  {failed} failed" if failed else "")
+        )
+        if ready:
+            self.traktor_offer_paths = [row["path"] for row in self._favorites_store().tracks()]
+            self.traktor_offer_name = name
+            self.traktor_offer_details = f"Exported {copied} track(s), {result.get('playable_files', 0)} verified playable."
+            self.traktor_playlist_name = name
+            self.traktor_history_id = ""
+            self._notify(f"{details}  •  Traktor playlist available: [Y] create or [N] skip.", 9.0)
+        else:
+            self._notify(f"{details}  •  Traktor playlist skipped: {reason}", 9.0)
+
+    def _favorites_traktor_start(self):
+        """Ask for the Traktor playlist name, then create the playlist."""
+        paths = list(getattr(self, "traktor_offer_paths", None) or [])
+        self.traktor_offer_paths = None
+        self.traktor_input_mode = ""
+        if not paths:
+            return
+        name = self.traktor_playlist_name.strip() or self.traktor_offer_name or "MP Favorites"
+        history_id = self.traktor_history_id.strip() or None
+        self._notify(f"Creating Traktor playlist '{name}'...", 5.0)
+
+        def _worker():
+            try:
+                result = self._fav_exporter_module().create_traktor_playlist(paths, name, history_id)
+            except Exception as exc:
+                result = {"ok": False, "message": str(exc)}
+            if result.get("ok"):
+                missing = len(result.get("missing") or [])
+                self._notify(
+                    f"Traktor playlist ready: {result.get('playlist')} "
+                    f"({result.get('matched', 0)} tracks{'  •  ' + str(missing) + ' not in Traktor' if missing else ''}). "
+                    "Open Traktor to use it.",
+                    9.0,
+                )
+            else:
+                self._notify(f"Traktor playlist not created: {result.get('message', 'unknown error')}", 9.0)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _arm_favorites_clear(self):
+        """Open the confirmation window before clearing the Favorites playlist."""
+        self._ensure_favorites_decision_state()
+        count = len(self._favorites_store())
+        if count == 0:
+            self.favorites_clear_confirm = False
+            self._notify("The Favorites playlist is already empty.", 3.0)
+            return
+        self.favorites_clear_confirm = True
+        self._notify(
+            f"Clear the Favorites playlist ({count} saved)? Press Y to confirm or Esc to cancel. "
+            "Audio files stay on disk.",
+            8.0,
+        )
+
+    def _confirm_favorites_clear(self):
+        self._ensure_favorites_decision_state()
+        self.favorites_clear_confirm = False
+        paths = [row.get("path") for row in self._favorites_store().tracks() if row.get("path")]
+        removed = self._favorites_store().clear()
+        if self.mode == "FAVORITES":
+            self._sync_open_favorites()
+        self._notify(
+            f"Favorites cleared — {removed} track(s) removed from the playlist. Audio files were not deleted.",
+            6.0,
+        )
+        # Offer the Traktor playlist for the tracks that were just cleared, as
+        # the last chance to turn this listened-to set into a ready playlist.
+        try:
+            ready, _reason = self._fav_exporter_module().traktor_ready()
+        except Exception:
+            ready = False
+        if ready and paths:
+            self.traktor_offer_paths = paths
+            self.traktor_offer_name = f"MP Favorites {time.strftime('%Y-%m-%d')}"
+            self.traktor_offer_details = (
+                f"{removed} cleared favorite track(s) are still on disk and can become a Traktor playlist."
+            )
+            self.traktor_playlist_name = self.traktor_offer_name
+            self.traktor_history_id = ""
+            self._notify(
+                f"Favorites cleared — {removed} track(s) removed. Create a Traktor playlist from them? "
+                "[Y] Yes   [N] No",
+                9.0,
+            )
+
+
     def _load_favorites(self):
         """Open the Favorites playlist. Playback of the current track continues."""
         self._favorites_store().load()
@@ -4766,7 +6054,7 @@ class TerminalPlayerUI:
         button = f"\033[1;38;2;255;196;0m{face}\033[0m"
         count = len(store)
         if self.mode == "FAVORITES":
-            long = f"  {button}  {count} saved   Favorites is open   click or press [3] to reload   [H] marks or removes this track"
+            long = f"  {button}  {count} saved   Favorites is open   [J] Export DJ Set   click or press [3] to reload   [H] marks or removes this track"
         else:
             long = f"  {button}  {count} saved   click this button or press [3] to open Favorites   [H] marks the selected mix or track"
         short = f"  {button}  {count} saved  [3] open  [H] mark"
@@ -4900,11 +6188,17 @@ class TerminalPlayerUI:
         self._on_favorites_click(col, row)
 
     def _on_favorites_click(self, col: int, row: int):
+        if self._favorites_decision_active():
+            return
         button_row = getattr(self, "_favorites_button_row", 0)
         span = getattr(self, "_favorites_button_span", (0, 0))
         whole = bool(getattr(self, "_favorites_button_whole_row", False))
         if row == button_row and button_row and (whole or span[0] <= col <= span[1]):
             self._load_favorites()
+            return
+        export_row, export_start, export_end = getattr(self, "_fav_export_button", (0, 0, 0))
+        if export_row and row == export_row and export_start <= col <= export_end:
+            self._favorites_export_begin()
             return
         index = getattr(self, "_playlist_star_rows", {}).get(row)
         star_col = getattr(self, "_playlist_star_col", 14)
@@ -5121,6 +6415,11 @@ class TerminalPlayerUI:
 
     def _arm_playlist_clear(self):
         """Ask before emptying the playlist. A second D or Delete confirms."""
+        if self.mode == "FAVORITES":
+            # Clearing Favorites is destructive and easy to trigger by accident,
+            # so it always uses an explicit decision window.
+            self._arm_favorites_clear()
+            return
         removed, queued = self._playlist_entry_count(), self._playlist_queue_count()
         if removed == 0 and queued == 0:
             self._playlist_clear_armed = False
@@ -5134,6 +6433,9 @@ class TerminalPlayerUI:
 
     def _confirm_clear_playlist(self):
         """Empty the open playlist and queue. [1] or [2] reloads that library."""
+        if self.mode == "FAVORITES":
+            self._confirm_favorites_clear()
+            return
         self._playlist_clear_armed = False
         removed = self._playlist_entry_count()
         self.scanner.mixes = []
@@ -5321,6 +6623,96 @@ class TerminalPlayerUI:
                 try: self.export_path += data.decode("utf-8", "ignore")
                 except Exception: pass
             return
+        self._ensure_favorites_decision_state()
+        if self.favorites_clear_confirm:
+            if data in (b"y", b"Y"):
+                self._confirm_favorites_clear()
+            elif data in (b"\x1b", b"n", b"N", b"\r", b"\n", b"q", b"Q"):
+                self.favorites_clear_confirm = False
+                self._notify("Favorites clear cancelled. The playlist is unchanged.", 3.5)
+            return
+        if self.fav_export_mode == "choose":
+            choice = data.decode("utf-8", "ignore") if len(data) == 1 else ""
+            if choice in ("1", "2"):
+                self._favorites_export_choose(choice)
+            elif data in (b"\x1b", b"q", b"Q"):
+                self.fav_export_mode = ""
+                self._notify("DJ export cancelled.", 3.0)
+            return
+        if self.fav_export_mode == "tracklist_name":
+            if data in (b"\r", b"\n"):
+                # Empty input keeps the automatic date + 12 character playlist ID.
+                if self.fav_export_kind == "smb":
+                    self.fav_export_mode = "smb_path"
+                    self._notify("Enter the folder inside the SMB share, then press Enter (empty for the share root).", 6.0)
+                else:
+                    self.fav_export_mode = "dest_path"
+                    self.fav_export_dest = self._fav_default_export_dir()
+                    self._notify("Enter the local export folder, then press Enter.", 6.0)
+            elif data == b"\x1b":
+                self.fav_export_mode = ""
+                self._notify("DJ export cancelled.", 3.0)
+            elif data in (b"\x7f", b"\x08"):
+                self.fav_export_name = self.fav_export_name[:-1]
+            else:
+                try:
+                    if (c := data.decode("utf-8", "ignore")).isprintable():
+                        self.fav_export_name += c
+                except Exception: pass
+            return
+        if self.fav_export_mode in ("dest_path", "smb_path"):
+            if data in (b"\r", b"\n"):
+                self._favorites_export_start()
+            elif data == b"\x1b":
+                self.fav_export_mode = ""
+                self._notify("DJ export cancelled.", 3.0)
+            elif data in (b"\x7f", b"\x08"):
+                self.fav_export_dest = self.fav_export_dest[:-1]
+            else:
+                try:
+                    if (c := data.decode("utf-8", "ignore")).isprintable():
+                        self.fav_export_dest += c
+                except Exception: pass
+            return
+        if self.traktor_offer_paths:
+            if data in (b"y", b"Y", b"\r", b"\n"):
+                self.traktor_playlist_name = self.traktor_playlist_name or self.traktor_offer_name
+                self.traktor_offer_paths = None
+                self.traktor_input_mode = "playlist_name"
+                self._notify("Enter the Traktor playlist name, then press Enter (empty keeps the export name).", 7.0)
+            elif data in (b"n", b"N", b"\x1b", b"q", b"Q"):
+                self.traktor_offer_paths = None
+                self._notify("Traktor playlist skipped. The exported files are ready.", 4.0)
+            return
+        if self.traktor_input_mode == "playlist_name":
+            if data in (b"\r", b"\n"):
+                self.traktor_input_mode = "history_id"
+                self._notify("Enter the Traktor history file ID, then press Enter (empty uses the newest history).", 7.0)
+            elif data == b"\x1b":
+                self.traktor_input_mode = ""
+                self._notify("Traktor playlist cancelled.", 3.0)
+            elif data in (b"\x7f", b"\x08"):
+                self.traktor_playlist_name = self.traktor_playlist_name[:-1]
+            else:
+                try:
+                    if (c := data.decode("utf-8", "ignore")).isprintable():
+                        self.traktor_playlist_name += c
+                except Exception: pass
+            return
+        if self.traktor_input_mode == "history_id":
+            if data in (b"\r", b"\n"):
+                self._favorites_traktor_start()
+            elif data == b"\x1b":
+                self.traktor_input_mode = ""
+                self._notify("Traktor playlist cancelled.", 3.0)
+            elif data in (b"\x7f", b"\x08"):
+                self.traktor_history_id = self.traktor_history_id[:-1]
+            else:
+                try:
+                    if (c := data.decode("utf-8", "ignore")).isprintable():
+                        self.traktor_history_id += c
+                except Exception: pass
+            return
         if self.search_mode:
             if data in (b"\r", b"\n"): self.search_mode = False
             elif data == b"\x1b": self.search_mode, self.search_query = False, ""
@@ -5419,7 +6811,13 @@ class TerminalPlayerUI:
             if self.equalizer_hud_active: self.inspector_hud_active = False
             return
         if data in (b"\x1b[A", b"\x1bOA", b"k"): self._navigate_list(-1)
-        elif data in (b"\x1b[B", b"\x1bOB", b"j", b"J"): self._navigate_list(1)
+        elif data == b"j": self._navigate_list(1)
+        elif data == b"J":
+            # Shift+J exports the Favorites playlist; lowercase j still scrolls.
+            if self.mode == "FAVORITES":
+                self._favorites_export_begin()
+            else:
+                self._navigate_list(1)
         elif data == b"\x1b[5~": self._navigate_list(-5)
         elif data == b"\x1b[6~": self._navigate_list(5)
         elif data in (b"\x1b[H", b"\x1b[1~", b"\x1b[7~", b"\x1bOH"): self.selected_row = 0
@@ -5624,7 +7022,8 @@ class TerminalPlayerUI:
         dim_s = DIM
         tname, maxlen = st.get("title", "Unknown Mix"), max(58, iw - 20)
         if len(tname) > maxlen: tname = tname[:maxlen - 3] + "..."
-        ch_str, sr, ext = ("Stereo" if st.get("channels", 2) == 2 else "Mono"), st.get("sample_rate", 44100), os.path.splitext(st.get("path", ""))[1][1:].upper() or "FLAC"
+        parts = os.path.splitext(st.get("path", ""))
+        ch_str, sr, ext = ("Stereo" if st.get("channels", 2) == 2 else "Mono"), st.get("sample_rate", 44100), parts[1][1:].upper() or "FLAC"
         badge = f"{bold_s}{GREEN}▶ PLAYING{NC}" if st.get("state") == "playing" else (f"{bold_s}{YELLOW}⏸ PAUSED{NC}" if st.get("state") == "paused" else f"{bold_s}{RED}⏹ STOPPED{NC}")
         if self.mode == "FAVORITES":
             mode_b = f" {bold_s}{COLOR_TRAFFIC_AMBER}[FAVORITES]{NC}"
@@ -5643,7 +7042,8 @@ class TerminalPlayerUI:
         out_n = bt_dev or st.get("output_device", "Speakers")
         bt_b = f"{bold_s}{COLOR_NEON_PINK}🎧 Output: {out_n}{NC}" if (is_bt or "bluetooth" in str(out_n).lower()) else f"{dim_s}{CYAN}🔊 Output: {out_n}{NC}"
         s4_b = f"  │  {bold_s}\033[38;2;0;255;127m🎛️ S4 MIDI [hw:0,0]{NC}" if (CONFIG_DIR / "traktor_s4_midi.pid").exists() else ""
-        lines.append(f"  {dim_s}{CYAN}Format: {ext}{' Lossless' if w>=116 else ''}  │  Sample Rate: {sr/1000:.1f} kHz  │  Channels: {ch_str}  │  {bt_b}{s4_b}{NC}" if w >= 106 else f"  {dim_s}{CYAN}Format: {ext}  │  {sr/1000:.1f} kHz  │  {bt_b}{NC}")
+        src_badge = " Lossless" if (w >= 116 and is_lossless_path(st.get("path", ""))) else ""
+        lines.append(f"  {dim_s}{CYAN}Format: {ext}{src_badge}  │  Sample Rate: {sr/1000:.1f} kHz  │  Channels: {ch_str}  │  {bt_b}{s4_b}{NC}" if w >= 106 else f"  {dim_s}{CYAN}Format: {ext}  │  {sr/1000:.1f} kHz  │  {bt_b}{NC}")
 
         pct, bw = float(st.get("progress_pct", 0.0)), max(20, min(max(54, iw - 42), iw - 28))
         fw = int((pct / 100.0) * bw)
@@ -5654,7 +7054,10 @@ class TerminalPlayerUI:
         lines.extend(self.visualizer.render(st, width=w, height=(7 if h >= 34 else (5 if h >= 28 else 3))) + [""])
 
         active_tracks = self._get_active_tracks()
-        if self.export_mode: lines.append(f"  {bold_s}{COLOR_TRAFFIC_AMBER}Export Playlist (.m3u) Path: [{self.export_path}█]  (Enter: Save, Esc: Cancel){NC}")
+        prompt_line = self._favorites_prompt_line()
+        if prompt_line:
+            lines.append(prompt_line)
+        elif self.export_mode: lines.append(f"  {bold_s}{COLOR_TRAFFIC_AMBER}Export Playlist (.m3u) Path: [{self.export_path}█]  (Enter: Save, Esc: Cancel){NC}")
         elif self.search_mode: lines.append(f"  {bold_s}{CYAN}Filter / Search: [{self.search_query}█]{NC}")
         elif self.search_query: lines.append(f"  {bold_s}Search Filter: '{self.search_query}' (Press '/' to search)")
         elif time.time() < self.notification_time and self.notification_msg: lines.append(f"  {bold_s}{COLOR_TRAFFIC_GREEN}📂 {self.notification_msg}{NC}")
@@ -5680,7 +7083,15 @@ class TerminalPlayerUI:
             elif self.selected_row < self.scroll_offset: self.scroll_offset = self.selected_row
             elif self.selected_row >= self.scroll_offset + vrows: self.scroll_offset = self.selected_row - vrows + 1
             avail_name = max(4, iw - 25)
-            if not active_tracks:
+            if self._favorites_decision_active():
+                # A Favorites decision window takes over the list area so the
+                # user cannot miss it and cannot touch the playlist behind it.
+                box = self._favorites_decision_box(iw)
+                for row in box:
+                    lines.append(row)
+                for _ in range(max(0, vrows - len(box))):
+                    lines.append(f"  {b_col}│{NC}{' ' * iw}{b_col}│{NC}")
+            elif not active_tracks:
                 if self.mode == "FAVORITES":
                     em1, em2 = "Favorites playlist is empty.", "Select a mix or track and press [H] to add it here."
                 elif self.mode == "MUSIC":
@@ -5716,15 +7127,30 @@ class TerminalPlayerUI:
                     cw = _display_width(ip)
                     ip = ip + " " * (iw - cw) if cw < iw else (_clip_display(ip, iw) if cw > iw else ip)
                     if sel:
-                        if is_lg:
-                            lines.append(f"  {b_col}│{NC}{_glass_rev()}{bold_s}{WHITE}{ip}\033[0m{b_col}│{NC}")
-                        else:
-                            lines.append(f"  {b_col}│{NC}\033[48;2;70;70;70m{WHITE}{ip}{NC}{b_col}│{NC}")
+                        # The selection bar follows the active theme instead of a
+                        # fixed grey (console) or reverse video (Liquid Glass).
+                        sel_bg, sel_fg = _selection_bar_ansi(self.visualizer.theme)
+                        lines.append(f"  {b_col}│{NC}{sel_bg}{sel_fg}{ip}{NC}{b_col}│{NC}")
                     elif act: lines.append(f"  {b_col}│{NC}{bold_s}{playlist_text_col}{ip}{NC}{b_col}│{NC}")
                     elif in_q: lines.append(f"  {b_col}│{NC}{bold_s}{playlist_text_col}{ip}{NC}{b_col}│{NC}")
                     else: lines.append(f"  {b_col}│{NC}{playlist_text_col}{ip}{NC}{b_col}│{NC}")
-            list_footer = f"── ↑/↓: Scroll • Enter: Play • [1] Mix • [2] Music • [3] Favorites • [H] Mark • Q: Queue • D: Clear • G: {g_key} • /: Search " if self.mode == "MUSIC" else f"── ↑/↓: Scroll  •  Enter: Play  •  [1] Mix Archive  •  [2] Music  •  [3] Favorites  •  [H] Mark  •  Q: Queue  •  D: Clear  •  G: {g_key}  •  O: Open  •  T: Tracklist "
+            if self.mode == "FAVORITES":
+                list_footer = "── ↑/↓: Scroll  •  Enter: Play  •  [J]: Export DJ Set  •  [H]: Mark  •  [D]: Clear  •  [1]: Mix Archive  •  [2]: Music  •  Q: Queue  •  /: Search "
+            elif self.mode == "MUSIC":
+                list_footer = f"── ↑/↓: Scroll • Enter: Play • [1] Mix • [2] Music • [3] Favorites • [H] Mark • Q: Queue • D: Clear • G: {g_key} • /: Search "
+            else:
+                list_footer = f"── ↑/↓: Scroll  •  Enter: Play  •  [1] Mix Archive  •  [2] Music  •  [3] Favorites  •  [H] Mark  •  Q: Queue  •  D: Clear  •  G: {g_key}  •  O: Open  •  T: Tracklist "
             lines.append(_boxed_rule("└", list_footer, "┘", iw, b_col, text_col))
+            if self.mode == "FAVORITES":
+                # Clickable "Export DJ Set" label on the list footer, when the
+                # clipped footer still shows it. SGR mouse columns are 1-based.
+                label = "[J]: Export DJ Set"
+                label_at = list_footer.find(label)
+                if label_at >= 0 and label_at + len(label) <= iw:
+                    start = 4 + label_at
+                    self._fav_export_button = (len(lines), start, start + len(label) - 1)
+                else:
+                    self._fav_export_button = (0, 0, 0)
 
         # One blank row keeps the Vol footer off the playlist edge.
         lines.append("")
@@ -5763,9 +7189,9 @@ class TerminalPlayerUI:
             ])
         else:
             lines.append(_fit_text_line([
-                f"  {hint_col}[3] Favorites  [H] Mark Fav  [1] Mix Archive  [2] Music  [D] Clear Playlist  [Space] Play/Pause  [R] Record WAV  [M] Mini Mode  [L] Liquid Glass  [Z] MP Liquid Visualizer  [Q] Queue  [G] {g_key}  [+/-] Pitch ±1% (±20% max)  [0] Pitch Reset  [v/V] Vol  [u] Mute  [s] Shuffle  [y] Repeat  [n/p] Next/Prev  [a] Audio/BT  [O] Open  [T] Tracklist  [w] Export  [F] Files  [E] Equalizer HUD  [e] Vis  [b/Esc] Exit{NC}",
-                f"  {hint_col}[3] Favorites  [H] Mark  [1] Mix Archive  [2] Music  [D] Clear  Space Play  R Rec  M Mini  L Glass  Q Queue  G {g_key}  +/- Pitch  0 Reset  v/V Vol  u Mute  s Shuf  y Rep  n/p Skip  O Open  T List  E EQ  b/Esc Exit{NC}",
-                f"  {hint_col}[3] Fav  [H] Mark  [1] Mix  [2] Music  [D] Clear  Space Play  R Rec  M Mini  Q Queue  G {g_key}  v/V Vol  u Mute  s Shuf  y Rep  n/p Skip  E EQ  b/Esc Exit{NC}"
+                f"  {hint_col}[3] Favorites  [H] Mark Fav  [1] Mix Archive  [2] Music  [D] Clear Playlist  [J] Export DJ Set  [Space] Play/Pause  [R] Record WAV  [M] Mini Mode  [L] Liquid Glass  [Z] MP Liquid Visualizer  [Q] Queue  [G] {g_key}  [+/-] Pitch ±1% (±20% max)  [0] Pitch Reset  [v/V] Vol  [u] Mute  [s] Shuffle  [y] Repeat  [n/p] Next/Prev  [a] Audio/BT  [O] Open  [T] Tracklist  [w] Export  [F] Files  [E] Equalizer HUD  [e] Vis  [b/Esc] Exit{NC}",
+                f"  {hint_col}[3] Favorites  [H] Mark  [1] Mix Archive  [2] Music  [D] Clear  [J] Export DJ Set  Space Play  R Rec  M Mini  L Glass  Q Queue  G {g_key}  +/- Pitch  0 Reset  v/V Vol  u Mute  s Shuf  y Rep  n/p Skip  O Open  T List  E EQ  b/Esc Exit{NC}",
+                f"  {hint_col}[3] Fav  [H] Mark  [1] Mix  [2] Music  [D] Clear  [J] Export DJ Set  Space Play  R Rec  M Mini  Q Queue  G {g_key}  v/V Vol  u Mute  s Shuf  y Rep  n/p Skip  E EQ  b/Esc Exit{NC}"
             ], max(20, w - 1)))
         if is_lg:
             lines = [_strip_bold_ansi(l) for l in lines]
@@ -5814,7 +7240,10 @@ class TerminalPlayerUI:
         lines.append(f"  🔊 \033[38;2;0;229;255m{vol}{NC} │ 🎚 {p_str} │ 🎛 {bold_s}{c2}{self.visualizer.get_style_display_name()[:16]}{NC} │ 🎨 {c1}{self.visualizer.get_theme_display_name()[:14]}{NC}")
         lines.extend(self.visualizer.render(st, width=iw + 4, height=(3 if h >= 14 else 2)))
         self._append_player_buttons(lines, max(20, w - 1))
-        if t_now < self.notification_time and self.notification_msg:
+        prompt_line = self._favorites_prompt_line()
+        if prompt_line:
+            lines.append(_fit_text_line([prompt_line], max(20, w - 1)))
+        elif t_now < self.notification_time and self.notification_msg:
             lines.append(f"  {bold_s}\033[38;2;0;255;127m📂 {self.notification_msg}{NC}")
         else:
             g_early = f"\033[38;2;0;229;255m[G]{NC} {text_col}{g_key}{NC}  " if is_lg else ""
@@ -5844,7 +7273,9 @@ class TerminalPlayerUI:
         state = st.get("state", "stopped")
         badge = f"{bold_s}\033[38;2;0;255;127m▶{NC}" if state == "playing" else (f"{bold_s}\033[38;2;255;191;0m⏸{NC}" if state == "paused" else f"{bold_s}\033[38;2;255;64;64m⏹{NC}")
         cs, lv = self.visualizer.style, np.array(st.get("levels", [0.0] * 24))
-        if cs == "stream_of_frequency_eq":
+        if cs in ("rainbow_mandala_eq", "rainbow_wormhole_eq", "rainbow_aurora_eq"):
+            m_str = self.visualizer._fx_micro_meter(cs, t_now, lv)
+        elif cs == "stream_of_frequency_eq":
             p_chars = []
             for i in range(14):
                 v = float(lv[i % len(lv)]) if len(lv) else 0.0
@@ -5998,6 +7429,8 @@ def main():
         (("--play-latest",), dict(action="store_true")), (("--get-latest-mix",), dict(action="store_true")),
         (("--list-mixes",), dict(action="store_true")), (("--open-file-manager", "-f"), dict(action="store_true")),
         (("--tracklist", "-t"), dict(action="store_true")), (("--export-playlist", "-e"), dict(nargs="?", const="default")),
+        (("--tracklist-export",), dict(type=str, choices=("html", "text", "txt"), default=None,
+                                       help="Export the tracklist of the selected mix to HTML or TEXT in TRACKLIST_EXPORTS")),
         (("--style", "--eq"), dict(type=str, choices=EqualizerVisualizer.STYLES)), (("--theme",), dict(type=str, choices=EqualizerVisualizer.THEMES)),
         (("--cmd",), dict(type=str)), (("--music-mode",), dict(action="store_true")), (("--mix-archive-mode",), dict(action="store_true")),
         (("--music-folder",), dict(type=str, default="ALL")), (("--playlist",), dict(type=str, default="")),
@@ -6052,7 +7485,7 @@ def main():
             print("✔ Routed system audio to Bluetooth" if BluetoothAudioRouter().route_to_bluetooth() else "✖ Failed to route to Bluetooth")
         sys.exit(0)
 
-    if args.open_file_manager or args.tracklist:
+    if args.open_file_manager or args.tracklist or args.tracklist_export:
         tp = (st.get("data", {}).get("path") if (daemon_running and (st := send_ipc_command("status"))) else None)
         if not tp or not os.path.exists(tp):
             if latest := MixArchiveScanner(base_dir).get_latest_mix(): tp = latest["path"]
@@ -6062,6 +7495,14 @@ def main():
             print(f"✔ Opened in file manager: {target}" if ok else "✖ Failed to open file manager")
             sys.exit(0 if ok else 1)
         tl = find_tracklist_for_mix(tp) if tp else None
+        if args.tracklist_export:
+            if tl and os.path.isfile(tl):
+                ok, res = export_tracklist_file(tl, args.tracklist_export, base_dir=base_dir)
+                print(f"✔ Exported tracklist ({args.tracklist_export}): {res}" if ok else f"✖ Failed to export tracklist: {res}",
+                      file=sys.stdout if ok else sys.stderr)
+                sys.exit(0 if ok else 1)
+            print("✖ Tracklist not found" if tp else "✖ No mix available", file=sys.stderr)
+            sys.exit(1)
         if tl and os.path.isfile(tl) and open_tracklist_window(tl, tp, theme=args.theme): print(f"✔ Opened tracklist: {tl}"); sys.exit(0)
         print("✖ Tracklist not found" if tp else "✖ No mix available", file=sys.stderr); sys.exit(1)
 

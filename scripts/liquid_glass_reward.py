@@ -7,7 +7,7 @@ When a user runs MP Mix Manager or MP Audio Player for the very first time:
    and MP Liquid Visualizer.
 2. Sets the Liquid Glass Audio Player as the Default Audio Player in config.
 3. Displays the welcome installer message for 0.5.0 (Sensorium) - [Stable Release]
-   from MPlanetarian: features added since 0.4.2, five tips, a Mix Archive and
+   from MPlanetarian: features added since 0.4.3, five tips, a Mix Archive and
    Music Folder quick start, and a thank-you.
 4. Marks the first-run reward as completed in ~/.config/mix-manager/.liquid_glass_welcomed.
 """

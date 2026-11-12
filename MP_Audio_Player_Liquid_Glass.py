@@ -13,12 +13,20 @@ from liquid_glass_font import default_liquid_glass_font  # noqa: E402
 from liquid_glass_opengl import glass_foreground_rgb  # noqa: E402
 from liquid_glass_vulkan import LiquidGlassRenderer, NVIDIA_VENDOR_ID, read_player_theme  # noqa: E402
 from liquid_visualizer_session import stop_companion_playback, stop_companion_visualizer  # noqa: E402
+try:  # The four-window cap ships beside the host; a lone copy still runs.
+    from mp_instance_limit import host_allowed  # noqa: E402
+except ImportError:
+    def host_allowed(role):  # type: ignore[misc]
+        return True
 
 COLS, ROWS = 120, 40
 # Used when Hack is not installed. Linux uses Hack 11 when that family is present.
 DEFAULT_FONT = "Monospace 11"
 CONFIG_DIR = Path.home() / ".config" / "mix-manager"
 FONT_CONFIG_FILE = CONFIG_DIR / "liquid_glass_font"
+# The tracklist viewer draws its own viewport, but VTE still needs a scrollback
+# buffer so wheel and scrollbar events are delivered to the child terminal.
+TRACKLIST_SCROLLBACK = 2000
 IS_WIN = sys.platform == "win32"
 
 RECOMMENDED_FONTS = [
@@ -395,6 +403,30 @@ class GlassHost:
         from liquid_player_visualizer import publish_liquid_player_window_size
         publish_liquid_player_window_size(width_i, height_i)
 
+    def _publish_player_window_geometry(self):
+        """Publish the player's position and size for the bonded visualizer.
+
+        Mini and Micro resize the same window, so their geometry is published
+        as well. Without it the visualizer kept the Normal geometry and came
+        away from the player as soon as M changed the size.
+
+        While a resize is still being applied, the size the host asked for is
+        published instead of the half-applied one, so the visualizer moves
+        straight to the new mode instead of stepping through it.
+        """
+        if self.mode in ("MANAGER", "TRACKLIST") or not sys.platform.startswith("linux") or self.renderer is None:
+            return
+        try:
+            x, y = self.renderer.window_pos()
+            width, height = self.renderer.window_size()
+            target = getattr(self, "_window_target", None)
+            if target and time.monotonic() < getattr(self, "_window_target_until", 0.0):
+                width, height = target
+            from liquid_player_visualizer import publish_liquid_player_window_geometry
+            publish_liquid_player_window_geometry(x, y, width, height)
+        except Exception:
+            pass
+
     def _sync_player_window(self):
         """Keep the fitted size if the window manager has not applied it yet."""
         if self.mode == "TRACKLIST" or self.renderer is None:
@@ -431,8 +463,12 @@ class GlassHost:
         else:
             base_t = "MP Audio Player"
         title = f"{base_t} (Liquid Glass{' - Vulkan' if IS_WIN else ''})"
+        # The MP Visualizer background is drawn by the host on both backends.
+        # The Manager GUI and the tracklist viewer keep the plain glass.
+        allow_visualizer = self.mode not in ("MANAGER", "TRACKLIST") and not getattr(self, "manager", False)
         if IS_WIN:
             self.renderer = LiquidGlassRenderer(iw, ih, title)
+            self.renderer.allow_player_visualizer = allow_visualizer
             try:
                 return self._run_windows()
             finally:
@@ -441,6 +477,7 @@ class GlassHost:
         self.glib = glib
         gtk.init([])
         self.renderer = LiquidGlassRenderer(iw, ih, title)
+        self.renderer.allow_player_visualizer = allow_visualizer
         try:
             return self._run_window(vte, glib)
         finally:
@@ -552,7 +589,9 @@ class GlassHost:
         term = vte.Terminal()
         term.set_audible_bell(False)
         if hasattr(term, "set_scrollback_lines"):
-            term.set_scrollback_lines(0)
+            # Tracklist mode draws its own viewport, but VTE still needs a scrollback
+            # buffer so wheel and scrollbar input reaches the child process.
+            term.set_scrollback_lines(TRACKLIST_SCROLLBACK if self.mode == "TRACKLIST" else 0)
         window.add(term)
         self._clear_terminal_background(window, term)
         window.show_all()
@@ -604,6 +643,7 @@ class GlassHost:
                         self._apply_glass_foreground(self.terminal, theme)
             self._follow_child_ui_size()
             self._sync_player_window()
+            self._publish_player_window_geometry()
             self._sync_panels()
             draw(theme)
             was_down, dragging, origin, press_screen = self._track_drag(was_down, dragging, origin, press_screen)
@@ -758,10 +798,23 @@ def ensure_random_visualizer_started() -> bool:
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         kw = {"creationflags": 0x00000208} if IS_WIN else {"start_new_session": True}
         with open(CONFIG_DIR / "liquid_visualizer.log", "a") as f:
-            subprocess.Popen([sys.executable, str(vis_script), "--preset", "random"], cwd=str(ROOT), stdin=subprocess.DEVNULL, stdout=f, stderr=f, **kw)
+            subprocess.Popen([sys.executable, str(vis_script), "--preset", "random", "--backend", "vulkan"], cwd=str(ROOT), stdin=subprocess.DEVNULL, stdout=f, stderr=f, **kw)
         return True
     except Exception:
         return False
+
+
+def _visualizer_env() -> dict:
+    """Env for a spawned visualizer.
+
+    _import_gtk() pins GDK_BACKEND=x11 and this module pins PYOPENGL_PLATFORM to
+    the X11 GLX platform so the glass window can be parented by XID. The spawned
+    visualizer uses GLFW with its own context, so inheriting either makes it die
+    with "Attempt to retrieve context when no valid context" (plus
+    "libdecor-gtk-WARNING: Failed to initialize GTK") and no window appears.
+    """
+    return {k: v for k, v in os.environ.items()
+            if k not in ("GDK_BACKEND", "PYOPENGL_PLATFORM")}
 
 
 def spawn_new_visualizer() -> bool:
@@ -771,8 +824,10 @@ def spawn_new_visualizer() -> bool:
             return False
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         kw = {"creationflags": 0x00000208} if IS_WIN else {"start_new_session": True}
+        if not IS_WIN:
+            kw["env"] = _visualizer_env()
         with open(CONFIG_DIR / "liquid_visualizer.log", "a") as f:
-            subprocess.Popen([sys.executable, str(vis_script), "--preset", "random"], cwd=str(ROOT), stdin=subprocess.DEVNULL, stdout=f, stderr=f, **kw)
+            subprocess.Popen([sys.executable, str(vis_script), "--preset", "random", "--backend", "vulkan"], cwd=str(ROOT), stdin=subprocess.DEVNULL, stdout=f, stderr=f, **kw)
         return True
     except Exception:
         return False
@@ -814,6 +869,17 @@ def main(argv):
             return 0
 
     player_gui = not embed and not opts["tracklist"] and "--self-test" not in argv
+    # MP Gui and MP Liquid Player stop at four windows. The tracklist viewer,
+    # the embed check, and helper flags are not counted.
+    if player_gui:
+        counted_role = "gui" if opts.get("manager") else "player"
+        if not host_allowed(counted_role):
+            print(
+                f"{'MP Gui' if opts.get('manager') else 'MP Liquid Player'} is already open 4 times. "
+                "Close a window first (4 is the maximum).",
+                file=sys.stderr,
+            )
+            return 1
     if player_gui and "--no-visualizer" not in argv:
         ensure_random_visualizer_started()
 

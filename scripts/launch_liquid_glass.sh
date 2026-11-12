@@ -48,6 +48,8 @@ CONFIG_FILE="$HOME/.config/mix-manager/config.env"
 [ ! -f "$CONFIG_FILE" ] && CONFIG_FILE="$BASE_DIR/config.env"
 
 TARGET_PY=""
+# Keep the standalone visualizer on the same GPU path as this player host.
+VIS_BACKEND="auto"
 
 # macOS check
 if [ "$(uname -s)" = "Darwin" ]; then
@@ -69,6 +71,8 @@ if [ -z "$TARGET_PY" ]; then
         VAL=$(grep -E "^LIQUID_GLASS_BACKEND=" "$CONFIG_FILE" 2>/dev/null | cut -d'=' -f2- | tr -d '"'\'' ')
         [ -n "$VAL" ] && BACKEND="$(echo "$VAL" | tr '[:upper:]' '[:lower:]')"
     fi
+
+    VIS_BACKEND="$BACKEND"
 
     if [ "$BACKEND" = "vulkan" ]; then
         TARGET_PY="$BASE_DIR/MP_Audio_Player_Liquid_Glass.py"
@@ -104,8 +108,28 @@ fi
 #    python3 "$BASE_DIR/MP_Audio_Player.py" --vol 100 2>/dev/null || true
 #fi
 
+# Pick the interpreter that can actually build the GTK window. Homebrew's
+# python3 is first on PATH but has no PyGObject, which killed every MP
+# shortcut with "No module named 'gi'".
+PYTHON_BIN=""
+_mp_resolver="$BASE_DIR/scripts/resolve_mp_python.sh"
+[ ! -f "$_mp_resolver" ] && _mp_resolver="$SCRIPT_DIR/resolve_mp_python.sh"
+if [ -f "$_mp_resolver" ]; then
+    # shellcheck disable=SC1090
+    source "$_mp_resolver"
+    PYTHON_BIN="$(mp_gui_python_bin 2>/dev/null || true)"
+fi
+unset _mp_resolver
+if [ -z "$PYTHON_BIN" ]; then
+    if command -v python3 >/dev/null 2>&1; then
+        PYTHON_BIN="python3"
+    elif command -v python >/dev/null 2>&1; then
+        PYTHON_BIN="python"
+    fi
+fi
+
 # If a previous window opened on the Hisense, bring it back to the main screen.
-python3 - "$BASE_DIR" << 'PY' || true
+"$PYTHON_BIN" - "$BASE_DIR" << 'PY' || true
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(sys.argv[1]) / "scripts"))
@@ -131,39 +155,27 @@ do
 done
 unset _mp_tray
 
-# Single instance check: if MP Liquid is already running, activate window and exit.
-# The Mix Manager GUI is this program with --manager and is not the player.
-_liquid_player_already_open=0
-_lg_line=""
-if [ "$(uname -s)" = "Darwin" ]; then
-    _lg_pgrep() { pgrep -fl 'MP_Audio_Player_Liquid_Glas[s]' 2>/dev/null || true; }
-else
-    _lg_pgrep() { pgrep -af 'MP_Audio_Player_Liquid_Glas[s]' 2>/dev/null || true; }
-fi
-while IFS= read -r _lg_line; do
-    case "$_lg_line" in
-        *--manager*) continue ;;
-        *MP_Audio_Player_Liquid_Glass*) _liquid_player_already_open=1; break ;;
-    esac
-done < <(_lg_pgrep)
-if [ "$_liquid_player_already_open" -eq 1 ]; then
-    if [ "$(uname -s)" = "Darwin" ] && [ -f "$BASE_DIR/scripts/mp_gui_focus.sh" ]; then
-        # shellcheck disable=SC1091
-        source "$BASE_DIR/scripts/mp_gui_focus.sh"
-        mp_player_raise_host || true
-    elif command -v wmctrl >/dev/null 2>&1; then
-        wmctrl -a "MP Audio Player (Liquid Glass" 2>/dev/null || true
+# Four MP Liquid Player windows at most. The claim below is atomic, so two
+# shortcuts pressed together cannot both take the last slot. Each launch
+# opens another window until the fourth; only a fifth focuses a window.
+_mp_limit_sh="$BASE_DIR/scripts/mp_instance_limit.sh"
+[ ! -f "$_mp_limit_sh" ] && _mp_limit_sh="$SCRIPT_DIR/mp_instance_limit.sh"
+if [ -f "$_mp_limit_sh" ]; then
+    # shellcheck disable=SC1090
+    source "$_mp_limit_sh"
+    if ! mp_instance_claim player; then
+        mp_instance_focus player || true
+        mp_instance_notify_limit player
+        exit 0
     fi
-    exit 0
 fi
-unset _lg_line _liquid_player_already_open
 
 # Start the companion visualizer. The Liquid Player closes this window on exit.
 if ! pgrep -f "MP_Liquid_Visualizer|mp_liquid_visualizer_vulkan" >/dev/null 2>&1; then
     VIS_PY="$BASE_DIR/MP_Liquid_Visualizer.py"
     [ ! -f "$VIS_PY" ] && VIS_PY="$BASE_DIR/scripts/mp_liquid_visualizer_vulkan.py"
     if [ -f "$VIS_PY" ]; then
-        nohup python3 "$VIS_PY" --preset random >> "$HOME/.config/mix-manager/liquid_visualizer.log" 2>&1 &
+        nohup "$PYTHON_BIN" "$VIS_PY" --preset random --backend "$VIS_BACKEND" >> "$HOME/.config/mix-manager/liquid_visualizer.log" 2>&1 &
     fi
 fi
 
@@ -174,7 +186,9 @@ if [ -f "$_VTE_BASE/girepository-1.0/Vte-2.91.typelib" ]; then
     export GI_TYPELIB_PATH="${_VTE_BASE}/girepository-1.0${GI_TYPELIB_PATH:+:$GI_TYPELIB_PATH}"
 fi
 cd "$BASE_DIR" || exit 1
-PYTHON_BIN="python3"
+if [ -z "$PYTHON_BIN" ]; then
+    PYTHON_BIN="python3"
+fi
 if [ "$(uname -s)" = "Darwin" ] && [ -f "$BASE_DIR/scripts/ensure_mp_python_env.sh" ]; then
     if _mp_env_python="$(bash "$BASE_DIR/scripts/ensure_mp_python_env.sh")"; then
         PYTHON_BIN="$_mp_env_python"

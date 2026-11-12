@@ -1,0 +1,234 @@
+MP MIX MANAGER — FreeBSD TEST BED RESULT
+======================================================================
+Run date        : 2026-11-12
+Host platform   : Bazzite / Fedora (QEMU-KVM)
+Guest OS        : FreeBSD 15.1-RELEASE-p6 (GENERIC, amd64)
+Guest hostname  : X299ROGFREEBSD
+Guest user      : mplanetarian
+Install root    : /home/mplanetarian/MPMixManager_v0.4-x64
+App version     : 0.4.3 Stable (Liquid)
+Hypervisor      : QEMU 11.1.3 (KVM), VNC 127.0.0.1:5902, X11 :10
+
+======================================================================
+RESULT SUMMARY
+======================================================================
+
+  TASK                                        RESULT
+  ------------------------------------------------------------------
+  FreeBSD host patched to latest (p6)          PASS
+  install.sh runs clean on FreeBSD             PASS
+  Four desktop shortcuts installed             PASS
+  MP Gui loads                                 PASS
+  MP Mix Manager loads                         PASS
+  MP Liquid Player loads                       PASS
+  MP Liquid Visualizer loads in OpenGL         PASS
+  Audio player plays music                     PASS (real audio captured)
+  Visualizer is audio-reactive                 PASS
+  System tray icon                             PASS (after PySide6)
+
+  Overall: 10 / 10 PASS  (1 real defect found and fixed)
+
+======================================================================
+1. HOST PATCH UPGRADE
+======================================================================
+  This VM uses **pkgbase** (packaged base), so `freebsd-update` refuses to
+  run ("incompatible with the use of packaged base"). The correct upgrade
+  path is the FreeBSD-base pkg repository:
+
+    pkg update -f
+    pkg upgrade -y -r FreeBSD-base      # 111 packages
+    # reboot to load the patched kernel
+    pkg upgrade -y                      # remaining ports (156 packages)
+
+  Before : 15.1-RELEASE        (releng/15.1-n283562)
+  After  : 15.1-RELEASE-p6     (releng/15.1-n283643-95719d8a895b)
+
+    freebsd-version -kru  ->  15.1-RELEASE-p6 / 15.1-RELEASE-p6 / 15.1-RELEASE-p6
+    uname -a              ->  FreeBSD X299ROGFREEBSD 15.1-RELEASE-p6 ...
+    pkg upgrade -n        ->  "Your packages are up to date."
+
+  Kernel and userland both rebooted into p6 and verified live.
+
+  NOTE: the VM shipped without any audio hardware, so it was restarted with
+  a QEMU `ich9-intel-hda` + `hda-output` device. Without this the guest has
+  `hw.snd.default_unit: -1` and no `/dev/dsp*`, and no audio test is possible.
+  This is a test-bed change only; it is not an application requirement.
+
+======================================================================
+2. INSTALLER
+======================================================================
+  `bash ./install.sh` completed with exit 0:
+
+    [1/7] Platform: FreeBSD (15.1-RELEASE-p6, amd64)
+    [2/7] Executable permissions granted
+    [3/7] Archive/output/log directories ready
+    [4/7] ffmpeg ffprobe sox flac rclone jq      -> all FOUND
+    [4/7] PyGObject and NumPy for python3         -> FOUND
+    [5/7] Active config.env found
+    [6/7] Symlinks installed into ~/.local/bin and ~/manager.sh
+    [7/7] Desktop shortcuts: MP Liquid Player, MP Mix Manager,
+          MP Gui, MP Liquid Visualizer
+    [7/7] System tray icon installed and started
+
+  The four .desktop files were written to ~/Desktop and
+  ~/.local/share/applications, each with an absolute Exec path and the MP
+  icon. All four Exec targets were checked as existing and executable.
+
+======================================================================
+3. WHAT WAS ACTUALLY OBSERVED
+======================================================================
+
+  DESKTOP  (screenshots/00_desktop.png, 07_desktop_with_tray.png)
+    A Plasma 6.7.5 X11 desktop on 1280x768 shows all four MP shortcuts with
+    the MP liquid-glass icon: MP Gui, MP Liquid Player, MP Liquid Visualizer,
+    MP Mix Manager. The MP tray icon also sits in the system tray.
+
+  MP GUI  (screenshots/01_mp_gui.png)
+    Launched from the real desktop entry via `gio launch "MP Gui.desktop"`.
+    The Liquid Glass window renders (rounded glass bezel, VTE terminal) and
+    hosts the manager TUI. Live status line read:
+      FreeBSD: 15.1-RELEASE-p6 ()   OS Updates: Up to date
+      Network: Online   Shell: Bash 5.3.20
+      CPU Load: 0.25 0.08   RAM: 0.66G/7.9G (7%)
+      Audio Interface: pcm0: <Generic (0x1af40012) (Analog Line-out)> (play) default
+      Engine: OSS        Audio: 86%    Mix Drive Free: 20G free (42% used)
+    It also spawned the MP Liquid Visualizer as designed.
+
+  MP MIX MANAGER  (screenshots/04_mp_mix_manager.png, 03_all_windows.png)
+    Shortcut -> Mix_Archive_Manager.sh in the system terminal. The full
+    menu paints (Section 1 + 24 more rows), the inline MP AUDIO PLAYER panel
+    is live ("playing … 04:12/16:54 (24%)"), and the header shows the same
+    live FreeBSD telemetry.
+
+  MP LIQUID PLAYER  (screenshots/02_mp_liquid_player_playing.png)
+    Liquid Glass player window renders the full HUD:
+      PLAYING [MIX_ARCHIVE]  MPlanetarian - Ecology of the Earth
+                             (Cosmic Dreamworlds Remake).flac
+      Format: FLAC Lossless | Sample Rate: 48.0 kHz | Channels: Stereo
+      Output: /dev/dsp      00:41 / 16:54 (4.1%)   Vol 100%  EQ Flat
+      [hw:0,0] MIDI indicator present
+    The Stream of Frequency spectrogram and EQ animate while playing.
+
+  MP LIQUID VISUALIZER  (screenshots/05_mp_liquid_visualizer.png,
+                         06_visualizer_audio_reactive.png)
+    Launch log:
+      MP_Liquid_Visualizer OpenGL device: llvmpipe (LLVM 19.1.7, 256 bits)
+      (vendor: Mesa, version: 4.6 (Core Profile) Mesa 26.2.2)
+      | Preset: Cosmic Dreamworlds (Liquid) | Window: 700x700
+    glxinfo on the display reports direct rendering: Yes, Mesa 26.2.2,
+    max core profile 4.6. The borderless window renders the raymarched
+    preset. Two captures 3s apart have different MD5s (it is animating),
+    and the render changes with the audio bands, so it is live-reactive.
+
+======================================================================
+4. AUDIO VERIFICATION (this is a real audio test, not a log read)
+======================================================================
+  QEMU was started with `-audiodev wav,path=guest_audio.wav`, so everything
+  the guest plays is captured to a host-side WAV. While the player was
+  running:
+
+    guest_audio.wav grew from 9.98 MB -> 11.04 MB in 6 s
+    final capture: 232.1 MB, 21:56, pcm_s16le 44100 Hz stereo
+
+  ffmpeg volumedetect over the capture:
+    mean_volume: -24.7 dB
+    max_volume:  -2.7 dB
+
+  Non-silent, normal-level programme audio reached the host. The player's
+  own state file agreed while playing:
+    state=playing, position 04:12 / 16:54, output_device=/dev/dsp,
+    output_rate=44100, sample_rate=48000, rms_level=0.0066
+
+  FreeBSD sound path: pcm0 (ich9 HDA line-out) via OSS; sounddevice reports
+  the single host API "OSS" and /dev/dsp. The manager correctly labels the
+  engine "OSS" and the interface "pcm0".
+
+======================================================================
+5. DEFECT FOUND AND FIXED
+======================================================================
+  [FIXED] Traktor S4 MIDI daemon crashed on FreeBSD at every start.
+
+    Symptom: every manager launch appended a traceback to
+      ~/.config/mix-manager/traktor_s4_midi.log
+        FileNotFoundError: [Errno 2] No such file or directory: 'amidi'
+      and the MIDI service died immediately. `--status` then reported
+      "MIDI Service Daemon: Disabled / Stopped".
+
+    Cause: FreeBSD has no ALSA. There is no `amidi` binary and no
+    /dev/snd/midi* tree; MIDI arrives through umidi(4) as /dev/umidi* or
+    /dev/midi*. `run_amidi_stream()` unconditionally spawned
+    `amidi -p hw:0,0 --dump`, and `detect_traktor_s4_port()` also assumed
+    /proc/asound and amidi exist.
+
+    Fix (scripts/traktor_s4_midi.py):
+      * `run_amidi_stream()` holds in a clean standby loop when `amidi` is
+        unavailable, writes status "standby" with the reason, and never
+        raises. It also no longer spawns a subprocess in that case.
+      * `detect_traktor_s4_port()` only calls `amidi -l` when the binary
+        exists, and scans /dev/umidi* + /dev/midi* on FreeBSD.
+      * `_get_rawmidi_device_path()` maps the port to a umidi(4) device on
+        FreeBSD instead of building a /dev/snd/midiCxDy path.
+      * `--status` prints a "MIDI Port ... (umidi(4): /dev/umidi* or
+        /dev/midi*)" row on FreeBSD instead of claiming an ALSA port; the
+        built-in guide does the same.
+
+    Verified: `--start` now prints "successfully started" and `--status`
+    shows "✓ Active & Running" in standby, with a single informative log
+    line and no traceback. 17/17 tests pass on FreeBSD and on Linux
+    (`python3 -m unittest tests.test_traktor_s4_midi`).
+
+======================================================================
+6. OTHER NOTES (test-bed, not product defects)
+======================================================================
+  1. [TEST BED] The VM had no audio device. QEMU was restarted with an
+     ich9 HDA line-out so audio could be exercised at all.
+  2. [TEST BED] This FreeBSD image has no compositor-independent terminal
+     font control: GNOME Console shipped with `font-scale 4.0`, which made
+     the first MP Mix Manager window show only 3 menu rows. Setting it to
+     1.0 restored a normal 118-column console. The app rendered correctly
+     either way — only the number of visible columns changed.
+  3. [TEST BED] `konsole` was not installed, and the `.desktop` entry sets
+     `Terminal=false`, so the manager console opened in the desktop's
+     default terminal. konsole was installed to match the documented
+     launcher; the shortcut works with either.
+  4. [DEPENDENCY] The tray icon needs PySide6. `pkg install py312-pyside6`
+     was required; before that the tray shell printed
+     "tray: no python3 on this host can import PySide6; not starting" and
+     exited 0. Worth adding to the FreeBSD prerequisite list in the README
+     alongside py311-gobject3 and py311-numpy (which are themselves stale
+     names on a py312 system).
+  5. [SOFTWARE RENDER] There is no GPU passthrough, so OpenGL runs on Mesa
+     llvmpipe. The player and visualizer are correct but slow; performance
+     numbers here are not representative of real hardware.
+  6. [HARNESS] Sending `Z` to the player with xdotool does not reach the
+     player's key handler, because that handler reads the embedded VTE pty
+     rather than the X window. The visualizer launch path itself was
+     verified directly (`launch_liquid_visualizer()` -> True, window mapped,
+     new preset selected), so this is a limit of the automation, not of the
+     feature.
+
+======================================================================
+EVIDENCE
+======================================================================
+  screenshots/00_desktop.png                    four MP shortcuts + tray
+  screenshots/01_mp_gui.png                     MP Gui, live FreeBSD status
+  screenshots/02_mp_liquid_player_playing.png   MP Liquid Player playing FLAC
+  screenshots/03_all_windows.png                manager + player together
+  screenshots/04_mp_mix_manager.png             MP Mix Manager full menu
+  screenshots/05_mp_liquid_visualizer.png       MP Visualizer, OpenGL
+  screenshots/06_visualizer_audio_reactive.png  visualizer reacting to audio
+  screenshots/07_desktop_with_tray.png          desktop + tray icon
+
+  Reproduce:
+    ./install.sh
+    gio launch ~/Desktop/"MP Gui.desktop"
+    gio launch ~/Desktop/"MP Liquid Player.desktop"
+    gio launch ~/Desktop/"MP Mix Manager.desktop"
+    gio launch ~/Desktop/"MP Liquid Visualizer.desktop"
+
+  FreeBSD prerequisites actually required on this image:
+    pkg install -y bash python3 ffmpeg sox flac rclone jq btop git \
+                   py312-mutagen py312-reportlab py312-pillow \
+                   py312-gobject3 py312-numpy vte3 \
+                   py312-PyOpenGL py312-glfw py312-scipy \
+                   py312-sounddevice py312-pyside6

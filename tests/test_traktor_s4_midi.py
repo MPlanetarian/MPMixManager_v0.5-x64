@@ -17,6 +17,7 @@ import traktor_s4_midi
 from traktor_s4_midi import (
     TraktorS4MidiController,
     detect_traktor_s4_port,
+    freebsd_midi_devices,
     is_daemon_running,
     CONFIG_DIR,
     PID_FILE,
@@ -32,7 +33,11 @@ class TestTraktorS4MidiController(unittest.TestCase):
         detected, port, details = detect_traktor_s4_port()
         self.assertIsInstance(detected, bool)
         self.assertIsInstance(port, str)
-        self.assertIn("hw:", port)
+        if traktor_s4_midi.IS_FREEBSD:
+            # FreeBSD exposes MIDI through umidi(4) as a path, never ALSA "hw:".
+            self.assertTrue(port.startswith("/dev/") or port.startswith("hw:"))
+        else:
+            self.assertIn("hw:", port)
 
     def test_pitch_cc_scaling_center_deadband(self):
         # Center values must firmly snap to 0%
@@ -143,6 +148,41 @@ class TestTraktorS4MidiController(unittest.TestCase):
         desc, action = self.controller.process_midi_event(0x90, 32, 127)
         self.assertIn("Loop Recorder REC", action)
         mock_ipc.assert_called_with("toggle_record")
+
+
+class TestFreeBSDMidiFallback(unittest.TestCase):
+    """FreeBSD has no ALSA, no amidi and no /dev/snd tree.
+
+    The daemon used to die with FileNotFoundError: 'amidi' as soon as it
+    started on FreeBSD, because run_amidi_stream() always spawned amidi.
+    """
+
+    def test_freebsd_midi_devices_is_empty_off_freebsd(self):
+        if not traktor_s4_midi.IS_FREEBSD:
+            self.assertEqual(freebsd_midi_devices(), [])
+
+    def test_rawmidi_path_uses_umidi_on_freebsd(self):
+        if not traktor_s4_midi.IS_FREEBSD:
+            self.skipTest("FreeBSD-only path")
+        ctrl = TraktorS4MidiController(port="hw:0,0")
+        if ctrl.rawmidi_dev is not None:
+            self.assertTrue(ctrl.rawmidi_dev.startswith("/dev/"))
+            self.assertNotIn("/dev/snd/", ctrl.rawmidi_dev)
+
+    def test_amidi_stream_stands_by_without_amidi(self):
+        """No traceback, no subprocess, just a clean standby loop."""
+        ctrl = TraktorS4MidiController(port="hw:0,0")
+        ctrl.running = True
+        with patch("traktor_s4_midi.subprocess.Popen") as mock_popen, \
+             patch("traktor_s4_midi.shutil.which", return_value=None):
+            import threading
+            th = threading.Thread(target=ctrl.run_amidi_stream, daemon=True)
+            th.start()
+            time.sleep(0.3)
+            ctrl.running = False
+            th.join(timeout=3.0)
+        self.assertFalse(th.is_alive(), "run_amidi_stream should exit when stopped")
+        mock_popen.assert_not_called()
 
 
 if __name__ == "__main__":

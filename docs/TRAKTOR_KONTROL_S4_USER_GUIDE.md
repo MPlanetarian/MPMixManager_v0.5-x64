@@ -5,7 +5,7 @@
 
 ## 1. Overview & Supported Hardware
 
-In Version 0.4.0, MP Mix Archive Manager introduces direct hardware MIDI integration exclusively for the **Native Instruments Traktor Kontrol S4** via the ALSA hardware MIDI port (`hw:0,0` / `/dev/snd/midiC0D0`).
+In Version 0.4.3, MP Mix Archive Manager introduces direct hardware MIDI integration exclusively for the **Native Instruments Traktor Kontrol S4** via the ALSA hardware MIDI port (`hw:0,0` / `/dev/snd/midiC0D0`).
 
 With this feature enabled, you can control the built-in **MP Audio Player** directly from your physical DJ controller without touching the keyboard or mouse.
 
@@ -45,6 +45,23 @@ Dir Device    Name
 IO  hw:0,0    Traktor Kontrol S4
 ```
 The raw ALSA MIDI device node is located at `/dev/snd/midiC0D0`.
+
+### On FreeBSD there is no ALSA
+
+FreeBSD does not ship ALSA, `amidi` or `/dev/snd/*`. MIDI controllers arrive
+through the kernel `umidi(4)` driver and appear as `/dev/umidi*` (usually
+`/dev/umidi0.0`) or `/dev/midi*`. Verify the connection with:
+
+```bash
+ls /dev/umidi* /dev/midi*
+kldstat | grep umidi        # load it with: kldload umidi
+```
+
+The MIDI service still starts and stays in **standby** until a device appears,
+so the manager never fails to launch on FreeBSD when no controller is plugged
+in. Once a `/dev/umidi*` node exists, the daemon reads raw MIDI from it
+directly. The usual group for these nodes is `wheel`/`operator`-accessible via
+`/etc/devfs.rules`; add a rule if your user cannot open the device.
 
 ---
 

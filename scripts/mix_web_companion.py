@@ -14,8 +14,11 @@ import json
 import os
 import random
 import re
+import shutil
 import socket
+import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.error
@@ -598,6 +601,38 @@ CLI_THEME: Optional[str] = None
 WEB_THEME_FILE = Path.home() / ".config" / "mix-manager" / "web_companion_theme"
 _tracklist_cache: Dict[str, str] = {}
 
+# Every server launch gets a fresh id. A dashboard that sees it change knows
+# the companion was restarted and refreshes so the phone resumes the stream
+# without a manual reload. The tray also posts a notice to /api/announce just
+# before it stops the service, so phones see why they are reconnecting.
+INSTANCE_ID = f"{int(time.time())}-{os.getpid()}"
+_announce_message: Optional[str] = None
+_announce_at = 0.0
+_announce_lock = threading.Lock()
+ANNOUNCE_TTL_SECONDS = 45.0
+ANNOUNCE_MESSAGE_DEFAULT = "MP Audio Web Companion has been restarted"
+
+
+def set_announcement(message: str) -> Optional[Dict[str, Any]]:
+    """Queue a one-shot notice for every connected dashboard."""
+    text = (message or "").strip()
+    if not text:
+        return None
+    global _announce_message, _announce_at
+    with _announce_lock:
+        _announce_message = text
+        _announce_at = time.time()
+    return {"message": text, "instance": INSTANCE_ID}
+
+
+def current_announcement() -> Optional[Dict[str, Any]]:
+    with _announce_lock:
+        if not _announce_message:
+            return None
+        if (time.time() - _announce_at) > ANNOUNCE_TTL_SECONDS:
+            return None
+        return {"message": _announce_message, "at": round(_announce_at, 3)}
+
 
 def get_base_dir() -> Path:
     p = Path(__file__).resolve()
@@ -696,6 +731,51 @@ def get_local_ip() -> str:
 
 
 # ------------------------------------------------------------------------------
+# DESKTOP LAUNCH PAD (Linux)
+#
+# The dashboard runs as a user service, so the phone can be the only thing in
+# front of the user. These four buttons start the desktop suite, show whether
+# each app is already live, and close all four without stopping the tray icon
+# or this companion.
+# ------------------------------------------------------------------------------
+try:
+    import mp_suite_control as suite_control
+except ImportError:  # The companion is also importable from the repo root.
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import mp_suite_control as suite_control  # type: ignore[no-redef]
+    except ImportError:
+        suite_control = None  # type: ignore[assignment]
+
+
+def launch_pad_status() -> Dict[str, Any]:
+    if suite_control is None:
+        return {"supported": False, "apps": [], "tray_running": False}
+    try:
+        return suite_control.app_status()
+    except Exception as exc:
+        return {"supported": False, "apps": [], "tray_running": False, "detail": str(exc)}
+
+
+def launch_pad_action(role: str) -> Dict[str, Any]:
+    if suite_control is None:
+        return {"success": False, "action": "unsupported", "app": role}
+    try:
+        return suite_control.launch_app(role)
+    except Exception as exc:
+        return {"success": False, "action": "error", "app": role, "detail": str(exc)}
+
+
+def launch_pad_close_all() -> Dict[str, Any]:
+    if suite_control is None:
+        return {"success": False, "action": "unsupported", "remaining": []}
+    try:
+        return suite_control.close_all_apps()
+    except Exception as exc:
+        return {"success": False, "action": "error", "remaining": [], "detail": str(exc)}
+
+
+# ------------------------------------------------------------------------------
 # STREAMING SERVICE STATE
 #
 # This process is an HTTP streamer only. It deliberately contains no IPC to a
@@ -703,111 +783,451 @@ def get_local_ip() -> str:
 # ------------------------------------------------------------------------------
 CONFIG_DIR = Path.home() / ".config" / "mix-manager"
 
-AUDIO_EXTENSIONS = (".flac", ".wav", ".mp3", ".ogg", ".m4a", ".aac", ".aiff", ".wma")
-AUDIO_CONTENT_TYPES = {
-    ".flac": "audio/flac",
-    ".wav": "audio/wav",
-    ".mp3": "audio/mpeg",
-    ".m4a": "audio/mp4",
-    ".aac": "audio/aac",
-    ".ogg": "audio/ogg",
-    ".aiff": "audio/aiff",
-    ".wma": "audio/x-ms-wma",
-}
+try:
+    from audio_formats import AUDIO_EXTENSIONS, AUDIO_MIME_TYPES
+except ImportError:  # imported as scripts.mix_web_companion
+    from scripts.audio_formats import AUDIO_EXTENSIONS, AUDIO_MIME_TYPES
+AUDIO_CONTENT_TYPES = dict(AUDIO_MIME_TYPES)
 RESUME_FILE = CONFIG_DIR / "playback_resume.json"
 PLAYLIST_DIR = CONFIG_DIR / "playlists"
+MUSIC_FOLDERS_FILE = CONFIG_DIR / "music_folders.json"
+WEB_MODE_FILE = CONFIG_DIR / "web_companion_mode"
+
+# Same libraries the MP Audio Player switches between with [1], [2] and [3].
+LIBRARY_MODE_MIX = "MIX_ARCHIVE"
+LIBRARY_MODE_MUSIC = "MUSIC"
+LIBRARY_MODE_FAVORITES = "FAVORITES"
+MODE_LABELS = {
+    LIBRARY_MODE_MIX: "Mix Archive",
+    LIBRARY_MODE_MUSIC: "Music",
+    LIBRARY_MODE_FAVORITES: "Favorites",
+}
+# The Favorites playlist is shared with the MP Audio Player, which writes it on
+# every [H] mark, so the companion only ever reads it.
+FAVORITES_FILE = CONFIG_DIR / "favorites.json"
 
 _autoplay_done = threading.Event()
 _autoplay_result: Dict[str, Any] = {"status": "pending", "detail": ""}
 
+# The resolved stream queue is expensive to build for a large music library, so
+# it is cached per mode for a few seconds while the dashboard polls.
+QUEUE_CACHE_TTL = 10.0
+_queue_cache: Optional[Tuple[str, float, Tuple[str, ...]]] = None
+_queue_source_state: Dict[str, Any] = {"fallback": False, "detail": ""}
+# Resolving the queue can take seconds (a 51k-entry music playlist), and the
+# dashboard polls hard. Only one thread may scan; the rest wait and then read
+# the fresh cache instead of starting their own scan.
+_queue_build_lock = threading.Lock()
+
 
 # ------------------------------------------------------------------------------
-# MP ASSISTANT BRIDGE (MP Harmony Agent)
+# MP HARMONY ASSISTANT (the "MP Assistant" tab)
 #
-# The MP Harmony Agent listens on 127.0.0.1:11435, so a phone on the LAN cannot
-# reach it directly. Everything below proxies the agent's OpenAI-compatible API
-# through this server, which is already bound to 0.0.0.0. That keeps the phone
-# talking to one origin and one port, and keeps speech audio on the same path.
+# The voice agent listens on 127.0.0.1:11435, so a phone on the LAN cannot talk
+# to it directly. The dashboard therefore chats through this companion, which
+# proxies the OpenAI-compatible stream, the speech endpoint and the voice
+# switch. Nothing here opens a sound device: the phone plays the speech.
+#
+# The default voice is Stephen Hawking. The choice is only overridden when the
+# user types "/voice <name>" in the assistant prompt, which persists to both
+# this dashboard and ~/.harmony_voice (through the agent's /api/settings).
 # ------------------------------------------------------------------------------
-ASSISTANT_URL = os.environ.get("MP_ASSISTANT_URL", "http://127.0.0.1:11435").rstrip("/")
-ASSISTANT_TIMEOUT = float(os.environ.get("MP_ASSISTANT_TIMEOUT", "600"))
+HARMONY_AGENT_HOST = os.environ.get("HARMONY_AGENT_HOST", "127.0.0.1")
+HARMONY_DEFAULT_VOICE = "stephen_hawking_matrix"
+HARMONY_VOICE_FILE = Path.home() / ".harmony_voice"
+WEB_ASSISTANT_VOICE_FILE = CONFIG_DIR / "web_assistant_voice.json"
+_HARMONY_AGENT_PORT_ENV = os.environ.get("HARMONY_AGENT_PORT", "").strip()
+
+# Mirrors VOICES_MAP in MP_Harmony_Agent.py, so the picker and /voice list the
+# same ids the agent can synthesize.
+HARMONY_VOICES: Dict[str, str] = {
+    "stephen_hawking_matrix": "Stephen Hawking (Enters the Matrix) [Default]",
+    "morpheus": "Morpheus (The Matrix - Master)",
+    "morpheus_construct": "Morpheus (The Construct - 'What is real?')",
+    "morpheus_redpill": "Morpheus (Red Pill - 'Rabbit Hole')",
+    "morpheus_dojo": "Morpheus (Combat Dojo - 'Free your mind')",
+    "morpheus_system": "Morpheus (The System - 'Our enemy')",
+    "agent_smith": "Agent Smith (The Matrix)",
+    "neo": "Neo (The Matrix)",
+    "trinity": "Trinity (The Matrix)",
+    "oracle": "The Oracle (The Matrix)",
+    "zion": "Zion (Councillor Hamann)",
+}
+HARMONY_VOICE_ALIASES: Dict[str, str] = {
+    "smith": "agent_smith",
+    "hawking": "stephen_hawking_matrix",
+    "stephen_hawking": "stephen_hawking_matrix",
+    "stephen": "stephen_hawking_matrix",
+    "default": HARMONY_DEFAULT_VOICE,
+    "master": "morpheus",
+    "construct": "morpheus_construct",
+    "redpill": "morpheus_redpill",
+    "dojo": "morpheus_dojo",
+    "system": "morpheus_system",
+    "the_oracle": "oracle",
+    "hamann": "zion",
+}
+
+_HARMONY_STATUS_CACHE: Dict[str, Any] = {"at": 0.0, "payload": None}
+_HARMONY_STATUS_LOCK = threading.Lock()
+_HARMONY_STATUS_TTL = 4.0
+
+# Replies are replayed often (tap the speaker twice, rotate the phone). Keeping
+# the last few clips avoids re-synthesizing the same paragraph each time.
+_SPEECH_CACHE: Dict[Tuple[str, str, float], bytes] = {}
+_SPEECH_CACHE_LOCK = threading.Lock()
+_SPEECH_CACHE_MAX = 8
 
 
-def assistant_url() -> str:
-    """Agent base URL. Read per call so config.env edits apply without a restart."""
-    configured = os.environ.get("MP_ASSISTANT_URL") or _config_value("MP_ASSISTANT_URL", "")
-    return (configured or ASSISTANT_URL).rstrip("/")
+def harmony_agent_url() -> str:
+    return f"http://{HARMONY_AGENT_HOST}:{_harmony_agent_port()}"
 
 
-def assistant_enabled() -> bool:
-    """The tab is on unless the operator turns it off in config.env."""
-    return _env_flag("MP_ASSISTANT_ENABLED", True)
+def _harmony_agent_port() -> int:
+    """Resolve the agent port lazily; config.env is read after import."""
+    for candidate in (_HARMONY_AGENT_PORT_ENV, _config_value("HARMONY_AGENT_PORT", "")):
+        if str(candidate or "").strip().isdigit():
+            return int(str(candidate).strip())
+    return 11435
 
 
-def assistant_request(path: str, payload: Optional[Dict[str, Any]] = None,
-                      session_id: str = "", timeout: float = 5.0):
-    """Make a JSON request to the MP Harmony Agent. Returns (status, body)."""
-    url = assistant_url() + path
+def _harmony_request(path: str, payload: Optional[Dict[str, Any]] = None,
+                     timeout: float = 6.0, method: Optional[str] = None):
+    """Open a request against the Harmony agent. Callers own the response."""
+    url = harmony_agent_url() + path
     data = None
-    headers = {"Accept": "application/json"}
+    headers = {}
     if payload is not None:
         data = json.dumps(payload).encode("utf-8")
         headers["Content-Type"] = "application/json"
-    if session_id:
-        headers["X-Session-Id"] = session_id
-    req = urllib.request.Request(url, data=data, headers=headers,
-                                 method="POST" if data is not None else "GET")
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return resp.status, resp.read()
-    except urllib.error.HTTPError as err:
-        try:
-            return err.code, err.read()
-        except Exception:
-            return err.code, b""
-    except Exception as err:
-        return 0, json.dumps({"error": str(err)}).encode("utf-8")
+    request = urllib.request.Request(url, data=data, headers=headers,
+                                     method=method or ("POST" if data else "GET"))
+    return urllib.request.urlopen(request, timeout=timeout)
 
 
-def assistant_status() -> Dict[str, Any]:
-    """Health summary used by the tab badge and the voice default."""
-    if not assistant_enabled():
-        return {"available": False, "status": "disabled",
-                "detail": "Set MP_ASSISTANT_ENABLED=true in config.env to enable the tab."}
-    code, body = assistant_request("/health", timeout=3.0)
-    if code != 200:
-        return {"available": False, "status": "offline", "port": PORT,
-                "detail": "MP Harmony Agent is not answering on port 11435."}
+def normalize_harmony_voice(value: Any) -> Optional[str]:
+    if not value:
+        return None
+    key = str(value).strip().lower()
+    if not key:
+        return None
+    key = HARMONY_VOICE_ALIASES.get(key, key)
+    if key in HARMONY_VOICES:
+        return key
+    for vid in HARMONY_VOICES:
+        if key in vid:
+            return vid
+    return None
+
+
+def harmony_voice_label(voice: str) -> str:
+    return HARMONY_VOICES.get(voice, voice)
+
+
+def load_web_assistant_voice() -> Optional[str]:
+    """The voice picked with /voice in this dashboard, if any."""
     try:
-        health = json.loads(body.decode("utf-8"))
-    except Exception:
-        health = {}
-    return {
-        "available": True,
-        "status": "online",
-        "agent": health.get("agent", "MP Harmony AI Agent"),
-        "model": health.get("model", "gpt-oss-pinned:latest"),
-        "voice": health.get("active_voice", "stephen_hawking_matrix"),
-        "tools_count": health.get("tools_count", 0),
+        payload = json.loads(WEB_ASSISTANT_VOICE_FILE.read_text(encoding="utf-8"))
+        if isinstance(payload, dict):
+            voice = normalize_harmony_voice(payload.get("voice"))
+            if voice:
+                return voice
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def save_web_assistant_voice(voice: str) -> bool:
+    try:
+        WEB_ASSISTANT_VOICE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        WEB_ASSISTANT_VOICE_FILE.write_text(
+            json.dumps({"voice": voice}, indent=2) + "\n", encoding="utf-8"
+        )
+        return True
+    except OSError:
+        return False
+
+
+def harmony_health() -> Optional[Dict[str, Any]]:
+    """The agent's /health payload, or None when it is not answering."""
+    try:
+        with _harmony_request("/health", timeout=2.5) as response:
+            if response.status != 200:
+                return None
+            payload = json.loads(response.read().decode("utf-8", "replace"))
+            return payload if isinstance(payload, dict) else None
+    except (urllib.error.URLError, OSError, ValueError):
+        return None
+
+
+def ensure_harmony_default_voice(health: Optional[Dict[str, Any]]) -> Optional[str]:
+    """Speak as Stephen Hawking until the user chooses another voice with /voice.
+
+    Priority:
+      1. a voice chosen with /voice in this dashboard (persisted here),
+      2. a voice the user set in the agent with /voice (shared file/environment),
+      3. Stephen Hawking.
+    The agent is nudged to the default only when nothing has been chosen, so a
+    fresh install speaks in the Hawking voice on first use.
+    """
+    stored = load_web_assistant_voice()
+    if stored:
+        return stored
+    chosen = normalize_harmony_voice(_read_agent_voice_file())
+    if chosen:
+        return chosen
+    current = normalize_harmony_voice((health or {}).get("active_voice"))
+    if current == HARMONY_DEFAULT_VOICE:
+        return current
+    if set_harmony_voice(HARMONY_DEFAULT_VOICE, remember=False):
+        return HARMONY_DEFAULT_VOICE
+    return current or HARMONY_DEFAULT_VOICE
+
+
+def _read_agent_voice_file() -> Optional[str]:
+    """The voice the agent itself remembers (~/.harmony_voice)."""
+    try:
+        value = HARMONY_VOICE_FILE.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    return value or None
+
+
+def set_harmony_voice(voice: Any, remember: bool = True) -> Optional[str]:
+    """Switch the agent voice (and optionally remember it for this dashboard)."""
+    target = normalize_harmony_voice(voice)
+    if not target:
+        return None
+    try:
+        with _harmony_request("/api/settings", {"voice": target}, timeout=10.0) as response:
+            if response.status != 200:
+                return None
+            response.read()
+    except (urllib.error.URLError, OSError, ValueError):
+        return None
+    if remember:
+        save_web_assistant_voice(target)
+    return target
+
+
+def harmony_voice_speed() -> float:
+    """Speech speed multiplier shared with the agent (~/.harmony_voice_speed)."""
+    try:
+        value = float(Path.home().joinpath(".harmony_voice_speed").read_text(encoding="utf-8").strip())
+        return max(0.5, min(3.0, value))
+    except (OSError, ValueError):
+        return 1.0
+
+
+def set_harmony_voice_speed(speed: Any) -> Optional[float]:
+    try:
+        value = round(max(0.5, min(3.0, float(speed))), 2)
+    except (TypeError, ValueError):
+        return None
+    try:
+        Path.home().joinpath(".harmony_voice_speed").write_text(f"{value}\n", encoding="utf-8")
+        return value
+    except OSError:
+        return None
+
+
+def harmony_status(force: bool = False) -> Dict[str, Any]:
+    """Availability plus the active voice, cached for a few seconds."""
+    now = time.time()
+    with _HARMONY_STATUS_LOCK:
+        cached = _HARMONY_STATUS_CACHE.get("payload")
+        if cached and not force and (now - float(_HARMONY_STATUS_CACHE.get("at") or 0)) < _HARMONY_STATUS_TTL:
+            return cached
+
+    health = harmony_health()
+    available = health is not None
+    voice = HARMONY_DEFAULT_VOICE
+    if available:
+        voice = ensure_harmony_default_voice(health) or HARMONY_DEFAULT_VOICE
+    else:
+        voice = load_web_assistant_voice() or HARMONY_DEFAULT_VOICE
+    payload = {
+        "available": available,
+        "agent_url": harmony_agent_url(),
+        "agent": (health or {}).get("agent", "MP Harmony AI Agent"),
+        "model": (health or {}).get("model", ""),
+        "voice": voice,
+        "voice_label": harmony_voice_label(voice),
+        "voice_speed": harmony_voice_speed(),
+        "default_voice": HARMONY_DEFAULT_VOICE,
+        "voices": [{"id": vid, "label": label} for vid, label in HARMONY_VOICES.items()],
+        "detail": "" if available else (
+            "The MP Harmony Agent is not answering on "
+            f"{harmony_agent_url()}. Start it from the button above or the manager."
+        ),
     }
+    with _HARMONY_STATUS_LOCK:
+        _HARMONY_STATUS_CACHE.update({"at": now, "payload": payload})
+    return payload
 
 
-def assistant_voices() -> List[Dict[str, str]]:
-    """Voice list mirrors MP_Harmony_Agent.VOICES_MAP (kept in step manually)."""
-    known = [
-        ("stephen_hawking_matrix", "Stephen Hawking (Enters the Matrix) [Default]"),
-        ("morpheus", "Morpheus (The Matrix - Master)"),
-        ("morpheus_construct", "Morpheus (The Construct)"),
-        ("morpheus_redpill", "Morpheus (Red Pill)"),
-        ("morpheus_dojo", "Morpheus (Combat Dojo)"),
-        ("morpheus_system", "Morpheus (The System)"),
-        ("agent_smith", "Agent Smith (The Matrix)"),
-        ("neo", "Neo (The Matrix)"),
-        ("trinity", "Trinity (The Matrix)"),
-        ("oracle", "The Oracle (The Matrix)"),
-        ("zion", "Zion (Councillor Hamann)"),
-    ]
-    return [{"id": vid, "name": label} for vid, label in known]
+def start_harmony_agent() -> Dict[str, Any]:
+    """Start the agent in the background from the dashboard's Start button."""
+    script = None
+    for candidate in (
+        get_base_dir() / "scripts" / "manage_harmony_agent.sh",
+        get_base_dir() / "manage_harmony_agent.sh",
+        Path(__file__).resolve().parent / "manage_harmony_agent.sh",
+    ):
+        if candidate.is_file():
+            script = candidate
+            break
+    if script is None:
+        return {"success": False, "detail": "manage_harmony_agent.sh was not found."}
+    try:
+        subprocess.Popen(
+            ["bash", str(script), "start"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except OSError as exc:
+        return {"success": False, "detail": str(exc)}
+    # The model load can take a while, so report "starting" and let the tab poll.
+    return {"success": True, "status": "starting", "detail": "Starting the MP Harmony Agent…"}
+
+
+def _fallback_hawking_wav(text: str, speed: float = 1.0) -> bytes:
+    """espeak-ng Hawking profile, used when the agent's TTS endpoint is down."""
+    clean = re.sub(r"```.*?```", " code block omitted ", text or "", flags=re.DOTALL)
+    clean = re.sub(r"[*_#`>]+", "", clean)
+    clean = re.sub(r"\s+", " ", clean).strip()
+    if not clean:
+        return b""
+    espeak = shutil_which("espeak-ng") or shutil_which("espeak")
+    if not espeak:
+        return b""
+    raw_path = out_path = ""
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as raw_f:
+            raw_path = raw_f.name
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as out_f:
+            out_path = out_f.name
+        subprocess.run(
+            [espeak, "-v", "en-us+m3", "-p", "19",
+             "-s", str(int(110 * max(0.5, min(3.0, speed)))),
+             clean[:1200], "-w", raw_path],
+            check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=20,
+        )
+        final = raw_path
+        ffmpeg = shutil_which("ffmpeg")
+        if ffmpeg:
+            result = subprocess.run(
+                [ffmpeg, "-y", "-v", "error", "-i", raw_path,
+                 "-af", "bass=g=12:f=95:w=0.6,equalizer=f=2400:t=q:w=1.2:g=2,"
+                        "aecho=0.8:0.7:50|100:0.3|0.2",
+                 out_path],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=20,
+            )
+            if result.returncode == 0 and os.path.getsize(out_path) > 44:
+                final = out_path
+        with open(final, "rb") as handle:
+            return handle.read()
+    except (OSError, subprocess.SubprocessError):
+        return b""
+    finally:
+        for path in (raw_path, out_path):
+            if path and os.path.exists(path):
+                try:
+                    os.unlink(path)
+                except OSError:
+                    pass
+
+
+def shutil_which(name: str) -> Optional[str]:
+    return shutil.which(name)
+
+
+def harmony_speech(text: str, voice: Optional[str] = None,
+                   speed: Optional[float] = None) -> bytes:
+    """Speech bytes for the reply. Falls back to local espeak-ng for Hawking."""
+    spoken = (text or "").strip()
+    if not spoken:
+        return b""
+    target = normalize_harmony_voice(voice) or (
+        load_web_assistant_voice() or HARMONY_DEFAULT_VOICE
+    )
+    rate = speed if isinstance(speed, (int, float)) else harmony_voice_speed()
+    key = (spoken, target, round(float(rate), 2))
+    with _SPEECH_CACHE_LOCK:
+        cached = _SPEECH_CACHE.get(key)
+    if cached:
+        return cached
+    audio = b""
+    try:
+        with _harmony_request(
+            "/v1/audio/speech",
+            {"input": spoken, "voice": target, "speed": float(rate)},
+            timeout=180.0,
+        ) as response:
+            if response.status == 200:
+                audio = response.read()
+                if audio and len(audio) <= 100:
+                    audio = b""
+    except (urllib.error.URLError, OSError, ValueError):
+        audio = b""
+    if not audio and target == HARMONY_DEFAULT_VOICE:
+        audio = _fallback_hawking_wav(spoken, float(rate))
+    if audio:
+        with _SPEECH_CACHE_LOCK:
+            # A phone replays the same bubble often; keep the last few clips.
+            while len(_SPEECH_CACHE) >= _SPEECH_CACHE_MAX:
+                _SPEECH_CACHE.pop(next(iter(_SPEECH_CACHE)))
+            _SPEECH_CACHE[key] = audio
+    return audio
+
+
+def _voice_command_reply(text: str) -> Optional[str]:
+    """/voice handling for the web prompt, matching the agent's CLI command."""
+    stripped = (text or "").strip()
+    if not stripped.lower().startswith("/voice"):
+        return None
+    arg = stripped[6:].strip()
+    low = arg.lower()
+    if not arg:
+        lines = [
+            "MP Harmony voice presets — type /voice <id> to switch:",
+            "",
+        ]
+        current = harmony_status(force=True).get("voice", HARMONY_DEFAULT_VOICE)
+        for vid, label in HARMONY_VOICES.items():
+            lines.append(f"  {'● ' if vid == current else '  '}{vid} — {label}")
+        lines.append("")
+        lines.append("Also: /voice speed <0.5-3.0> and /voice test")
+        return "\n".join(lines)
+    if low.startswith("speed"):
+        parts = arg.split(maxsplit=1)
+        if len(parts) > 1:
+            value = set_harmony_voice_speed(parts[1])
+            if value is None:
+                return "Voice speed must be a number between 0.5 and 3.0."
+            return f"Voice speed set to {value}x."
+        return f"Current voice speed: {harmony_voice_speed()}x (use /voice speed <0.5-3.0>)."
+    if low == "test":
+        current = harmony_status(force=True)
+        return (
+            f"Voice test ready — press the speaker button on this reply to hear "
+            f"{harmony_voice_label(current.get('voice', HARMONY_DEFAULT_VOICE))}."
+        )
+    target_id = normalize_harmony_voice(arg)
+    if not target_id:
+        return (
+            f"Unknown voice '{arg}'. Type /voice on its own to list the "
+            f"{len(HARMONY_VOICES)} available presets."
+        )
+    target = set_harmony_voice(target_id)
+    if not target:
+        return (
+            f"Could not switch to {harmony_voice_label(target_id)} — the MP Harmony "
+            "Agent is not answering. Start it with ▶ Start Agent, then try again."
+        )
+    return f"Active voice switched to {harmony_voice_label(target)}."
 
 
 # ------------------------------------------------------------------------------
@@ -819,8 +1239,6 @@ def assistant_voices() -> List[Dict[str, str]]:
 # ------------------------------------------------------------------------------
 def _env_flag(name: str, default: bool = True) -> bool:
     raw = os.environ.get(name)
-    if raw is None:
-        raw = read_config_env().get(name)
     if raw is None:
         return default
     return str(raw).strip().lower() not in ("0", "false", "no", "off", "")
@@ -856,13 +1274,89 @@ def is_audio_file(path: Any) -> bool:
         return False
 
 
+def get_library_mode() -> str:
+    """Which library the companion streams from: MIX_ARCHIVE, MUSIC or FAVORITES.
+
+    The web toggle persists here so a phone can switch libraries and the choice
+    survives a service restart. Falls back to WEB_COMPANION_MODE in config.env,
+    then to the mix archive.
+    """
+    if WEB_MODE_FILE.is_file():
+        try:
+            saved = WEB_MODE_FILE.read_text(encoding="utf-8").strip().upper()
+            if saved in MODE_LABELS:
+                return saved
+        except Exception:
+            pass
+    configured = (_config_value("WEB_COMPANION_MODE", "") or "").strip().upper()
+    if configured in MODE_LABELS:
+        return configured
+    return LIBRARY_MODE_MIX
+
+
+def set_library_mode(mode: str) -> Optional[str]:
+    """Persist the library choice and restart the queue at its first entry."""
+    target = str(mode or "").strip().upper()
+    if target in ("MIX", "MIXES", "ARCHIVE", "MIXARCHIVE"):
+        target = LIBRARY_MODE_MIX
+    elif target in ("MUSIC", "TRACKS", "SONGS", "LIBRARY"):
+        target = LIBRARY_MODE_MUSIC
+    elif target in ("FAV", "FAVS", "FAVES", "FAVOURITE", "FAVOURITES", "FAVORITE", "FAVORITES"):
+        target = LIBRARY_MODE_FAVORITES
+    if target not in MODE_LABELS:
+        return None
+    unchanged = get_library_mode() == target
+    try:
+        WEB_MODE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        WEB_MODE_FILE.write_text(target + "\n", encoding="utf-8")
+    except Exception:
+        return None
+    # Tapping the library that is already active must not rewind the stream to
+    # track one or pay for another library scan.
+    if unchanged:
+        return target
+    if target == LIBRARY_MODE_MUSIC:
+        # The mix archive needs no preparation, but a music library on SMB does.
+        # This runs inside the explicit tap, which the dashboard already paints
+        # with a "Switching to Music…" state, so waiting here is safe and it
+        # makes the very first Music tap list tracks instead of mixes.
+        ensure_music_folders_mounted(wait=True)
+    invalidate_queue_cache()
+    reset_stream_for_new_library()
+    return target
+
+
+def reset_stream_for_new_library() -> None:
+    """Point the stream at the first entry of the newly selected library.
+
+    Playback state carries over, so switching libraries while listening keeps
+    the phone playing - it just starts the new library from track one. The
+    dashboard sees the file change and re-points its <audio> element.
+    """
+    was_playing = bool(load_stream_session().get("playing"))
+    queue = build_stream_queue()
+    with _stream_lock:
+        state = load_stream_session()
+        state.update({
+            "index": 0,
+            "path": queue[0] if queue else "",
+            "position_sec": 0.0,
+            "started_at": 0.0,
+            "duration_sec": probe_duration(queue[0]) if queue else 0.0,
+            "playing": was_playing and bool(queue),
+        })
+        if state["playing"]:
+            state["started_at"] = time.time()
+        save_stream_session(state)
+
+
 def scan_playlist_files() -> List[str]:
     """Return the playlist the companion should play from.
 
     Order of preference:
       1. WEB_COMPANION_PLAYLIST (explicit .m3u/.m3u8/.json file)
-      2. Saved player playlist for the configured mode (MUSIC or MIX_ARCHIVE)
-      3. Every audio file in the configured archive folders, newest first
+      2. Saved player playlist for the selected library mode
+      3. Every audio file in the configured folders for that mode, newest first
 
     An empty list means "there is nothing to play" and autoplay is skipped.
     """
@@ -870,16 +1364,304 @@ def scan_playlist_files() -> List[str]:
     if explicit:
         return _read_playlist_file(Path(os.path.expanduser(explicit)))
 
-    mode = (_config_value("WEB_COMPANION_MODE", "MIX_ARCHIVE") or "MIX_ARCHIVE").upper()
-    if mode == "MUSIC":
-        for cand in (PLAYLIST_DIR / "DJ_Tracks_ALL_MUSIC_FOLDERS.json",
-                     PLAYLIST_DIR / "DJ_Tracks_ALL_MUSIC_FOLDERS.m3u"):
-            if cand.is_file():
-                files = _read_playlist_file(cand)
-                if files:
-                    return files
+    if get_library_mode() == LIBRARY_MODE_MUSIC:
+        files = scan_music_files()
+        if files:
+            return files
+        # An unconfigured or unreachable music library must not leave the
+        # companion with nothing to stream, so fall through to the archive.
+        return scan_archive_files()
 
     return scan_archive_files()
+
+
+def music_playlist_candidates() -> List[Path]:
+    """The combined per-machine music playlist, mirroring the MP Audio Player.
+
+    music_folders_manager.py writes the "ALL_MUSIC_FOLDERS" playlist beside the
+    per-machine list, under either the config playlists dir or the legacy
+    PLAYLISTS_GENERATED folder inside the app.
+    """
+    base = get_base_dir()
+    names = (
+        "DJ_Tracks_ALL_MUSIC_FOLDERS.json",
+        "DJ_Tracks_ALL_MUSIC_FOLDERS.m3u8",
+        "DJ_Tracks_ALL_MUSIC_FOLDERS.m3u",
+    )
+    dirs = [PLAYLIST_DIR,
+            CONFIG_DIR / "PLAYLISTS_GENERATED",
+            base / "PLAYLISTS_GENERATED",
+            base / "playlists"]
+    return [d / name for d in dirs for name in names]
+
+
+def _music_folders_data() -> List[Dict[str, Any]]:
+    """The configured music folders, local and SMB, as stored on this machine."""
+    try:
+        if not MUSIC_FOLDERS_FILE.is_file():
+            return []
+        data = json.loads(MUSIC_FOLDERS_FILE.read_text(encoding="utf-8", errors="ignore"))
+    except Exception:
+        return []
+    items = data.get("folders") if isinstance(data, dict) else data
+    return [f for f in (items or []) if isinstance(f, dict)]
+
+
+def music_folder_roots() -> List[Path]:
+    """Local paths of the configured music folders, skipping SMB/UNC entries.
+
+    A share such as \\\\192.168.1.138\\MUSIC001 only becomes a filesystem path
+    once it is mounted, and walking a whole mounted home share picks up
+    unrelated audio (application sound effects), so those entries are ignored
+    here. The generated playlist is the authoritative music list; mounting the
+    share is what makes its paths resolve.
+    """
+    roots: List[Path] = []
+    seen = set()
+    for folder in _music_folders_data():
+        if str(folder.get("type", "")).lower() in ("smb", "nfs", "remote", "unc"):
+            continue
+        raw = str(folder.get("local_path") or folder.get("path") or "").strip()
+        if not raw or raw.startswith("\\\\") or raw.startswith("//"):
+            continue
+        try:
+            p = Path(os.path.expanduser(raw)).resolve()
+        except Exception:
+            continue
+        try:
+            if p.is_dir() and str(p) not in seen:
+                seen.add(str(p))
+                roots.append(p)
+        except OSError:
+            continue
+    return roots
+
+
+# Mounting is expensive (rclone startup plus a share listing per folder), so a
+# failed attempt is not repeated for a minute. The queue retry below is much
+# faster than that, so an offline library does not hammer the NAS.
+MUSIC_MOUNT_RETRY_TTL = 60.0
+_music_mount_lock = threading.Lock()
+_last_music_mount_attempt = 0.0
+_music_mount_in_flight = False
+
+
+def ensure_music_folders_mounted(wait: bool = False, deadline_sec: float = 15.0) -> bool:
+    """Mount the configured SMB music shares on demand.
+
+    The companion runs as a background service and never goes through the
+    Music Folders menu, so nothing else mounts these shares for it. Without
+    this the generated playlist points at unmounted paths and Music mode stays
+    empty (and silently falls back to the mix archive) even though the library
+    is reachable on the network.
+
+    The dashboard polls every couple of seconds, so the default is to start the
+    mount in the background and answer immediately: a blocking mount here would
+    stall /api/playlist and make the Music button look dead, which is exactly
+    the symptom this fixes. The next queue build sees the mounted shares.
+
+    `wait` mounts synchronously for the explicit Music tap, bounded by
+    `deadline_sec` so one offline share cannot hold the request for minutes.
+    Anything left over is picked up by the background retry.
+
+    Returns True when a share was mounted by this call.
+    """
+    global _last_music_mount_attempt, _music_mount_in_flight
+
+    folders = [f for f in _music_folders_data()
+               if str(f.get("type", "")).lower() == "smb" and f.get("id")]
+    if not folders:
+        return False
+
+    now = time.time()
+    with _music_mount_lock:
+        if _music_mount_in_flight:
+            return False
+        # The retry window exists so an offline NAS is not hammered by the
+        # 2-second dashboard poll. An explicit Music tap is a user decision, so
+        # it may retry immediately; only the background path is rate-limited.
+        if not wait and (now - _last_music_mount_attempt) < MUSIC_MOUNT_RETRY_TTL:
+            return False
+        _last_music_mount_attempt = now
+        _music_mount_in_flight = True
+
+    mounted = False
+
+    def _mount_all() -> bool:
+        nonlocal mounted
+        try:
+            try:
+                import music_folders_manager as mfm
+            except ImportError:  # imported as scripts.mix_web_companion
+                from scripts import music_folders_manager as mfm
+            config = mfm.load_music_config()
+            stop_at = time.time() + max(0.0, deadline_sec)
+            for folder in folders:
+                if time.time() >= stop_at:
+                    break
+                try:
+                    # connect_folder is a no-op when the share is already
+                    # answering, and it remounts a wedged one.
+                    ok, _detail = mfm.connect_folder(folder, config, interactive=False)
+                    mounted = mounted or bool(ok)
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        finally:
+            with _music_mount_lock:
+                _music_mount_in_flight = False
+        return mounted
+
+    if not wait:
+        threading.Thread(target=_mount_all, name="mp-music-mount", daemon=True).start()
+        return False
+
+    return _mount_all()
+
+
+# A scan that found nothing is only trusted briefly. The generated playlist
+# does not change when an SMB share mounts, so caching an empty result against
+# the playlist signature kept Music mode on the Mix Archive until the service
+# restarted - even though the library was reachable again.
+MUSIC_SCAN_RETRY_TTL = 20.0
+
+# (playlist signature, resolved files, when the scan ran)
+_music_scan_cache: Optional[Tuple[Tuple[Tuple[str, float, int], ...], Tuple[str, ...], float]] = None
+
+
+def _music_scan_signature() -> Tuple[Tuple[str, float, int], ...]:
+    """Identity of the music playlist files, so a big JSON is parsed only once."""
+    sig: List[Tuple[str, float, int]] = []
+    for cand in music_playlist_candidates():
+        try:
+            st = cand.stat()
+            sig.append((str(cand), st.st_mtime, st.st_size))
+        except OSError:
+            continue
+    return tuple(sig)
+
+
+def scan_music_files() -> List[str]:
+    """The MUSIC library: generated playlist first, then the folder roots.
+
+    The combined playlist holds tens of thousands of paths in a ~30 MB JSON
+    file, so a re-parse on every library switch made the Mix/Music buttons feel
+    dead. The parsed result is reused until the playlist file changes.
+
+    An empty result is re-scanned every MUSIC_SCAN_RETRY_TTL seconds: a share
+    that was not mounted when the playlist was read leaves every path
+    unresolved, and the playlist file itself never changes when it mounts.
+    Without the retry, Music mode stayed on the archive fallback for the life
+    of the process and the phone kept listing mixes.
+    """
+    global _music_scan_cache
+
+    signature = _music_scan_signature()
+    now = time.time()
+    cached = _music_scan_cache
+    if cached:
+        cached_signature, cached_files, cached_at = cached
+        if cached_signature == signature:
+            # A populated library is good until the playlist is rewritten. An
+            # empty one is only a hint, because the share may mount at any time.
+            if cached_files or (now - cached_at) < MUSIC_SCAN_RETRY_TTL:
+                return list(cached_files)
+
+    files: List[str] = []
+    for cand in music_playlist_candidates():
+        if not cand.is_file():
+            continue
+        files = _read_playlist_file(cand)
+        if files:
+            break
+    if not files:
+        # The generated playlist exists but every path inside it is unresolved:
+        # its share is not mounted. Mount on demand, then read it again, so the
+        # first Music tap after a reboot fills the queue instead of reporting an
+        # offline library.
+        if ensure_music_folders_mounted():
+            for cand in music_playlist_candidates():
+                if not cand.is_file():
+                    continue
+                files = _read_playlist_file(cand)
+                if files:
+                    break
+    if not files:
+        files = _scan_dirs(music_folder_roots())
+
+    _music_scan_cache = (signature, tuple(files), now)
+    return list(files)
+
+
+def _favorite_key(path: Any) -> str:
+    """Identity used to de-duplicate Favorites, matching the MP Audio Player."""
+    raw = str(path or "").strip()
+    if not raw:
+        return ""
+    if raw.startswith(("\\\\", "//", "smb://")):
+        return raw.replace("\\", "/").rstrip("/").lower()
+    try:
+        return os.path.normcase(os.path.abspath(os.path.expanduser(raw)))
+    except Exception:
+        return os.path.normcase(raw)
+
+
+def scan_favorite_files() -> List[str]:
+    """The FAVORITES library: the playlist the MP Audio Player marks with [H].
+
+    favorites.json is the authoritative list (favorites.m3u8 is a mirror of it),
+    so it is read in saved order - the player's Favorites order is meaningful,
+    unlike the newest-first archive and music scans. The file is re-read on each
+    call because it is tiny and the player may mark a track at any moment.
+    """
+    paths: List[str] = []
+    seen = set()
+    for cand in (FAVORITES_FILE, FAVORITES_FILE.with_suffix(".m3u8")):
+        if not cand.is_file():
+            continue
+        for path in _read_playlist_file(cand):
+            key = _favorite_key(path)
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            paths.append(path)
+        if paths:
+            break
+    return paths
+
+
+def _scan_dirs(roots: List[Path]) -> List[str]:
+    """Newest-first audio files underneath the given directories."""
+    skip = {"__pycache__", "node_modules", ".git", "venv", ".venv"}
+    found: List[Tuple[float, str]] = []
+    seen = set()
+    for root_dir in roots:
+        # A privacy-blocked folder can park a walk inside the kernel, so it is
+        # probed first and skipped when unreadable.
+        if not _dir_readable(root_dir):
+            continue
+        for root, subdirs, files in os.walk(root_dir):
+            subdirs[:] = [d for d in subdirs if not d.startswith(".") and d not in skip]
+            for name in files:
+                # "._track.flac" is an AppleDouble resource fork, not audio.
+                if name.startswith("._") or not is_audio_file(name):
+                    continue
+                full = os.path.join(root, name)
+                if full in seen:
+                    continue
+                seen.add(full)
+                try:
+                    st = os.stat(full)
+                except OSError:
+                    continue
+                # A zero-byte file (usually an interrupted conversion) would
+                # stall the phone on an empty body, so it is not streamable.
+                if st.st_size <= 0:
+                    continue
+                found.append((st.st_mtime, full))
+    found.sort(key=lambda item: item[0], reverse=True)
+    return [path for _, path in found]
 
 
 def _read_playlist_file(path: Path) -> List[str]:
@@ -934,30 +1716,74 @@ def _archive_dirs() -> List[Path]:
 
 def scan_archive_files() -> List[str]:
     """Newest-first audio files across the configured archive folders."""
-    skip = {"__pycache__", "node_modules", ".git", "venv", ".venv"}
-    found: List[Tuple[float, str]] = []
-    seen = set()
-    for root_dir in _archive_dirs():
-        for root, subdirs, files in os.walk(root_dir):
-            subdirs[:] = [d for d in subdirs if not d.startswith(".") and d not in skip]
-            for name in files:
-                if not is_audio_file(name):
-                    continue
-                full = os.path.join(root, name)
-                if full in seen:
-                    continue
-                seen.add(full)
-                try:
-                    st = os.stat(full)
-                except OSError:
-                    continue
-                # A zero-byte file (usually an interrupted conversion) would
-                # stall the phone on an empty body, so it is not streamable.
-                if st.st_size <= 0:
-                    continue
-                found.append((st.st_mtime, full))
-    found.sort(key=lambda item: item[0], reverse=True)
-    return [path for _, path in found]
+    return _scan_dirs(_archive_dirs())
+
+
+def _archive_dirs_permission_denied() -> str:
+    """First configured archive folder that exists but cannot be listed.
+
+    macOS privacy protection (TCC) refuses a background job access to external
+    volumes, and the failure is a plain PermissionError rather than a missing
+    path. Returning the folder lets the dashboard name the folder to approve.
+
+    This must use the bounded probe: under launchd the denied read can block
+    instead of raising, and a plain os.listdir here hung the whole status
+    request (the phone saw an empty reply).
+    """
+    for folder in _archive_dirs():
+        if _dir_readable(folder):
+            return ""
+        if Path(folder).is_dir():
+            return str(folder)
+    return ""
+
+
+# Directories already found unreadable, with the time of the check. A TCC
+# denial can either raise PermissionError or block inside the kernel waiting
+# for an approval dialog that a background job cannot show. Probing once and
+# remembering the answer keeps the dashboard responsive instead of letting
+# every status poll wedge on the same folder for the life of the process.
+_BLOCKED_DIRS: Dict[str, float] = {}
+_BLOCKED_TTL = 60.0
+
+
+def _dir_readable(path: Any, timeout: float = 2.0) -> bool:
+    """True when the directory can be listed, giving up after `timeout`.
+
+    The listing runs on a daemon thread because a privacy-blocked read does not
+    always return an error: it can park indefinitely. A hung probe only leaks
+    that one thread and never blocks the caller.
+    """
+    key = str(path)
+    now = time.time()
+    cached_at = _BLOCKED_DIRS.get(key)
+    if cached_at is not None and (now - cached_at) < _BLOCKED_TTL:
+        return False
+
+    result = {"ok": False, "done": False}
+
+    def _probe():
+        try:
+            os.listdir(key)
+            result["ok"] = True
+        except PermissionError:
+            result["ok"] = False
+        except OSError:
+            result["ok"] = False
+        finally:
+            result["done"] = True
+
+    worker = threading.Thread(target=_probe, name="mp-dir-probe", daemon=True)
+    worker.start()
+    worker.join(max(0.1, timeout))
+    if not result["done"]:
+        _BLOCKED_DIRS[key] = now
+        return False
+    if not result["ok"]:
+        _BLOCKED_DIRS[key] = now
+    else:
+        _BLOCKED_DIRS.pop(key, None)
+    return bool(result["ok"])
 
 
 # ------------------------------------------------------------------------------
@@ -999,62 +1825,192 @@ def _pick_start_track(playlist: List[str]) -> Tuple[Optional[str], float]:
     return (playlist[0], 0.0) if playlist else (None, 0.0)
 
 
-_queue_cache: Dict[str, Any] = {"files": [], "built_at": 0.0}
-_queue_lock = threading.Lock()
-QUEUE_TTL_SECONDS = 30.0
-
-
-def build_stream_queue(force: bool = False) -> List[str]:
+def build_stream_queue() -> List[str]:
     """Resolve the play queue the phones will stream through.
 
-    The result is cached briefly: the page polls several endpoints per second
-    and each call would otherwise re-walk the whole archive. Callers that need
-    to see a newly added file can pass force=True.
+    Scanning the music playlist stats tens of thousands of paths, so the result
+    is cached briefly. Without this every 2-second status poll would re-walk the
+    library.
     """
-    with _queue_lock:
-        now = time.monotonic()
-        files = _queue_cache["files"]
-        fresh = files and (now - _queue_cache["built_at"]) < QUEUE_TTL_SECONDS
-        if fresh and not force:
-            return list(files)
+    global _queue_cache
 
-    files = scan_playlist_files()
-    if files and _env_flag("WEB_COMPANION_SHUFFLE", False):
-        files = list(files)
-        random.shuffle(files)
+    mode = get_library_mode()
+    now = time.time()
+    cached = _queue_cache
+    if cached and cached[0] == mode and (now - cached[1]) < QUEUE_CACHE_TTL:
+        return list(cached[2])
 
-    with _queue_lock:
-        _queue_cache["files"] = list(files)
-        _queue_cache["built_at"] = time.monotonic()
-    return files
+    with _queue_build_lock:
+        # Another request may have finished the scan while this one waited.
+        now = time.time()
+        cached = _queue_cache
+        if cached and cached[0] == mode and (now - cached[1]) < QUEUE_CACHE_TTL:
+            return list(cached[2])
+
+        if mode == LIBRARY_MODE_MUSIC:
+            files = scan_music_files()
+            # An unmounted SMB share leaves the generated playlist full of paths
+            # that no longer resolve. Falling back keeps audio flowing, but the
+            # status call reports it so the phone is not silently mislabelled:
+            # a fallback queue must never look like the Music library.
+            _queue_source_state.update({
+                "fallback": not files,
+                "detail": "" if files else (
+                    "Music library offline - the music folders are not mounted, "
+                    "streaming Mix Archive"
+                ),
+            })
+            if not files:
+                files = scan_archive_files()
+        elif mode == LIBRARY_MODE_FAVORITES:
+            files = scan_favorite_files()
+            # An empty Favorites playlist is a normal state, not a broken
+            # library, so it is reported as empty instead of borrowed from
+            # another mode. Marking tracks with [H] in the player fills it.
+            _queue_source_state.update({
+                "fallback": False,
+                "detail": "" if files else "No favorites yet - press H in the player to add one",
+            })
+        else:
+            _queue_source_state.update({"fallback": False, "detail": ""})
+            files = scan_archive_files()
+            # A launchd/systemd job on macOS is denied read access to external
+            # volumes until it is approved in Full Disk Access. Without this the
+            # empty scan looks like an empty archive and the phone shows
+            # "No mixes found" instead of the real cause.
+            if not files:
+                blocked = _archive_dirs_permission_denied()
+                if blocked:
+                    # The gate macOS actually enforces for a USB/removable
+                    # archive is kTCCServiceSystemPolicyRemovableVolumes (seen
+                    # in tccd's log for this bundle), which lives under
+                    # Privacy & Security > Files and Folders. Full Disk Access
+                    # is the blunt alternative that also covers it.
+                    _queue_source_state.update({
+                        "fallback": False,
+                        "detail": ("macOS blocked archive access - allow Removable Volumes "
+                                   "(or Full Disk Access) for MP Web Companion.app "
+                                   f"({blocked})"),
+                    })
+
+        if files and _env_flag("WEB_COMPANION_SHUFFLE", False):
+            files = list(files)
+            random.shuffle(files)
+
+        _queue_cache = (mode, now, tuple(files))
+        return list(files)
 
 
-def invalidate_stream_queue() -> None:
-    with _queue_lock:
-        _queue_cache["built_at"] = 0.0
+def invalidate_queue_cache() -> None:
+    global _queue_cache, _music_scan_cache
+    _queue_cache = None
+    _music_scan_cache = None
+
+
+# The dashboard polls /api/status, /api/playlist and /api/eq continuously, and
+# every one of those used to call build_stream_queue(). As soon as the 10 s
+# cache expired the next poll took _queue_build_lock and every other request
+# thread queued behind the scan (a 51k-entry music playlist takes seconds, and
+# an unmounted share makes it worse). The phone then had a page that stopped
+# answering, which is exactly the "unresponsive dashboard" symptom.
+#
+# These helpers let the read-only polling endpoints serve the last good queue
+# immediately and refresh it on a worker thread, so a slow scan can never block
+# a status reply. Control actions still build synchronously, because they must
+# act on an accurate queue.
+_queue_refresh_lock = threading.Lock()
+_queue_refresh_active = False
+
+
+def _refresh_queue_in_background() -> None:
+    """Start at most one background queue scan at a time."""
+    global _queue_refresh_active
+    with _queue_refresh_lock:
+        if _queue_refresh_active:
+            return
+        _queue_refresh_active = True
+
+    def _worker() -> None:
+        global _queue_refresh_active
+        try:
+            build_stream_queue()
+        except Exception:
+            pass
+        finally:
+            with _queue_refresh_lock:
+                _queue_refresh_active = False
+
+    threading.Thread(target=_worker, name="mp-queue-refresh", daemon=True).start()
+
+
+def build_stream_queue_cached() -> List[str]:
+    """The stream queue for read-only endpoints: never waits on a scan.
+
+    A populated cache is returned as-is, and a stale entry is refreshed on a
+    worker thread while the caller answers from the old copy. Only a cold cache
+    (no queue for this mode yet) builds synchronously, which is the cost the
+    very first request always paid anyway.
+    """
+    mode = get_library_mode()
+    cached = _queue_cache
+    if cached and cached[0] == mode:
+        if (time.time() - cached[1]) >= QUEUE_CACHE_TTL:
+            _refresh_queue_in_background()
+        return list(cached[2])
+    return build_stream_queue()
 
 
 def autoplay_once() -> Dict[str, Any]:
-    """Pick the track to serve once, at startup. Never starts local playback."""
+    """Arm the stream at startup so a phone starts playing with no extra taps.
+
+    Nothing is played on the host: the session is only marked as playing, which
+    makes /api/status report a running stream so the browser dashboard points
+    its <audio> element at /api/stream and autoplays. The phone is the only
+    audio output.
+    """
     if _autoplay_done.is_set():
+        return dict(_autoplay_result)
+
+    if not _env_flag("WEB_COMPANION_AUTOPLAY", True):
+        _autoplay_result.update(status="disabled", detail="Autoplay disabled by WEB_COMPANION_AUTOPLAY")
+        _autoplay_done.set()
         return dict(_autoplay_result)
 
     playlist = build_stream_queue()
     track, position = _pick_start_track(playlist)
     if not track:
-        _autoplay_result.update(status="empty_playlist", detail="Playlist is empty")
+        # build_stream_queue() already knows why the library is empty - most
+        # often a macOS privacy block on the archive volume. Report that instead
+        # of a generic "empty playlist" so the phone can show the fix.
+        reason = _queue_source_state.get("detail") or "Playlist is empty"
+        _autoplay_result.update(status="empty_playlist", detail=reason)
         _autoplay_done.set()
         return dict(_autoplay_result)
 
+    # Resume where the last session stopped, otherwise start at the top.
+    with _stream_lock:
+        state = load_stream_session()
+        state["path"] = track
+        try:
+            state["index"] = playlist.index(track)
+        except ValueError:
+            state["index"] = 0
+        state["duration_sec"] = probe_duration(track)
+        state["position_sec"] = clamp_position(state, position)
+        state["playing"] = True
+        state["started_at"] = time.time()
+        save_stream_session(state)
+
     _autoplay_result.update(
         status="ready",
-        detail=f"Streaming queue ready ({len(playlist)} mixes)",
+        detail=f"Auto-streaming {MODE_LABELS.get(get_library_mode(), 'library')} ({len(playlist)} items)",
         match=track,
         track=os.path.basename(track),
-        position=round(position, 2),
+        position=round(float(state.get("position_sec", 0.0) or 0.0), 2),
         queue_len=len(playlist),
+        mode=get_library_mode(),
         verified=True,
-        verified_position=round(position, 2),
+        verified_position=round(float(state.get("position_sec", 0.0) or 0.0), 2),
     )
     _autoplay_done.set()
     return dict(_autoplay_result)
@@ -1248,9 +2204,46 @@ def clamp_position(state: Dict[str, Any], pos: float) -> float:
     return min(pos, duration) if duration > 0 else pos
 
 
-def current_stream_file() -> Tuple[str, Dict[str, Any]]:
-    """Return the file the phone should currently be streaming."""
-    queue = build_stream_queue()
+# The service arms the session when it boots and nothing plays on the host, so
+# the elapsed clock keeps running even when no phone is listening. After a long
+# idle stretch it reports the *end* of the mix as the position (#repro: a 45 s
+# track left for 83 minutes reported 45.0/45.0). A phone that then engages
+# seeks to the last frame, play() resolves into "ended" immediately, and the
+# listener sees a button that does nothing.
+#
+# Playback is owned by the browser, so a position that close to the end is not
+# a resume point: it is an unfinished unattended run. Starting the mix from the
+# top is the only useful answer, and an actually-listening phone never asks for
+# the tail because it keeps its own local clock.
+RESUME_END_MARGIN_MIN = 2.0
+RESUME_END_MARGIN_RATIO = 0.02
+
+
+def resume_point(state: Dict[str, Any], duration: float = 0.0) -> float:
+    """Where a phone picking up this session should start, in seconds.
+
+    Returns 0.0 whenever the recorded position is not safely inside the file
+    (an overrun, or the final moments that cannot be buffered before the media
+    ends). Otherwise returns the elapsed position.
+    """
+    dur = float(duration or state.get("duration_sec", 0.0) or 0.0)
+    pos = clamp_position(state, stream_position(state))
+    if dur <= 0:
+        # No length known: a bare elapsed value is the only hint available.
+        return pos
+    margin = max(RESUME_END_MARGIN_MIN, dur * RESUME_END_MARGIN_RATIO)
+    if pos < 0.5 or pos >= (dur - margin):
+        return 0.0
+    return pos
+
+
+def current_stream_file(cached: bool = False) -> Tuple[str, Dict[str, Any]]:
+    """Return the file the phone should currently be streaming.
+
+    `cached` is for the polling endpoints: they must answer instantly even
+    while a large library scan runs, so they read the last good queue.
+    """
+    queue = build_stream_queue_cached() if cached else build_stream_queue()
     state = load_stream_session()
     if not queue:
         return "", state
@@ -1268,7 +2261,7 @@ def current_stream_file() -> Tuple[str, Dict[str, Any]]:
 
 
 def get_eq_status() -> Dict[str, Any]:
-    active_file, state = current_stream_file()
+    active_file, state = current_stream_file(cached=True)
     playing = bool(state.get("playing"))
     pos = stream_position(state)
     dur = float(state.get("duration_sec", 0.0) or 0.0)
@@ -1317,8 +2310,27 @@ def probe_duration(path: str) -> float:
         duration = 0.0
     if duration <= 0.0:
         duration = _wav_duration(path)
+    if duration <= 0.0:
+        # soundfile lives in the user site-packages, which a systemd start may
+        # not resolve. ffprobe reads the same header and is package-managed.
+        duration = _ffprobe_duration(path)
     _duration_cache[path] = (st.st_mtime, st.st_size, duration)
     return duration
+
+
+def _ffprobe_duration(path: str) -> float:
+    """Container length from ffprobe, used when soundfile is unavailable."""
+    try:
+        out = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=nw=1:nk=1", str(path)],
+            capture_output=True, text=True, timeout=6,
+        )
+        if out.returncode == 0:
+            return max(0.0, float((out.stdout or "").strip() or 0.0))
+    except Exception:
+        pass
+    return 0.0
 
 
 def _wav_duration(path: str) -> float:
@@ -1339,8 +2351,8 @@ def _wav_duration(path: str) -> float:
 
 def get_playback_status(cli_theme: Optional[str] = None) -> Dict[str, Any]:
     active_theme = get_theme_palette(cli_theme)
-    active_file, state = current_stream_file()
-    queue = build_stream_queue()
+    active_file, state = current_stream_file(cached=True)
+    queue = build_stream_queue_cached()
 
     duration = probe_duration(active_file) if active_file else 0.0
     if duration > 0 and abs(float(state.get("duration_sec", 0.0) or 0.0) - duration) > 0.5:
@@ -1349,6 +2361,7 @@ def get_playback_status(cli_theme: Optional[str] = None) -> Dict[str, Any]:
     pos = clamp_position(state, stream_position(state))
     pct = round(pos / duration * 100.0, 1) if duration > 0 else 0.0
     playing = bool(state.get("playing")) and bool(active_file)
+    resume = resume_point(state, duration)
 
     title, artist, album = clean_track_title("", active_file, {})
     tracklist: List[str] = []
@@ -1371,6 +2384,10 @@ def get_playback_status(cli_theme: Optional[str] = None) -> Dict[str, Any]:
         "duration": format_seconds(duration) if duration else "00:00:00",
         "position_sec": round(pos, 2),
         "duration_sec": round(duration, 2),
+        # What a phone that has not started the mix yet should seek to. It is
+        # 0 for an unattended run that drifted to the end, so engaging audio
+        # always produces sound instead of an instantly-finished track.
+        "resume_sec": round(resume, 2),
         "progress_pct": pct,
         "active_file": active_file,
         "format": Path(active_file).suffix.lstrip(".").upper() if active_file else "",
@@ -1388,22 +2405,49 @@ def get_playback_status(cli_theme: Optional[str] = None) -> Dict[str, Any]:
         "tracklist_total": len(tracklist),
         "queue_len": len(queue),
         "queue_position": int(state.get("index", 0) or 0) + 1,
+        "mode": get_library_mode(),
+        "mode_label": MODE_LABELS.get(get_library_mode(), "Library"),
+        "library_fallback": bool(_queue_source_state.get("fallback")),
+        "library_detail": _queue_source_state.get("detail", ""),
         "theme": active_theme,
     }
 
 
-MINI_PLAYLIST_SIZE = 3
+MINI_PLAYLIST_SIZE = 5
+# Five rows are visible on a phone; the extra entries are what the list scrolls
+# through, so a long mix queue is browsable without loading the whole library.
+MINI_PLAYLIST_WINDOW = 20
 
 
-def get_mini_playlist(limit: int = MINI_PLAYLIST_SIZE) -> Dict[str, Any]:
-    """A short window of the stream queue: the current mix plus the next ones.
+def get_mini_playlist(limit: Optional[int] = None) -> Dict[str, Any]:
+    """A short window of the stream queue: the current track plus the next ones.
 
-    Only `limit` entries are returned, so the phone shows a compact playlist
-    instead of the whole archive.
+    The dashboard renders `show` rows inside a scrollable box and the server
+    sends up to `limit` (default MINI_PLAYLIST_WINDOW) entries, so five tracks
+    are visible at once and the rest can be scrolled. `total` is the full queue
+    length and is what the dashboard shows as the track count.
     """
-    queue = build_stream_queue()
+    queue = build_stream_queue_cached()
+    mode = get_library_mode()
+    show = MINI_PLAYLIST_SIZE
     if not queue:
-        return {"items": [], "total": 0, "current_index": -1}
+        return {
+            "items": [],
+            "total": 0,
+            "show": show,
+            "current_index": -1,
+            "mode": mode,
+            "mode_label": MODE_LABELS.get(mode, "Library"),
+            "library_fallback": bool(_queue_source_state.get("fallback")),
+            "library_detail": _queue_source_state.get("detail", ""),
+            "modes": [{"id": mid, "label": label} for mid, label in MODE_LABELS.items()],
+        }
+
+    try:
+        window = int(limit) if limit is not None else MINI_PLAYLIST_WINDOW
+    except (TypeError, ValueError):
+        window = MINI_PLAYLIST_WINDOW
+    window = max(1, window)
 
     state = load_stream_session()
     idx = int(state.get("index", 0) or 0)
@@ -1413,35 +2457,134 @@ def get_mini_playlist(limit: int = MINI_PLAYLIST_SIZE) -> Dict[str, Any]:
     idx = max(0, min(idx, len(queue) - 1))
 
     items: List[Dict[str, Any]] = []
-    for offset in range(max(1, int(limit))):
-        i = (idx + offset) % len(queue)
+    # Stop at the end of the queue instead of wrapping: a repeating window
+    # looks broken once it is scrollable.
+    for offset in range(min(window, len(queue))):
+        i = (idx + offset)
+        if i >= len(queue):
+            break
         path = queue[i]
         title, artist, album = clean_track_title("", path, {})
+        duration = probe_duration(path)
         items.append({
             "index": i,
             "title": title,
             "artist": artist,
             "file": path,
             "current": i == idx,
-            "duration": format_seconds(probe_duration(path)),
-            "duration_sec": round(probe_duration(path), 2),
+            "duration": format_seconds(duration),
+            "duration_sec": round(duration, 2),
         })
-    return {"items": items, "total": len(queue), "current_index": idx}
+    return {
+        "items": items,
+        "total": len(queue),
+        "show": show,
+        "current_index": idx,
+        "mode": mode,
+        "mode_label": MODE_LABELS.get(mode, "Library"),
+        "library_fallback": bool(_queue_source_state.get("fallback")),
+        "library_detail": _queue_source_state.get("detail", ""),
+        "modes": [{"id": mid, "label": label} for mid, label in MODE_LABELS.items()],
+    }
+
+
+def play_random_track() -> Dict[str, Any]:
+    """Pick a random track from the active playlist and arm it immediately.
+
+    "Play Anything" from the MP Harmony Agent lands here. The playlist is the
+    same one the dashboard streams, so the Mix / Music / Favorites choice the
+    listener made is respected. An empty playlist is reported instead of
+    pretending something was selected: the caller cannot play a track that
+    does not exist.
+
+    The current track is skipped while there is more than one entry, so a
+    second request in a row never replays the same file.
+    """
+    queue = build_stream_queue()
+    mode = get_library_mode()
+    total = len(queue)
+    base_payload: Dict[str, Any] = {
+        "mode": mode,
+        "mode_label": MODE_LABELS.get(mode, "Library"),
+        "total": total,
+        "app_root": str(get_base_dir()),
+        "player_script": str(get_base_dir() / "MP_Audio_Player.py"),
+        "library_fallback": bool(_queue_source_state.get("fallback")),
+        "library_detail": _queue_source_state.get("detail", ""),
+    }
+    if total < 1:
+        detail = _queue_source_state.get("detail") or (
+            f"No tracks available in the {MODE_LABELS.get(mode, 'library')} playlist"
+        )
+        return dict(base_payload, success=False, status="empty_playlist", detail=detail)
+
+    with _stream_lock:
+        state = load_stream_session()
+        current = str(state.get("path", "") or "")
+        candidates = (
+            [i for i, path in enumerate(queue) if path != current]
+            if total > 1
+            else [0]
+        )
+        idx = random.choice(candidates or [0])
+        path = queue[idx]
+        state["index"] = idx
+        state["path"] = path
+        state["position_sec"] = 0.0
+        state["duration_sec"] = probe_duration(path)
+        state["playing"] = True
+        state["started_at"] = time.time()
+        save_stream_session(state)
+
+    title, artist, album = clean_track_title("", path, {})
+    try:
+        tl_path = find_tracklist_for_mix(path)
+        if tl_path:
+            info = parse_tracklist_file(tl_path)
+            title, artist, album = clean_track_title(
+                os.path.basename(path), path, info.get("metadata", {})
+            )
+    except Exception:
+        pass
+
+    return dict(
+        base_payload,
+        success=True,
+        status="playing",
+        index=idx,
+        position=0.0,
+        track=os.path.basename(path),
+        path=path,
+        title=title or os.path.basename(path),
+        artist=artist,
+        album=album,
+        detail=f"Picked {os.path.basename(path)} at random from {total} "
+               f"{MODE_LABELS.get(mode, 'library')} tracks",
+    )
 
 
 def control_player(action: str, params: Optional[Dict[str, List[str]]] = None) -> bool:
     """Drive the stream session. The browser performs the actual playback."""
     params = params or {}
-    if action in ("refresh", "rescan"):
-        invalidate_stream_queue()
-        return True
+    if action in ("random", "play_random", "play_random_track"):
+        return bool(play_random_track().get("success"))
     queue = build_stream_queue()
     if not queue:
         return False
 
     with _stream_lock:
         state = load_stream_session()
-        path, _ = current_stream_file()
+        # Resolve the current file from the already-built queue. Calling
+        # current_stream_file() here would re-enter the queue lock and could
+        # hold the stream lock across a multi-second library scan, which made
+        # every control tap wait behind a busy scan.
+        saved = str(state.get("path", "") or "")
+        if saved and saved in queue:
+            path = saved
+        else:
+            idx = int(state.get("index", 0) or 0)
+            idx = max(0, min(idx, len(queue) - 1))
+            path = queue[idx]
         if path and state.get("path") != path:
             state["path"] = path
         if state.get("path"):
@@ -1453,11 +2596,6 @@ def control_player(action: str, params: Optional[Dict[str, List[str]]] = None) -
 
         pos = clamp_position(state, stream_position(state))
         duration = float(state.get("duration_sec", 0.0) or 0.0) or probe_duration(state["path"])
-        # Make the known length visible to clamp_position() before the action
-        # runs, otherwise a fresh session (duration 0) lets a skip run past the
-        # end of the mix and the reported clock overshoots.
-        if duration > 0:
-            state["duration_sec"] = duration
 
         def seek_to(target: float) -> None:
             state["position_sec"] = clamp_position(state, target)
@@ -1505,6 +2643,20 @@ def control_player(action: str, params: Optional[Dict[str, List[str]]] = None) -
             seek_to(pos + float(params.get("seconds", [10.0])[0]))
         elif action == "seek_to":
             seek_to(float(params.get("position", [0.0])[0]))
+        elif action == "report_position":
+            # The phone owns playback, so its clock is the true one. Without
+            # this the host's unattended clock free-runs from boot and reports
+            # the end of the mix after a few idle hours, which then becomes the
+            # resume point for the next device. Reports only move the clock
+            # forward within the same file; they never change which file plays.
+            try:
+                reported = float(params.get("position", [pos])[0])
+            except (TypeError, ValueError):
+                reported = pos
+            if reported != reported or reported in (float("inf"), float("-inf")):
+                return False
+            state["position_sec"] = clamp_position(state, reported)
+            state["started_at"] = time.time() if state.get("playing") else 0.0
         elif action in ("shuffle", "toggle_shuffle"):
             state["shuffle"] = not bool(state.get("shuffle"))
         elif action in ("repeat", "cycle_repeat"):
@@ -1534,20 +2686,133 @@ def control_player(action: str, params: Optional[Dict[str, List[str]]] = None) -
     return True
 
 
+def render_launch_pad_html() -> str:
+    """Linux-only desktop launch pad. Colours come from the page's CSS vars."""
+    if suite_control is None:
+        return ""
+    try:
+        if not suite_control.is_supported():
+            return ""
+        apps = suite_control.app_definitions()
+    except Exception:
+        return ""
+
+    buttons = []
+    for app in apps:
+        role = html.escape(str(app["id"]), quote=True)
+        label = html.escape(str(app["label"]))
+        icon = html.escape(str(app["icon"]))
+        buttons.append(
+            f'<button type="button" class="launch-btn" data-app="{role}" '
+            f'data-label="{label}" onclick="launchApp(\'{role}\')" '
+            f'aria-pressed="false" title="Launch {label}">'
+            f'<span class="launch-icon" aria-hidden="true">{icon}</span>'
+            f'<span class="launch-label">{label}</span>'
+            f'<span class="launch-state">Off</span>'
+            f'</button>'
+        )
+    return (
+        '<div class="launchpad" id="launchPad">'
+        '<div class="launchpad-head">'
+        '<span>🖥 Desktop Suite</span>'
+        '<span id="launchPadTray" class="launch-state">Tray off</span>'
+        '</div>'
+        '<div class="launchpad-grid" id="launchPadGrid">'
+        + "".join(buttons)
+        + '<button type="button" class="launch-btn launch-close" id="launchCloseAll" '
+          'onclick="closeAllApps()" title="Close all four apps, keep the tray icon">'
+          '<span class="launch-icon" aria-hidden="true">⏻</span>'
+          '<span class="launch-label">Close All</span>'
+          '</button>'
+        '</div>'
+        '<div class="launchpad-note" id="launchPadNote">'
+        'Tap a button to open that app on the computer.'
+        '</div>'
+        '</div>'
+    )
+
+
 # ------------------------------------------------------------------------------
 # DYNAMIC HTML TEMPLATE (SEAMLESS AUDIO STREAMING & SYNCED SEEKING)
 # ------------------------------------------------------------------------------
 def render_html_page(theme: Dict[str, Any]) -> str:
     t = theme
     is_rainbow = t.get("is_dynamic_rainbow", False) or t['id'] == "dynamic_rainbow_liquid_glass"
-    
+    launch_pad_html = render_launch_pad_html()
+
+    # Dynamic Liquid Glass [Rainbow Colours]: the body carries a slowly rotating
+    # hue while the glass cards breathe, so the whole dashboard cycles through
+    # the spectrum instead of sitting on one static accent colour.
     rainbow_anim_css = """
         @keyframes rainbowShift {
-            0% { filter: hue-rotate(0deg); }
-            100% { filter: hue-rotate(360deg); }
+            0% { background-position: 0% 50%; }
+            100% { background-position: 300% 50%; }
         }
-        .rainbow-animated {
+        @keyframes dynamicRainbowHue {
+            0% { filter: hue-rotate(0deg) saturate(1.15); }
+            50% { filter: hue-rotate(180deg) saturate(1.35); }
+            100% { filter: hue-rotate(360deg) saturate(1.15); }
+        }
+        @keyframes dynamicRainbowBreath {
+            0%, 100% {
+                box-shadow: 0 14px 40px rgba(176, 88, 255, 0.45),
+                            inset 0 0 24px rgba(0, 242, 254, 0.16);
+                border-color: rgba(176, 88, 255, 0.45);
+            }
+            50% {
+                box-shadow: 0 18px 52px rgba(255, 45, 142, 0.55),
+                            inset 0 0 34px rgba(254, 225, 64, 0.22);
+                border-color: rgba(0, 242, 254, 0.60);
+            }
+        }
+        /* The hue rotation belongs on a dedicated background layer, not on
+           <body>. Filtering the body re-rasterises every glyph and card on each
+           frame, which is the single most expensive thing iOS Safari does here
+           and a direct cause of the dashboard going unresponsive after a while.
+           A fixed pseudo-element keeps the cycling colours while the text stays
+           crisp and un-filtered. */
+        body.dynamic-rainbow-glass-active::before {
+            content: "";
+            position: fixed;
+            inset: 0;
+            z-index: -1;
+            pointer-events: none;
+            background: radial-gradient(circle at 20% 15%, rgba(176, 88, 255, 0.30), transparent 55%),
+                        radial-gradient(circle at 80% 25%, rgba(0, 242, 254, 0.22), transparent 55%),
+                        radial-gradient(circle at 50% 90%, rgba(255, 45, 142, 0.26), transparent 60%);
+            animation: dynamicRainbowHue 24s linear infinite;
+            will-change: filter;
+        }
+        body.dynamic-rainbow-glass-active .card {
+            animation: dynamicRainbowBreath 6s ease-in-out infinite;
+            backdrop-filter: blur(18px) saturate(1.35);
+            -webkit-backdrop-filter: blur(18px) saturate(1.35);
+            /* Keep the painter inside the card's own box so a border/shadow
+               animation cannot invalidate the whole page. */
+            contain: paint;
+        }
+        body.dynamic-rainbow-glass-active .header h1 {
+            background: linear-gradient(90deg,
+                #b058ff, #ff2d8e, #fee140, #00f2fe, #b058ff);
+            background-size: 300% 100%;
+            -webkit-background-clip: text;
+            background-clip: text;
+            -webkit-text-fill-color: transparent;
             animation: rainbowShift 12s linear infinite;
+        }
+        /* Animations cost battery and CPU on a phone that is only listening, so
+           they stop entirely while the tab is in the background. */
+        body.dynamic-rainbow-glass-frozen::before,
+        body.dynamic-rainbow-glass-frozen .card,
+        body.dynamic-rainbow-glass-frozen .header h1 {
+            animation: none !important;
+        }
+        @media (prefers-reduced-motion: reduce) {
+            body.dynamic-rainbow-glass-active::before,
+            body.dynamic-rainbow-glass-active .card,
+            body.dynamic-rainbow-glass-active .header h1 {
+                animation: none;
+            }
         }
     """ if is_rainbow else ""
 
@@ -1555,8 +2820,8 @@ def render_html_page(theme: Dict[str, Any]) -> str:
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>MP Mix Manager — DJ Booth Remote</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no">
+    <title>MP Liquid Player (Web) — DJ Booth Remote</title>
     <style>
         :root {{
             --bg: {t['bg']};
@@ -1593,6 +2858,21 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             flex-direction: column;
             align-items: center;
             min-height: 100vh;
+            /* iOS Safari reports the *large* viewport for 100vh, so the last
+               control could sit behind the toolbar. dvh tracks the visible
+               height and keeps the page exactly one screen tall. */
+            min-height: 100dvh;
+            overflow-x: hidden;
+        }}
+        /* While the engage gate is up the page behind it must not scroll, so
+           the button cannot be pushed off screen by a stray swipe. */
+        body.overlay-active {{
+            overflow: hidden;
+            height: 100vh;
+            height: 100dvh;
+            position: fixed;
+            inset: 0;
+            width: 100%;
         }}
         .header {{
             text-align: center;
@@ -1637,307 +2917,87 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             letter-spacing: 0.5px;
             font-weight: 600;
         }}
-        .theme-select {{
-            appearance: none;
-            -webkit-appearance: none;
-            margin-top: 10px;
-            padding: 8px 34px 8px 14px;
-            border-radius: 12px;
-            font-size: 0.78rem;
-            font-weight: 700;
-            letter-spacing: 0.3px;
-            color: var(--text-main);
-            background-color: var(--card-bg);
-            background-image: linear-gradient(45deg, transparent 50%, var(--accent-secondary) 50%),
-                              linear-gradient(135deg, var(--accent-secondary) 50%, transparent 50%);
-            background-position: calc(100% - 18px) 52%, calc(100% - 12px) 52%;
-            background-size: 6px 6px, 6px 6px;
-            background-repeat: no-repeat;
-            border: 1px solid var(--card-border);
-            box-shadow: var(--card-shadow);
-            cursor: pointer;
-            max-width: 100%;
-        }}
-        .theme-select:focus {{
-            outline: none;
-            border-color: var(--accent-primary);
-        }}
-        .theme-select option {{
-            background: #14141c;
-            color: #ffffff;
-        }}
-        /* Primary tab bar: MP Liquid Player | MP Assistant */
-        .tab-bar {{
+        .theme-bar {{
             display: flex;
-            width: 100%;
-            max-width: 520px;
-            gap: 6px;
-            margin: 0 0 14px 0;
-            padding: 5px;
-            background: var(--card-bg);
-            border: 1px solid var(--card-border);
-            border-radius: 14px;
-            box-shadow: var(--card-shadow);
-            position: sticky;
-            top: 8px;
-            z-index: 500;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-top: 10px;
         }}
-        .tab-btn {{
-            flex: 1;
+        .theme-btn {{
             appearance: none;
             -webkit-appearance: none;
-            padding: 11px 8px;
-            border: 1px solid transparent;
-            border-radius: 10px;
-            background: transparent;
-            color: var(--text-dim);
+            display: inline-flex;
+            align-items: center;
+            gap: 7px;
+            padding: 9px 18px;
+            border-radius: 12px;
             font-size: 0.82rem;
             font-weight: 800;
             letter-spacing: 0.4px;
-            text-transform: uppercase;
-            cursor: pointer;
-            transition: background 0.18s ease, color 0.18s ease;
-        }}
-        .tab-btn.active {{
+            color: var(--text-main);
             background: var(--btn-gradient);
-            color: #fff;
-            border-color: var(--accent-primary);
+            border: 1px solid var(--card-border);
             box-shadow: var(--btn-shadow);
+            cursor: pointer;
+            transition: transform 0.12s ease, filter 0.15s ease;
         }}
-        .tab-panel {{
-            /* The cards used to be direct flex children of <body>, which is what
-               centred them. Keep that alignment now they sit inside a panel. */
-            display: flex;
-            flex-direction: column;
-            align-items: center;
+        .theme-btn:active {{
+            transform: scale(0.96);
+        }}
+        .theme-btn:hover {{
+            filter: brightness(1.12);
+        }}
+        .theme-btn.open {{
+            border-color: var(--accent-secondary);
+        }}
+        .theme-menu {{
+            display: none;
+            margin-top: 10px;
             width: 100%;
+            max-width: 420px;
+            max-height: 270px;
+            overflow-y: auto;
+            padding: 6px;
+            border-radius: 14px;
+            background: var(--card-bg);
+            border: 1px solid var(--card-border);
+            box-shadow: var(--card-shadow);
+            -webkit-overflow-scrolling: touch;
         }}
-        .tab-panel[hidden] {{
-            display: none !important;
+        .theme-menu.show {{
+            display: block;
         }}
-        /* MP Assistant chat */
-        .assistant-head {{
+        .theme-option {{
             display: flex;
             align-items: center;
             justify-content: space-between;
             gap: 10px;
-            margin-bottom: 12px;
-            padding-bottom: 10px;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.07);
-            flex-wrap: wrap;
+            width: 100%;
+            text-align: left;
+            padding: 9px 12px;
+            margin: 2px 0;
+            border: 1px solid transparent;
+            border-radius: 10px;
+            background: transparent;
+            color: var(--text-main);
+            font-size: 0.8rem;
+            font-weight: 600;
+            font-family: inherit;
+            cursor: pointer;
         }}
-        .assistant-title {{
-            font-size: 0.95rem;
-            font-weight: 800;
-            color: var(--accent-secondary);
-            letter-spacing: 0.5px;
+        .theme-option:hover {{
+            background: rgba(255, 255, 255, 0.07);
         }}
-        .assistant-status {{
-            font-size: 0.7rem;
-            font-weight: 800;
-            text-transform: uppercase;
-            letter-spacing: 0.6px;
-            padding: 3px 10px;
-            border-radius: 12px;
-            background: rgba(255, 255, 255, 0.06);
-            border: 1px solid var(--card-border);
-            color: var(--text-dim);
-        }}
-        .assistant-status.online {{
+        .theme-option.active {{
             background: var(--badge-bg);
             color: var(--badge-color);
             border-color: var(--badge-color);
-        }}
-        .assistant-status.offline {{
-            background: rgba(255, 170, 0, 0.12);
-            color: #ffaa00;
-            border-color: #ffaa00;
-        }}
-        .assistant-voice-row {{
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            width: 100%;
-            margin-bottom: 12px;
-            flex-wrap: wrap;
-        }}
-        .assistant-voice-row label {{
-            font-size: 0.72rem;
-            font-weight: 700;
-            color: var(--text-dim);
-            letter-spacing: 0.4px;
-        }}
-        .assistant-voice-select {{
-            flex: 1;
-            min-width: 150px;
-            appearance: none;
-            -webkit-appearance: none;
-            padding: 7px 30px 7px 12px;
-            border-radius: 10px;
-            font-size: 0.76rem;
-            font-weight: 700;
-            color: var(--text-main);
-            background-color: rgba(255, 255, 255, 0.05);
-            background-image: linear-gradient(45deg, transparent 50%, var(--accent-secondary) 50%),
-                              linear-gradient(135deg, var(--accent-secondary) 50%, transparent 50%);
-            background-position: calc(100% - 17px) 52%, calc(100% - 11px) 52%;
-            background-size: 6px 6px, 6px 6px;
-            background-repeat: no-repeat;
-            border: 1px solid var(--card-border);
-            cursor: pointer;
-        }}
-        .assistant-voice-select option {{
-            background: #14141c;
-            color: #ffffff;
-        }}
-        .assistant-log {{
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-            min-height: 220px;
-            max-height: 46vh;
-            overflow-y: auto;
-            padding: 4px 2px 8px 2px;
-            margin-bottom: 12px;
-            scroll-behavior: smooth;
-            -webkit-overflow-scrolling: touch;
-        }}
-        .msg {{
-            padding: 10px 13px;
-            border-radius: 14px;
-            font-size: 0.86rem;
-            line-height: 1.5;
-            white-space: pre-wrap;
-            word-break: break-word;
-            max-width: 92%;
-        }}
-        .msg.user {{
-            align-self: flex-end;
-            background: var(--btn-gradient);
-            color: #fff;
-            border-bottom-right-radius: 4px;
-            font-weight: 600;
-        }}
-        .msg.agent {{
-            align-self: flex-start;
-            background: rgba(255, 255, 255, 0.05);
-            border: 1px solid var(--card-border);
-            color: var(--text-main);
-            border-bottom-left-radius: 4px;
-        }}
-        .msg.agent.error {{
-            border-color: #ffaa00;
-            color: #ffaa00;
-            background: rgba(255, 170, 0, 0.08);
-        }}
-        .msg-hint {{
-            align-self: center;
-            font-size: 0.72rem;
-            color: var(--text-dim);
-            text-align: center;
-            padding: 6px 10px;
-            opacity: 0.85;
-        }}
-        .assistant-input-row {{
-            display: flex;
-            align-items: flex-end;
-            gap: 8px;
-            width: 100%;
-            padding-top: 10px;
-            border-top: 1px solid rgba(255, 255, 255, 0.07);
-        }}
-        .assistant-input {{
-            flex: 1;
-            resize: none;
-            min-height: 46px;
-            max-height: 130px;
-            padding: 12px 14px;
-            border-radius: 12px;
-            border: 1px solid var(--card-border);
-            background: rgba(255, 255, 255, 0.05);
-            color: var(--text-main);
-            font-family: inherit;
-            /* 16px keeps iOS Safari from zooming the page on focus. */
-            font-size: 16px;
-            line-height: 1.35;
-        }}
-        .assistant-input:focus {{
-            outline: none;
-            border-color: var(--accent-primary);
-        }}
-        .assistant-input::placeholder {{
-            color: var(--text-dim);
-            opacity: 0.7;
-        }}
-        .assistant-send {{
-            background: var(--btn-gradient);
-            color: #fff;
-            border: none;
-            box-shadow: var(--btn-shadow);
-            padding: 12px 16px;
-            font-size: 0.88rem;
             font-weight: 800;
-            border-radius: 12px;
-            min-width: 62px;
         }}
-        .assistant-send:disabled {{
-            opacity: 0.5;
-            cursor: not-allowed;
-        }}
-        .assistant-actions {{
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            gap: 8px;
-            width: 100%;
-            margin-top: 10px;
-            flex-wrap: wrap;
-        }}
-        .assistant-actions button {{
-            padding: 7px 12px;
-            font-size: 0.74rem;
-            border-radius: 9px;
-            font-weight: 700;
-        }}
-        .voice-toggle {{
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            font-size: 0.74rem;
-            font-weight: 700;
-            color: var(--text-dim);
-        }}
-        .assistant-audio {{
-            /* Laid out but invisible. `display: none` can stop iOS Safari from
-               playing the reply element at all, so it is moved off-screen
-               instead of removed from the layout. */
-            position: absolute;
-            left: -9999px;
-            width: 1px;
-            height: 1px;
-            opacity: 0;
-            pointer-events: none;
-        }}
-        .assistant-replay {{
-            display: inline-block;
-            margin-top: 8px;
-            padding: 6px 11px;
+        .theme-option .theme-check {{
             font-size: 0.72rem;
-            font-weight: 700;
-            border-radius: 9px;
-            border: 1px solid var(--card-border);
-            background: rgba(255, 255, 255, 0.06);
-            color: var(--accent-secondary);
-            cursor: pointer;
-        }}
-        .assistant-replay:active {{
-            transform: scale(0.97);
-        }}
-        .assistant-speaking {{
-            font-size: 0.72rem;
-            font-weight: 800;
-            letter-spacing: 0.4px;
-            color: var(--accent-secondary);
             opacity: 0.9;
         }}
         .mini-playlist {{
@@ -1946,15 +3006,106 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             flex-direction: column;
             gap: 6px;
         }}
+        /* Five rows are visible at once; the rest of the window scrolls. */
+        #miniPlItems {{
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            /* 5 rows x 48px + 4 gaps x 6px = 264px */
+            max-height: 264px;
+            overflow-y: auto;
+            overscroll-behavior: contain;
+            -webkit-overflow-scrolling: touch;
+            touch-action: pan-y;
+            padding-right: 4px;
+        }}
+        #miniPlItems::-webkit-scrollbar {{
+            width: 5px;
+        }}
+        #miniPlItems::-webkit-scrollbar-thumb {{
+            background: var(--accent-secondary);
+            border-radius: 3px;
+        }}
+        #miniPlItems::-webkit-scrollbar-track {{
+            background: transparent;
+        }}
         .mini-pl-head {{
             display: flex;
             align-items: center;
             justify-content: space-between;
+            gap: 8px;
             font-size: 0.7rem;
             font-weight: 800;
             letter-spacing: 0.7px;
             color: var(--text-dim);
             text-transform: uppercase;
+        }}
+        .mini-pl-count {{
+            font-size: 0.68rem;
+            font-weight: 800;
+            letter-spacing: 0.5px;
+            padding: 3px 9px;
+            border-radius: 10px;
+            background: var(--badge-bg);
+            color: var(--badge-color);
+            border: 1px solid var(--badge-color);
+            white-space: nowrap;
+            text-transform: none;
+        }}
+        .mode-switch {{
+            display: flex;
+            gap: 4px;
+            padding: 3px;
+            border-radius: 11px;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid var(--card-border);
+        }}
+        .mode-switch button {{
+            appearance: none;
+            border: none;
+            background: transparent;
+            color: var(--text-dim);
+            font-family: inherit;
+            font-size: 0.72rem;
+            font-weight: 800;
+            letter-spacing: 0.2px;
+            padding: 7px 6px;
+            border-radius: 8px;
+            cursor: pointer;
+            flex: 1 1 0;
+            min-width: 0;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            transition: background 0.15s ease, color 0.15s ease;
+        }}
+        .mode-switch button.active {{
+            background: var(--badge-bg);
+            color: var(--badge-color);
+            box-shadow: 0 0 0 1px var(--badge-color) inset;
+        }}
+        .mode-switch button:disabled {{
+            cursor: progress;
+            opacity: 0.55;
+        }}
+        .mode-switch button.pending:disabled {{
+            opacity: 1;
+            animation: modePulse 1s ease-in-out infinite;
+        }}
+        @keyframes modePulse {{
+            0%, 100% {{ opacity: 1; }}
+            50% {{ opacity: 0.45; }}
+        }}
+        @media (prefers-reduced-motion: reduce) {{
+            .mode-switch button.pending:disabled {{ animation: none; }}
+        }}
+        .mini-pl-empty {{
+            font-size: 0.75rem;
+            color: var(--text-dim);
+            padding: 10px 12px;
+            border-radius: 10px;
+            border: 1px dashed var(--card-border);
+            text-align: center;
         }}
         .mini-pl-item {{
             display: flex;
@@ -1966,6 +3117,10 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             border: 1px solid var(--card-border);
             cursor: pointer;
             transition: background 0.15s ease, border-color 0.15s ease;
+            /* Uniform 48px rows put exactly five in the 264px window. */
+            flex: 0 0 48px;
+            height: 48px;
+            box-sizing: border-box;
         }}
         .mini-pl-item:hover {{
             background: rgba(255, 255, 255, 0.08);
@@ -2018,6 +3173,47 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             color: var(--badge-color);
             border-color: var(--badge-color);
         }}
+        /* Tray start/stop of the companion: the phone shows why it is
+           reconnecting, then reloads itself to resume the stream. */
+        .restart-notice {{
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            z-index: 10000;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            padding: 10px 14px;
+            font-size: 0.78rem;
+            font-weight: 800;
+            letter-spacing: 0.2px;
+            text-align: center;
+            color: #fff;
+            background: var(--btn-gradient);
+            border-bottom: 2px solid var(--badge-color);
+            box-shadow: 0 6px 24px rgba(0, 0, 0, 0.7);
+        }}
+        .restart-notice.show {{
+            display: flex;
+        }}
+        .restart-notice .restart-spinner {{
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            flex: 0 0 auto;
+            border-radius: 50%;
+            border: 2px solid rgba(255, 255, 255, 0.35);
+            border-top-color: #fff;
+            animation: restartSpin 0.8s linear infinite;
+        }}
+        @keyframes restartSpin {{
+            to {{ transform: rotate(360deg); }}
+        }}
+        @media (prefers-reduced-motion: reduce) {{
+            .restart-notice .restart-spinner {{ animation: none; }}
+        }}
         .autoplay-notice.warn {{
             background: rgba(255, 170, 0, 0.12);
             color: #ffaa00;
@@ -2032,12 +3228,6 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             box-shadow: var(--card-shadow);
             border: 1px solid var(--card-border);
             margin-bottom: 16px;
-        }}
-        .assistant-card {{
-            /* The chat log is the scrolling region, so the card itself must not
-               be squeezed on a short iPhone viewport. */
-            display: flex;
-            flex-direction: column;
         }}
         .badges-row {{
             display: flex;
@@ -2120,16 +3310,28 @@ def render_html_page(theme: Dict[str, Any]) -> str:
         }}
         /* Stream Activation Modal */
         #streamOverlay {{
-            display: flex;
+            display: none;
             position: fixed;
             top: 0; left: 0; width: 100%; height: 100%;
+            /* dvh keeps the gate inside the visible area on iOS Safari, where
+               100% of the fixed viewport can extend under the browser chrome. */
+            height: 100dvh;
             background: rgba(5, 4, 15, 0.92);
             z-index: 9999;
             flex-direction: column;
             align-items: center;
+            /* The engage button is the only way forward, so the card is pinned
+               to the middle of the free space. On very short screens it can
+               still scroll rather than hiding the button off screen. */
             justify-content: center;
-            padding: 24px;
+            padding: max(16px, env(safe-area-inset-top)) 16px
+                     max(16px, env(safe-area-inset-bottom));
             text-align: center;
+            overflow-y: auto;
+            -webkit-overflow-scrolling: touch;
+        }}
+        #streamOverlay.show {{
+            display: flex;
         }}
         .overlay-card {{
             background: var(--card-bg);
@@ -2138,6 +3340,9 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             padding: 28px 20px;
             max-width: 400px;
             width: 100%;
+            max-height: calc(100dvh - 32px);
+            overflow-y: auto;
+            margin: auto 0;
             box-shadow: 0 16px 50px rgba(0, 0, 0, 0.9), 0 0 30px rgba(176, 88, 255, 0.3);
         }}
         .overlay-card h2 {{
@@ -2154,6 +3359,11 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             margin: 0 0 20px 0;
             line-height: 1.4;
         }}
+        .overlay-card p.stream-overlay-detail {{
+            color: #ffaa00;
+            font-size: 0.82rem;
+            margin: -8px 0 18px 0;
+        }}
         .btn-activate-stream {{
             background: var(--btn-gradient);
             color: #fff;
@@ -2167,19 +3377,6 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             box-shadow: var(--btn-shadow);
             text-transform: uppercase;
             letter-spacing: 1px;
-        }}
-        .overlay-skip {{
-            margin-top: 14px;
-            background: transparent;
-            border: none;
-            box-shadow: none;
-            color: var(--text-dim);
-            font-size: 0.8rem;
-            font-weight: 700;
-            padding: 8px;
-            width: 100%;
-            cursor: pointer;
-            text-decoration: underline;
         }}
         .visualizer-container {{
             width: 100%;
@@ -2318,8 +3515,10 @@ def render_html_page(theme: Dict[str, Any]) -> str:
         }}
         .sec-controls {{
             display: flex;
-            justify-content: space-between;
-            gap: 12px;
+            /* Two control clusters cannot sit side by side on a 390px phone;
+               without stacking, the pitch cluster is clipped off the card. */
+            flex-direction: column;
+            gap: 8px;
             width: 100%;
             margin-top: 14px;
             padding-top: 12px;
@@ -2329,8 +3528,10 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             display: flex;
             align-items: center;
             gap: 6px;
-            flex: 1;
+            flex: 1 1 auto;
+            min-width: 0;
             justify-content: center;
+            flex-wrap: nowrap;
         }}
         .control-pill {{
             font-size: 0.78rem;
@@ -2388,41 +3589,594 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             opacity: 0.75;
             padding: 10px 0;
         }}
+        /* Desktop launch pad: only rendered for the Linux host. Themed with the
+           same palette variables as the rest of the dashboard. A running app
+           keeps its button pressed down; an app that is not running sits up. */
+        .launchpad {{
+            width: 100%;
+            max-width: 520px;
+            margin-top: 16px;
+            padding: 12px;
+            border-radius: 16px;
+            background: var(--card-bg);
+            border: 1px solid var(--card-border);
+            box-shadow: var(--card-shadow);
+        }}
+        .launchpad-head {{
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            margin-bottom: 10px;
+            font-size: 0.7rem;
+            font-weight: 800;
+            letter-spacing: 0.7px;
+            text-transform: uppercase;
+            color: var(--text-dim);
+        }}
+        .launchpad-grid {{
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 8px;
+        }}
+        .launch-btn {{
+            appearance: none;
+            -webkit-appearance: none;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 4px;
+            min-width: 0;
+            padding: 10px 4px;
+            border-radius: 12px;
+            font-family: inherit;
+            font-size: 0.68rem;
+            font-weight: 800;
+            line-height: 1.15;
+            text-align: center;
+            color: var(--text-dim);
+            background: rgba(255, 255, 255, 0.04);
+            border: 1px solid var(--card-border);
+            box-shadow: 0 3px 0 rgba(0, 0, 0, 0.35);
+            cursor: pointer;
+            transition: transform 0.1s ease, box-shadow 0.1s ease,
+                        background 0.15s ease, color 0.15s ease;
+            overflow: hidden;
+        }}
+        .launch-btn .launch-icon {{
+            font-size: 1.15rem;
+            line-height: 1;
+        }}
+        .launch-btn .launch-label {{
+            display: block;
+            max-width: 100%;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }}
+        .launch-btn:hover {{
+            color: var(--text-main);
+            border-color: var(--accent-secondary);
+        }}
+        .launch-btn:focus-visible {{
+            outline: 2px solid var(--accent-secondary);
+            outline-offset: 2px;
+        }}
+        /* Pressed down: the button is physically sunk into the panel and lit
+           with the theme's primary/secondary gradient. */
+        .launch-btn.running {{
+            color: #fff;
+            background: var(--btn-gradient);
+            border-color: var(--badge-color);
+            box-shadow: inset 0 3px 8px rgba(0, 0, 0, 0.55),
+                        0 0 0 1px var(--badge-color) inset,
+                        0 0 14px -2px var(--accent-primary);
+            transform: translateY(2px);
+        }}
+        .launch-btn.running .launch-state {{
+            color: var(--badge-color);
+        }}
+        .launch-btn:active {{
+            transform: translateY(2px);
+            box-shadow: inset 0 3px 8px rgba(0, 0, 0, 0.55);
+        }}
+        .launch-btn.busy {{
+            cursor: progress;
+            opacity: 0.7;
+        }}
+        .launch-state {{
+            font-size: 0.58rem;
+            font-weight: 800;
+            letter-spacing: 0.4px;
+            text-transform: uppercase;
+            opacity: 0.9;
+        }}
+        .launch-close {{
+            grid-column: 1 / -1;
+            flex-direction: row;
+            gap: 8px;
+            margin-top: 8px;
+            padding: 11px 10px;
+            font-size: 0.76rem;
+            background: rgba(255, 255, 255, 0.03);
+            color: var(--accent-crimson);
+            border-color: var(--accent-crimson);
+            box-shadow: 0 3px 0 rgba(0, 0, 0, 0.35);
+        }}
+        .launch-close:hover {{
+            color: #fff;
+            background: var(--accent-crimson);
+            border-color: var(--accent-crimson);
+        }}
+        .launchpad-note {{
+            margin-top: 8px;
+            font-size: 0.66rem;
+            font-weight: 700;
+            color: var(--text-dim);
+            text-align: center;
+        }}
+        .launchpad-note.ok {{
+            color: var(--badge-color);
+        }}
+        /* ------------------------------------------------------------------
+           Top tabs: the dashboard switches between the MP Liquid Player and
+           the MP Assistant without a page load, so a stream that is already
+           playing keeps playing while the user chats.
+           ------------------------------------------------------------------ */
+        .app-tabs {{
+            display: flex;
+            gap: 6px;
+            width: 100%;
+            max-width: 520px;
+            margin: 0 0 16px 0;
+            padding: 5px;
+            border-radius: 16px;
+            background: var(--card-bg);
+            border: 1px solid var(--card-border);
+            box-shadow: var(--card-shadow);
+            position: sticky;
+            top: 8px;
+            z-index: 200;
+            backdrop-filter: blur(14px);
+            -webkit-backdrop-filter: blur(14px);
+        }}
+        .app-tab {{
+            appearance: none;
+            -webkit-appearance: none;
+            flex: 1 1 0;
+            min-width: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 7px;
+            padding: 12px 10px;
+            border: 1px solid transparent;
+            border-radius: 12px;
+            background: transparent;
+            color: var(--text-dim);
+            font-family: inherit;
+            font-size: 0.82rem;
+            font-weight: 800;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            cursor: pointer;
+            transition: background 0.18s ease, color 0.18s ease,
+                        box-shadow 0.18s ease, transform 0.12s ease;
+        }}
+        .app-tab .app-tab-icon {{
+            font-size: 1rem;
+            line-height: 1;
+        }}
+        .app-tab:hover {{
+            color: var(--text-main);
+        }}
+        .app-tab:active {{
+            transform: scale(0.98);
+        }}
+        .app-tab:focus-visible {{
+            outline: 2px solid var(--accent-secondary);
+            outline-offset: 2px;
+        }}
+        .app-tab.active {{
+            color: #fff;
+            background: var(--btn-gradient);
+            border-color: var(--badge-color);
+            box-shadow: var(--btn-shadow), 0 0 0 1px var(--badge-color) inset;
+        }}
+        .app-tab .app-tab-badge {{
+            display: none;
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: var(--accent-tertiary);
+            box-shadow: 0 0 8px var(--accent-tertiary);
+        }}
+        .app-tab.just-pinged .app-tab-badge {{
+            display: inline-block;
+        }}
+        .tab-panel {{
+            width: 100%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }}
+        .tab-panel[hidden] {{
+            display: none !important;
+        }}
+        /* The assistant needs vertical space on a phone. While it is the active
+           tab the big brand header collapses to one compact line. */
+        body.assistant-tab-open .header h1 {{
+            font-size: 1.05rem;
+            letter-spacing: 0.8px;
+        }}
+        body.assistant-tab-open .header p,
+        body.assistant-tab-open .theme-bar,
+        body.assistant-tab-open .theme-pill,
+        body.assistant-tab-open #autoplayNotice {{
+            display: none !important;
+        }}
+        body.assistant-tab-open .header {{
+            margin-bottom: 10px;
+        }}
+        /* Assistant shell */
+        .assistant-shell {{
+            width: 100%;
+            max-width: 520px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            margin-bottom: 16px;
+        }}
+        .assistant-card {{
+            background-color: var(--card-bg);
+            border-radius: 18px;
+            padding: 16px;
+            border: 1px solid var(--card-border);
+            box-shadow: var(--card-shadow);
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }}
+        .assistant-head {{
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            flex-wrap: wrap;
+        }}
+        .assistant-title {{
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+            min-width: 0;
+        }}
+        .assistant-title strong {{
+            font-size: 0.95rem;
+            color: var(--text-main);
+            letter-spacing: 0.4px;
+        }}
+        .assistant-title span {{
+            font-size: 0.7rem;
+            color: var(--text-dim);
+            font-weight: 600;
+        }}
+        .assistant-state {{
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 0.66rem;
+            font-weight: 800;
+            letter-spacing: 0.6px;
+            text-transform: uppercase;
+            border: 1px solid var(--card-border);
+            color: var(--text-dim);
+            background: rgba(255, 255, 255, 0.04);
+            white-space: nowrap;
+        }}
+        .assistant-state .dot {{
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--text-dim);
+            flex: 0 0 auto;
+        }}
+        .assistant-state.online {{
+            color: var(--badge-color);
+            border-color: var(--badge-color);
+            background: var(--badge-bg);
+        }}
+        .assistant-state.online .dot {{
+            background: var(--badge-color);
+            box-shadow: 0 0 10px var(--badge-color);
+        }}
+        .assistant-state.offline {{
+            color: var(--accent-crimson);
+            border-color: var(--accent-crimson);
+        }}
+        .assistant-state.offline .dot {{
+            background: var(--accent-crimson);
+        }}
+        .assistant-voice-row {{
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            flex-wrap: wrap;
+            font-size: 0.72rem;
+            color: var(--text-dim);
+            font-weight: 700;
+        }}
+        .assistant-voice-pill {{
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 5px 11px;
+            border-radius: 12px;
+            background: var(--badge-bg);
+            color: var(--badge-color);
+            border: 1px solid var(--badge-color);
+            font-size: 0.68rem;
+            font-weight: 800;
+            letter-spacing: 0.3px;
+            max-width: 100%;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }}
+        .assistant-actions {{
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }}
+        .assistant-actions button {{
+            flex: 1 1 auto;
+            padding: 9px 12px;
+            font-size: 0.74rem;
+            border-radius: 10px;
+        }}
+        .assistant-actions .btn-speak {{
+            background: var(--btn-gradient);
+            color: #fff;
+            border: none;
+            box-shadow: var(--btn-shadow);
+        }}
+        .assistant-actions .btn-speak.off {{
+            background: rgba(255, 255, 255, 0.06);
+            color: var(--text-dim);
+            box-shadow: none;
+            border: 1px solid var(--card-border);
+        }}
+        .chat-log {{
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            /* Roughly half a phone screen, so the prompt stays reachable. */
+            max-height: 46vh;
+            min-height: 150px;
+            overflow-y: auto;
+            overscroll-behavior: contain;
+            -webkit-overflow-scrolling: touch;
+            padding: 4px 4px 4px 0;
+            touch-action: pan-y;
+        }}
+        .chat-log::-webkit-scrollbar {{
+            width: 5px;
+        }}
+        .chat-log::-webkit-scrollbar-thumb {{
+            background: var(--accent-secondary);
+            border-radius: 3px;
+        }}
+        .chat-bubble {{
+            max-width: 92%;
+            padding: 10px 12px;
+            border-radius: 14px;
+            font-size: 0.82rem;
+            line-height: 1.45;
+            white-space: pre-wrap;
+            word-break: break-word;
+            border: 1px solid var(--card-border);
+            background: rgba(255, 255, 255, 0.04);
+            color: var(--text-main);
+            position: relative;
+        }}
+        .chat-bubble.user {{
+            align-self: flex-end;
+            background: var(--badge-bg);
+            border-color: var(--badge-color);
+            color: var(--text-main);
+        }}
+        .chat-bubble.assistant {{
+            align-self: flex-start;
+            border-left: 3px solid var(--accent-primary);
+        }}
+        .chat-bubble.system {{
+            align-self: center;
+            font-size: 0.7rem;
+            font-weight: 700;
+            color: var(--text-dim);
+            background: transparent;
+            border-style: dashed;
+            text-align: center;
+            max-width: 100%;
+        }}
+        .chat-bubble .bubble-tools {{
+            display: flex;
+            gap: 6px;
+            margin-top: 8px;
+            padding-top: 6px;
+            border-top: 1px solid rgba(255, 255, 255, 0.08);
+            align-items: center;
+        }}
+        .chat-bubble .bubble-tools button {{
+            padding: 4px 9px;
+            font-size: 0.68rem;
+            border-radius: 8px;
+        }}
+        .chat-bubble.speaking {{
+            border-color: var(--accent-tertiary);
+            box-shadow: 0 0 0 1px var(--accent-tertiary) inset;
+        }}
+        .chat-bubble .speak-state {{
+            font-size: 0.62rem;
+            font-weight: 800;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            color: var(--accent-tertiary);
+        }}
+        .chat-empty {{
+            align-self: center;
+            text-align: center;
+            font-size: 0.76rem;
+            color: var(--text-dim);
+            padding: 16px 12px;
+            border-radius: 12px;
+            border: 1px dashed var(--card-border);
+            line-height: 1.5;
+        }}
+        .chat-empty strong {{
+            display: block;
+            color: var(--text-main);
+            margin-bottom: 4px;
+            font-size: 0.86rem;
+        }}
+        .chat-composer {{
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }}
+        .chat-composer textarea {{
+            width: 100%;
+            min-height: 64px;
+            max-height: 160px;
+            resize: vertical;
+            padding: 11px 12px;
+            border-radius: 12px;
+            border: 1px solid var(--card-border);
+            background: rgba(0, 0, 0, 0.28);
+            color: var(--text-main);
+            font-family: inherit;
+            font-size: 0.88rem;
+            line-height: 1.4;
+        }}
+        .chat-composer textarea:focus {{
+            outline: none;
+            border-color: var(--accent-secondary);
+            box-shadow: 0 0 0 1px var(--accent-secondary);
+        }}
+        .chat-buttons {{
+            display: flex;
+            gap: 8px;
+        }}
+        .chat-buttons .btn-send {{
+            flex: 1;
+            background: var(--btn-gradient);
+            color: #fff;
+            border: none;
+            box-shadow: var(--btn-shadow);
+            font-weight: 800;
+            letter-spacing: 0.6px;
+            text-transform: uppercase;
+            font-size: 0.82rem;
+            padding: 12px 16px;
+        }}
+        .chat-buttons .btn-stop {{
+            display: none;
+            background: var(--accent-crimson);
+            color: #fff;
+            border: none;
+            font-weight: 800;
+            padding: 12px 16px;
+        }}
+        .chat-buttons .btn-stop.show {{
+            display: block;
+        }}
+        .chat-buttons button:disabled {{
+            opacity: 0.5;
+            cursor: progress;
+        }}
+        .assistant-hint {{
+            font-size: 0.66rem;
+            color: var(--text-dim);
+            font-weight: 600;
+            text-align: center;
+            line-height: 1.5;
+        }}
+        .assistant-hint code {{
+            background: rgba(255, 255, 255, 0.07);
+            padding: 1px 5px;
+            border-radius: 5px;
+            color: var(--accent-secondary);
+            font-size: 0.66rem;
+        }}
+        @media (max-width: 390px) {{
+            .chat-log {{
+                max-height: 40vh;
+            }}
+        }}
+        @media (max-width: 390px) {{
+            .launchpad-grid {{
+                gap: 6px;
+            }}
+            .launch-btn {{
+                padding: 9px 3px;
+                font-size: 0.62rem;
+            }}
+            .launch-btn .launch-icon {{
+                font-size: 1rem;
+            }}
+        }}
     </style>
 </head>
 <body>
+    <div id="restartNotice" class="restart-notice" role="status" aria-live="polite">
+        <span class="restart-spinner" aria-hidden="true"></span>
+        <span id="restartNoticeText">MP Audio Web Companion has been restarted — reconnecting…</span>
+    </div>
     <!-- Stream Activation Modal to Satisfy Mobile Autoplay Policies -->
-    <div id="streamOverlay">
+    <div id="streamOverlay" class="show">
         <div class="overlay-card">
             <h2>🎧 MP Mix Stream</h2>
             <p>Tap below to engage mobile studio audio streaming and dashboard synchronization.</p>
+            <p id="streamOverlayDetail" class="stream-overlay-detail" style="display: none;"></p>
             <button class="btn-activate-stream" onclick="activateMobileStream()">Engage Audio Stream</button>
-            <button class="overlay-skip" onclick="dismissStreamOverlay()">Skip — use the assistant only</button>
         </div>
+    </div>
+
+    <!-- Top tabs. The stream keeps playing while the assistant tab is open,
+         so the listener can switch back at any time without re-engaging it. -->
+    <div class="app-tabs" role="tablist" aria-label="MP Web Companion sections">
+        <button type="button" class="app-tab active" id="tabPlayer" role="tab"
+                aria-selected="true" aria-controls="panelPlayer"
+                onclick="switchAppTab('player')">
+            <span class="app-tab-icon" aria-hidden="true">🎧</span> MP Liquid Player
+        </button>
+        <button type="button" class="app-tab" id="tabAssistant" role="tab"
+                aria-selected="false" aria-controls="panelAssistant"
+                onclick="switchAppTab('assistant')">
+            <span class="app-tab-icon" aria-hidden="true">🧠</span> MP Assistant
+            <span class="app-tab-badge" aria-hidden="true"></span>
+        </button>
     </div>
 
     <div class="header">
-        <h1>MP MIX MANAGER <span class="app-version">v{html.escape(VERSION)}</span></h1>
+        <h1>MP LIQUID PLAYER (WEB) <span class="app-version">v{html.escape(VERSION)}</span></h1>
         <p>Studio & DJ Booth Mobile Web Companion</p>
         <div id="themeBadge" class="theme-pill">🎨 <span id="themeNameText">{html.escape(t['name'])}</span></div>
-        <div>
-            <select id="themeSelect" class="theme-select" onchange="changeTheme(this.value)"
-                    aria-label="Choose theme" title="Change the companion theme">
-                <option value="{html.escape(t['id'])}">{html.escape(t['name'])}</option>
-            </select>
+        <div class="theme-bar">
+            <button class="theme-btn" id="themeBtn" onclick="toggleThemeMenu()"
+                    aria-haspopup="true" aria-expanded="false"
+                    title="Change the companion theme">
+                🎨 Theme
+            </button>
         </div>
+        <div class="theme-menu" id="themeMenu" role="menu"></div>
         <div id="autoplayNotice" class="autoplay-notice" style="display: none;"></div>
     </div>
 
-    <!-- Primary tabs: the player and the assistant share one page -->
-    <div class="tab-bar" role="tablist" aria-label="MP Web Companion sections">
-        <button class="tab-btn active" id="tabBtnPlayer" role="tab" aria-selected="true"
-                aria-controls="panelPlayer" onclick="showTab('player')">🎧 MP Liquid Player</button>
-        <button class="tab-btn" id="tabBtnAssistant" role="tab" aria-selected="false"
-                aria-controls="panelAssistant" onclick="showTab('assistant')">🧠 MP Assistant</button>
-    </div>
-
-    <div class="tab-panel" id="panelPlayer" role="tabpanel" aria-labelledby="tabBtnPlayer">
+    <div class="tab-panel" id="panelPlayer" role="tabpanel" aria-labelledby="tabPlayer">
     <div class="card now-playing">
         <div id="mobileAudioBanner" class="mobile-audio-banner">
             <h4>📱 Mobile Audio Stream Active</h4>
@@ -2466,11 +4220,11 @@ def render_html_page(theme: Dict[str, Any]) -> str:
 
         <!-- Primary Controls -->
         <div class="controls-row">
-            <button class="btn-sub" onclick="skipBy(-30)">⏪ 30s</button>
+            <button class="btn-sub" onclick="sendAction('seek_backward')">⏪ 30s</button>
             <button onclick="sendAction('previous')">⏮</button>
             <button class="btn-main" id="btnPlayPause" onclick="handlePlayPauseClick()">⏯ Play</button>
             <button onclick="sendAction('next')">⏭</button>
-            <button class="btn-sub" onclick="skipBy(30)">30s ⏩</button>
+            <button class="btn-sub" onclick="sendAction('seek_forward')">30s ⏩</button>
         </div>
 
         <!-- Mode Controls -->
@@ -2498,12 +4252,18 @@ def render_html_page(theme: Dict[str, Any]) -> str:
                 <button class="btn-mini" onclick="sendAction('reset_pitch')">0</button>
             </div>
         </div>
-        <!-- Mini Playlist: the current mix plus the next two -->
+        <!-- Mini Playlist: the current track plus the next four, scrollable -->
         <div class="mini-playlist" id="miniPlaylist">
             <div class="mini-pl-head">
-                <span>🎵 Up Next</span>
-                <span id="miniPlCount">3</span>
+                <span id="miniPlTitle">🎵 Up Next</span>
+                <span class="mini-pl-count" id="miniPlCount">0 tracks</span>
             </div>
+            <div class="mode-switch" id="modeSwitch" role="group" aria-label="Choose library mode">
+                <button type="button" data-mode="MIX_ARCHIVE" onclick="switchLibraryMode('MIX_ARCHIVE')">Mix</button>
+                <button type="button" data-mode="MUSIC" onclick="switchLibraryMode('MUSIC')">Music</button>
+                <button type="button" data-mode="FAVORITES" onclick="switchLibraryMode('FAVORITES')">Favourites</button>
+            </div>
+            <div id="miniPlNote"></div>
             <div id="miniPlItems"></div>
         </div>
     </div>
@@ -2516,43 +4276,73 @@ def render_html_page(theme: Dict[str, Any]) -> str:
         </div>
         <ul class="tl-items" id="tlItems"></ul>
     </div>
+
+    {launch_pad_html}
     </div><!-- /panelPlayer -->
 
-    <!-- MP Assistant: live MP Harmony prompt -->
-    <div class="tab-panel" id="panelAssistant" role="tabpanel" aria-labelledby="tabBtnAssistant" hidden>
-        <div class="card assistant-card">
-            <div class="assistant-head">
-                <span class="assistant-title">🧠 MP ASSISTANT</span>
-                <span class="assistant-status" id="assistantStatus">CHECKING…</span>
+    <div class="tab-panel" id="panelAssistant" role="tabpanel" aria-labelledby="tabAssistant" hidden>
+        <div class="assistant-shell">
+            <div class="assistant-card">
+                <div class="assistant-head">
+                    <div class="assistant-title">
+                        <strong>🧠 MP Harmony Agent</strong>
+                        <span id="assistantModel">Local engineering assistant</span>
+                    </div>
+                    <span class="assistant-state" id="assistantState">
+                        <span class="dot" aria-hidden="true"></span>
+                        <span id="assistantStateText">Checking…</span>
+                    </span>
+                </div>
+
+                <div class="assistant-voice-row">
+                    <span>🔊 Voice</span>
+                    <span class="assistant-voice-pill" id="assistantVoicePill"
+                          title="Stephen Hawking speaks every reply until you change it with /voice">
+                        Stephen Hawking
+                    </span>
+                </div>
+
+                <div class="assistant-actions">
+                    <button type="button" class="btn-speak" id="assistantSpeakBtn"
+                            onclick="toggleAutoSpeak()"
+                            title="Read every reply out loud on this device">
+                        🔊 Auto-speak: ON
+                    </button>
+                    <button type="button" id="assistantStartBtn"
+                            onclick="startAssistantAgent()"
+                            title="Start the MP Harmony Agent on the computer">
+                        ▶ Start Agent
+                    </button>
+                </div>
+
+                <div class="chat-log" id="chatLog" aria-live="polite">
+                    <div class="chat-empty" id="chatEmpty">
+                        <strong>MP Harmony is ready when you are.</strong>
+                        Ask about your mixes, tracklists or archive — replies are
+                        spoken in Stephen Hawking's voice.
+                    </div>
+                </div>
+
+                <div class="chat-composer">
+                    <textarea id="chatPrompt" rows="2"
+                              placeholder="Ask MP Harmony anything… (/voice switches the voice)"
+                              aria-label="Message MP Harmony Agent"></textarea>
+                    <audio id="assistantSpeech" playsinline preload="auto" style="display: none;"></audio>
+                    <div class="chat-buttons">
+                        <button type="button" class="btn-send" id="chatSendBtn"
+                                onclick="sendAssistantPrompt()">Send</button>
+                        <button type="button" class="btn-stop" id="chatStopBtn"
+                                onclick="stopAssistantReply()">Stop</button>
+                    </div>
+                </div>
+
+                <div class="assistant-hint">
+                    Type <code>/voice</code> to list voices, <code>/voice hawking</code>
+                    for Stephen Hawking, or <code>/voice speed 1.15</code>.
+                </div>
             </div>
-            <div class="assistant-voice-row">
-                <label for="assistantVoice">Voice</label>
-                <select id="assistantVoice" class="assistant-voice-select"
-                        aria-label="Assistant voice" title="Default voice is Stephen Hawking">
-                    <option value="stephen_hawking_matrix">Stephen Hawking (Enters the Matrix)</option>
-                </select>
-            </div>
-            <div class="assistant-log" id="assistantLog">
-                <div class="msg-hint">Ask MP Harmony anything. Replies are spoken in Stephen Hawking's
-                    voice unless you choose another one above.</div>
-            </div>
-            <div class="assistant-input-row">
-                <textarea id="assistantInput" class="assistant-input" rows="1"
-                          placeholder="Message MP Harmony…" aria-label="Message MP Harmony"></textarea>
-                <button class="assistant-send" id="assistantSend" onclick="sendAssistantMessage()">Send</button>
-            </div>
-            <div class="assistant-actions">
-                <label class="voice-toggle">
-                    <input type="checkbox" id="assistantSpeak" checked>
-                    🔊 Speak replies
-                </label>
-                <span class="assistant-speaking" id="assistantSpeaking" hidden>🔊 Speaking…</span>
-                <button onclick="resetAssistantChat()">↺ New chat</button>
-            </div>
-            <audio id="assistantAudio" class="assistant-audio" preload="auto"
-                   playsinline webkit-playsinline></audio>
         </div>
-    </div>
+    </div><!-- /panelAssistant -->
 
     <div class="footer">
         MP Mix Archive Manager v{html.escape(VERSION)} • MPlanetarian (Dreamworlds Productions)
@@ -2568,28 +4358,548 @@ def render_html_page(theme: Dict[str, Any]) -> str:
         let audioSeekInFlight = false;
         let lastAudioSyncAt = 0;
         let lastServerPos = -1.0;
+        // The server's safe starting point for this file. Unlike lastServerPos
+        // (its live, possibly drifted clock) this is where a phone that has not
+        // started yet should seek, so a track left unattended does not begin at
+        // its final frame and end the instant play() is called.
+        let lastServerResume = 0.0;
         let audioStreamEngaged = false;
-        // A seek requested before the media metadata is known (fresh load, or a
-        // file that is still buffering) is parked here and applied as soon as
-        // the element has a timeline to scrub.
-        let pendingSeek = null;
+        // Restart detection. The server reports a fresh instance id on every
+        // launch; a change means the companion was stopped and started again.
+        let serverInstance = "";
+        let restartNoticeShown = false;
+        let statusFailureCount = 0;
+        // Native media errors (the server went away mid-stream) are recovered
+        // by re-attaching to the fresh instance, not by a full page reload.
+        let mediaRecoveryUsed = false;
+        let lastMediaErrorAt = 0;
+
+        // ---------------------------------------------------------------------
+        // Top tabs: MP Liquid Player <-> MP Assistant.
+        //
+        // Switching only hides one panel, so the <audio> element keeps its
+        // source and playback position. Coming back never costs a re-engage
+        // tap, which is the whole point of putting the two in one page.
+        // ---------------------------------------------------------------------
+        let activeTab = 'player';
+        try {{
+            const savedTab = window.localStorage.getItem('mp-companion-tab');
+            if (savedTab === 'assistant' || savedTab === 'player') activeTab = savedTab;
+        }} catch (e) {{}}
+
+        function switchAppTab(tab) {{
+            activeTab = (tab === 'assistant') ? 'assistant' : 'player';
+            const playerPanel = document.getElementById('panelPlayer');
+            const assistantPanel = document.getElementById('panelAssistant');
+            const playerTab = document.getElementById('tabPlayer');
+            const assistantTab = document.getElementById('tabAssistant');
+            if (playerPanel) playerPanel.hidden = activeTab !== 'player';
+            if (assistantPanel) assistantPanel.hidden = activeTab !== 'assistant';
+            document.body.classList.toggle('assistant-tab-open', activeTab === 'assistant');
+            if (playerTab) {{
+                playerTab.classList.toggle('active', activeTab === 'player');
+                playerTab.setAttribute('aria-selected', activeTab === 'player' ? 'true' : 'false');
+            }}
+            if (assistantTab) {{
+                assistantTab.classList.toggle('active', activeTab === 'assistant');
+                assistantTab.setAttribute('aria-selected', activeTab === 'assistant' ? 'true' : 'false');
+                assistantTab.classList.remove('just-pinged');
+            }}
+            try {{ window.localStorage.setItem('mp-companion-tab', activeTab); }} catch (e) {{}}
+            if (activeTab === 'assistant') {{
+                fetchAssistantStatus();
+                const prompt = document.getElementById('chatPrompt');
+                // Focus only on devices with a real keyboard; on a phone the
+                // focus would pop the soft keyboard over the chat log.
+                if (prompt && window.matchMedia('(min-width: 720px)').matches) {{
+                    try {{ prompt.focus(); }} catch (e) {{}}
+                }}
+            }}
+            renderStreamOverlay();
+        }}
+
+        // ---------------------------------------------------------------------
+        // MP Assistant: stream the agent reply, speak it with the chosen voice.
+        // ---------------------------------------------------------------------
+        let assistantOnline = false;
+        let assistantBusy = false;
+        let autoSpeak = true;
+        let assistantVoice = 'stephen_hawking_matrix';
+        let assistantAbort = null;
+        let chatHistory = [];
+        try {{
+            const savedSpeak = window.localStorage.getItem('mp-assistant-autospeak');
+            if (savedSpeak === '0') autoSpeak = false;
+        }} catch (e) {{}}
+
+        function paintAutoSpeak() {{
+            const btn = document.getElementById('assistantSpeakBtn');
+            if (!btn) return;
+            btn.classList.toggle('off', !autoSpeak);
+            btn.innerText = autoSpeak ? '🔊 Auto-speak: ON' : '🔇 Auto-speak: OFF';
+            btn.setAttribute('aria-pressed', autoSpeak ? 'true' : 'false');
+        }}
+
+        function toggleAutoSpeak() {{
+            autoSpeak = !autoSpeak;
+            try {{ window.localStorage.setItem('mp-assistant-autospeak', autoSpeak ? '1' : '0'); }} catch (e) {{}}
+            paintAutoSpeak();
+            if (!autoSpeak) {{
+                stopSpeech();
+            }} else if (!assistantVoice) {{
+                assistantVoice = 'stephen_hawking_matrix';
+            }}
+        }}
+
+        function paintAssistantVoice(label) {{
+            const pill = document.getElementById('assistantVoicePill');
+            if (!pill) return;
+            pill.innerText = '🔊 ' + (label || 'Stephen Hawking');
+            pill.title = 'Type /voice in the prompt to change this voice';
+        }}
+
+        function setAssistantState(state, text) {{
+            const box = document.getElementById('assistantState');
+            const label = document.getElementById('assistantStateText');
+            if (box) {{
+                box.classList.remove('online', 'offline');
+                if (state === 'online' || state === 'offline') box.classList.add(state);
+            }}
+            if (label) label.innerText = text;
+        }}
+
+        async function fetchAssistantStatus(force) {{
+            try {{
+                const res = await fetch('/api/assistant/status' + (force ? '?force=1' : ''));
+                const data = await res.json();
+                assistantOnline = Boolean(data.available);
+                assistantVoice = data.voice || 'stephen_hawking_matrix';
+                paintAssistantVoice(data.voice_label);
+                if (assistantOnline) {{
+                    setAssistantState('online', 'Online');
+                    const model = document.getElementById('assistantModel');
+                    if (model) {{
+                        model.innerText = data.model
+                            ? ('Model: ' + data.model)
+                            : 'Local engineering assistant';
+                    }}
+                    setAssistantStartVisible(false);
+                }} else {{
+                    setAssistantState('offline', 'Offline');
+                    setAssistantStartVisible(true);
+                }}
+                return data;
+            }} catch (e) {{
+                assistantOnline = false;
+                setAssistantState('offline', 'Unreachable');
+                setAssistantStartVisible(true);
+                return null;
+            }}
+        }}
+
+        function setAssistantStartVisible(visible) {{
+            const btn = document.getElementById('assistantStartBtn');
+            if (btn) btn.style.display = visible ? 'inline-flex' : 'none';
+        }}
+
+        async function startAssistantAgent() {{
+            const btn = document.getElementById('assistantStartBtn');
+            if (!btn) return;
+            btn.disabled = true;
+            setAssistantState('', 'Starting…');
+            try {{
+                const res = await fetch('/api/assistant/start', {{ method: 'POST' }});
+                const data = await res.json();
+                addChatSystem(data.detail || 'Starting the MP Harmony Agent…');
+            }} catch (e) {{
+                addChatSystem('Could not reach the companion service.');
+            }} finally {{
+                btn.disabled = false;
+                // The model loads in the background; poll until the health
+                // endpoint answers instead of leaving the button dead.
+                let tries = 0;
+                const timer = setInterval(async () => {{
+                    tries += 1;
+                    const data = await fetchAssistantStatus(true);
+                    if ((data && data.available) || tries >= 20) {{
+                        clearInterval(timer);
+                        if (data && data.available) addChatSystem('MP Harmony Agent is online.');
+                    }}
+                }}, 3000);
+            }}
+        }}
+
+        function clearChatEmpty() {{
+            const empty = document.getElementById('chatEmpty');
+            if (empty) empty.remove();
+        }}
+
+        function scrollChatToEnd() {{
+            const log = document.getElementById('chatLog');
+            if (log) log.scrollTop = log.scrollHeight;
+        }}
+
+        function addChatBubble(role, text) {{
+            clearChatEmpty();
+            const log = document.getElementById('chatLog');
+            if (!log) return null;
+            const bubble = document.createElement('div');
+            bubble.className = 'chat-bubble ' + role;
+            const body = document.createElement('div');
+            body.className = 'bubble-text';
+            body.textContent = text || '';
+            bubble.appendChild(body);
+            log.appendChild(bubble);
+            scrollChatToEnd();
+            return bubble;
+        }}
+
+        function addChatSystem(text) {{
+            return addChatBubble('system', text);
+        }}
+
+        function attachSpeakControl(bubble, text, isUser) {{
+            if (!bubble || isUser) return;
+            const tools = document.createElement('div');
+            tools.className = 'bubble-tools';
+            const speak = document.createElement('button');
+            speak.type = 'button';
+            speak.innerText = '🔊 Speak';
+            speak.title = 'Play this reply in the active MP Harmony voice';
+            speak.onclick = () => speakText(text, bubble);
+            const state = document.createElement('span');
+            state.className = 'speak-state';
+            tools.appendChild(speak);
+            tools.appendChild(state);
+            bubble.appendChild(tools);
+        }}
+
+        function stopSpeech() {{
+            const audio = speechElement();
+            if (audio) {{
+                try {{
+                    audio.pause();
+                    audio.removeAttribute('src');
+                    audio.load();
+                }} catch (e) {{}}
+                audio.__bubble = null;
+                audio.__requestId = (audio.__requestId || 0) + 1;
+                if (audio.__objectUrl) {{
+                    try {{ URL.revokeObjectURL(audio.__objectUrl); }} catch (e) {{}}
+                    audio.__objectUrl = null;
+                }}
+            }}
+            document.querySelectorAll('.chat-bubble.speaking').forEach(el => {{
+                el.classList.remove('speaking');
+                const state = el.querySelector('.speak-state');
+                if (state) state.innerText = '';
+            }});
+            restoreMixAfterSpeech();
+        }}
+
+        // The reply is spoken by the phone itself. The companion synthesizes
+        // the WAV through the agent (or espeak-ng for Hawking) and streams it
+        // back over the same origin, so no LAN port is exposed.
+        //
+        // A hidden <audio> element with playsinline is reused for every reply:
+        // iOS refuses a fresh Audio() object that was not created inside the
+        // original tap, but it happily re-points an element that already has
+        // one successful play() behind it.
+        function speechElement() {{
+            return document.getElementById('assistantSpeech');
+        }}
+
+        // Duck the mix while a reply is spoken, then put the volume back, so
+        // the Hawking voice is audible over a playing set without stopping it.
+        let duckedMixVolume = null;
+
+        function duckMixForSpeech() {{
+            const mix = document.getElementById('mobileAudioStream');
+            if (!mix || mix.paused || mix.ended) return;
+            if (duckedMixVolume === null) duckedMixVolume = mix.volume;
+            try {{
+                mix.volume = Math.max(0.08, duckedMixVolume * 0.25);
+            }} catch (e) {{}}
+        }}
+
+        function restoreMixAfterSpeech() {{
+            const mix = document.getElementById('mobileAudioStream');
+            if (mix && duckedMixVolume !== null) {{
+                try {{ mix.volume = duckedMixVolume; }} catch (e) {{}}
+            }}
+            duckedMixVolume = null;
+        }}
+
+        function speakText(text, bubble) {{
+            const spoken = (text || '').trim();
+            if (!spoken) return;
+            stopSpeech();
+            const audio = speechElement();
+            if (!audio) return;
+            if (bubble) {{
+                bubble.classList.add('speaking');
+                const state = bubble.querySelector('.speak-state');
+                if (state) state.innerText = 'synthesizing…';
+            }}
+            // A POST keeps long replies out of the URL, and the blob URL lets
+            // the element play the synthesized WAV as soon as it arrives.
+            audio.__bubble = bubble || null;
+            const requestId = (audio.__requestId || 0) + 1;
+            audio.__requestId = requestId;
+            fetch('/api/assistant/speech', {{
+                method: 'POST',
+                headers: {{ 'Content-Type': 'application/json' }},
+                body: JSON.stringify({{ text: spoken, voice: assistantVoice }}),
+            }}).then(async (res) => {{
+                if (!res.ok) {{
+                    const err = await res.json().catch(() => ({{}}));
+                    throw new Error((err && err.error) || 'Speech synthesis failed');
+                }}
+                return res.blob();
+            }}).then((blob) => {{
+                if (audio.__requestId !== requestId) return;
+                const url = URL.createObjectURL(blob);
+                if (audio.__objectUrl) {{
+                    try {{ URL.revokeObjectURL(audio.__objectUrl); }} catch (e) {{}}
+                }}
+                audio.__objectUrl = url;
+                audio.src = url;
+                return audio.play();
+            }}).catch((err) => {{
+                if (audio.__requestId !== requestId) return;
+                if (bubble) {{
+                    bubble.classList.remove('speaking');
+                    const state = bubble.querySelector('.speak-state');
+                    if (state) state.innerText = '';
+                }}
+                addChatSystem(
+                    (err && err.message) ? err.message :
+                    'Speech synthesis failed on the host.'
+                );
+            }});
+        }}
+
+        function initSpeechElement() {{
+            const audio = speechElement();
+            if (!audio) return;
+            audio.addEventListener('playing', () => {{
+                const bubble = audio.__bubble;
+                const state = bubble && bubble.querySelector('.speak-state');
+                if (state) state.innerText = 'speaking';
+                duckMixForSpeech();
+            }});
+            audio.addEventListener('ended', () => {{
+                const bubble = audio.__bubble;
+                if (bubble) bubble.classList.remove('speaking');
+                audio.__bubble = null;
+                restoreMixAfterSpeech();
+            }});
+            audio.addEventListener('error', () => {{
+                const bubble = audio.__bubble;
+                if (bubble) {{
+                    bubble.classList.remove('speaking');
+                    const state = bubble.querySelector('.speak-state');
+                    if (state) state.innerText = '';
+                }}
+                audio.__bubble = null;
+                restoreMixAfterSpeech();
+            }});
+        }}
+
+        // A 100 ms silent WAV played inside the user's tap unlocks the element
+        // for the reply that arrives seconds later.
+        const SILENT_WAV = 'data:audio/wav;base64,UklGRkQDAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YSADAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==';
+
+        function unlockSpeechElement() {{
+            const audio = speechElement();
+            if (!audio || audio.__unlocked) return;
+            try {{
+                audio.__unlocked = true;
+                audio.__unlockSrc = SILENT_WAV;
+                audio.src = SILENT_WAV;
+                audio.play().catch(() => {{}});
+            }} catch (e) {{}}
+        }}
+
+        function assistantHistory() {{
+            // Only the last few turns are sent, so a long phone chat cannot
+            // overflow the agent's context window.
+            return chatHistory.slice(-12);
+        }}
+
+        async function sendAssistantPrompt() {{
+            if (assistantBusy) return;
+            const input = document.getElementById('chatPrompt');
+            if (!input) return;
+            const text = (input.value || '').trim();
+            if (!text) return;
+            input.value = '';
+
+            // A phone only allows audible playback from inside the tap that
+            // started it. Unlocking the shared element here means every reply
+            // after this can be spoken without another gesture.
+            unlockSpeechElement();
+
+            addChatBubble('user', text);
+            chatHistory.push({{ role: 'user', content: text }});
+
+            const sendBtn = document.getElementById('chatSendBtn');
+            const stopBtn = document.getElementById('chatStopBtn');
+            assistantBusy = true;
+            if (sendBtn) sendBtn.disabled = true;
+            if (stopBtn) stopBtn.classList.add('show');
+
+            const replyBubble = addChatBubble('assistant', '');
+            const replyBody = replyBubble && replyBubble.querySelector('.bubble-text');
+            let replyText = '';
+            let replyVoice = assistantVoice;
+            let replyVoiceLabel = '';
+            let isLocal = false;
+
+            assistantAbort = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+
+            try {{
+                const res = await fetch('/api/assistant/chat', {{
+                    method: 'POST',
+                    headers: {{ 'Content-Type': 'application/json' }},
+                    body: JSON.stringify({{
+                        messages: assistantHistory(),
+                        voice: assistantVoice,
+                    }}),
+                    signal: assistantAbort ? assistantAbort.signal : undefined,
+                }});
+                const contentType = res.headers.get('Content-Type') || '';
+                if (contentType.indexOf('text/event-stream') === -1) {{
+                    // /voice and other local replies come back as plain JSON.
+                    const data = await res.json();
+                    replyText = data.content || '';
+                    isLocal = Boolean(data.local);
+                    replyVoice = data.voice || replyVoice;
+                    replyVoiceLabel = data.voice_label || '';
+                    if (replyBody) replyBody.textContent = replyText;
+                    if (replyVoice) {{
+                        assistantVoice = replyVoice;
+                        paintAssistantVoice(replyVoiceLabel || undefined);
+                    }}
+                }} else {{
+                    if (!res.body || !res.body.getReader) {{
+                        throw new Error('This browser cannot stream replies.');
+                    }}
+                    const reader = res.body.getReader();
+                    const decoder = new TextDecoder();
+                    let buffered = '';
+                    while (true) {{
+                        const chunk = await reader.read();
+                        if (chunk.done) break;
+                        buffered += decoder.decode(chunk.value, {{ stream: true }});
+                        const events = buffered.split('\\n\\n');
+                        buffered = events.pop() || '';
+                        for (const event of events) {{
+                            const line = event.split('\\n').find(l => l.startsWith('data: '));
+                            if (!line) continue;
+                            const payload = line.slice(6).trim();
+                            if (payload === '[DONE]') continue;
+                            let obj;
+                            try {{ obj = JSON.parse(payload); }} catch (e) {{ continue; }}
+                            const type = obj.object || '';
+                            if (type === 'mp.assistant.delta') {{
+                                replyText += obj.content || '';
+                                if (replyBody) replyBody.textContent = replyText;
+                                scrollChatToEnd();
+                            }} else if (type === 'mp.assistant.meta') {{
+                                if (obj.voice) replyVoice = obj.voice;
+                                replyVoiceLabel = obj.voice_label || '';
+                                paintAssistantVoice(replyVoiceLabel || undefined);
+                            }} else if (type === 'mp.assistant.error') {{
+                                replyText += (replyText ? '\\n' : '') + (obj.message || 'Agent error');
+                                if (replyBody) replyBody.textContent = replyText;
+                            }}
+                        }}
+                    }}
+                }}
+            }} catch (e) {{
+                if (e && e.name === 'AbortError') {{
+                    replyText += (replyText ? '\\n' : '') + '[Stopped]';
+                }} else {{
+                    replyText += (replyText ? '\\n' : '')
+                        + 'The MP Harmony Agent did not answer. Tap ▶ Start Agent, then send again.';
+                }}
+                if (replyBody) replyBody.textContent = replyText;
+            }} finally {{
+                assistantBusy = false;
+                assistantAbort = null;
+                if (sendBtn) sendBtn.disabled = false;
+                if (stopBtn) stopBtn.classList.remove('show');
+            }}
+
+            const spoken = replyText.trim();
+            if (spoken) {{
+                chatHistory.push({{ role: 'assistant', content: spoken }});
+                attachSpeakControl(replyBubble, spoken, false);
+                if (autoSpeak) speakText(spoken, replyBubble);
+                scrollChatToEnd();
+                // A reply that lands while the player tab is showing gets a dot
+                // on the assistant tab, so the user knows it is ready.
+                if (activeTab !== 'assistant') {{
+                    const tab = document.getElementById('tabAssistant');
+                    if (tab) tab.classList.add('just-pinged');
+                }}
+            }} else if (replyBubble) {{
+                replyBubble.remove();
+            }}
+            if (isLocal) fetchAssistantStatus(true);
+        }}
+
+        function stopAssistantReply() {{
+            if (assistantAbort) {{
+                try {{ assistantAbort.abort(); }} catch (e) {{}}
+            }}
+            // The agent's own barge-in endpoint stops generation server-side.
+            fetch('/api/assistant/abort', {{ method: 'POST' }}).catch(() => {{}});
+            stopSpeech();
+        }}
 
         function audioElIsPlaying() {{
             const audioEl = document.getElementById('mobileAudioStream');
             return Boolean(audioEl && !audioEl.paused && !audioEl.ended);
         }}
 
+        // The host's clock is only a fallback: it cannot hear the mix and it
+        // free-runs while the service sits idle. Once the phone is actually
+        // playing, send it the true position every few seconds so a later
+        // listener resumes where this one left off instead of at a drifted
+        // point near the end of the file.
+        let lastPositionReportAt = 0;
+
+        function reportPlaybackPosition() {{
+            const audioEl = document.getElementById('mobileAudioStream');
+            if (!audioEl || !audioStreamEngaged || !audioElIsPlaying()) return;
+            if (!isFinite(audioEl.currentTime) || audioEl.currentTime <= 0) return;
+            const now = performance.now();
+            if (now - lastPositionReportAt < 4000) return;
+            lastPositionReportAt = now;
+            fetch('/api/control?action=report_position&position=' +
+                  encodeURIComponent(audioEl.currentTime.toFixed(1)), {{ method: 'POST' }})
+                .catch(() => {{}});
+        }}
+
         // Seek the phone's element only once per request and clear the guard
         // when the element reports it actually moved. Without this the 100 ms
         // poll can re-issue the same seek while the previous one is settling.
-        function seekAudioTo(pos) {{
+        function seekAudioTo(pos, fromResume) {{
             const audioEl = document.getElementById('mobileAudioStream');
             if (!audioEl || !isFinite(pos) || pos < 0) return;
-            // readyState 0 = HAVE_NOTHING: there is no timeline yet, so writing
-            // currentTime would be ignored. Remember it and retry on metadata.
-            if (audioEl.readyState < 1) {{
-                pendingSeek = pos;
-                return;
+            // A resume that lands on the last frames ends the media the moment
+            // playback starts. Treat that tail as "start from the top" so a
+            // stale server position can never silence the player. A deliberate
+            // seek from the progress bar is left alone - the listener asked for
+            // that spot.
+            if (fromResume) {{
+                const dur = Number(audioEl.duration);
+                if (isFinite(dur) && dur > 0) {{
+                    const margin = Math.max(2.0, dur * 0.02);
+                    if (pos >= dur - margin) pos = 0;
+                }}
             }}
             if (audioSeekInFlight && Math.abs(audioEl.currentTime - pos) < 0.5) return;
             try {{
@@ -2598,75 +4908,66 @@ def render_html_page(theme: Dict[str, Any]) -> str:
                 lastAudioSyncAt = performance.now();
                 setTimeout(() => {{ audioSeekInFlight = false; }}, 1500);
             }} catch (e) {{
-                pendingSeek = pos;
                 audioSeekInFlight = false;
             }}
         }}
 
-        function applyPendingSeek() {{
-            if (pendingSeek === null) return;
-            const audioEl = document.getElementById('mobileAudioStream');
-            if (!audioEl || audioEl.readyState < 1) return;
-            const pos = pendingSeek;
-            pendingSeek = null;
-            seekAudioTo(pos);
-        }}
-
-        // The 30s arrows act on the element that is actually playing (the
-        // phone), then report the new offset to the server so the dashboard
-        // clock and any other client stay in step.
-        function skipBy(delta) {{
-            const audioEl = document.getElementById('mobileAudioStream');
-            const configured = Boolean(audioEl) && audioStreamConfigured;
-            // No src assigned yet (the tap-to-listen overlay is still up): the
-            // browser has no offset to move, so nudge the server clock and let
-            // the element align to it when it engages.
-            if (!configured) {{
-                sendAction(delta < 0 ? 'seek_backward' : 'seek_forward');
-                return;
-            }}
-            const hasTimeline = audioEl.readyState > 0 && isFinite(audioEl.currentTime);
-            // While the file is still loading, stack presses on the offset we
-            // already have queued rather than on a stale currentTime of 0.
-            let base;
-            if (hasTimeline) {{
-                base = audioEl.currentTime;
-            }} else if (pendingSeek !== null) {{
-                base = pendingSeek;
-            }} else {{
-                base = Math.max(0, lastServerPos);
-            }}
-            const dur = (hasTimeline && isFinite(audioEl.duration) && audioEl.duration > 0)
-                ? audioEl.duration
-                : Number(currentDurationSec) || 0;
-            let target = base + delta;
-            if (target < 0) target = 0;
-            if (dur > 0 && target > dur) target = Math.max(0, dur - 0.25);
-            // seekAudioTo parks the request until metadata is available, so a
-            // press during loading still lands once the timeline exists.
-            seekAudioTo(target);
-            sendAction('seek_to', {{ position: target.toFixed(2) }});
-        }}
-
         window.addEventListener('DOMContentLoaded', () => {{
             if (currentThemeId === 'dynamic_rainbow_liquid_glass') {{
-                document.body.classList.add('rainbow-animated');
+                document.body.classList.add('dynamic-rainbow-glass-active');
             }}
+            // The gate is shown in the initial markup, before any script runs.
+            // Apply the no-scroll state now so the first paint is already
+            // locked and the engage button is centred.
+            renderStreamOverlay();
             const audioEl = document.getElementById('mobileAudioStream');
             if (audioEl) {{
                 audioEl.addEventListener('seeked', () => {{ audioSeekInFlight = false; }});
-                // A skip pressed while the file was still loading has to be
-                // replayed once the element finally has a timeline.
-                audioEl.addEventListener('loadedmetadata', applyPendingSeek);
-                audioEl.addEventListener('canplay', applyPendingSeek);
                 // The phone decides when a mix ends, so tell the server which
                 // file to serve next instead of waiting for a local player.
                 audioEl.addEventListener('ended', () => {{
+                    // An end within a couple of seconds of engaging is not a
+                    // finished mix, it is a resume point that landed on the
+                    // final frame. Restart the same mix instead of advancing,
+                    // otherwise the tap looks dead and the queue skips a track.
+                    const sinceEngage = performance.now() - lastEngageAt;
+                    if (audioStreamEngaged && lastEngageAt > 0 && sinceEngage < 2500) {{
+                        restartStreamFromTop();
+                        return;
+                    }}
                     sendAction('track_ended');
+                }});
+                // The tray stopped the service while this mix was playing. The
+                // URL is dead, so re-attach once to the fresh instance instead
+                // of leaving a silent player behind. A second error means the
+                // stream really is broken and is left to the normal retry.
+                audioEl.addEventListener('error', () => {{
+                    if (!activeAudioFile) return;
+                    const now = performance.now();
+                    if (mediaRecoveryUsed && (now - lastMediaErrorAt) < 5000) return;
+                    mediaRecoveryUsed = true;
+                    lastMediaErrorAt = now;
+                    showRestartNotice('MP Audio Web Companion has been restarted — reconnecting…');
+                    reattachToRestartedServer();
                 }});
             }}
             loadThemeList();
             fetchMiniPlaylist();
+            paintAutoSpeak();
+            initSpeechElement();
+            switchAppTab(activeTab);
+            fetchAssistantStatus();
+            const prompt = document.getElementById('chatPrompt');
+            if (prompt) {{
+                // Enter sends, Shift+Enter adds a line — the same convention as
+                // the agent's own Web HUD chat box.
+                prompt.addEventListener('keydown', (e) => {{
+                    if (e.key === 'Enter' && !e.shiftKey) {{
+                        e.preventDefault();
+                        sendAssistantPrompt();
+                    }}
+                }});
+            }}
         }});
 
         function applyPalette(th) {{
@@ -2693,33 +4994,77 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             r.style.setProperty('--badge-color', th.badge_color);
             r.style.setProperty('--eq-bar', th.eq_bar);
             r.style.setProperty('--eq-peak', th.eq_peak);
-            document.body.classList.toggle('rainbow-animated', th.id === 'dynamic_rainbow_liquid_glass');
+            document.body.classList.toggle('dynamic-rainbow-glass-active', th.id === 'dynamic_rainbow_liquid_glass');
         }}
 
         async function loadThemeList() {{
             try {{
                 const res = await fetch('/api/themes');
                 const data = await res.json();
-                const sel = document.getElementById('themeSelect');
-                if (!sel || !data.themes) return;
-                sel.innerHTML = '';
+                const menu = document.getElementById('themeMenu');
+                if (!menu || !data.themes) return;
+                const active = data.current || currentThemeId;
+                menu.innerHTML = '';
                 data.themes.forEach(th => {{
-                    const opt = document.createElement('option');
-                    opt.value = th.id;
-                    opt.textContent = th.name;
-                    sel.appendChild(opt);
+                    const opt = document.createElement('button');
+                    opt.type = 'button';
+                    opt.className = 'theme-option' + (th.id === active ? ' active' : '');
+                    opt.setAttribute('role', 'menuitem');
+                    opt.dataset.themeId = th.id;
+
+                    const label = document.createElement('span');
+                    label.innerText = th.name;
+                    const check = document.createElement('span');
+                    check.className = 'theme-check';
+                    check.innerText = th.id === active ? '✓ Active' : '';
+
+                    opt.appendChild(label);
+                    opt.appendChild(check);
+                    opt.onclick = () => changeTheme(th.id);
+                    menu.appendChild(opt);
                 }});
-                sel.value = data.current || currentThemeId;
             }} catch (e) {{}}
         }}
 
+        function toggleThemeMenu() {{
+            const menu = document.getElementById('themeMenu');
+            const btn = document.getElementById('themeBtn');
+            if (!menu) return;
+            const show = !menu.classList.contains('show');
+            menu.classList.toggle('show', show);
+            if (btn) {{
+                btn.classList.toggle('open', show);
+                btn.setAttribute('aria-expanded', show ? 'true' : 'false');
+            }}
+        }}
+
+        function closeThemeMenu() {{
+            const menu = document.getElementById('themeMenu');
+            const btn = document.getElementById('themeBtn');
+            if (menu) menu.classList.remove('show');
+            if (btn) {{
+                btn.classList.remove('open');
+                btn.setAttribute('aria-expanded', 'false');
+            }}
+        }}
+
+        document.addEventListener('click', (e) => {{
+            const menu = document.getElementById('themeMenu');
+            const btn = document.getElementById('themeBtn');
+            if (!menu || !menu.classList.contains('show')) return;
+            if (menu.contains(e.target) || (btn && btn.contains(e.target))) return;
+            closeThemeMenu();
+        }});
+
         async function changeTheme(themeId) {{
             if (!themeId) return;
+            closeThemeMenu();
             try {{
                 const res = await fetch('/api/set_theme?theme=' + encodeURIComponent(themeId));
                 const data = await res.json();
                 if (data && data.success && data.palette) {{
                     applyPalette(data.palette);
+                    loadThemeList();
                 }} else {{
                     loadThemeList();
                 }}
@@ -2732,9 +5077,63 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             const wrap = document.getElementById('miniPlItems');
             if (!wrap) return;
             const items = (data && data.items) || [];
+            const total = Number(data && data.total) || 0;
+            const show = Math.max(1, Number(data && data.show) || 5);
+            // Music asked for but the archive is being streamed instead: the
+            // rows below are mixes, so they must not be presented as tracks
+            // from the selected library.
+            const fellBack = Boolean(data && data.library_fallback);
+
             const countEl = document.getElementById('miniPlCount');
-            if (countEl) countEl.innerText = items.length + ' of ' + (data.total || 0);
+            if (countEl) {{
+                // Track count for the whole selected library, not just the
+                // rows that fit on a phone screen.
+                countEl.innerText = total + (total === 1 ? ' track' : ' tracks') +
+                    (fellBack ? ' (from Mix Archive)' : '');
+                countEl.title = Math.min(items.length, show) + ' shown of ' + total +
+                                ' in this library · scroll for more';
+            }}
+
+            const titleEl = document.getElementById('miniPlTitle');
+            if (titleEl) {{
+                const label = fellBack ? 'Mix Archive (Music unavailable)'
+                                       : ((data && data.mode_label) || 'Library');
+                titleEl.innerText = '🎵 Up Next · ' + label;
+            }}
+
+            // The offline notice sits above the list, so five rows always fit.
+            const noteEl = document.getElementById('miniPlNote');
+            if (noteEl) {{
+                noteEl.innerHTML = '';
+                if (data && data.library_detail) {{
+                    // A warning when the mode fell back, a plain hint otherwise
+                    // (an empty Favorites playlist is normal, not an error).
+                    const note = document.createElement('div');
+                    note.className = 'mini-pl-empty';
+                    if (data.library_fallback) {{
+                        note.style.borderColor = '#ffaa00';
+                        note.style.color = '#ffaa00';
+                    }}
+                    note.innerText = (data.library_fallback ? '⚠ ' : '') + data.library_detail;
+                    noteEl.appendChild(note);
+                }}
+            }}
+
+            // Keep the scroll position across the 15-second refresh instead of
+            // snapping back to the top while the user is browsing.
+            const scrollTop = wrap.scrollTop;
             wrap.innerHTML = '';
+
+            if (!items.length) {{
+                const empty = document.createElement('div');
+                empty.className = 'mini-pl-empty';
+                empty.innerText = (data && data.mode === 'FAVORITES')
+                    ? 'No favourites yet — press H in the player to add one'
+                    : 'No audio found in this library';
+                wrap.appendChild(empty);
+                return;
+            }}
+
             items.forEach((item, i) => {{
                 const row = document.createElement('div');
                 row.className = 'mini-pl-item' + (item.current ? ' current' : '');
@@ -2748,7 +5147,7 @@ def render_html_page(theme: Dict[str, Any]) -> str:
                 body.className = 'mini-pl-body';
                 const title = document.createElement('div');
                 title.className = 'mini-pl-title';
-                title.innerText = item.title || 'Untitled Mix';
+                title.innerText = item.title || 'Untitled Track';
                 const dur = document.createElement('div');
                 dur.className = 'mini-pl-dur';
                 dur.innerText = (item.artist || '') + (item.duration ? ' • ' + item.duration : '');
@@ -2759,49 +5158,189 @@ def render_html_page(theme: Dict[str, Any]) -> str:
                 row.appendChild(body);
                 wrap.appendChild(row);
             }});
+            wrap.scrollTop = scrollTop;
+        }}
+
+        function updateModeSwitch(mode) {{
+            document.querySelectorAll('#modeSwitch button').forEach(btn => {{
+                btn.classList.toggle('active', btn.dataset.mode === mode);
+            }});
+        }}
+
+        // The mode request scans a multi-thousand-entry library, so it can take
+        // a few seconds. A single token makes sure only the newest tap decides
+        // the highlighted mode and the playlist that is finally shown.
+        let modeRequestToken = 0;
+        let modeSwitchBusy = false;
+
+        function setModeBusy(busy, pendingMode) {{
+            modeSwitchBusy = busy;
+            const group = document.getElementById('modeSwitch');
+            if (group) group.classList.toggle('busy', busy);
+            document.querySelectorAll('#modeSwitch button').forEach(btn => {{
+                btn.disabled = busy;
+                btn.classList.toggle('pending', busy && btn.dataset.mode === pendingMode);
+            }});
+            const titleEl = document.getElementById('miniPlTitle');
+            if (!titleEl || !busy) return;
+            const labels = {{ MIX_ARCHIVE: 'Mix Archive', MUSIC: 'Music', FAVORITES: 'Favourites' }};
+            titleEl.innerText = '⏳ Switching to ' + (labels[pendingMode] || 'library') + '…';
+        }}
+
+        async function switchLibraryMode(mode) {{
+            if (!mode) return;
+            const token = ++modeRequestToken;
+            updateModeSwitch(mode);
+            setModeBusy(true, mode);
+            try {{
+                const res = await fetch('/api/mode?mode=' + encodeURIComponent(mode));
+                const data = await res.json();
+                if (token !== modeRequestToken) return;
+                if (data && data.success) {{
+                    updateModeSwitch(data.mode);
+                    // fetchMiniPlaylist reports the offline notice itself, so no
+                    // placeholder render here (it would flash "No audio").
+                    await fetchMiniPlaylist();
+                    await fetchStatus();
+                }} else {{
+                    fetchMiniPlaylist();
+                }}
+            }} catch (e) {{
+                if (token === modeRequestToken) fetchMiniPlaylist();
+            }} finally {{
+                if (token === modeRequestToken) setModeBusy(false, null);
+            }}
         }}
 
         async function fetchMiniPlaylist() {{
             try {{
                 const res = await fetch('/api/playlist');
-                renderMiniPlaylist(await res.json());
+                const data = await res.json();
+                renderMiniPlaylist(data);
+                // A tap already picked the new mode; the poll must not paint the
+                // old one back while that switch is still in flight.
+                if (!modeSwitchBusy && data && data.mode) updateModeSwitch(data.mode);
             }} catch (e) {{}}
         }}
 
-        function activateMobileStream() {{
-            const overlay = document.getElementById('streamOverlay');
-            if (overlay) overlay.style.display = 'none';
-            const banner = document.getElementById('mobileAudioBanner');
-            if (banner) banner.style.display = 'block';
+        // The host tells us why it has nothing to stream (empty archive, macOS
+        // privacy block). Cache the newest reason so the overlay can explain a
+        // refused engage tap instead of silently doing nothing.
+        let streamUnavailableReason = "";
+
+        // Start streaming with no extra taps. The server arms the session when
+        // the service boots, so the phone picks up the running stream. Browsers
+        // only allow audible playback after a gesture, so a refused play() keeps
+        // the overlay up and the first touch starts the same stream.
+        let lastEngageAt = 0;
+
+        function engageStreamFromServer(resumePos) {{
             const audioEl = document.getElementById('mobileAudioStream');
-            if (audioEl) {{
-                if (activeAudioFile && !audioStreamConfigured) {{
-                    audioEl.src = '/api/stream?file=' + encodeURIComponent(activeAudioFile);
-                    audioStreamConfigured = true;
-                }}
-                // One-time alignment with the saved stream position; the
-                // browser then owns playback. Never re-sync from here.
-                if (isPlayerActive && lastServerPos > 0) {{
-                    audioEl.addEventListener('loadedmetadata', function once() {{
-                        audioEl.removeEventListener('loadedmetadata', once);
-                        seekAudioTo(lastServerPos);
-                    }});
-                }}
-                audioEl.play().then(() => {{
-                    audioStreamEngaged = true;
-                    console.log("Audio stream engaged successfully");
-                }}).catch(e => {{
-                    console.log("Stream play blocked:", e);
-                    if (overlay) overlay.style.display = 'flex';
+            if (!audioEl) return;
+            if (!activeAudioFile) {{
+                // /api/stream?file= would 404 here, which is indistinguishable
+                // from a dead button on the phone. Explain the real cause.
+                showStreamOverlay(streamUnavailableReason ||
+                    'No audio is queued on the host. Start a mix in MP Audio Player, then tap again.');
+                return;
+            }}
+            if (activeAudioFile && !audioStreamConfigured) {{
+                audioEl.src = '/api/stream?file=' + encodeURIComponent(activeAudioFile);
+                audioStreamConfigured = true;
+            }}
+            lastEngageAt = performance.now();
+            // One-time alignment with the saved stream position; the browser
+            // then owns playback. Never re-sync from here.
+            const startAt = Number(resumePos);
+            if (isFinite(startAt) && startAt > 0) {{
+                audioEl.addEventListener('loadedmetadata', function once() {{
+                    audioEl.removeEventListener('loadedmetadata', once);
+                    seekAudioTo(startAt, true);
                 }});
             }}
+            audioEl.play().then(() => {{
+                audioStreamEngaged = true;
+                hideStreamOverlay();
+            }}).catch(() => {{
+                showStreamOverlay(streamUnavailableReason);
+            }});
         }}
 
-        function dismissStreamOverlay() {{
-            // The assistant tab does not need audio, so let a phone open it
-            // without being forced through the autoplay unlock first.
+        // A resume point on the final frame makes play() resolve and then end
+        // the media at once: the tap "works" but nothing is heard. The server
+        // no longer sends such a position, but a browser that dropped the seek
+        // can still land there, so an end that arrives immediately after an
+        // engage restarts the mix instead of skipping it.
+        function restartStreamFromTop() {{
+            const audioEl = document.getElementById('mobileAudioStream');
+            if (!audioEl) return;
+            try {{
+                audioEl.currentTime = 0;
+            }} catch (e) {{}}
+            lastEngageAt = performance.now();
+            audioEl.play().catch(() => {{
+                showStreamOverlay(streamUnavailableReason);
+            }});
+        }}
+
+        // The overlay is a gate for the mobile autoplay gesture, so it belongs
+        // to the player tab only. Without this the fixed overlay would cover
+        // the tab bar and the assistant could never be reached before the
+        // first successful play().
+        let streamOverlayWanted = true;
+
+        function renderStreamOverlay() {{
             const overlay = document.getElementById('streamOverlay');
-            if (overlay) overlay.style.display = 'none';
+            if (!overlay) return;
+            const visible = streamOverlayWanted && activeTab === 'player';
+            overlay.classList.toggle('show', visible);
+            // Lock the page behind the gate: a swipe would otherwise scroll the
+            // dashboard and leave the engage button below the fold.
+            document.body.classList.toggle('overlay-active', visible);
+        }}
+
+        function showStreamOverlay(detail) {{
+            streamOverlayWanted = true;
+            const note = document.getElementById('streamOverlayDetail');
+            if (note) {{
+                if (detail) {{
+                    note.innerText = detail;
+                    note.style.display = 'block';
+                }} else {{
+                    note.style.display = 'none';
+                }}
+            }}
+            renderStreamOverlay();
+        }}
+
+        // The overlay is the first thing a phone sees, so it explains the host
+        // state on its own instead of waiting for a tap that would go nowhere.
+        function syncStreamOverlayDetail() {{
+            if (!streamOverlayWanted) return;
+            if (activeAudioFile) return;
+            showStreamOverlay(streamUnavailableReason ||
+                'Waiting for the host to queue a mix…');
+        }}
+
+        function hideStreamOverlay() {{
+            streamOverlayWanted = false;
+            renderStreamOverlay();
+            const banner = document.getElementById('mobileAudioBanner');
+            if (banner) banner.style.display = 'block';
+        }}
+
+        let streamAutoStarted = false;
+
+        // Called once the dashboard knows which file the server is streaming.
+        function maybeAutoStartStream() {{
+            if (streamAutoStarted) return;
+            if (!activeAudioFile) return;
+            streamAutoStarted = true;
+            engageStreamFromServer(lastServerResume);
+        }}
+
+        function activateMobileStream() {{
+            engageStreamFromServer(lastServerResume);
         }}
 
         function handlePlayPauseClick() {{
@@ -2809,10 +5348,13 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             if (audioEl) {{
                 if (!audioEl.paused) {{
                     audioEl.pause();
+                }} else if (!activeAudioFile) {{
+                    showStreamOverlay(streamUnavailableReason ||
+                        'No audio is queued on the host. Start a mix in MP Audio Player, then tap again.');
+                    return;
                 }} else {{
                     audioEl.play().catch(e => {{
-                        const overlay = document.getElementById('streamOverlay');
-                        if (overlay) overlay.style.display = 'flex';
+                        showStreamOverlay(streamUnavailableReason);
                     }});
                 }}
             }}
@@ -2830,6 +5372,27 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             const attack = 0.52;
             const decay = 0.88;
             const gravity = 0.0022;
+
+            if (document.hidden) {{
+                // A hidden tab paints nothing; keeping the 60 fps loop alive only
+                // burns battery and competes with the poll timers when Safari
+                // throttles background work.
+                requestAnimationFrame(animLoop);
+                return;
+            }}
+
+            // Synthesise the spectrum here, once per frame, instead of asking
+            // the server for it 10 times a second. The bars follow the phone's
+            // own audio element, which the host cannot observe.
+            if (isPlayerActive) {{
+                const t = performance.now() / 1000;
+                for (let i = 0; i < BANDS; i++) {{
+                    const base = 0.30 + 0.22 * Math.sin(t * 1.7 + i * 0.55);
+                    const wobble = 0.14 * Math.sin(t * 3.1 + i * 1.15);
+                    const tilt = 1.0 - (i / BANDS) * 0.55;
+                    targetLevels[i] = Math.max(0.05, Math.min(0.95, (base + wobble) * tilt));
+                }}
+            }}
 
             for (let i = 0; i < BANDS; i++) {{
                 const bar = document.getElementById('vb' + i);
@@ -2912,18 +5475,21 @@ def render_html_page(theme: Dict[str, Any]) -> str:
         async function fetchTheme() {{
             try {{
                 const res = await fetch('/api/theme');
+                if (!res.ok) throw new Error('theme ' + res.status);
                 const th = await res.json();
                 if (th && th.id && th.id !== currentThemeId) {{
                     applyPalette(th);
-                    const sel = document.getElementById('themeSelect');
-                    if (sel) sel.value = th.id;
+                    loadThemeList();
                 }}
-            }} catch (e) {{}}
+            }} catch (e) {{
+                throw e;
+            }}
         }}
 
         async function fetchEq() {{
             try {{
                 const res = await fetch('/api/eq');
+                if (!res.ok) throw new Error('eq ' + res.status);
                 const data = await res.json();
                 // The phone is the only audio output, so the visualizer follows
                 // its element. The server cannot observe audio itself.
@@ -2934,17 +5500,9 @@ def render_html_page(theme: Dict[str, Any]) -> str:
                         targetLevels[i] = isPlayerActive ? Math.max(0.04, Math.min(1.0, data.levels[i])) : 0.04;
                     }}
                 }}
-                // No local audio analysis exists (the phone owns playback), so
-                // synthesise a gentle spectrum while the stream is running.
-                if (isPlayerActive) {{
-                    const t = performance.now() / 1000;
-                    for (let i = 0; i < BANDS; i++) {{
-                        const base = 0.30 + 0.22 * Math.sin(t * 1.7 + i * 0.55);
-                        const wobble = 0.14 * Math.sin(t * 3.1 + i * 1.15);
-                        const tilt = 1.0 - (i / BANDS) * 0.55;
-                        targetLevels[i] = Math.max(0.05, Math.min(0.95, (base + wobble) * tilt));
-                    }}
-                }}
+                // The spectrum is synthesised locally by animLoop(). There is no
+                // local audio analysis to fetch - the phone owns playback - so
+                // polling the server for it would only add load.
                 const audioEl = document.getElementById('mobileAudioStream');
                 const hasLocalClock = audioEl && isFinite(audioEl.duration) && audioEl.duration > 0 && audioStreamConfigured;
                 const shownPos = hasLocalClock ? audioEl.currentTime : Number(data.position_sec || 0);
@@ -2973,7 +5531,11 @@ def render_html_page(theme: Dict[str, Any]) -> str:
                 if (data.volume !== undefined) {{
                     document.getElementById('volPill').innerText = 'Vol: ' + data.volume + '%';
                     const audioEl = document.getElementById('mobileAudioStream');
-                    if (audioEl) audioEl.volume = Math.max(0, Math.min(1, data.volume / 100.0));
+                    // Do not fight the assistant's temporary duck while speech
+                    // is playing; the user's level is restored afterwards.
+                    if (audioEl && duckedMixVolume === null) {{
+                        audioEl.volume = Math.max(0, Math.min(1, data.volume / 100.0));
+                    }}
                 }}
                 if (data.pitch_percent !== undefined) {{
                     const p = data.pitch_percent;
@@ -2981,7 +5543,29 @@ def render_html_page(theme: Dict[str, Any]) -> str:
                 }}
                 updateShuffleUI(Boolean(data.shuffle));
                 if (data.repeat) updateRepeatUI(data.repeat);
-            }} catch (e) {{}}
+            }} catch (e) {{
+                // Let the scheduler back this endpoint off instead of retrying
+                // an unreachable service at full rate.
+                throw e;
+            }}
+        }}
+
+        // The reason the host cannot stream right now, phrased for a listener.
+        // Empty when the stream is fine.
+        function streamUnavailableDetail(data) {{
+            const state = (data && data.autoplay) || {{}};
+            if (state.status === 'disabled') {{
+                return 'Streaming is disabled on the host (WEB_COMPANION_AUTOPLAY).';
+            }}
+            // "ready" means the queue resolved; a library note such as
+            // "Music library offline - streaming Mix Archive" is informational
+            // then, not a reason the tap would fail.
+            if (state.status === 'ready' || state.status === 'playing') return '';
+            if (data && data.library_detail) {{
+                return data.library_detail;
+            }}
+            if (state.detail) return state.detail;
+            return '';
         }}
 
         function updateAutoplayNotice(state) {{
@@ -3001,6 +5585,12 @@ def render_html_page(theme: Dict[str, Any]) -> str:
                 playback_unverified: '⚠ Stream not confirmed',
             }};
             el.innerText = labels[state.status] || state.status;
+            // A phone has no hover, so the cause must be on screen, not only in
+            // the tooltip: "No mixes found" is wrong when the reason is a macOS
+            // privacy block on the archive volume.
+            if (state.detail && state.status !== 'ready' && state.status !== 'playing') {{
+                el.innerText += ' — ' + state.detail;
+            }}
             el.className = 'autoplay-notice ' + (
                 (state.status === 'ready' || state.status === 'playing') ? 'ok' :
                 (state.status === 'empty_playlist' || state.status === 'disabled') ? '' : 'warn'
@@ -3009,10 +5599,89 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             if (state.detail) el.title = state.detail;
         }}
 
+        function showRestartNotice(message) {{
+            const el = document.getElementById('restartNotice');
+            const text = document.getElementById('restartNoticeText');
+            if (text && message) text.innerText = message;
+            if (el) el.classList.add('show');
+            restartNoticeShown = true;
+        }}
+
+        function hideRestartNotice() {{
+            const el = document.getElementById('restartNotice');
+            if (el) el.classList.remove('show');
+        }}
+
+        // The tray tells us before it stops the service; show that reason now
+        // rather than waiting for the connection to drop.
+        function observeAnnouncement(message, at) {{
+            if (!message) return;
+            const key = message + '|' + String(at || '');
+            if (window.__lastAnnouncementKey === key) return;
+            window.__lastAnnouncementKey = key;
+            showRestartNotice(message + ' — reconnecting…');
+        }}
+
+        function noteServerGone() {{
+            if (restartNoticeShown) return;
+            showRestartNotice('MP Audio Web Companion is restarting — reconnecting…');
+        }}
+
+        function reloadForFreshInstance() {{
+            try {{
+                window.location.reload();
+            }} catch (e) {{}}
+        }}
+
+        // A restarted server is a new instance, so its stream URL and position
+        // are fresh. Re-point the <audio> element in place; a full reload
+        // would drop the user's tap gesture and force a second "engage stream"
+        // tap, which is exactly what they do not need mid-set.
+        function reattachToRestartedServer() {{
+            const audioEl = document.getElementById('mobileAudioStream');
+            audioStreamConfigured = false;
+            streamAutoStarted = false;
+            activeAudioFile = "";
+            lastServerPos = -1.0;
+            lastServerResume = 0.0;
+            mediaRecoveryUsed = false;
+            lastMediaErrorAt = 0;
+            if (audioEl) {{
+                try {{
+                    audioEl.pause();
+                }} catch (e) {{}}
+                audioEl.removeAttribute('src');
+                try {{
+                    audioEl.load();
+                }} catch (e) {{}}
+            }}
+            fetchStatus();
+            fetchMiniPlaylist();
+            fetchEq();
+        }}
+
         async function fetchStatus() {{
             try {{
                 const res = await fetch('/api/status');
                 const data = await res.json();
+                statusFailureCount = 0;
+
+                observeAnnouncement(data.announcement, data.announcement_at);
+
+                // A new instance id means Stop/Start ran while this page was
+                // open. Resume on the new instance without a reload so the
+                // phone keeps playing after one reconnect.
+                if (data.instance) {{
+                    if (serverInstance && data.instance !== serverInstance) {{
+                        serverInstance = data.instance;
+                        showRestartNotice('MP Audio Web Companion has been restarted — reconnecting…');
+                        reattachToRestartedServer();
+                        setTimeout(() => hideRestartNotice(), 4000);
+                        return;
+                    }}
+                    serverInstance = data.instance;
+                }}
+                if (restartNoticeShown) hideRestartNotice();
 
                 document.getElementById('trackTitle').innerText = data.title || "No Mix Playing";
                 document.getElementById('trackArtist').innerText = data.album ? (data.artist + " • " + data.album) : (data.artist || "MPlanetarian");
@@ -3036,26 +5705,29 @@ def render_html_page(theme: Dict[str, Any]) -> str:
                 document.getElementById('sourceBadge').innerText = (data.player || "None").toUpperCase();
                 currentDurationSec = data.duration_sec || 0;
                 updateAutoplayNotice(data.autoplay);
+                streamUnavailableReason = streamUnavailableDetail(data);
+                syncStreamOverlayDetail();
 
                 if (data.active_file && activeAudioFile !== data.active_file) {{
                     const wasPlaying = audioStreamEngaged && audioElIsPlaying();
                     activeAudioFile = data.active_file;
                     audioStreamConfigured = false;
                     lastServerPos = -1.0;
-                    // A skip queued for the previous mix must not be replayed
-                    // against the next file.
-                    pendingSeek = null;
+                    lastServerResume = Number(data.resume_sec) || 0;
                     const audioEl = document.getElementById('mobileAudioStream');
                     if (audioEl) {{
                         audioEl.src = '/api/stream?file=' + encodeURIComponent(data.active_file);
                         audioStreamConfigured = true;
-                        const resumeAt = Number(data.position_sec) || 0;
+                        // A track change is followed by the same rule as the
+                        // first engage: resume only from a safe point, never
+                        // from the tail of a file that ran unattended.
+                        const resumeAt = Number(data.resume_sec) || 0;
                         if (resumeAt > 0) {{
                             // Wait for metadata before seeking, otherwise the
                             // assignment is discarded by the new source load.
                             audioEl.addEventListener('loadedmetadata', function once() {{
                                 audioEl.removeEventListener('loadedmetadata', once);
-                                seekAudioTo(resumeAt);
+                                seekAudioTo(resumeAt, true);
                             }});
                         }}
                         audioEl.load();
@@ -3064,7 +5736,14 @@ def render_html_page(theme: Dict[str, Any]) -> str:
                             audioEl.play().catch(() => {{}});
                         }}
                     }}
+                }} else if (audioStreamEngaged === false) {{
+                    // Not engaged yet: keep the starting point current so the
+                    // tap that does engage uses the newest safe position.
+                    lastServerResume = Number(data.resume_sec) || 0;
                 }}
+                // First status poll: the service already armed the stream at
+                // startup, so pull it without waiting for a tap.
+                maybeAutoStartStream();
 
                 document.getElementById('specFormat').innerText = data.format || "AUDIO";
                 document.getElementById('specRate').innerText = data.sample_rate || "48.0 kHz";
@@ -3091,7 +5770,14 @@ def render_html_page(theme: Dict[str, Any]) -> str:
                 }} else {{
                     document.getElementById('tlCard').style.display = 'none';
                 }}
-            }} catch (e) {{}}
+            }} catch (e) {{
+                // The service may be mid-restart. Show the notice once the
+                // connection has failed repeatedly, then keep retrying and
+                // reload as soon as the new instance answers.
+                statusFailureCount += 1;
+                if (statusFailureCount >= 2) noteServerGone();
+                throw e;
+            }}
         }}
 
         async function sendAction(act, params = {{}}) {{
@@ -3107,539 +5793,194 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             }} catch (e) {{}}
         }}
 
-        setInterval(fetchEq, 100);
-        setInterval(fetchStatus, 2000);
-        setInterval(fetchTheme, 3000);
-        setInterval(fetchMiniPlaylist, 15000);
+        // ---------------------------------------------------------------------
+        // Desktop launch pad (Linux only). A running app keeps its button
+        // pressed down; an app that is not running sits in the raised state.
+        // ---------------------------------------------------------------------
+        function paintLaunchPad(data) {{
+            if (!data || !data.supported) return;
+            const buttons = document.querySelectorAll('#launchPadGrid .launch-btn[data-app]');
+            buttons.forEach(btn => {{
+                const app = (data.apps || []).find(a => a.id === btn.dataset.app);
+                const running = Boolean(app && app.running);
+                btn.classList.toggle('running', running);
+                btn.setAttribute('aria-pressed', running ? 'true' : 'false');
+                const state = btn.querySelector('.launch-state');
+                if (state) state.innerText = running ? 'Running' : 'Off';
+            }});
+            const tray = document.getElementById('launchPadTray');
+            if (tray) {{
+                tray.innerText = data.tray_running ? 'Tray on' : 'Tray off';
+                tray.classList.toggle('ok', Boolean(data.tray_running));
+            }}
+        }}
+
+        async function fetchLaunchPad() {{
+            const pad = document.getElementById('launchPad');
+            if (!pad) return;
+            try {{
+                const res = await fetch('/api/launchpad');
+                const data = await res.json();
+                if (!data || !data.supported) {{
+                    pad.style.display = 'none';
+                    return;
+                }}
+                pad.style.display = 'block';
+                paintLaunchPad(data);
+            }} catch (e) {{}}
+        }}
+
+        function launchPadNote(text, ok) {{
+            const note = document.getElementById('launchPadNote');
+            if (!note) return;
+            note.innerText = text;
+            note.classList.toggle('ok', Boolean(ok));
+        }}
+
+        async function launchApp(role) {{
+            const btn = document.querySelector('#launchPadGrid .launch-btn[data-app="' + role + '"]');
+            if (!btn || btn.classList.contains('busy')) return;
+            btn.classList.add('busy');
+            launchPadNote('Starting ' + (btn.dataset.label || role) + '…', false);
+            try {{
+                const res = await fetch('/api/launchpad/launch?app=' + encodeURIComponent(role), {{ method: 'POST' }});
+                const data = await res.json();
+                if (data && data.success) {{
+                    const verb = data.action === 'launch' ? 'Launched' : 'Brought forward';
+                    launchPadNote(verb + ' ' + (data.label || btn.dataset.label || role) + ' on the computer.', true);
+                }} else {{
+                    launchPadNote('Could not open ' + (btn.dataset.label || role) + '.', false);
+                }}
+            }} catch (e) {{
+                launchPadNote('Could not reach the computer.', false);
+            }} finally {{
+                btn.classList.remove('busy');
+                // Let the window appear before the pressed state is painted.
+                setTimeout(fetchLaunchPad, 1500);
+                setTimeout(fetchLaunchPad, 4000);
+            }}
+        }}
+
+        async function closeAllApps() {{
+            const btn = document.getElementById('launchCloseAll');
+            if (!btn || btn.classList.contains('busy')) return;
+            btn.classList.add('busy');
+            launchPadNote('Closing the desktop suite…', false);
+            try {{
+                const res = await fetch('/api/launchpad/close', {{ method: 'POST' }});
+                const data = await res.json();
+                const left = (data && data.remaining) || [];
+                const names = left.map(r => {{
+                    const b = document.querySelector('#launchPadGrid .launch-btn[data-app="' + r + '"]');
+                    return b ? b.dataset.label : r;
+                }});
+                if (data && data.success) {{
+                    launchPadNote('All MP apps closed. Tray icon stays up.', true);
+                }} else if (names.length) {{
+                    launchPadNote('Still open: ' + names.join(', '), false);
+                }} else {{
+                    launchPadNote('Close All did not complete.', false);
+                }}
+            }} catch (e) {{
+                launchPadNote('Could not reach the computer.', false);
+            }} finally {{
+                btn.classList.remove('busy');
+                setTimeout(fetchLaunchPad, 600);
+                setTimeout(fetchLaunchPad, 2500);
+            }}
+        }}
+
+        // ---------------------------------------------------------------------
+        // POLLING SCHEDULE
+        //
+        // Every poll used to be a bare setInterval, including fetchEq at 100 ms.
+        // That is 10 requests a second forever, and iOS Safari keeps firing
+        // timers in a backgrounded tab, so a phone left on this page queued
+        // hundreds of pending fetches against a single-threaded Python server
+        // and the dashboard became unresponsive. The schedule below:
+        //   * pauses completely while the tab is hidden (visibilitychange),
+        //   * never overlaps a second request for the same endpoint,
+        //   * backs off after failures instead of hammering a dead service,
+        //   * talks to the visualiser locally at 60 fps instead of over HTTP.
+        // ---------------------------------------------------------------------
+        const POLLS = [
+            {{ name: 'eq', fn: fetchEq, every: 2000, fail: 5000 }},
+            {{ name: 'status', fn: fetchStatus, every: 2000, fail: 4000 }},
+            {{ name: 'theme', fn: fetchTheme, every: 6000, fail: 15000 }},
+            {{ name: 'playlist', fn: fetchMiniPlaylist, every: 15000, fail: 30000 }},
+            {{ name: 'launchpad', fn: fetchLaunchPad, every: 10000, fail: 30000 }},
+            {{ name: 'assistant', fn: fetchAssistantStatus, every: 20000, fail: 30000 }},
+            {{ name: 'position', fn: reportPlaybackPosition, every: 5000, fail: 10000 }},
+        ];
+
+        let pollTimers = [];
+        let pollPaused = false;
+
+        function startPolls() {{
+            stopPolls();
+            if (pollPaused) return;
+            POLLS.forEach(p => {{
+                const tick = async () => {{
+                    if (pollPaused) return;
+                    if (p.busy) return;
+                    p.busy = true;
+                    let failed = false;
+                    try {{
+                        await p.fn();
+                    }} catch (e) {{
+                        failed = true;
+                    }} finally {{
+                        p.busy = false;
+                    }}
+                    if (pollPaused) return;
+                    const delay = failed ? p.fail : p.every;
+                    p.timer = setTimeout(tick, delay);
+                    pollTimers.push(p.timer);
+                }};
+                // Stagger the first run so page load does not fire them at once.
+                p.timer = setTimeout(tick, 150 + Math.random() * 400);
+                pollTimers.push(p.timer);
+            }});
+        }}
+
+        function stopPolls() {{
+            pollTimers.forEach(t => clearTimeout(t));
+            pollTimers = [];
+            POLLS.forEach(p => {{ p.busy = false; }});
+        }}
+
+        function setPollingPaused(paused) {{
+            if (pollPaused === paused) return;
+            pollPaused = paused;
+            // Stop the theme's CSS animations too: on iOS they keep the GPU and
+            // the compositor busy for a tab nobody is looking at.
+            document.body.classList.toggle('dynamic-rainbow-glass-frozen', paused);
+            if (paused) {{
+                stopPolls();
+            }} else {{
+                // Catch up immediately: the page was frozen while hidden and
+                // the displayed state is now stale.
+                startPolls();
+                fetchStatus();
+                fetchEq();
+            }}
+        }}
+
+        document.addEventListener('visibilitychange', () => {{
+            setPollingPaused(document.hidden);
+        }});
+        window.addEventListener('pagehide', () => setPollingPaused(true));
+        window.addEventListener('pageshow', (e) => {{
+            if (e.persisted) setPollingPaused(false);
+        }});
+
+        startPolls();
         fetchEq();
         fetchStatus();
         fetchTheme();
         fetchMiniPlaylist();
-
-        // ------------------------------------------------------------------
-        // MP ASSISTANT TAB
-        // The player keeps polling and playing while the assistant is open, so
-        // a mix can keep running underneath the conversation.
-        // ------------------------------------------------------------------
-        let assistantOnline = false;
-        let assistantBusy = false;
-        let assistantSession = '';
-        const DEFAULT_ASSISTANT_VOICE = 'stephen_hawking_matrix';
-
-        function assistantSessionId() {{
-            if (!assistantSession) {{
-                const key = 'mpAssistantSession';
-                try {{
-                    assistantSession = localStorage.getItem(key) || '';
-                }} catch (e) {{ assistantSession = ''; }}
-                if (!assistantSession) {{
-                    assistantSession = 'web-' + Date.now().toString(36) + '-' +
-                        Math.random().toString(36).slice(2, 8);
-                    try {{ localStorage.setItem(key, assistantSession); }} catch (e) {{}}
-                }}
-            }}
-            return assistantSession;
-        }}
-
-        function showTab(name) {{
-            const isAssistant = name === 'assistant';
-            const playerPanel = document.getElementById('panelPlayer');
-            const assistantPanel = document.getElementById('panelAssistant');
-            const playerBtn = document.getElementById('tabBtnPlayer');
-            const assistantBtn = document.getElementById('tabBtnAssistant');
-            if (!playerPanel || !assistantPanel) return;
-
-            playerPanel.hidden = isAssistant;
-            assistantPanel.hidden = !isAssistant;
-            if (playerBtn) {{
-                playerBtn.classList.toggle('active', !isAssistant);
-                playerBtn.setAttribute('aria-selected', String(!isAssistant));
-            }}
-            if (assistantBtn) {{
-                assistantBtn.classList.toggle('active', isAssistant);
-                assistantBtn.setAttribute('aria-selected', String(isAssistant));
-            }}
-            try {{ localStorage.setItem('mpCompanionTab', name); }} catch (e) {{}}
-            // Keep the deep link shareable and survive a Safari reload.
-            try {{
-                if (history.replaceState) {{
-                    history.replaceState(null, '', '#' + name);
-                }}
-            }} catch (e) {{}}
-            if (isAssistant) {{
-                // Entering the assistant tab is an explicit "no audio needed"
-                // choice, so do not leave the autoplay gate covering the chat.
-                dismissStreamOverlay();
-                fetchAssistantStatus();
-                // The tab switch is a real tap, so use it to unlock the reply
-                // element before the model has even been asked anything.
-                unlockAssistantAudio();
-                const input = document.getElementById('assistantInput');
-                if (input && assistantOnline) setTimeout(() => input.focus(), 60);
-            }}
-        }}
-
-        function assistantVoiceChoice() {{
-            const sel = document.getElementById('assistantVoice');
-            return (sel && sel.value) || DEFAULT_ASSISTANT_VOICE;
-        }}
-
-        function setAssistantStatus(state, label) {{
-            const el = document.getElementById('assistantStatus');
-            if (!el) return;
-            el.className = 'assistant-status ' + (state || '');
-            el.innerText = label || state || 'CHECKING…';
-        }}
-
-        function appendAssistantMessage(role, text) {{
-            const log = document.getElementById('assistantLog');
-            if (!log) return null;
-            const bubble = document.createElement('div');
-            bubble.className = 'msg ' + (role === 'user' ? 'user' : 'agent');
-            bubble.innerText = text || '';
-            log.appendChild(bubble);
-            log.scrollTop = log.scrollHeight;
-            return bubble;
-        }}
-
-        function appendAssistantHint(text) {{
-            const log = document.getElementById('assistantLog');
-            if (!log) return null;
-            const hint = document.createElement('div');
-            hint.className = 'msg-hint';
-            hint.innerText = text;
-            log.appendChild(hint);
-            log.scrollTop = log.scrollHeight;
-            return hint;
-        }}
-
-        async function fetchAssistantStatus() {{
-            try {{
-                const res = await fetch('/api/assistant');
-                const data = await res.json();
-                assistantOnline = Boolean(data.available);
-                if (assistantOnline) {{
-                    setAssistantStatus('online', 'ONLINE');
-                }} else if (data.status === 'disabled') {{
-                    setAssistantStatus('offline', 'DISABLED');
-                }} else {{
-                    setAssistantStatus('offline', 'OFFLINE');
-                }}
-                if (data.voices && data.voices.length) {{
-                    const sel = document.getElementById('assistantVoice');
-                    if (sel && sel.options.length !== data.voices.length) {{
-                        const saved = sel.value || DEFAULT_ASSISTANT_VOICE;
-                        sel.innerHTML = '';
-                        data.voices.forEach(v => {{
-                            const opt = document.createElement('option');
-                            opt.value = v.id;
-                            opt.textContent = v.name;
-                            sel.appendChild(opt);
-                        }});
-                        sel.value = saved;
-                    }}
-                }}
-                if (data.voice) {{
-                    const sel = document.getElementById('assistantVoice');
-                    if (sel && !sel.dataset.touched) sel.value = data.voice;
-                }}
-                return data;
-            }} catch (e) {{
-                assistantOnline = false;
-                setAssistantStatus('offline', 'UNREACHABLE');
-                return null;
-            }}
-        }}
-
-        function assistantAudioEl() {{
-            return document.getElementById('assistantAudio');
-        }}
-
-        // Pause the mix while the assistant talks, then put it back.
-        function duckMixForSpeech(isSpeaking) {{
-            const mix = document.getElementById('mobileAudioStream');
-            const badge = document.getElementById('assistantSpeaking');
-            if (badge) badge.hidden = !isSpeaking;
-            if (!mix) return;
-            if (isSpeaking) {{
-                if (!mix.paused) {{
-                    mix.dataset.duckedByAssistant = '1';
-                    mix.pause();
-                }}
-            }} else if (mix.dataset.duckedByAssistant === '1') {{
-                delete mix.dataset.duckedByAssistant;
-                mix.play().catch(() => {{}});
-            }}
-        }}
-
-        function splitForSpeech(text) {{
-            // Piper is slow on very long input, and Safari caps URL length.
-            // Speak sentence-sized chunks back to back instead.
-            const clean = (text || '').replace(/\\s+/g, ' ').trim();
-            if (!clean) return [];
-            const parts = clean.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [clean];
-            const chunks = [];
-            let current = '';
-            for (const part of parts) {{
-                if ((current + part).length > 240 && current) {{
-                    chunks.push(current.trim());
-                    current = part;
-                }} else {{
-                    current += ' ' + part;
-                }}
-            }}
-            if (current.trim()) chunks.push(current.trim());
-            return chunks;
-        }}
-
-        // ------------------------------------------------------------------
-        // SPEECH UNLOCK (mobile autoplay policy)
-        //
-        // A phone only lets audio start inside a real tap. The model takes
-        // several seconds to answer, so by the time the reply is ready that
-        // tap is long gone and `play()` rejects with NotAllowedError, leaving
-        // a text-only reply. Answering the tap with a mute priming clip marks
-        // the element as user-activated, so later programmatic playback (the
-        // actual spoken reply) is allowed. Every tap on the assistant tab also
-        // re-primes, which keeps it working after a reload or a long pause.
-        // ------------------------------------------------------------------
-        const SILENT_WAV = 'data:audio/wav;base64,UklGRkQDAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YSADAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==';
-        let assistantAudioUnlocked = false;
-        let assistantSpeechUrl = '';
-        let assistantSpeechToken = 0;
-        let assistantLastPrimeAt = 0;
-        let assistantSpeaking = false;
-
-        function unlockAssistantAudio() {{
-            const el = assistantAudioEl();
-            if (!el) return Promise.resolve(false);
-            // Never interrupt a reply that is already speaking.
-            if (assistantSpeaking) return Promise.resolve(true);
-            if (assistantAudioUnlocked && Date.now() - assistantLastPrimeAt < 60000) {{
-                return Promise.resolve(true);
-            }}
-            // A phone fires pointerdown and touchstart for the same tap; only
-            // the first one needs to prime the element.
-            if (Date.now() - assistantLastPrimeAt < 600) {{
-                return Promise.resolve(assistantAudioUnlocked);
-            }}
-            assistantLastPrimeAt = Date.now();
-            return new Promise(resolve => {{
-                const restore = () => {{
-                    el.removeEventListener('playing', onPlaying);
-                    el.removeEventListener('error', onError);
-                }};
-                const onPlaying = () => {{
-                    restore();
-                    // Release the element at once; the priming clip has no
-                    // audible content and must not delay the real reply.
-                    try {{ el.pause(); }} catch (e) {{}}
-                    assistantAudioUnlocked = true;
-                    resolve(true);
-                }};
-                const onError = () => {{
-                    restore();
-                    assistantAudioUnlocked = false;
-                    resolve(false);
-                }};
-                el.addEventListener('playing', onPlaying);
-                el.addEventListener('error', onError);
-                try {{
-                    // The priming clip must not duck the mix or show the
-                    // speaking badge, so mute any reply handler for its run.
-                    el.onplay = null;
-                    el.src = SILENT_WAV;
-                    el.play().then(() => {{
-                        // Some browsers resolve without firing `playing`.
-                        if (!assistantAudioUnlocked) {{
-                            restore();
-                            try {{ el.pause(); }} catch (e) {{}}
-                            assistantAudioUnlocked = true;
-                        }}
-                        resolve(true);
-                    }}).catch(() => {{
-                        restore();
-                        assistantAudioUnlocked = false;
-                        resolve(false);
-                    }});
-                }} catch (e) {{
-                    restore();
-                    resolve(false);
-                }}
-            }});
-        }}
-
-        function stopAssistantSpeech() {{
-            assistantSpeechToken += 1;
-            assistantSpeaking = false;
-            const el = assistantAudioEl();
-            if (el) {{
-                try {{ el.pause(); }} catch (e) {{}}
-                el.onplay = null;
-            }}
-            duckMixForSpeech(false);
-        }}
-
-        function speakAssistantReply(text, bubble) {{
-            const speak = document.getElementById('assistantSpeak');
-            if (!speak || !speak.checked) return;
-            const audioEl = assistantAudioEl();
-            if (!audioEl) return;
-
-            const chunks = splitForSpeech(text);
-            if (!chunks.length) return;
-            const token = ++assistantSpeechToken;
-            let index = 0;
-            assistantSpeaking = true;
-
-            const finish = () => {{
-                if (token !== assistantSpeechToken) return;
-                assistantSpeaking = false;
-                duckMixForSpeech(false);
-            }};
-
-            const offerReplay = (retry) => {{
-                if (token !== assistantSpeechToken || !bubble) return;
-                if (bubble.querySelector('.assistant-replay')) return;
-                const replay = document.createElement('button');
-                replay.className = 'assistant-replay';
-                replay.type = 'button';
-                replay.innerText = '▶ Speak reply';
-                // The retry runs inside this tap, so playback is allowed.
-                replay.onclick = () => {{
-                    replay.remove();
-                    retry();
-                }};
-                bubble.appendChild(document.createElement('br'));
-                bubble.appendChild(replay);
-            }};
-
-            const playNext = () => {{
-                if (token !== assistantSpeechToken) return;
-                if (index >= chunks.length) {{
-                    finish();
-                    return;
-                }}
-                const body = JSON.stringify({{
-                    text: chunks[index],
-                    voice: assistantVoiceChoice(),
-                }});
-                index += 1;
-                fetch('/api/assistant/speech', {{
-                    method: 'POST',
-                    headers: {{ 'Content-Type': 'application/json' }},
-                    body: body,
-                }}).then(res => {{
-                    if (!res.ok) throw new Error('speech ' + res.status);
-                    return res.blob();
-                }}).then(blob => {{
-                    if (token !== assistantSpeechToken) return null;
-                    if (assistantSpeechUrl) URL.revokeObjectURL(assistantSpeechUrl);
-                    assistantSpeechUrl = URL.createObjectURL(blob);
-                    audioEl.onended = () => {{
-                        if (token !== assistantSpeechToken) return;
-                        playNext();
-                    }};
-                    audioEl.onerror = () => {{
-                        if (token !== assistantSpeechToken) return;
-                        finish();
-                    }};
-                    audioEl.src = assistantSpeechUrl;
-                    return audioEl.play().then(() => {{
-                        assistantAudioUnlocked = true;
-                    }}).catch(err => {{
-                        // Autoplay was blocked (no tap, or the unlock did not
-                        // stick). Stop the queue and surface a one-tap retry so
-                        // the reply is never silently text-only.
-                        if (token !== assistantSpeechToken) return;
-                        assistantAudioUnlocked = err && err.name === 'NotAllowedError'
-                            ? false
-                            : assistantAudioUnlocked;
-                        assistantSpeaking = false;
-                        duckMixForSpeech(false);
-                        offerReplay(() => speakAssistantReply(text, bubble));
-                    }});
-                }}).catch(() => {{
-                    if (token !== assistantSpeechToken) return;
-                    finish();
-                }});
-            }};
-
-            audioEl.onplay = () => duckMixForSpeech(true);
-            duckMixForSpeech(true);
-            playNext();
-        }}
-
-        function resetAssistantChat() {{
-            assistantSession = '';
-            try {{ localStorage.removeItem('mpAssistantSession'); }} catch (e) {{}}
-            const log = document.getElementById('assistantLog');
-            if (log) {{
-                log.innerHTML = '';
-                appendAssistantHint('New chat started with MP Harmony.');
-            }}
-            stopAssistantSpeech();
-            const audioEl = assistantAudioEl();
-            if (audioEl) {{
-                try {{ audioEl.pause(); }} catch (e) {{}}
-                audioEl.removeAttribute('src');
-            }}
-            if (assistantSpeechUrl) {{
-                try {{ URL.revokeObjectURL(assistantSpeechUrl); }} catch (e) {{}}
-                assistantSpeechUrl = '';
-            }}
-            duckMixForSpeech(false);
-        }}
-
-        function setAssistantBusy(busy) {{
-            assistantBusy = busy;
-            const btn = document.getElementById('assistantSend');
-            if (btn) {{
-                btn.disabled = busy;
-                btn.innerText = busy ? '…' : 'Send';
-            }}
-        }}
-
-        async function sendAssistantMessage() {{
-            if (assistantBusy) return;
-            const input = document.getElementById('assistantInput');
-            if (!input) return;
-            const message = input.value.trim();
-            if (!message) return;
-
-            // The send itself is a gesture. Unlock playback now so the reply
-            // can be spoken when it arrives several seconds from now.
-            unlockAssistantAudio();
-
-            if (!assistantOnline) {{
-                const status = await fetchAssistantStatus();
-                if (!status || !status.available) {{
-                    appendAssistantHint(
-                        'MP Harmony Agent is not running. Start it from the manager: ' +
-                        'AI Assistant & Local LLM Servers Suite, then option 4 (Manage MP Harmony AI Agent).'
-                    );
-                    return;
-                }}
-            }}
-
-            input.value = '';
-            input.style.height = 'auto';
-            appendAssistantMessage('user', message);
-            const bubble = appendAssistantMessage('agent', '▍ thinking…');
-            setAssistantBusy(true);
-
-            let reply = '';
-            let started = false;
-            try {{
-                const res = await fetch('/api/assistant/chat', {{
-                    method: 'POST',
-                    headers: {{ 'Content-Type': 'application/json' }},
-                    body: JSON.stringify({{
-                        message: message,
-                        session: assistantSessionId(),
-                    }}),
-                }});
-                if (!res.ok || !res.body) {{
-                    let detail = '';
-                    try {{ detail = (await res.json()).error || ''; }} catch (e) {{}}
-                    throw new Error(detail || ('HTTP ' + res.status));
-                }}
-
-                const reader = res.body.getReader();
-                const decoder = new TextDecoder();
-                let buffer = '';
-
-                while (true) {{
-                    const chunk = await reader.read();
-                    if (chunk.done) break;
-                    buffer += decoder.decode(chunk.value, {{ stream: true }});
-                    const frames = buffer.split('\\n\\n');
-                    buffer = frames.pop();
-                    for (const frame of frames) {{
-                        for (const line of frame.split('\\n')) {{
-                            const trimmed = line.trim();
-                            if (!trimmed.startsWith('data:')) continue;
-                            const payload = trimmed.slice(5).trim();
-                            if (!payload || payload === '[DONE]') continue;
-                            let obj;
-                            try {{ obj = JSON.parse(payload); }} catch (e) {{ continue; }}
-                            const delta = obj.choices && obj.choices[0] &&
-                                obj.choices[0].delta && obj.choices[0].delta.content;
-                            if (delta) {{
-                                if (!started) {{
-                                    started = true;
-                                    bubble.innerText = '';
-                                }}
-                                reply += delta;
-                                bubble.innerText = reply;
-                                const log = document.getElementById('assistantLog');
-                                if (log) log.scrollTop = log.scrollHeight;
-                            }}
-                        }}
-                    }}
-                }}
-            }} catch (err) {{
-                bubble.classList.add('error');
-                bubble.innerText = 'Could not reach MP Harmony: ' + (err.message || err);
-                setAssistantBusy(false);
-                return;
-            }}
-
-            if (!reply.trim()) {{
-                bubble.classList.add('error');
-                bubble.innerText = 'MP Harmony returned no text. Check the agent console for tool output.';
-            }} else {{
-                bubble.innerText = reply;
-                speakAssistantReply(reply, bubble);
-            }}
-            setAssistantBusy(false);
-        }}
-
-        window.addEventListener('DOMContentLoaded', () => {{
-            const savedTab = (location.hash || '').replace('#', '');
-            let storedTab = '';
-            try {{ storedTab = localStorage.getItem('mpCompanionTab') || ''; }} catch (e) {{}}
-            showTab(savedTab === 'assistant' || storedTab === 'assistant' ? 'assistant' : 'player');
-
-            // Prime the reply element on the first tap anywhere in the
-            // assistant panel. Phones only allow audio from a user gesture,
-            // and the reply arrives long after the send tap has expired.
-            const assistantPanel = document.getElementById('panelAssistant');
-            if (assistantPanel) {{
-                const prime = () => {{ unlockAssistantAudio(); }};
-                assistantPanel.addEventListener('pointerdown', prime);
-                assistantPanel.addEventListener('touchstart', prime, {{ passive: true }});
-            }}
-
-            const voiceSel = document.getElementById('assistantVoice');
-            if (voiceSel) {{
-                voiceSel.addEventListener('change', () => {{ voiceSel.dataset.touched = '1'; }});
-            }}
-            const speakBox = document.getElementById('assistantSpeak');
-            if (speakBox) {{
-                speakBox.addEventListener('change', () => {{
-                    if (!speakBox.checked) stopAssistantSpeech();
-                }});
-            }}
-            const input = document.getElementById('assistantInput');
-            if (input) {{
-                input.addEventListener('input', () => {{
-                    input.style.height = 'auto';
-                    input.style.height = Math.min(130, input.scrollHeight) + 'px';
-                }});
-                input.addEventListener('keydown', (ev) => {{
-                    // Enter sends, Shift+Enter makes a new line (matches the TUI).
-                    if (ev.key === 'Enter' && !ev.shiftKey) {{
-                        ev.preventDefault();
-                        sendAssistantMessage();
-                    }}
-                }});
-            }}
-            fetchAssistantStatus();
-            setInterval(() => {{
-                if (!document.getElementById('panelAssistant').hidden) fetchAssistantStatus();
-            }}, 20000);
-        }});
+        fetchLaunchPad();
+        fetchAssistantStatus();
     </script>
 </body>
 </html>
@@ -3650,6 +5991,13 @@ def render_html_page(theme: Dict[str, Any]) -> str:
 # HTTP SERVER & API HANDLER (WITH RANGE HEADER SUPPORT FOR HTML5 STREAMING)
 # ------------------------------------------------------------------------------
 class CompanionHandler(http.server.BaseHTTPRequestHandler):
+    # A phone that locks its screen or backgrounds Safari stops reading the
+    # streaming socket. Without a timeout the writing thread parked forever on
+    # a full TCP window, so every abandoned page load leaked a thread until the
+    # service could no longer serve anything. A bounded write turns that into a
+    # closed connection, which is the correct outcome.
+    timeout = 30
+
     def do_HEAD(self):
         url = urllib.parse.urlparse(self.path)
         if url.path in ("/", "/index.html"):
@@ -3658,8 +6006,11 @@ class CompanionHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
             self.end_headers()
         elif url.path in ("/api/status", "/api/theme", "/api/eq", "/api/autoplay",
-                          "/api/themes", "/api/set_theme", "/api/playlist",
-                          "/api/assistant", "/api/assistant/speech"):
+                          "/api/themes", "/api/set_theme", "/api/playlist", "/api/mode",
+                          "/api/launchpad", "/api/announce", "/api/assistant/status",
+                          "/api/assistant/voices", "/api/assistant/chat",
+                          "/api/assistant/speech", "/api/assistant/start",
+                          "/api/assistant/abort"):
             self.send_response(200)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Access-Control-Allow-Origin", "*")
@@ -3690,6 +6041,11 @@ class CompanionHandler(http.server.BaseHTTPRequestHandler):
         elif url.path == "/api/status":
             status = get_playback_status(CLI_THEME)
             status["autoplay"] = autoplay_state()
+            status["instance"] = INSTANCE_ID
+            announcement = current_announcement()
+            if announcement:
+                status["announcement"] = announcement["message"]
+                status["announcement_at"] = announcement["at"]
             self.send_response(200)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Access-Control-Allow-Origin", "*")
@@ -3733,6 +6089,23 @@ class CompanionHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(payload).encode("utf-8"))
+        elif url.path == "/api/mode":
+            requested = parsed_query.get("mode", [""])[0]
+            chosen = set_library_mode(requested) if requested else None
+            payload = {
+                "success": chosen is not None,
+                "mode": chosen or get_library_mode(),
+                "mode_label": MODE_LABELS.get(chosen or get_library_mode(), "Library"),
+                "total": len(build_stream_queue_cached()),
+                "library_fallback": bool(_queue_source_state.get("fallback")),
+                "library_detail": _queue_source_state.get("detail", ""),
+            }
+            self.send_response(200 if chosen else 400)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(json.dumps(payload).encode("utf-8"))
         elif url.path == "/api/playlist":
             payload = get_mini_playlist()
             payload["shuffle"] = bool(load_stream_session().get("shuffle", False))
@@ -3742,14 +6115,52 @@ class CompanionHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(payload).encode("utf-8"))
-        elif url.path == "/api/assistant":
-            payload = assistant_status()
-            if payload.get("available"):
-                payload["voices"] = assistant_voices()
-                payload["enabled"] = True
-            else:
-                payload["voices"] = assistant_voices()
-                payload["enabled"] = assistant_enabled()
+        elif url.path == "/api/play-random":
+            payload = play_random_track()
+            status = 200 if payload.get("success") else 409
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(json.dumps(payload).encode("utf-8"))
+        elif url.path == "/api/launchpad":
+            payload = launch_pad_status()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(json.dumps(payload).encode("utf-8"))
+        elif url.path == "/api/announce":
+            # The tray posts here just before it stops the service; a dashboard
+            # polling this endpoint can show the notice even if /api/status is
+            # already unreachable.
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(json.dumps(
+                {"announcement": current_announcement()}
+            ).encode("utf-8"))
+        elif url.path == "/api/assistant/status":
+            payload = harmony_status(force="1" in parsed_query.get("force", ["0"]))
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(json.dumps(payload).encode("utf-8"))
+        elif url.path == "/api/assistant/voices":
+            current = harmony_status().get("voice", HARMONY_DEFAULT_VOICE)
+            payload = {
+                "current": current,
+                "current_label": harmony_voice_label(current),
+                "default": HARMONY_DEFAULT_VOICE,
+                "voice_speed": harmony_voice_speed(),
+                "voices": [{"id": vid, "label": label} for vid, label in HARMONY_VOICES.items()],
+            }
             self.send_response(200)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Cache-Control", "no-store")
@@ -3757,7 +6168,24 @@ class CompanionHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json.dumps(payload).encode("utf-8"))
         elif url.path == "/api/assistant/speech":
-            self._serve_assistant_speech(parsed_query)
+            # GET form for simple links and tests; the dashboard itself POSTs,
+            # because a long reply does not fit comfortably in a URL.
+            raw_text = parsed_query.get("text", [""])[0]
+            voice = parsed_query.get("voice", [""])[0] or None
+            speed_raw = parsed_query.get("speed", [""])[0]
+            try:
+                speed = float(speed_raw) if speed_raw else None
+            except ValueError:
+                speed = None
+            self._send_assistant_speech(raw_text, voice, speed)
+        elif url.path == "/api/assistant/start":
+            payload = start_harmony_agent()
+            self.send_response(200 if payload.get("success") else 501)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(json.dumps(payload).encode("utf-8"))
         elif url.path == "/api/stream":
             file_path = parsed_query.get("file", [""])[0]
             if file_path and os.path.isfile(file_path):
@@ -3821,6 +6249,11 @@ class CompanionHandler(http.server.BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             # The phone scrubbed away or closed the tab: not an error.
             self.close_connection = True
+        except TimeoutError:
+            # A backgrounded phone stopped reading mid-transfer and the socket
+            # write timed out. Abandon the response instead of trying to write
+            # an error into a half-sent body.
+            self.close_connection = True
         except OSError:
             try:
                 self.send_error(404)
@@ -3857,8 +6290,219 @@ class CompanionHandler(http.server.BaseHTTPRequestHandler):
             return None, 0
         return start, min(end, file_size - 1)
 
+    def _read_json_body(self, limit: int = 65536) -> Dict[str, Any]:
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            length = 0
+        if length <= 0:
+            return {}
+        try:
+            payload = json.loads(self.rfile.read(min(length, limit)).decode("utf-8"))
+        except (ValueError, UnicodeDecodeError, OSError):
+            payload = {}
+        finally:
+            # Never leave a partially-read body behind: this server keeps
+            # connections alive, and an unread tail would be parsed as the
+            # next request line.
+            unread = max(0, length - min(length, limit))
+            while unread > 0:
+                chunk = self.rfile.read(min(unread, 65536))
+                if not chunk:
+                    break
+                unread -= len(chunk)
+        return payload if isinstance(payload, dict) else {}
+
+    def _send_json(self, status: int, payload: Dict[str, Any]) -> None:
+        body = json.dumps(payload).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        try:
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            self.close_connection = True
+
+    def _send_assistant_speech(self, text: Any, voice: Any, speed: Any) -> None:
+        """Synthesize a reply and stream it back as WAV.
+
+        The phone is the only audio output. When synthesis fails the response
+        is a JSON error with a 503, so the page can say what happened instead
+        of playing silence.
+        """
+        audio = harmony_speech(str(text or ""), voice=voice, speed=speed)
+        if not audio:
+            self._send_json(503, {
+                "error": "Speech synthesis failed on the host. Is espeak-ng installed?",
+                "voice": normalize_harmony_voice(voice)
+                         or load_web_assistant_voice() or HARMONY_DEFAULT_VOICE,
+            })
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "audio/wav")
+        self.send_header("Content-Length", str(len(audio)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        try:
+            self.wfile.write(audio)
+        except (BrokenPipeError, ConnectionResetError):
+            self.close_connection = True
+
+    def _stream_assistant_sse(self, payload: Dict[str, Any]) -> None:
+        """Relay the agent's token stream as SSE to the dashboard.
+
+        The agent streams OpenAI chat-completion chunks. They are forwarded
+        verbatim, so the page can render tokens as they arrive and the whole
+        reply is concatenated at the end for speech.
+        """
+        session_id = "web-companion"
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "close")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+
+        def emit(obj: Any) -> bool:
+            try:
+                self.wfile.write(f"data: {json.dumps(obj)}\n\n".encode("utf-8"))
+                self.wfile.flush()
+                return True
+            except (BrokenPipeError, ConnectionResetError):
+                self.close_connection = True
+                return False
+            except OSError:
+                self.close_connection = True
+                return False
+
+        def emit_done() -> None:
+            # The literal marker every OpenAI SSE client stops on, written raw
+            # rather than JSON-encoded.
+            try:
+                self.wfile.write(b"data: [DONE]\n\n")
+                self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                pass
+            self.close_connection = True
+
+        voice = normalize_harmony_voice(payload.get("voice")) or (
+            load_web_assistant_voice() or HARMONY_DEFAULT_VOICE
+        )
+        emit({"object": "mp.assistant.meta", "voice": voice,
+              "voice_label": harmony_voice_label(voice)})
+
+        body = {
+            "model": payload.get("model") or "mp-harmony-agent",
+            "messages": payload.get("messages") or [],
+            "stream": True,
+        }
+        request = urllib.request.Request(
+            harmony_agent_url() + "/v1/chat/completions",
+            data=json.dumps(body).encode("utf-8"),
+            headers={"Content-Type": "application/json", "X-Session-Id": session_id},
+            method="POST",
+        )
+        try:
+            response = urllib.request.urlopen(request, timeout=1800.0)
+        except (urllib.error.URLError, OSError) as exc:
+            emit({"object": "mp.assistant.error",
+                  "message": f"The MP Harmony Agent is not reachable: {exc}"})
+            emit_done()
+            return
+        try:
+            for raw in response:
+                line = raw.decode("utf-8", "replace").strip()
+                if not line:
+                    continue
+                if line.startswith("data: "):
+                    line = line[6:]
+                if line == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(line)
+                except ValueError:
+                    continue
+                choice = (chunk.get("choices") or [{}])[0]
+                delta = (choice.get("delta") or {}).get("content", "")
+                if delta:
+                    if not emit({"object": "mp.assistant.delta", "content": delta}):
+                        return
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            self.close_connection = True
+            return
+        finally:
+            try:
+                response.close()
+            except Exception:
+                pass
+
+        emit({"object": "mp.assistant.done", "voice": voice,
+              "voice_label": harmony_voice_label(voice)})
+        emit_done()
+
     def do_POST(self):
         url = urllib.parse.urlparse(self.path)
+        if url.path == "/api/assistant/chat":
+            payload = self._read_json_body()
+            messages = payload.get("messages") or []
+            prompt = ""
+            for message in reversed(messages):
+                if isinstance(message, dict) and message.get("role") == "user":
+                    prompt = str(message.get("content") or "")
+                    break
+            # /voice is answered here so the dashboard can switch the voice
+            # without sending the command to the model.
+            local = _voice_command_reply(prompt)
+            if local is not None:
+                self._send_json(200, {
+                    "object": "mp.assistant.reply",
+                    "content": local,
+                    "voice": harmony_status().get("voice", HARMONY_DEFAULT_VOICE),
+                    "voice_label": harmony_voice_label(
+                        harmony_status().get("voice", HARMONY_DEFAULT_VOICE)
+                    ),
+                    "local": True,
+                })
+                return
+            self._stream_assistant_sse(payload)
+            return
+        if url.path == "/api/assistant/voice":
+            payload = self._read_json_body()
+            target = set_harmony_voice(payload.get("voice"))
+            self._send_json(200 if target else 400, {
+                "success": bool(target),
+                "voice": target or harmony_status().get("voice"),
+                "voice_label": harmony_voice_label(target or ""),
+            })
+            return
+        if url.path == "/api/assistant/start":
+            payload = start_harmony_agent()
+            self._send_json(200 if payload.get("success") else 501, payload)
+            return
+        if url.path == "/api/assistant/speech":
+            # POST form: a long reply exceeds the URL limit that <audio src>
+            # would otherwise hit, so the page posts the text and blobs the WAV.
+            payload = self._read_json_body(limit=200000)
+            self._send_assistant_speech(
+                payload.get("text"), payload.get("voice"), payload.get("speed")
+            )
+            return
+        if url.path == "/api/assistant/abort":
+            # Barge-in: tell the agent to stop generating the current reply so
+            # the model does not keep running after the phone hangs up.
+            success = False
+            try:
+                with _harmony_request("/v1/abort", {}, timeout=4.0) as response:
+                    success = response.status == 200
+                    response.read()
+            except (urllib.error.URLError, OSError, ValueError):
+                success = False
+            self._send_json(200, {"success": success})
+            return
         if url.path == "/api/control":
             params = urllib.parse.parse_qs(url.query)
             action = params.get("action", [""])[0]
@@ -3868,154 +6512,101 @@ class CompanionHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps({"success": success, "action": action}).encode("utf-8"))
-        elif url.path == "/api/assistant/chat":
-            self._proxy_assistant_chat()
-        elif url.path == "/api/assistant/speech":
-            self._serve_assistant_speech()
-        else:
-            self.send_response(404)
-            self.end_headers()
-
-    def _serve_assistant_speech(self, parsed_query=None) -> None:
-        """Proxy MP Harmony's TTS back to the phone as a WAV body."""
-        query = parsed_query or {}
-        text = query.get("text", [""])[0]
-        voice = query.get("voice", [""])[0]
-        if self.command == "POST":
+        elif url.path == "/api/announce":
+            message = ANNOUNCE_MESSAGE_DEFAULT
             try:
-                length = int(self.headers.get("Content-Length", 0))
-                data = json.loads(self.rfile.read(length).decode("utf-8")) if length else {}
-            except Exception:
-                data = {}
-            text = str(data.get("text", text) or "")
-            voice = str(data.get("voice", voice) or "")
-        text = text.strip()
-        if not text:
-            self.send_response(400)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(b'{"error":"No text supplied"}')
-            return
-
-        code, audio = assistant_request(
-            "/v1/audio/speech",
-            {"input": text, "voice": voice or "stephen_hawking_matrix"},
-            timeout=120.0,
-        )
-        if code == 200 and audio:
+                length = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                length = 0
+            if length > 0:
+                try:
+                    body = self.rfile.read(min(length, 4096))
+                    payload = json.loads(body.decode("utf-8"))
+                    if isinstance(payload, dict) and payload.get("message"):
+                        message = str(payload["message"])
+                except (ValueError, UnicodeDecodeError, OSError):
+                    pass
+            queued = set_announcement(message)
             self.send_response(200)
-            self.send_header("Content-Type", "audio/wav")
-            self.send_header("Content-Length", str(len(audio)))
+            self.send_header("Content-Type", "application/json")
             self.send_header("Cache-Control", "no-store")
             self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
-            self.wfile.write(audio)
+            self.wfile.write(json.dumps(
+                {"success": queued is not None, "announcement": queued}
+            ).encode("utf-8"))
+        elif url.path in ("/api/launchpad/launch", "/api/launchpad/close"):
+            params = urllib.parse.parse_qs(url.query)
+            if url.path.endswith("/close"):
+                payload = launch_pad_close_all()
+            else:
+                payload = launch_pad_action(params.get("app", [""])[0])
+            status = 200 if payload.get("success") else 400
+            if payload.get("action") == "unsupported":
+                status = 501
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(json.dumps(payload).encode("utf-8"))
         else:
-            self.send_response(502)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_response(404)
             self.end_headers()
-            self.wfile.write(b'{"error":"Speech synthesis failed"}')
-
-    def _proxy_assistant_chat(self) -> None:
-        """Stream MP Harmony's SSE reply straight through to the phone.
-
-        Rewriting the stream would lose tokens from the agent's final channel,
-        so the bytes are forwarded as they arrive and only the terminating
-        [DONE] frame is checked for.
-        """
-        if not assistant_enabled():
-            self.send_response(503)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(b'{"error":"MP Assistant is disabled"}')
-            return
-
-        try:
-            length = int(self.headers.get("Content-Length", 0))
-            data = json.loads(self.rfile.read(length).decode("utf-8")) if length else {}
-        except Exception:
-            data = {}
-
-        message = str(data.get("message", "")).strip()
-        session_id = str(data.get("session", "") or "web-companion")
-        if not message:
-            self.send_response(400)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(b'{"error":"No message supplied"}')
-            return
-
-        payload = {
-            "model": "mp-harmony-agent",
-            "stream": True,
-            "messages": [{"role": "user", "content": message}],
-            "user": session_id,
-        }
-        req = urllib.request.Request(
-            assistant_url() + "/v1/chat/completions",
-            data=json.dumps(payload).encode("utf-8"),
-            headers={
-                "Content-Type": "application/json",
-                "Accept": "text/event-stream",
-                "X-Session-Id": session_id,
-            },
-            method="POST",
-        )
-        try:
-            upstream = urllib.request.urlopen(req, timeout=ASSISTANT_TIMEOUT)
-        except Exception as err:
-            self.send_response(502)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
-            self.wfile.write(json.dumps({
-                "error": "MP Harmony Agent is not answering on port 11435.",
-                "detail": str(err),
-            }).encode("utf-8"))
-            return
-
-        self.send_response(200)
-        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
-        self.send_header("Cache-Control", "no-cache, no-transform")
-        self.send_header("X-Accel-Buffering", "no")
-        self.send_header("Connection", "close")
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.end_headers()
-        self.close_connection = True
-
-        try:
-            while True:
-                line = upstream.readline()
-                if not line:
-                    break
-                self.wfile.write(line)
-                self.wfile.flush()
-        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
-            # The phone navigated away or switched tabs; that is not an error.
-            pass
-        except Exception:
-            pass
-        finally:
-            try:
-                upstream.close()
-            except Exception:
-                pass
 
     def log_message(self, format, *args):
         pass
 
 
 class CompanionServer(http.server.ThreadingHTTPServer):
-    """Same threading server, but with a backlog sized for a polling client.
+    """Threaded server with a bounded worker pool.
 
-    The stdlib default is 5 pending connections. The dashboard polls several
-    endpoints per second and mobile browsers open parallel range requests for
-    audio, so bursts are normal rather than exceptional.
+    The dashboard polls several endpoints and keeps an audio stream open, so
+    concurrent requests are expected. An unbounded thread-per-connection model
+    made a stuck client able to exhaust the process, so worker threads are
+    capped and surplus connections wait in the listen backlog instead of
+    spawning without limit. `daemon_threads` keeps shutdown from hanging on an
+    abandoned stream.
     """
+
     daemon_threads = True
     allow_reuse_address = True
-    request_queue_size = 128
+    request_queue_size = 64
+
+    def __init__(self, server_address, handler_class, max_workers: int = 32):
+        super().__init__(server_address, handler_class)
+        self._worker_slots = threading.BoundedSemaphore(max_workers)
+
+    def process_request(self, request, client_address):
+        # Bounded so a flood of stalled phones cannot create unbounded threads.
+        # The acquire is timed: if every worker is busy the connection is closed
+        # quickly, which keeps the accept loop moving instead of parking it and
+        # taking the whole dashboard down with it.
+        if not self._worker_slots.acquire(timeout=5.0):
+            self._drop_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except Exception:
+            self._worker_slots.release()
+            raise
+
+    @staticmethod
+    def _drop_request(request) -> None:
+        try:
+            request.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+        try:
+            request.close()
+        except OSError:
+            pass
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._worker_slots.release()
 
     def handle_error(self, request, client_address) -> None:
         """A client hanging up is normal, not a server fault.
@@ -4072,25 +6663,27 @@ def main():
             return 0
         raise
 
-    # Resolve the stream queue in the background so the HTTP server is
-    # reachable immediately. This only catalogs files; it never plays anything.
+    # Arm the stream at startup so the phone begins playing on its own. This
+    # only catalogs files and marks the session active; no local device opens.
     stream_thread = start_autoplay_worker()
 
     print(f"\n======================================================================")
     print(f"  🌌 MP MIX ARCHIVE MANAGER — MOBILE WEB COMPANION")
     print(f"======================================================================")
     print(f"  • Active Theme:   {active_theme['name']} ({active_theme['id']})")
+    print(f"  • Library Mode:   {MODE_LABELS.get(get_library_mode(), 'Library')}")
     print(f"  • Local Machine:  http://localhost:{args.port}")
     print(f"  • Phone / Tablet: http://{host_display}:{args.port}")
     print(f"  • Audio Output:   STREAM ONLY (no local device)")
+    print(f"  • Autoplay:       {'ON' if _env_flag('WEB_COMPANION_AUTOPLAY', True) else 'OFF'}")
     print(f"======================================================================\n")
 
     def _report_stream_queue() -> None:
         stream_thread.join()
         state = autoplay_state()
         if state.get("status") == "ready":
-            print(f"  ▶ STREAM QUEUE READY: {state.get('detail', '')}", flush=True)
-            print(f"  • First mix:      {state.get('track', '')}", flush=True)
+            print(f"  ▶ AUTO-STREAM ARMED: {state.get('detail', '')}", flush=True)
+            print(f"  • First track:    {state.get('track', '')}", flush=True)
         else:
             print(f"  ⏹ NO STREAM QUEUE: {state.get('detail', '')}", flush=True)
         print(f"======================================================================\n", flush=True)
