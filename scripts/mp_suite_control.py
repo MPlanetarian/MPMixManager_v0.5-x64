@@ -13,6 +13,13 @@ the same shell launchers the tray menu and desktop shortcuts use. Process
 classification is delegated to :mod:`mp_system_tray` when it is importable, so
 the dashboard cannot disagree with the icon about what is running (in
 particular, a manager hosted inside the MP Gui window is not the CLI).
+
+There is also a fifth control, the **MP Visualizer** button at the bottom of
+the dashboard. It is not a launch/focus toggle like the four suite buttons: it
+owns exactly one window for its whole life — press once to open it, again to
+take that same window fullscreen, and again to close it. See
+:mod:`mp_visualizer_control` for the state file and the signals, and
+:func:`web_visualizer_action` for the three-state decision.
 """
 
 from __future__ import annotations
@@ -21,8 +28,18 @@ import os
 import subprocess
 import sys
 import time
+import uuid
 from pathlib import Path
-from typing import Iterable, Optional, Sequence
+from typing import Any, Iterable, Optional, Sequence
+
+try:
+    import mp_visualizer_control as visualizer_control
+except ImportError:  # imported as scripts.mp_suite_control
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import mp_visualizer_control as visualizer_control  # type: ignore[no-redef]
+    except ImportError:
+        visualizer_control = None  # type: ignore[assignment]
 
 ROLE_GUI = "gui"
 ROLE_MANAGER = "manager"
@@ -92,6 +109,23 @@ def base_dir() -> Path:
 def is_supported() -> bool:
     """The dashboard buttons exist on Linux only."""
     return sys.platform.startswith("linux") and Path("/proc").is_dir()
+
+
+def tty_mode_active() -> bool:
+    """True while MP Mix Manager is running in TTY Audio Mode.
+
+    In that mode the desktop is left for a text console and every MP desktop
+    window (MP Gui, the CLI manager, the Liquid Player and the visualizer) is
+    deliberately kept closed, so the dashboard must not offer to open one. The
+    flag file survives the logout and is what a background companion sees; the
+    environment variable covers a manager started in the same shell.
+    """
+    if os.environ.get("MP_MIX_MANAGER_TTY_MODE", "").strip() == "1":
+        return True
+    try:
+        return (config_dir() / "tty_audio_mode").is_file()
+    except OSError:
+        return False
 
 
 def app_definitions() -> list[dict[str, str]]:
@@ -202,12 +236,15 @@ def app_status() -> dict:
     if _status_cache is not None and (now - _status_cache[0]) < _STATUS_CACHE_SECONDS:
         return dict(_status_cache[1])
     supported = is_supported()
+    tty_mode = supported and tty_mode_active()
     roles = running_roles() if supported else set()
-    if supported:
+    if supported and not tty_mode:
         _touch_keepalive()
     payload = {
         "supported": supported,
         "platform": sys.platform,
+        "tty_mode": tty_mode,
+        "launch_disabled": (not supported) or tty_mode,
         "apps": [
             {
                 "id": role,
@@ -218,6 +255,7 @@ def app_status() -> dict:
             for role in ROLE_ORDER
         ],
         "tray_running": tray_running() if supported else False,
+        "visualizer": web_visualizer_status() if supported else {"running": False, "fullscreen": False},
     }
     _status_cache = (now, payload)
     return dict(payload)
@@ -314,7 +352,8 @@ def session_environment() -> dict[str, str]:
     return dict(found)
 
 
-def _spawn(argv: list[str], base: Path) -> None:
+def _spawn(argv: list[str], base: Path, extra_env: Optional[dict[str, str]] = None) -> Optional[int]:
+    """Start a launcher detached from this service; returns its pid."""
     config = config_dir()
     config.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
@@ -325,9 +364,11 @@ def _spawn(argv: list[str], base: Path) -> None:
     env.setdefault("WAYLAND_DISPLAY", "wayland-0")
     env.setdefault("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
     env.pop("MP_SYSTEM_TRAY_CHILD", None)
+    for key, value in (extra_env or {}).items():
+        env[key] = value
     log_path = config / "mp_web_launcher.log"
     with open(log_path, "ab") as log_file:
-        subprocess.Popen(
+        proc = subprocess.Popen(
             argv,
             cwd=str(base),
             env=env,
@@ -336,6 +377,7 @@ def _spawn(argv: list[str], base: Path) -> None:
             stderr=log_file,
             start_new_session=True,
         )
+    return int(proc.pid)
 
 
 def _focus(role: str) -> bool:
@@ -355,6 +397,9 @@ def launch_app(role: str) -> dict:
         return {"success": False, "action": "unknown", "app": role}
     if not is_supported():
         return {"success": False, "action": "unsupported", "app": role}
+    if tty_mode_active():
+        # TTY Audio Mode keeps every desktop window closed on purpose.
+        return {"success": False, "action": "tty_mode", "app": role}
     base = base_dir()
     if role in running_roles():
         focused = _focus(role)
@@ -369,6 +414,132 @@ def launch_app(role: str) -> dict:
     except OSError as error:
         return {"success": False, "action": "error", "app": role, "detail": str(error)}
     return {"success": True, "action": "launch", "app": role, "label": APP_LABELS[role]}
+
+
+# ------------------------------------------------------------------------------
+# MP VISUALIZER (the Web Companion's own window)
+#
+# The four suite buttons focus what is already open; this one is a three-state
+# control over exactly one window. The window is identified by a random
+# instance token that is passed in its environment and echoed in its command
+# line, and the published state file carries the pid. Every signal is sent to
+# that pid only, so a visualizer the user opened from the tray or a shortcut is
+# never toggled and never closed.
+# ------------------------------------------------------------------------------
+def _visualizer_state() -> Optional[dict]:
+    if visualizer_control is None:
+        return None
+    try:
+        state = visualizer_control.read_state()
+    except Exception:
+        return None
+    if state is None:
+        return None
+    if not visualizer_control.instance_is_live(state):
+        # The window is gone (crashed, killed, or the machine restarted).
+        # Clear the stale record so the next press opens a fresh window.
+        try:
+            visualizer_control.clear_state(state["instance"])
+        except Exception:
+            pass
+        return None
+    return state
+
+
+def web_visualizer_status() -> dict:
+    """What the MP Visualizer button should look like right now."""
+    state = _visualizer_state()
+    if state is None:
+        return {"running": False, "fullscreen": False}
+    return {
+        "running": True,
+        "fullscreen": bool(state.get("fullscreen")),
+        "pending": bool(state.get("pending")),
+        "instance": state.get("instance", ""),
+    }
+
+
+def web_visualizer_action() -> dict:
+    """Open, go fullscreen, or close the one Web Companion visualizer window."""
+    if not is_supported():
+        return {"success": False, "action": "unsupported"}
+    if visualizer_control is None:
+        return {"success": False, "action": "error", "detail": "control module unavailable"}
+    if tty_mode_active():
+        # TTY Audio Mode has no desktop to draw a window on.
+        return {"success": False, "action": "tty_mode"}
+
+    state = _visualizer_state()
+    if state is None:
+        base = base_dir()
+        instance = uuid.uuid4().hex
+        env = {
+            visualizer_control.ENV_INSTANCE: instance,
+            visualizer_control.ENV_STATE: str(visualizer_control.state_path()),
+            # A window the dashboard owns stands on its own. It must not bond
+            # behind the Liquid Player, which would pin it to the player's
+            # rectangle and refuse the fullscreen toggle.
+            "MP_VISUALIZER_DETACHED": "1",
+        }
+        try:
+            pid = _spawn(launch_argv(ROLE_VISUALIZER, base) + ["--web-instance", instance],
+                         base, extra_env=env)
+        except OSError as error:
+            return {"success": False, "action": "error", "detail": str(error)}
+        # Claim the button immediately. The window takes a moment to open, and
+        # without this record a second tap would start a second window — the
+        # one thing this button must never do. The launcher ``exec``s Python,
+        # so the pid we record is the visualizer's own pid.
+        if pid:
+            try:
+                visualizer_control.write_state({
+                    "instance": instance,
+                    "pid": int(pid),
+                    "pending": True,
+                    "fullscreen": False,
+                    "title": APP_LABELS[ROLE_VISUALIZER],
+                })
+            except Exception:
+                pass
+        reset_status_cache()
+        return {
+            "success": True,
+            "action": "launch",
+            "label": APP_LABELS[ROLE_VISUALIZER],
+            "state": "windowed",
+        }
+
+    if state.get("pending"):
+        return {
+            "success": True,
+            "action": "already_running",
+            "label": APP_LABELS[ROLE_VISUALIZER],
+            "state": "windowed",
+        }
+
+    if not state.get("fullscreen"):
+        toggled = visualizer_control.request_toggle_fullscreen(state)
+        if not toggled:
+            return {"success": False, "action": "error",
+                    "detail": "the visualizer window did not accept the command"}
+        return {
+            "success": True,
+            "action": "fullscreen",
+            "label": APP_LABELS[ROLE_VISUALIZER],
+            "state": "fullscreen",
+        }
+
+    closed = visualizer_control.request_close(state)
+    reset_status_cache()
+    if not closed:
+        return {"success": False, "action": "error",
+                "detail": "the visualizer window did not close"}
+    return {
+        "success": True,
+        "action": "close",
+        "label": APP_LABELS[ROLE_VISUALIZER],
+        "state": "closed",
+    }
 
 
 # ------------------------------------------------------------------------------
@@ -444,6 +615,14 @@ def close_all_apps(base: Optional[Path] = None) -> dict:
             "closed": [],
             "remaining": [],
             "tray_running": False,
+        }
+    if tty_mode_active():
+        return {
+            "success": False,
+            "action": "tty_mode",
+            "closed": [],
+            "remaining": [],
+            "tray_running": tray_running(),
         }
     base = Path(base) if base is not None else base_dir()
     before = running_roles()

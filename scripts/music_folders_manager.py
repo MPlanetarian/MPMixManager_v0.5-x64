@@ -273,9 +273,13 @@ def parse_folder_path(raw: str) -> Dict[str, Any]:
         raise ValueError(_ONLY_LOCAL_OR_SMB)
     if s.startswith(("\\\\", "//")):
         raise ValueError("SMB paths must include both a host and a share, e.g. \\\\192.168.1.138\\music001")
-    if IS_WINDOWS:
-        if not _looks_like_windows_local(s):
-            raise ValueError(_ONLY_LOCAL_OR_SMB)
+    # Classify by the *shape* of the path, not by the host OS. A Windows
+    # drive-letter path is legitimate input here even on Linux and macOS: the
+    # folder list can be imported from a Windows machine, and the parser has to
+    # describe it rather than reject it with "only local or SMB".
+    windows_style = bool(_looks_like_windows_local(s)) or bool(re.match(r'^[a-zA-Z]:[\\/]', s))
+    if windows_style:
+        pass
     elif not (s.startswith("~") or s.startswith("/")):
         raise ValueError(_ONLY_LOCAL_OR_SMB)
     p = os.path.expandvars(os.path.expanduser(s))
@@ -283,7 +287,18 @@ def parse_folder_path(raw: str) -> Dict[str, Any]:
         mm = re.match(r'^/(?:cygdrive/)?([a-zA-Z])(?:/(.*))?$', p)
         if mm:
             p = mm.group(1).upper() + ":\\" + (mm.group(2) or "").replace("/", "\\")
-    p = os.path.normpath(os.path.abspath(p))
+    msys = None if IS_WINDOWS else re.match(r'^/(?:cygdrive/)?([a-zA-Z])(?:/(.*))?$', p)
+    if msys:
+        # MSYS/Git Bash spelling of a Windows drive (/d/DJ, /cygdrive/d/DJ).
+        # Checked before the generic Windows branch below, which would otherwise
+        # rewrite the leading slash into a backslash and produce "\d\DJ".
+        p = msys.group(1).upper() + ":\\" + (msys.group(2) or "").replace("/", "\\")
+    elif windows_style and not IS_WINDOWS:
+        # Keep the path as written. `abspath` would prefix the POSIX working
+        # directory and destroy the drive letter.
+        p = p.replace("/", "\\")
+    else:
+        p = os.path.normpath(os.path.abspath(p))
     mapped = _windows_remote_unc(p)
     if mapped:
         return parse_folder_path(mapped)
@@ -344,7 +359,16 @@ def _migrate_legacy_folders(config: Dict[str, Any]) -> List[Dict[str, Any]]:
         f = {"type": "smb", "host": host, "share": share, "subpath": "", "user": ""}
         f["name"] = share
         f["id"] = make_folder_id(share, folders)
-        f["path"] = str(config["mount_root"] / f["id"])
+        # A partial config (the migration is also called from tests and from
+        # importers) may not carry mount_root; fall back to the documented
+        # default rather than raising KeyError from a migration helper.
+        mount_root = config.get("mount_root")
+        if not isinstance(mount_root, Path):
+            fallback = load_music_config().get("mount_root")
+            mount_root = Path(fallback) if fallback else Path.home() / "MUSIC_SMB"
+            if not isinstance(mount_root, Path):
+                mount_root = Path(str(mount_root))
+        f["path"] = str(mount_root / f["id"])
         folders.append(f)
     return folders
 

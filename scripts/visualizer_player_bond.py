@@ -408,3 +408,33 @@ class PlayerBondMixin:
                 self.switch_preset(preset)
         except Exception:
             pass
+
+    def _publish_bonded_preset(self, preset: Dict[str, Any]) -> None:
+        """Write a preset chosen in this window back to the player's state.
+
+        A bonded window and the Liquid Player share one preset. Both write the
+        same state file, so a key pressed here (Left/Right, 1-9, + or -) is
+        persisted for the player and is not undone by the next bond poll,
+        which would otherwise still see the player's older ``preset_id``.
+
+        Only a window that is already bonded publishes: a free window must not
+        mark the visualizer active, because that would ask the player to bond a
+        window the user keeps on its own.
+        """
+        if getattr(self, "screensaver", False):
+            return
+        try:
+            if not self._bonding_applies():
+                return
+        except Exception:
+            return
+        if not (getattr(self, "_player_bonded", False) or self._bond_is_locked()):
+            return
+        try:
+            from liquid_player_visualizer import write_player_visualizer_state
+        except ImportError:
+            from scripts.liquid_player_visualizer import write_player_visualizer_state
+        try:
+            write_player_visualizer_state(True, preset)
+        except Exception:
+            pass

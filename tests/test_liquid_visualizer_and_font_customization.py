@@ -94,6 +94,10 @@ class TestLiquidVisualizerAndFontCustomization(unittest.TestCase):
 
     def test_liquid_glass_vte_css_unbolded_and_liquid_glow(self):
         """VTE terminal styling in Liquid Glass must disable bold and include liquid text glow."""
+        # Needs a real GTK CssProvider. Without PyGObject's typelibs (headless
+        # CI, a minimal container) Gtk is None and there is nothing to style.
+        if getattr(lg_gl, "Gtk", None) is None or getattr(lg_vk, "Gtk", None) is None:
+            self.skipTest("GTK is not importable in this environment")
         for mod in (lg_vk, lg_gl):
             host = mod.GlassHost(["test"], mode="NORMAL", font="Monospace 11")
             self.assertEqual(host.font_name, "Monospace 11")

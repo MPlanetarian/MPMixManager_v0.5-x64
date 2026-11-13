@@ -1215,8 +1215,13 @@ class GlassHost:
         if hasattr(term, "set_color_background") and Gdk is not None:
             term.set_color_background(Gdk.RGBA(0, 0, 0, 0))
         self._apply_glass_foreground(term, read_player_theme())
+        # VTE needs both: `set_bold_is_bright` stops bold text from switching to
+        # the bright palette, and `set_allow_bold` actually disables the bold
+        # face so the glass pane is not punched through by heavy glyphs.
         if hasattr(term, "set_bold_is_bright"):
             term.set_bold_is_bright(False)
+        if hasattr(term, "set_allow_bold"):
+            term.set_allow_bold(False)
         try:
             import gi
             gi.require_version("Pango", "1.0")

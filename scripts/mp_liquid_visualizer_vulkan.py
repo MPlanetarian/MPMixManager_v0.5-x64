@@ -639,6 +639,10 @@ GLFW_KEY_1, GLFW_KEY_2, GLFW_KEY_3, GLFW_KEY_4, GLFW_KEY_5, GLFW_KEY_6, GLFW_KEY
 # Preset cycle keys. GLFW reports the "=" key as 61 (shifted it produces "+"),
 # 45 is "-", and the numeric keypad sends 334 ("+") / 333 ("-").
 GLFW_KEY_EQUAL, GLFW_KEY_MINUS, GLFW_KEY_KP_ADD, GLFW_KEY_KP_SUBTRACT = 61, 45, 334, 333
+# The arrow keys also step through presets, wrapping at both ends. The MP
+# Liquid Player binds the same keys while its visualizer is on, so the two
+# windows behave alike; the player keeps +/- for the track's pitch.
+GLFW_KEY_LEFT, GLFW_KEY_RIGHT = 263, 262
 # F10 spans every other monitor with a plain preset; F11 does the same in
 # random mode. Pressing either again (in any of the spanned windows) tears the
 # span down again.
@@ -1420,6 +1424,13 @@ class LiquidVisualizerVulkanRenderer(MonitorSpanMixin, RandomPresetMixin, Player
             # own volume and mode controls, so it must never share these keys.
             forward = key in (GLFW_KEY_EQUAL, GLFW_KEY_KP_ADD)
             nxt = cycle_preset(self.preset, 1 if forward else -1)
+            if nxt is not None: self.switch_preset(nxt)
+        elif key in (GLFW_KEY_LEFT, GLFW_KEY_RIGHT):
+            # Left/Right step through the whole library too, wrapping at both
+            # ends. The MP Liquid Player binds its own Left/Right to preset
+            # switching while its visualizer is on, so the keys feel the same
+            # whether the player or this window has focus.
+            nxt = cycle_preset(self.preset, 1 if key == GLFW_KEY_RIGHT else -1)
             if nxt is not None: self.switch_preset(nxt)
 
     def is_4k_display(self, mon=None) -> bool:
@@ -2316,6 +2327,10 @@ class LiquidVisualizerVulkanRenderer(MonitorSpanMixin, RandomPresetMixin, Player
         # copies and screensaver windows must not rewrite the active preset.
         if self._span_role != ROLE_SPAWNED and not getattr(self, "screensaver", False):
             save_active_preset(self.preset["key"])
+            # A bonded companion is the same visualizer the player shows, so
+            # publish the choice back or the player's next bond poll would
+            # switch it straight back.
+            self._publish_bonded_preset(self.preset)
         if hasattr(self, "_device") and self._device and getattr(self, "_tex_sampler", 0):
             try:
                 self._vk.QueueWaitIdle(self._queue)
@@ -3283,12 +3298,20 @@ def run_visualizer(preset_name: Optional[str] = None, max_seconds: Optional[floa
                               backend=backend, span_bounds=span_bounds, span_role=span_role)
     bridge = AudioTelemetryBridge()
     renderer.open()
+    # The Web Companion's Visualizer button owns exactly one window. When this
+    # process was started for it, the instance token in the environment is
+    # published with the pid so the companion can toggle and close this window
+    # and no other visualizer that happens to be running.
+    control = _window_control()
+    control.install()
+    control.opened(renderer)
     monotonic = time.monotonic
     last_t = start_t = monotonic()
     pace = [last_t + _FRAME_INTERVAL, monitor_refresh_interval(renderer)]
     update, draw = bridge.update, renderer.draw
     try:
         while not renderer.should_close:
+            control.pump(renderer)
             if stop_flag and stop_flag.get("flag"):
                 break
             now = monotonic()
@@ -3299,8 +3322,19 @@ def run_visualizer(preset_name: Optional[str] = None, max_seconds: Optional[floa
             draw(bridge, False)
             _frame_sleep(renderer, pace)
     except KeyboardInterrupt: pass
-    finally: renderer.close()
+    finally:
+        control.closed()
+        renderer.close()
     return 0
+
+
+def _window_control():
+    """The Web Companion channel for this window, or an inert stand-in."""
+    try:
+        from mp_visualizer_control import WindowControl
+    except ImportError:
+        from scripts.mp_visualizer_control import WindowControl
+    return WindowControl()
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -3327,7 +3361,20 @@ def main(argv: Optional[List[str]] = None) -> int:
     # Internal flags used by F10 (mirror) and F11 (random) monitor spanning.
     p.add_argument("--span-bounds", type=str, default=None, help=argparse.SUPPRESS)
     p.add_argument("--span-role", type=str, default=None, help=argparse.SUPPRESS)
+    # The Web Companion's MP Visualizer button stamps its instance token into
+    # the command line so the pid in the state file can be verified as ours.
+    p.add_argument("--web-instance", type=str, default=None, help=argparse.SUPPRESS)
     args = p.parse_args(argv)
+
+    # A window started for the Web Companion's MP Visualizer button owns a
+    # control channel (see mp_visualizer_control). The token doubles as the
+    # command-line marker that proves the recorded pid is this window.
+    if args.web_instance:
+        try:
+            from mp_visualizer_control import ENV_INSTANCE
+        except ImportError:
+            from scripts.mp_visualizer_control import ENV_INSTANCE
+        os.environ[ENV_INSTANCE] = str(args.web_instance)
 
     if args.random_preset: args.preset = "random"
     if args.list_presets:

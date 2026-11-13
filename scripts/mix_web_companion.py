@@ -783,6 +783,16 @@ def launch_pad_close_all() -> Dict[str, Any]:
         return {"success": False, "action": "error", "remaining": [], "detail": str(exc)}
 
 
+def launch_pad_visualizer() -> Dict[str, Any]:
+    """Open, fullscreen, or close the one Web Companion visualizer window."""
+    if suite_control is None:
+        return {"success": False, "action": "unsupported"}
+    try:
+        return suite_control.web_visualizer_action()
+    except Exception as exc:
+        return {"success": False, "action": "error", "detail": str(exc)}
+
+
 # ------------------------------------------------------------------------------
 # STREAMING SERVICE STATE
 #
@@ -3298,10 +3308,12 @@ def render_launch_pad_html() -> str:
         if not suite_control.is_supported():
             return ""
         apps = suite_control.app_definitions()
+        tty_mode = bool(suite_control.tty_mode_active())
     except Exception:
         return ""
 
     buttons = []
+    disabled_attr = " disabled" if tty_mode else ""
     for app in apps:
         role = html.escape(str(app["id"]), quote=True)
         label = html.escape(str(app["label"]))
@@ -3309,26 +3321,51 @@ def render_launch_pad_html() -> str:
         buttons.append(
             f'<button type="button" class="launch-btn" data-app="{role}" '
             f'data-label="{label}" onclick="launchApp(\'{role}\')" '
-            f'aria-pressed="false" title="Launch {label}">'
+            f'aria-pressed="false" title="Launch {label}"{disabled_attr}>'
             f'<span class="launch-icon" aria-hidden="true">{icon}</span>'
             f'<span class="launch-label">{label}</span>'
             f'<span class="launch-state">Off</span>'
             f'</button>'
         )
+    visualizer_label = html.escape(str(suite_control.APP_LABELS.get(
+        suite_control.ROLE_VISUALIZER, "MP Visualizer")))
+    disabled = disabled_attr
+    pad_class = "launchpad tty-disabled" if tty_mode else "launchpad"
+    tty_banner = (
+        '<div class="launchpad-tty" id="launchPadTty" role="status">'
+        '<strong>⌨ MP Mix Manager TTY Audio Mode</strong>'
+        '<span>These desktop launchers are disabled while the manager runs in '
+        'the text console. Return to the desktop to use them.</span>'
+        '</div>'
+        if tty_mode else
+        '<div class="launchpad-tty" id="launchPadTty" role="status" hidden></div>'
+    )
     return (
-        '<div class="launchpad" id="launchPad">'
+        f'<div class="{pad_class}" id="launchPad">'
         '<div class="launchpad-head">'
         '<span>🖥 Desktop Suite</span>'
         '<span id="launchPadTray" class="launch-state">Tray off</span>'
         '</div>'
+        + tty_banner +
         '<div class="launchpad-grid" id="launchPadGrid">'
         + "".join(buttons)
         + '<button type="button" class="launch-btn launch-close" id="launchCloseAll" '
-          'onclick="closeAllApps()" title="Close all four apps, keep the tray icon">'
+          'onclick="closeAllApps()" title="Close all four apps, keep the tray icon"'
+        + disabled + '>'
           '<span class="launch-icon" aria-hidden="true">⏻</span>'
           '<span class="launch-label">Close All</span>'
           '</button>'
         '</div>'
+        # MP Visualizer: one window, owned by this dashboard. Press to open,
+        # press again for fullscreen, press a third time to close it.
+        '<button type="button" class="launch-btn launch-visualizer" id="launchVisualizer" '
+        'data-label="' + visualizer_label + '" onclick="launchVisualizer()" '
+        'aria-pressed="false" aria-live="polite" title="Open MP Visualizer on the computer"'
+        + disabled + '>'
+        '<span class="launch-icon" aria-hidden="true">🌌</span>'
+        '<span class="launch-label">MP Visualizer</span>'
+        '<span class="launch-state" id="launchVisualizerState">Off</span>'
+        '</button>'
         '<div class="launchpad-note" id="launchPadNote">'
         'Tap a button to open that app on the computer.'
         '</div>'
@@ -3930,15 +3967,18 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             z-index: 9999;
             flex-direction: column;
             align-items: center;
-            /* The engage button is the only way forward, so the card is pinned
-               to the middle of the free space. On very short screens it can
-               still scroll rather than hiding the button off screen. */
+            /* The engage button is the only way forward: the card is pinned to
+               the middle of the *visible* screen and the gate itself never
+               scrolls. Short screens get a smaller card through the media
+               queries below rather than a scrollbar that pushes the button
+               off the page. */
             justify-content: center;
-            padding: max(16px, env(safe-area-inset-top)) 16px
-                     max(16px, env(safe-area-inset-bottom));
+            padding: max(12px, env(safe-area-inset-top)) 12px
+                     max(12px, env(safe-area-inset-bottom));
             text-align: center;
-            overflow-y: auto;
-            -webkit-overflow-scrolling: touch;
+            overflow: hidden;
+            overscroll-behavior: none;
+            touch-action: none;
         }}
         #streamOverlay.show {{
             display: flex;
@@ -3950,12 +3990,20 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             padding: 28px 20px;
             max-width: 400px;
             width: 100%;
-            max-height: calc(100dvh - 32px);
-            overflow-y: auto;
-            margin: auto 0;
+            /* Never taller than the gate. Laid out as a column so the engage
+               button is a fixed row that is always on screen; only the copy
+               above it can shrink. No scrollbar anywhere. */
+            max-height: 100%;
+            box-sizing: border-box;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            overflow: hidden;
+            margin: 0;
             box-shadow: 0 16px 50px rgba(0, 0, 0, 0.9), 0 0 30px rgba(176, 88, 255, 0.3);
         }}
         .overlay-card h2 {{
+            flex: 0 0 auto;
             margin: 0 0 10px 0;
             font-size: 1.4rem;
             background: var(--header-gradient);
@@ -3964,6 +4012,9 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             font-weight: 900;
         }}
         .overlay-card p {{
+            flex: 0 1 auto;
+            min-height: 0;
+            overflow: hidden;
             font-size: 0.88rem;
             color: var(--text-dim);
             margin: 0 0 20px 0;
@@ -3973,6 +4024,53 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             color: #ffaa00;
             font-size: 0.82rem;
             margin: -8px 0 18px 0;
+        }}
+        .overlay-card .btn-activate-stream {{
+            /* The one control that must never leave the screen. */
+            flex: 0 0 auto;
+        }}
+        /* Short viewports (landscape phones, split screens): shrink the card
+           instead of scrolling it, so the engage button stays centred and on
+           screen no matter how little height there is. */
+        @media (max-height: 560px) {{
+            .overlay-card {{
+                padding: 16px 16px;
+            }}
+            .overlay-card h2 {{
+                margin-bottom: 6px;
+                font-size: 1.15rem;
+            }}
+            .overlay-card p {{
+                margin-bottom: 12px;
+                font-size: 0.78rem;
+            }}
+            .overlay-card p.stream-overlay-detail {{
+                margin: -4px 0 12px 0;
+            }}
+            .btn-activate-stream {{
+                padding: 12px 20px;
+                font-size: 0.92rem;
+            }}
+        }}
+        @media (max-height: 400px) {{
+            .overlay-card {{
+                padding: 10px 14px;
+            }}
+            .overlay-card h2 {{
+                font-size: 1rem;
+                margin-bottom: 4px;
+            }}
+            .overlay-card p {{
+                margin-bottom: 8px;
+                font-size: 0.74rem;
+            }}
+            .overlay-card p.stream-overlay-detail {{
+                margin: 0 0 8px 0;
+            }}
+            .btn-activate-stream {{
+                padding: 10px 16px;
+                font-size: 0.84rem;
+            }}
         }}
         .btn-activate-stream {{
             background: var(--btn-gradient);
@@ -4318,6 +4416,65 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             color: #fff;
             background: var(--accent-crimson);
             border-color: var(--accent-crimson);
+        }}
+        /* MP Visualizer: a full-width button under the grid, because it is one
+           window with three states rather than a member of the suite. */
+        .launch-visualizer {{
+            flex-direction: row;
+            gap: 8px;
+            width: 100%;
+            margin-top: 8px;
+            padding: 12px 10px;
+            font-size: 0.8rem;
+            color: var(--accent-secondary);
+            border-color: var(--accent-primary);
+        }}
+        .launch-visualizer .launch-label {{
+            flex: 1;
+            text-align: left;
+            white-space: normal;
+        }}
+        .launch-visualizer.running {{
+            color: #fff;
+        }}
+        .launch-visualizer.fullscreen {{
+            border-color: var(--badge-color);
+            box-shadow: inset 0 3px 8px rgba(0, 0, 0, 0.55),
+                        0 0 0 1px var(--badge-color) inset,
+                        0 0 18px -2px var(--accent-secondary);
+        }}
+        /* TTY Audio Mode: the desktop launchers cannot work from the text
+           console, so they are visibly disabled and the reason is spelled out. */
+        .launch-btn:disabled,
+        .launch-btn[disabled] {{
+            opacity: 0.4;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+            filter: grayscale(1);
+        }}
+        .launchpad-tty {{
+            display: block;
+            margin: 0 0 10px 0;
+            padding: 10px 12px;
+            border-radius: 12px;
+            border: 1px solid var(--accent-tertiary);
+            background: rgba(255, 45, 142, 0.12);
+            color: var(--text-main);
+            font-size: 0.72rem;
+            line-height: 1.45;
+            text-align: left;
+        }}
+        .launchpad-tty[hidden] {{
+            display: none;
+        }}
+        .launchpad-tty strong {{
+            display: block;
+            margin-bottom: 3px;
+            color: var(--accent-tertiary);
+            font-size: 0.74rem;
+            letter-spacing: 0.4px;
+            text-transform: uppercase;
         }}
         .launchpad-note {{
             margin-top: 8px;
@@ -6593,7 +6750,70 @@ def render_html_page(theme: Dict[str, Any]) -> str:
         // ---------------------------------------------------------------------
         // Desktop launch pad (Linux only). A running app keeps its button
         // pressed down; an app that is not running sits in the raised state.
+        //
+        // MP Visualizer is different: it owns exactly one window, so its
+        // button walks through Off -> Windowed -> Fullscreen -> Off and always
+        // reflects what the host reports, not how many times it was tapped.
+        // In TTY Audio Mode every desktop launcher is disabled and the panel
+        // says why.
         // ---------------------------------------------------------------------
+        let launchPadTtyMode = false;
+
+        function paintTtyMode(ttyMode) {{
+            launchPadTtyMode = Boolean(ttyMode);
+            const pad = document.getElementById('launchPad');
+            const banner = document.getElementById('launchPadTty');
+            if (pad) pad.classList.toggle('tty-disabled', launchPadTtyMode);
+            if (banner) {{
+                if (launchPadTtyMode) {{
+                    banner.hidden = false;
+                    if (!banner.dataset.filled) {{
+                        banner.innerHTML = '';
+                        const title = document.createElement('strong');
+                        title.textContent = '⌨ MP Mix Manager TTY Audio Mode';
+                        const body = document.createElement('span');
+                        body.textContent = 'These desktop launchers are disabled while '
+                            + 'the manager runs in the text console. Return to the '
+                            + 'desktop to use them.';
+                        banner.appendChild(title);
+                        banner.appendChild(body);
+                        banner.dataset.filled = '1';
+                    }}
+                }} else {{
+                    banner.hidden = true;
+                }}
+            }}
+            document.querySelectorAll('#launchPad .launch-btn').forEach(btn => {{
+                if (launchPadTtyMode) {{
+                    btn.disabled = true;
+                    btn.setAttribute('aria-disabled', 'true');
+                }} else {{
+                    btn.disabled = false;
+                    btn.removeAttribute('aria-disabled');
+                }}
+            }});
+        }}
+
+        function paintVisualizer(data) {{
+            const btn = document.getElementById('launchVisualizer');
+            if (!btn) return;
+            const state = (data && data.visualizer) || {{}};
+            const running = Boolean(state.running);
+            const fullscreen = Boolean(state.fullscreen);
+            btn.classList.toggle('running', running);
+            btn.classList.toggle('fullscreen', running && fullscreen);
+            btn.setAttribute('aria-pressed', running ? 'true' : 'false');
+            const label = document.getElementById('launchVisualizerState');
+            if (label) {{
+                label.innerText = !running ? 'Off' : (fullscreen ? 'Fullscreen' : 'Windowed');
+            }}
+            btn.title = !running
+                ? 'Open MP Visualizer on the computer'
+                : (fullscreen
+                    ? 'MP Visualizer is fullscreen — press to close it'
+                    : 'MP Visualizer is open — press for fullscreen');
+        }}
+
         function paintLaunchPad(data) {{
             if (!data || !data.supported) return;
             const buttons = document.querySelectorAll('#launchPadGrid .launch-btn[data-app]');
@@ -6610,6 +6830,8 @@ def render_html_page(theme: Dict[str, Any]) -> str:
                 tray.innerText = data.tray_running ? 'Tray on' : 'Tray off';
                 tray.classList.toggle('ok', Boolean(data.tray_running));
             }}
+            paintVisualizer(data);
+            paintTtyMode(data.tty_mode);
         }}
 
         async function fetchLaunchPad() {{
@@ -6635,6 +6857,10 @@ def render_html_page(theme: Dict[str, Any]) -> str:
         }}
 
         async function launchApp(role) {{
+            if (launchPadTtyMode) {{
+                launchPadNote('TTY Audio Mode is active — desktop launchers are disabled.', false);
+                return;
+            }}
             const btn = document.querySelector('#launchPadGrid .launch-btn[data-app="' + role + '"]');
             if (!btn || btn.classList.contains('busy')) return;
             btn.classList.add('busy');
@@ -6645,6 +6871,9 @@ def render_html_page(theme: Dict[str, Any]) -> str:
                 if (data && data.success) {{
                     const verb = data.action === 'launch' ? 'Launched' : 'Brought forward';
                     launchPadNote(verb + ' ' + (data.label || btn.dataset.label || role) + ' on the computer.', true);
+                }} else if (data && data.action === 'tty_mode') {{
+                    paintTtyMode(true);
+                    launchPadNote('TTY Audio Mode is active — desktop launchers are disabled.', false);
                 }} else {{
                     launchPadNote('Could not open ' + (btn.dataset.label || role) + '.', false);
                 }}
@@ -6658,7 +6887,50 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             }}
         }}
 
+        async function launchVisualizer() {{
+            if (launchPadTtyMode) {{
+                launchPadNote('TTY Audio Mode is active — the MP Visualizer button is disabled.', false);
+                return;
+            }}
+            const btn = document.getElementById('launchVisualizer');
+            if (!btn || btn.classList.contains('busy')) return;
+            const wasRunning = btn.classList.contains('running');
+            const wasFullscreen = btn.classList.contains('fullscreen');
+            btn.classList.add('busy');
+            launchPadNote(wasFullscreen ? 'Closing MP Visualizer…'
+                : (wasRunning ? 'Taking MP Visualizer fullscreen…' : 'Opening MP Visualizer…'), false);
+            try {{
+                const res = await fetch('/api/launchpad/visualizer', {{ method: 'POST' }});
+                const data = await res.json();
+                if (data && data.success) {{
+                    if (data.action === 'launch') {{
+                        launchPadNote('MP Visualizer opened on the computer.', true);
+                    }} else if (data.action === 'fullscreen') {{
+                        launchPadNote('MP Visualizer is fullscreen. Press again to close it.', true);
+                    }} else {{
+                        launchPadNote('MP Visualizer closed.', true);
+                    }}
+                }} else if (data && data.action === 'tty_mode') {{
+                    paintTtyMode(true);
+                    launchPadNote('TTY Audio Mode is active — the MP Visualizer button is disabled.', false);
+                }} else {{
+                    launchPadNote((data && data.detail) || 'Could not control the MP Visualizer.', false);
+                }}
+            }} catch (e) {{
+                launchPadNote('Could not reach the computer.', false);
+            }} finally {{
+                btn.classList.remove('busy');
+                setTimeout(fetchLaunchPad, 800);
+                setTimeout(fetchLaunchPad, 2500);
+                setTimeout(fetchLaunchPad, 5000);
+            }}
+        }}
+
         async function closeAllApps() {{
+            if (launchPadTtyMode) {{
+                launchPadNote('TTY Audio Mode is active — desktop launchers are disabled.', false);
+                return;
+            }}
             const btn = document.getElementById('launchCloseAll');
             if (!btn || btn.classList.contains('busy')) return;
             btn.classList.add('busy');
@@ -6673,6 +6945,9 @@ def render_html_page(theme: Dict[str, Any]) -> str:
                 }});
                 if (data && data.success) {{
                     launchPadNote('All MP apps closed. Tray icon stays up.', true);
+                }} else if (data && data.action === 'tty_mode') {{
+                    paintTtyMode(true);
+                    launchPadNote('TTY Audio Mode is active — desktop launchers are disabled.', false);
                 }} else if (names.length) {{
                     launchPadNote('Still open: ' + names.join(', '), false);
                 }} else {{
@@ -7465,15 +7740,21 @@ class CompanionHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(json.dumps(
                 {"success": queued is not None, "announcement": queued}
             ).encode("utf-8"))
-        elif url.path in ("/api/launchpad/launch", "/api/launchpad/close"):
+        elif url.path in ("/api/launchpad/launch", "/api/launchpad/close",
+                          "/api/launchpad/visualizer"):
             params = urllib.parse.parse_qs(url.query)
             if url.path.endswith("/close"):
                 payload = launch_pad_close_all()
+            elif url.path.endswith("/visualizer"):
+                # One window, three states: open, fullscreen, close. The host
+                # decides from the published state, so a tap that races the
+                # window's own mode change still does the right thing.
+                payload = launch_pad_visualizer()
             else:
                 payload = launch_pad_action(params.get("app", [""])[0])
             status = 200 if payload.get("success") else 400
-            if payload.get("action") == "unsupported":
-                status = 501
+            if payload.get("action") in ("unsupported", "tty_mode"):
+                status = 501 if payload.get("action") == "unsupported" else 409
             self.send_response(status)
             self.send_header("Content-Type", "application/json")
             self.send_header("Cache-Control", "no-store")

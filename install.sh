@@ -745,6 +745,7 @@ echo -e "  ${BOLD}${CYAN}MP Liquid Player${NC}"
 echo -e "  ${BOLD}${CYAN}MP Mix Manager${NC}"
 echo -e "  ${BOLD}${CYAN}MP Gui${NC}"
 echo -e "  ${BOLD}${CYAN}MP Liquid Visualizer${NC}"
+echo -e "  ${BOLD}${CYAN}MP Liquid Player VR Mode${NC} (Windows + Bigscreen, or the VR launcher)"
 echo ""
 if [ "$HOST_OS" = "macos" ]; then
     echo -e "Menu bar: the MP Mix Manager icon is on the right side of the menu bar. Click it to launch MP Gui, MP Liquid Player, or MP Mix Manager."

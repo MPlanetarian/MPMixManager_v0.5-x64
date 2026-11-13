@@ -54,9 +54,9 @@ GLFW_OPENGL_CORE_PROFILE = 0x00032001
 _DEFAULT_STATE = CONFIG_DIR / "liquid_player_visualizer.json"
 
 try:
-    from visualizer_monitor_span import MonitorSpanMixin
+    from visualizer_monitor_span import ROLE_SPAWNED, MonitorSpanMixin
 except ImportError:
-    from scripts.visualizer_monitor_span import MonitorSpanMixin
+    from scripts.visualizer_monitor_span import ROLE_SPAWNED, MonitorSpanMixin
 try:
     from visualizer_random_mode import RANDOM_PRESET_INTERVAL, RandomPresetMixin
 except ImportError:
@@ -1729,6 +1729,13 @@ class LiquidVisualizerOpenGLRenderer(MonitorSpanMixin, RandomPresetMixin, Player
             nxt = cycle_preset(self.preset, 1 if forward else -1)
             if nxt is not None:
                 self.switch_preset(nxt)
+        elif key in (263, 262):  # Left / Right
+            # Same wrap-around preset stepping as the Vulkan window and the
+            # MP Liquid Player's own arrow keys.
+            from mp_liquid_visualizer_vulkan import cycle_preset
+            nxt = cycle_preset(self.preset, 1 if key == 262 else -1)
+            if nxt is not None:
+                self.switch_preset(nxt)
         else:
             # F10 spans every other monitor; F11 does it with random presets.
             self.handle_span_key(key)
@@ -2041,7 +2048,17 @@ class LiquidVisualizerOpenGLRenderer(MonitorSpanMixin, RandomPresetMixin, Player
             pass
 
     def switch_preset(self, preset: Dict[str, Any]) -> None:
+        previous = self.preset.get("key")
         self.preset = dict(preset)
+        if self.preset.get("key") == previous:
+            return
+        # A bonded companion is the same visualizer the MP Liquid Player shows.
+        # Publish the choice so the player's next bond poll does not switch the
+        # preset straight back. A spawned monitor-span window and the
+        # screensaver are viewers, so neither writes anything.
+        if getattr(self, "_span_role", "") == ROLE_SPAWNED or getattr(self, "screensaver", False):
+            return
+        self._publish_bonded_preset(self.preset)
 
     # -- close ------------------------------------------------------------
     def close(self) -> None:

@@ -44,7 +44,7 @@ THEMES = (
 PREAMBLE = f'''
 set -e
 eval "$(awk '/^set_theme_colors\\(\\)/{{f=1}} f{{print}} f&&/^}}/{{exit}}' "{MGR_SH}")"
-eval "$(sed -n '/^MENU_WHITE=/,/^}}/p' "{MGR_SH}" | head -12)"
+eval "$(grep -m1 '^MENU_WHITE=' "{MGR_SH}")"
 '''
 
 

@@ -799,8 +799,11 @@ class GlassHost:
         if hasattr(term, "set_color_background"):
             term.set_color_background(rgba)
         self._apply_glass_foreground(term, read_player_theme())
+        # Both are needed to fully disable bold in VTE; see the OpenGL host.
         if hasattr(term, "set_bold_is_bright"):
             term.set_bold_is_bright(False)
+        if hasattr(term, "set_allow_bold"):
+            term.set_allow_bold(False)
         try:
             import gi
             gi.require_version("Pango", "1.0")
