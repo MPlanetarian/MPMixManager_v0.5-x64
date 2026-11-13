@@ -39,6 +39,9 @@ class TestMPLiquidVisualizer(unittest.TestCase):
         elif vis._IS_LINUX:
             from liquid_player_visualizer import linux_visualizer_window_size
             self.assertEqual(renderer._windowed_size, linux_visualizer_window_size())
+            # The stored offset keeps the historical corner value; the window is
+            # centred on the primary desktop when it is created, via
+            # place_on_main_screen(window_size=...).
             self.assertEqual(renderer._windowed_offset, (72, 64))
         else:
             fitted = fit_square_on_main(vis.preferred_window_edge())

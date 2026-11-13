@@ -90,5 +90,67 @@ class TestPlayerShuffle(unittest.TestCase):
         self.assertIn("--repeat", res.stdout)
 
 
+class StepTrackShuffleTest(unittest.TestCase):
+    """`_step_track` must spread across the whole playlist when shuffling.
+
+    A file that cannot be opened (sleeping SMB share, truncated conversion)
+    returns False from load_track. The old loop made at most ten random draws,
+    so on a degraded library shuffle collapsed onto whichever few files
+    happened to load - the reported "only the same 3 mixes" symptom.
+    """
+
+    def _engine(self, n, readable=None):
+        engine = object.__new__(MP_Audio_Player.AudioEngine)
+        engine.playlist = [{"path": f"/x/{i}.flac"} for i in range(n)]
+        engine.current_index = 0
+        engine.shuffle = True
+        engine.play_queue = []
+        engine.dequeue_next = lambda: None
+        engine.readable = set(range(n)) if readable is None else set(readable)
+        engine.load_track = lambda i, play=True, **kw: (
+            setattr(engine, "current_index", i) or True
+            if i in engine.readable else False
+        )
+        return engine
+
+    def test_shuffle_reaches_far_beyond_ten_candidates(self):
+        engine = self._engine(200)
+        import random
+        random.seed(7)
+        seen = set()
+        for _ in range(120):
+            engine._step_track(1)
+            seen.add(engine.current_index)
+        self.assertGreater(len(seen), 60, "shuffle must not be limited to ~10 picks")
+
+    def test_only_readable_tracks_are_reached(self):
+        engine = self._engine(200, readable={3, 4, 5})
+        import random
+        random.seed(8)
+        seen = set()
+        for _ in range(80):
+            engine._step_track(1)
+            seen.add(engine.current_index)
+        self.assertEqual(seen, {3, 4, 5})
+
+    def test_shuffle_never_repeats_the_current_track(self):
+        engine = self._engine(50)
+        import random
+        random.seed(9)
+        for _ in range(40):
+            before = engine.current_index
+            engine._step_track(1)
+            self.assertNotEqual(before, engine.current_index)
+
+    def test_non_shuffle_still_walks_in_order(self):
+        engine = self._engine(10)
+        engine.shuffle = False
+        order = []
+        for _ in range(5):
+            engine._step_track(1)
+            order.append(engine.current_index)
+        self.assertEqual(order, [1, 2, 3, 4, 5])
+
+
 if __name__ == "__main__":
     unittest.main()

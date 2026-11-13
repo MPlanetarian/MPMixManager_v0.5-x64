@@ -93,7 +93,16 @@ class TestMenuNumberThemeColor(unittest.TestCase):
         blues = [name for name, accent in EXPECTED.items() if _is_light_blue(accent)]
         self.assertEqual(blues, ["ice_cold"])
 
-    def test_selection_bar_uses_that_same_hue(self):
+    def test_selection_bar_uses_the_players_navigation_hue(self):
+        """The manager's selected row must be the player's playlist bar colour.
+
+        MP Liquid Player fills the selected playlist row from
+        _THEME_PALETTES[theme]["highlight"]. MP Gui walks the same theme list on
+        C, so its navigation bar has to publish the identical RGB or the two
+        windows look different on every theme.
+        """
+        import MP_Audio_Player as player
+
         themes = " ".join(EXPECTED)
         script = f"""
         set -e
@@ -103,28 +112,36 @@ class TestMenuNumberThemeColor(unittest.TestCase):
             set_theme_colors "$theme"
             line=""
             highlight_menu_line "0" "Play Mix" "" 0 line 74 100
-            printf '%s\\t%s\\n' "$theme" "$line"
+            printf '%s\\t%s\\t%s\\t%s\\t%s\\n' "$theme" "$SEL_BAR_R" "$SEL_BAR_G" "$SEL_BAR_B" "$line"
         done
         """
         res = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
         self.assertEqual(res.returncode, 0, res.stderr)
         bars = []
         for raw in res.stdout.splitlines():
-            theme, line = raw.split("\t", 1)
-            accent = EXPECTED[theme]
-            # The filled bar carries the theme hue, so it changes with the theme.
-            self.assertIn(f"48;2;{accent}", line, theme)
-            # The old 1;37;40m foreground painted the bar black in every theme.
-            self.assertNotIn("40m", line, theme)
+            theme, r, g, b = raw.split("\t")[:4]
+            line = raw.split("\t", 4)[4]
+            # The bar hue is the one the player paints behind its selection.
+            player_theme = player._THEME_ALIASES.get(theme, theme)
+            expected_bg, expected_fg = player._selection_bar_ansi(player_theme)
+            self.assertEqual((int(r), int(g), int(b)), player._rgb_from_ansi(expected_bg), theme)
+            # highlight_menu_line returns printf-ready text, so ESC is spelled \\033.
+            expected_esc = expected_bg.replace("\x1b", "\\033")
+            self.assertIn(expected_esc, line, f"{theme} bar does not match the player")
+            # Legible text on that fill, using the same rule as the player.
+            fg_colour = expected_fg.split("[1;", 1)[-1]
+            self.assertIn(fg_colour, line, theme)
+            # The old 1;37;40m foreground carried its own black background.
+            self.assertNotIn("1;37;40m", line, theme)
             self.assertNotIn("48;5;", line, theme)
-            self.assertNotIn("0;229;255", line, theme)
-            # Text stays legible on the fill: black on light hues, white on dark.
-            channels = [int(part) for part in accent.split(";")]
-            luma = (channels[0] * 299 + channels[1] * 587 + channels[2] * 114) // 1000
-            expected_fg = "1;38;2;0;0;0m" if luma >= 140 else "1;38;2;255;255;255m"
-            self.assertIn(expected_fg, line, theme)
-            bars.append(accent)
-        self.assertEqual(len(bars), len(set(bars)))
+            bars.append((player_theme, (r, g, b)))
+        # Themes that resolve to the same player palette share one bar colour;
+        # distinct themes must not collapse onto one.
+        by_theme = {}
+        for player_theme, rgb in bars:
+            by_theme.setdefault(player_theme, set()).add(rgb)
+        for player_theme, rgbs in by_theme.items():
+            self.assertEqual(len(rgbs), 1, player_theme)
 
 
 def _is_light_blue(accent: str) -> bool:

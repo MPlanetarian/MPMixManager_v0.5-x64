@@ -102,8 +102,22 @@ class TestDynamicRainbowLiquidGlass(unittest.TestCase):
         self.assertIn("dynamic-rainbow-glass-active", html_out)
         self.assertIn("dynamicRainbowHue", html_out)
         self.assertIn("dynamicRainbowBreath", html_out)
-        self.assertIn("18s linear infinite", html_out)
+        self.assertIn("24s linear infinite", html_out)
         self.assertIn("6s ease-in-out infinite", html_out)
+
+    def test_web_companion_rainbow_css_available_without_reload(self):
+        """The rainbow animation rules must ship with every render.
+
+        Selecting the theme at runtime only toggles a body class, so the
+        keyframes and class-scoped rules have to already be in the document.
+        Emitting them only for the initially-active theme forced a reload
+        before the colours would start cycling.
+        """
+        for theme_id, theme in WEB_THEMES.items():
+            html_out = render_html_page(theme)
+            self.assertIn("@keyframes dynamicRainbowHue", html_out, theme_id)
+            self.assertIn("@keyframes dynamicRainbowBreath", html_out, theme_id)
+            self.assertIn("body.dynamic-rainbow-glass-active::before", html_out, theme_id)
 
     def test_manager_themes_menu_includes_option_16(self):
         """Verify Mix_Archive_Manager.sh includes option 16 for Dynamic Liquid Glass."""

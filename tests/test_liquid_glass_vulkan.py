@@ -130,14 +130,24 @@ class TestNvidiaFrame(unittest.TestCase):
         renderer = LiquidGlassRenderer(400, 300, "Movement Test")
         try:
             renderer.open()
-            from desktop_launch_screen import kscreen_outputs, select_main, visible_origin
+            from desktop_launch_screen import (
+                kscreen_outputs,
+                select_main,
+                visible_origin,
+                x11_coordinate_scale,
+            )
             visible = visible_origin(renderer.x11_window(), renderer.title)
             main = select_main(kscreen_outputs())
             self.assertIsNotNone(visible)
             self.assertIsNotNone(main)
+            # visible_origin is an X11 position, while kscreen reports KWin
+            # logical units. Under Xwayland the two differ by the output scale
+            # (1.45 on this desktop), so convert before comparing.
+            scale = x11_coordinate_scale(kscreen_outputs())
+            logical = (int(round(visible[0] / scale)), int(round(visible[1] / scale)))
             left, top, width, height = main["geo"]
-            self.assertTrue(left <= visible[0] < left + width, f"window {visible} is outside {main['name']} {main['geo']}")
-            self.assertTrue(top <= visible[1] < top + height, f"window {visible} is outside {main['name']} {main['geo']}")
+            self.assertTrue(left <= logical[0] < left + width, f"window {visible} (logical {logical}) is outside {main['name']} {main['geo']}")
+            self.assertTrue(top <= logical[1] < top + height, f"window {visible} (logical {logical}) is outside {main['name']} {main['geo']}")
             renderer.set_window_pos(150, 200)
             self.assertEqual(renderer.window_pos(), (150, 200))
             rx, ry = renderer.root_pointer()

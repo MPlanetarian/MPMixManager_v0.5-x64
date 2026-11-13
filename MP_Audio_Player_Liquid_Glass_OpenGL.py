@@ -324,6 +324,32 @@ class CustomGlassRenderer(LiquidGlassRendererOpenGL):
         self._glfw.glfwSwapBuffers(self._window)
         return pixels
 
+    def _slider_child_bottom(self):
+        """Pixels of clear space below the terminal, or ``None`` if unmeasurable.
+
+        The GTK terminal can be taller than ``_well_rect`` asks for, because
+        VTE sizes itself from its row grid. Drawing the slider from a fixed
+        offset then put it underneath that terminal, which is why the bar
+        looked removed in MP Gui. This reports the real free strip at the
+        bottom of the window so the bar can be placed inside it.
+        """
+        try:
+            child = int(getattr(self, "_slider_child", 0) or 0)
+            if child <= 0:
+                return None
+            _cx, cy, _cw, ch = self.window_rect(child)
+            if ch <= 0:
+                return None
+            _wx, wy = self.window_pos()
+            _ww, wh = self.window_size()
+            if wh <= 0:
+                return None
+            # Vertical clear space between the terminal's lower edge and the
+            # bottom of the glass window.
+            return max(0.0, float((wy + wh) - (cy + ch)))
+        except Exception:
+            return None
+
     def _draw_transparency_slider(self, fw, fh, ww, wh, colors):
         try:
             from OpenGL.GL import (
@@ -368,16 +394,33 @@ class CustomGlassRenderer(LiquidGlassRendererOpenGL):
 
             x_left = 40.0
             x_right = max(80.0, float(ww) - 40.0)
-            y_from_bottom = 22.0
+            # Sit inside the strip the terminal well reserves below itself
+            # (_well_rect keeps 44 px free at the bottom). The old fixed 22 px
+            # left the bar underneath the terminal's last text row in MP Gui,
+            # so it looked missing even though it was being drawn.
+            y_from_bottom = 20.0
+            # VTE can overflow that reserve with its own row grid. Measure the
+            # real clear strip and centre the 8 px bar inside it, so the bar is
+            # never drawn under the terminal.
+            clear = self._slider_child_bottom()
+            if clear is not None and clear >= 12.0:
+                y_from_bottom = max(6.0, (clear - 8.0) / 2.0)
 
             # Derive slider panel and thumb colors dynamically from the active theme palette
             c0 = _rgb01(colors[0])
             c1 = _rgb01(colors[1])
 
+            # NDC y grows upward, so a distance from the bottom becomes a
+            # negative offset: 1 - 2*(y/height). The previous 2*(y/height) - 1
+            # put the "22 px from the bottom" bar at the top of the window,
+            # where the bezel clipped it, so the slider looked missing.
+            def _ndc_y(px):
+                return 1.0 - (float(px) / float(wh)) * 2.0
+
             ndc_x1 = (x_left / ww) * 2.0 - 1.0
             ndc_x2 = (x_right / ww) * 2.0 - 1.0
-            ndc_y1 = (y_from_bottom / wh) * 2.0 - 1.0
-            ndc_y2 = ((y_from_bottom + 8.0) / wh) * 2.0 - 1.0
+            ndc_y1 = _ndc_y(y_from_bottom)
+            ndc_y2 = _ndc_y(y_from_bottom + 8.0)
 
             glEnable(GL_BLEND)
             glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
@@ -404,8 +447,8 @@ class CustomGlassRenderer(LiquidGlassRendererOpenGL):
 
             t_x1 = ((thumb_x - 6.0) / ww) * 2.0 - 1.0
             t_x2 = ((thumb_x + 6.0) / ww) * 2.0 - 1.0
-            t_y1 = ((y_from_bottom - 4.0) / wh) * 2.0 - 1.0
-            t_y2 = ((y_from_bottom + 12.0) / wh) * 2.0 - 1.0
+            t_y1 = _ndc_y(y_from_bottom - 4.0)
+            t_y2 = _ndc_y(y_from_bottom + 12.0)
 
             thumb_quad = np.array([
                 t_x1, t_y1,  t_x2, t_y1,  t_x1, t_y2,
@@ -554,7 +597,13 @@ class GlassHost:
             self.gtk_window.move(int(x), int(y))
             if getattr(self, "_last_term_size", None) != (int(iw), int(ih)):
                 self.gtk_window.resize(int(iw), int(ih))
-                self._last_term_size = (int(iw), int(ih))
+                self._last_term_size = (int(iw), int(ih))        # Let the renderer measure the terminal so the transparency slider can
+        # be kept clear of it (VTE can be taller than the well asks for).
+        if self.renderer is not None:
+            try:
+                self.renderer._slider_child = int(self.child_xid or 0)
+            except Exception:
+                pass
         self.renderer.place_terminal(self.child_xid, x, y, iw, ih)
         self._sync_panels()
 
@@ -595,17 +644,21 @@ class GlassHost:
         publish_liquid_player_window_size(width_i, height_i)
 
     def _publish_player_window_geometry(self):
-        """Publish the player's position and size for the bonded visualizer.
+        """Publish the window's position and size for the bonded visualizer.
 
         Mini and Micro are the same window, so their geometry is published
         too. Without that the visualizer kept the Normal geometry and came
         away from the player as soon as M changed the size.
 
+        MP Gui publishes its own geometry as well: the companion visualizer it
+        launches sits behind *that* window, so it needs the GUI's position and
+        not just its size.
+
         While a resize is still being applied, the size the host asked for is
         published instead of the half-applied one, so the visualizer moves
         straight to the new mode instead of stepping through it.
         """
-        if self.mode in ("MANAGER", "TRACKLIST") or not sys.platform.startswith("linux") or self.renderer is None:
+        if self.mode == "TRACKLIST" or not sys.platform.startswith("linux") or self.renderer is None:
             return
         try:
             x, y = self.renderer.window_pos()
@@ -811,6 +864,24 @@ class GlassHost:
         self._note_player_window(width, height)
         self.renderer.set_window_size(width, height)
         term.set_size(self._target_cols, self._target_rows)
+        self._recenter_window(width, height)
+
+    def _recenter_window(self, width, height):
+        """Centre the freshly sized window instead of leaving it in the corner.
+
+        The window is created at a 9×18 guess and then refitted to the real
+        VTE cell, so it grows after the first placement. Recentring here keeps
+        the finished window on the primary screen instead of letting the
+        growth push it off the right and bottom edges.
+        """
+        if not sys.platform.startswith("linux") or self.renderer is None:
+            return
+        try:
+            from desktop_launch_screen import main_window_origin
+            x, y = main_window_origin(int(width), int(height), 72, 64)
+            self.renderer.set_window_pos(int(x), int(y))
+        except Exception:
+            pass
 
     def run(self):
         m = LiquidGlassRendererOpenGL.bezel_px
@@ -1176,7 +1247,7 @@ class GlassHost:
             renderer.close()
 
 
-def _visualizer_env() -> dict:
+def _visualizer_env(companion: bool = False) -> dict:
     """Environment for a spawned visualizer process.
 
     _import_gtk() forces two GTK/X11-specific variables so the glass window can
@@ -1190,9 +1261,21 @@ def _visualizer_env() -> dict:
 
     The child then dies before drawing and no window ever appears. Strip both so
     it negotiates Wayland/EGL itself.
+
+    ``companion=True`` marks the child as the window the player owns. That
+    child is bonded behind the player for its whole life. Extra windows opened
+    later (Z, the Manager) leave the flag off and are explicitly detached, so
+    they never latch onto the player just because a companion is running.
     """
-    return {k: v for k, v in os.environ.items()
-            if k not in ("GDK_BACKEND", "PYOPENGL_PLATFORM")}
+    env = {k: v for k, v in os.environ.items()
+           if k not in ("GDK_BACKEND", "PYOPENGL_PLATFORM",
+                        "MP_LIQUID_GLASS", "MP_LIQUID_GLASS_BACKEND",
+                        "MP_VISUALIZER_COMPANION", "MP_VISUALIZER_DETACHED")}
+    if companion:
+        env["MP_VISUALIZER_COMPANION"] = "1"
+    else:
+        env["MP_VISUALIZER_DETACHED"] = "1"
+    return env
 
 
 def spawn_new_visualizer() -> bool:
@@ -1209,7 +1292,9 @@ def spawn_new_visualizer() -> bool:
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         extra_kw = {"creationflags": 0x00000208} if sys.platform == "win32" else {"start_new_session": True}
         if sys.platform != "win32":
-            extra_kw["env"] = _visualizer_env()
+            # Z opens an extra window: it is explicitly detached from the
+            # player, while the companion the player starts stays locked.
+            extra_kw["env"] = _visualizer_env(companion=False)
         with open(CONFIG_DIR / "liquid_visualizer.log", "a") as f:
             f.write(f"\n--- spawn_new_visualizer: {vis_script.name} ---\n")
             f.flush()
@@ -1246,9 +1331,16 @@ def ensure_random_visualizer_started() -> bool:
             return False
 
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        # Write the active state before the child starts, so its first poll
+        # already knows it belongs behind this player.
+        try:
+            from liquid_player_visualizer import mark_player_visualizer_attached
+            mark_player_visualizer_attached()
+        except Exception:
+            pass
         extra_kw = {"creationflags": 0x00000208} if sys.platform == "win32" else {"start_new_session": True}
         if sys.platform != "win32":
-            extra_kw["env"] = _visualizer_env()
+            extra_kw["env"] = _visualizer_env(companion=True)
         with open(CONFIG_DIR / "liquid_visualizer.log", "a") as f:
             subprocess.Popen([sys.executable, str(vis_script), "--preset", "random", "--backend", "opengl"], cwd=str(ROOT), stdin=subprocess.DEVNULL, stdout=f, stderr=f, **extra_kw)
         return True

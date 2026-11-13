@@ -8,8 +8,11 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from desktop_launch_screen import (  # noqa: E402
+    centered_window_origin,
     fit_square_on_main,
     main_desktop_origin,
+    main_desktop_rect,
+    main_window_origin,
     parse_kscreen,
     parse_xrandr_monitors,
     parse_xwininfo_origin,
@@ -205,6 +208,79 @@ Output: 1 DP-3 aaaa
             fit_square_on_main(1400, outputs=outputs, workarea=(0, 0, 3840, 2160)),
             (1400, 1400, 160, 80),
         )
+
+
+class TestCenteredPlacement(unittest.TestCase):
+    """MP windows must open centred on the primary screen, never in the corner.
+
+    Regression: the Liquid Player and MP Gui opened at a fixed (72, 64) corner
+    offset. Their finished size (1574x1098) then ran past the right and bottom
+    edges of the 1920x1200 primary monitor, so the windows appeared to hang off
+    the top-right corner instead of being centred.
+    """
+
+    # The centre screen (DP-3) is primary and sits at logical x 1920. Under the
+    # default 1.0 scale the X11 origin is the same as the KWin origin here, so
+    # the expected numbers stay readable.
+    MONITORS = "\n".join([
+        "Monitors: 3",
+        " 0: +*DP-3 1920/519x1200/324+1920+0  DP-3",
+        " 1: +DP-1 1920/519x1200/324+0+0  DP-1",
+        " 2: +DP-2 1920/546x1200/352+3840+0  DP-2",
+    ])
+
+    def test_centred_window_sits_in_the_middle_of_the_primary_monitor(self):
+        outputs = parse_kscreen(CURRENT_DESKTOP)
+        monitors = parse_xrandr_monitors(self.MONITORS)
+        self.assertEqual(x11_coordinate_scale(outputs, monitors), 1.0)
+        x, y = centered_window_origin(1574, 1098, outputs, monitors, panel_inset=0)
+        self.assertEqual(x, 1920 + (1920 - 1574) // 2)
+        self.assertEqual(y, (1200 - 1098) // 2)
+
+    def test_main_window_origin_is_centred_not_cornered(self):
+        outputs = parse_kscreen(CURRENT_DESKTOP)
+        monitors = parse_xrandr_monitors(self.MONITORS)
+        corner = window_launch_origin(72, 64, outputs, monitors)
+        centred = main_window_origin(1574, 1098, 72, 64, outputs, monitors)
+        self.assertNotEqual(centred, corner)
+        self.assertEqual(corner, (1992, 64))
+        self.assertEqual(centred, centered_window_origin(1574, 1098, outputs, monitors))
+
+    def test_window_stays_inside_the_primary_monitor(self):
+        outputs = parse_kscreen(CURRENT_DESKTOP)
+        monitors = parse_xrandr_monitors(self.MONITORS)
+        width, height = 1574, 1098
+        x, y = main_window_origin(width, height, 72, 64, outputs, monitors)
+        rect_x, rect_y, rect_w, rect_h = main_desktop_rect(outputs, monitors, panel_inset=0)
+        self.assertGreaterEqual(x, rect_x)
+        self.assertGreaterEqual(y, rect_y)
+        self.assertLessEqual(x + width, rect_x + rect_w)
+        self.assertLessEqual(y + height, rect_y + rect_h)
+
+    def test_main_window_origin_matches_centred_origin(self):
+        outputs = parse_kscreen(CURRENT_DESKTOP)
+        monitors = parse_xrandr_monitors(self.MONITORS)
+        origin = main_window_origin(1574, 1098, 72, 64, outputs, monitors)
+        expected = centered_window_origin(1574, 1098, outputs, monitors)
+        self.assertEqual(origin, expected)
+
+    def test_scaled_xwayland_layout_centres_on_the_scaled_primary(self):
+        """At a 1.45 Xwayland scale the centre point must use X11 pixels."""
+        outputs = parse_kscreen(CURRENT_DESKTOP)
+        monitors = parse_xrandr_monitors("\n".join([
+            "Monitors: 3",
+            " 0: +*DP-3 2784/519x1740/324+2784+0  DP-3",
+            " 1: +DP-1 2784/519x1740/324+0+0  DP-1",
+            " 2: +DP-2 2784/546x1740/352+5568+0  DP-2",
+        ]))
+        self.assertAlmostEqual(x11_coordinate_scale(outputs, monitors), 1.45, places=2)
+        rect_x, rect_y, rect_w, rect_h = main_desktop_rect(outputs, monitors, panel_inset=0)
+        self.assertEqual((rect_x, rect_w), (2784, 2784))
+        x, y = centered_window_origin(1574, 1098, outputs, monitors, panel_inset=0)
+        self.assertEqual(x, rect_x + (rect_w - 1574) // 2)
+        self.assertEqual(y, rect_y + (rect_h - 1098) // 2)
+        self.assertLessEqual(x + 1574, rect_x + rect_w)
+        self.assertLessEqual(y + 1098, rect_y + rect_h)
 
 
 if __name__ == "__main__":

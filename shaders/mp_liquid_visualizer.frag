@@ -1080,16 +1080,148 @@ vec2 csMapSequences(vec3 p) {
     return vec2(dMix, mat);
 }
 
+// Beyond Dimensions Signature Palette
+// Inspired by Cotangent Dimensions cover & Defasten - Beyond Basel 2023
+vec3 beyondDimensionsPalette(float t, vec2 uvHint) {
+    vec3 colDeepIndigo       = vec3(0.027, 0.031, 0.078); // Deep Interdimensional Void (#070814)
+    vec3 colUltraviolet      = vec3(0.420, 0.067, 1.000); // Hyperdimensional Ultraviolet (#6b11ff)
+    vec3 colCotangentCyan    = vec3(0.000, 0.961, 0.831); // Electric Cotangent Cyan (#00f5d4)
+    vec3 colPrismMagenta     = vec3(0.969, 0.145, 0.522); // Non-Euclidean Prism Magenta (#f72585)
+    vec3 colLuminousAmber    = vec3(0.996, 0.894, 0.251); // Transdimensional Amber Gold (#fee440)
+    vec3 colQuantumPearl     = vec3(0.941, 0.973, 1.000); // Luminous Quantum Pearl (#f0f8ff)
+
+    float s = fract(t);
+    vec3 procCol;
+    if (s < 0.2) {
+        procCol = mix(colDeepIndigo, colUltraviolet, s * 5.0);
+    } else if (s < 0.4) {
+        procCol = mix(colUltraviolet, colCotangentCyan, (s - 0.2) * 5.0);
+    } else if (s < 0.6) {
+        procCol = mix(colCotangentCyan, colPrismMagenta, (s - 0.4) * 5.0);
+    } else if (s < 0.8) {
+        procCol = mix(colPrismMagenta, colLuminousAmber, (s - 0.6) * 5.0);
+    } else {
+        procCol = mix(colLuminousAmber, colQuantumPearl, (s - 0.8) * 5.0);
+    }
+
+    vec2 texUv = fract(uvHint * 0.35 + vec2(0.5));
+    vec3 coverSample = texture(uCoverTex, texUv).rgb;
+    float luma = dot(coverSample, vec3(0.299, 0.587, 0.114));
+    coverSample = clamp(mix(vec3(luma), coverSample, 1.48), 0.0, 1.0);
+
+    return mix(procCol, coverSample, 0.44);
+}
+
+// Particle Accelerator Signature Palette
+// Inspired by Vortex Sync cover & Defasten - TOROID (feat. Yaporigami)
+vec3 particleAcceleratorPalette(float t, vec2 uvHint) {
+    vec3 colHadronVoid       = vec3(0.016, 0.020, 0.039); // Hadron Vacuum Void (#04050a)
+    vec3 colSynchrotronBlue  = vec3(0.000, 0.824, 1.000); // High-Flux Synchrotron Blue (#00d2ff)
+    vec3 colPlasmaViolet     = vec3(0.475, 0.157, 0.792); // Relativistic Plasma Violet (#7928ca)
+    vec3 colNeonPink         = vec3(1.000, 0.000, 0.502); // Collision Neon Pink (#ff0080)
+    vec3 colCherenkovAqua    = vec3(0.000, 1.000, 0.749); // Cherenkov Radiation Aqua (#00ffbf)
+    vec3 colCollisionCore    = vec3(1.000, 0.985, 0.980); // Incandescent Collision Core (#ffffff)
+
+    float s = fract(t);
+    vec3 procCol;
+    if (s < 0.2) {
+        procCol = mix(colHadronVoid, colPlasmaViolet, s * 5.0);
+    } else if (s < 0.4) {
+        procCol = mix(colPlasmaViolet, colSynchrotronBlue, (s - 0.2) * 5.0);
+    } else if (s < 0.6) {
+        procCol = mix(colSynchrotronBlue, colCherenkovAqua, (s - 0.4) * 5.0);
+    } else if (s < 0.8) {
+        procCol = mix(colCherenkovAqua, colNeonPink, (s - 0.6) * 5.0);
+    } else {
+        procCol = mix(colNeonPink, colCollisionCore, (s - 0.8) * 5.0);
+    }
+
+    vec2 texUv = fract(uvHint * 0.35 + vec2(0.5));
+    vec3 coverSample = texture(uCoverTex, texUv).rgb;
+    float luma = dot(coverSample, vec3(0.299, 0.587, 0.114));
+    coverSample = clamp(mix(vec3(luma), coverSample, 1.50), 0.0, 1.0);
+
+    return mix(procCol, coverSample, 0.45);
+}
+
+// Cosmic Universe Signature Palette
+// Inspired by The Cosmological Horizon cover & Defasten - Constellation (2012)
+vec3 cosmicUniversePalette(float t, vec2 uvHint) {
+    vec3 colCosmicAbyss      = vec3(0.008, 0.008, 0.031); // Cosmological Abyssal Black (#020208)
+    vec3 colNebulaBlue       = vec3(0.039, 0.145, 0.251); // Deep Space Nebula Blue (#0a2540)
+    vec3 colStarlightCyan    = vec3(0.220, 0.741, 0.973); // Celestial Starlight Cyan (#38bdf8)
+    vec3 colSupernovaGold    = vec3(0.984, 0.749, 0.141); // Supernova Solar Gold (#fbbf24)
+    vec3 colRoseNebula       = vec3(0.984, 0.443, 0.522); // Cosmic Dawn Rose Nebula (#fb7185)
+    vec3 colStellarDiamond   = vec3(0.992, 0.957, 1.000); // Brilliant Stellar Diamond Core (#fdf4ff)
+
+    float s = fract(t);
+    vec3 procCol;
+    if (s < 0.2) {
+        procCol = mix(colCosmicAbyss, colNebulaBlue, s * 5.0);
+    } else if (s < 0.4) {
+        procCol = mix(colNebulaBlue, colStarlightCyan, (s - 0.2) * 5.0);
+    } else if (s < 0.6) {
+        procCol = mix(colStarlightCyan, colRoseNebula, (s - 0.4) * 5.0);
+    } else if (s < 0.8) {
+        procCol = mix(colRoseNebula, colSupernovaGold, (s - 0.6) * 5.0);
+    } else {
+        procCol = mix(colSupernovaGold, colStellarDiamond, (s - 0.8) * 5.0);
+    }
+
+    vec2 texUv = fract(uvHint * 0.35 + vec2(0.5));
+    vec3 coverSample = texture(uCoverTex, texUv).rgb;
+    float luma = dot(coverSample, vec3(0.299, 0.587, 0.114));
+    coverSample = clamp(mix(vec3(luma), coverSample, 1.48), 0.0, 1.0);
+
+    return mix(procCol, coverSample, 0.45);
+}
+
+// Stream of Frequency Signature Palette
+// Inspired by the official "MPlanetarian - Stream of Frequency" cover art:
+// a resonant frequency core carrying five live spectrum ribbons.
+vec3 streamOfFrequencyPalette(float t, vec2 uvHint) {
+    vec3 colStreamIndigo   = vec3(0.122, 0.125, 0.376); // Deep Stream Indigo (#1f2060)
+    vec3 colStreamCyan     = vec3(0.000, 0.949, 1.000); // Electric Stream Cyan (#00f2ff)
+    vec3 colFreqEmerald    = vec3(0.298, 0.851, 0.482); // Frequency Emerald (#4cd97b)
+    vec3 colSolarWaveGold  = vec3(0.961, 0.929, 0.416); // Solar Wave Gold (#f5ed6a)
+    vec3 colElectricViolet = vec3(0.592, 0.310, 0.976); // Electric Violet (#974ff9)
+    vec3 colPeakCrimson    = vec3(0.941, 0.125, 0.125); // Peak Crimson (#f02020)
+
+    float s = fract(t * 0.09 + uvHint.x * 0.12 + uvHint.y * 0.07);
+    vec3 procCol;
+    if (s < 0.2) {
+        procCol = mix(colStreamIndigo, colStreamCyan, s * 5.0);
+    } else if (s < 0.4) {
+        procCol = mix(colStreamCyan, colFreqEmerald, (s - 0.2) * 5.0);
+    } else if (s < 0.6) {
+        procCol = mix(colFreqEmerald, colSolarWaveGold, (s - 0.4) * 5.0);
+    } else if (s < 0.8) {
+        procCol = mix(colSolarWaveGold, colElectricViolet, (s - 0.6) * 5.0);
+    } else {
+        procCol = mix(colElectricViolet, colPeakCrimson, (s - 0.8) * 5.0);
+    }
+
+    vec2 texUv = fract(uvHint * 0.35 + vec2(0.5));
+    vec3 coverSample = texture(uCoverTex, texUv).rgb;
+    float luma = dot(coverSample, vec3(0.299, 0.587, 0.114));
+    coverSample = clamp(mix(vec3(luma), coverSample, 1.42), 0.0, 1.0);
+
+    return mix(procCol, coverSample, 0.46);
+}
+
 vec3 getPresetPalette(float t, vec2 uvHint) {
     if (u.preset.x > 9.5) {
         return chromaticStormPalette(t, uvHint);
     } else if (u.preset.x > 8.5) {
         return resonantFluidDynamicsPalette(t, uvHint);
+    } else if (u.preset.x > 7.5) {
+        return cosmicUniversePalette(t, uvHint);
+    } else if (u.preset.x > 6.5) {
+        return particleAcceleratorPalette(t, uvHint);
+    } else if (u.preset.x > 5.5) {
+        return beyondDimensionsPalette(t, uvHint);
     } else if (u.preset.x > 4.5) {
-        float s = fract(t * 0.12 + uvHint.x * 0.16 + uvHint.y * 0.09);
-        vec3 prismatic = mix(vec3(0.12, 0.82, 0.94), vec3(0.91, 0.20, 0.68), 0.5 + 0.5 * sin(s * TAU));
-        vec3 pearl = mix(vec3(0.70, 0.75, 0.83), vec3(0.98, 0.98, 1.0), 0.5 + 0.5 * cos(s * TAU));
-        return mix(pearl, prismatic, 0.48);
+        return streamOfFrequencyPalette(t, uvHint);
     } else if (u.preset.x > 3.5) {
         return sensoriumPalette(t, uvHint);
     } else if (u.preset.x > 2.5) {
@@ -1335,31 +1467,288 @@ vec2 mapScene(vec3 p) {
         if (dTechArmor < res.x)      res = vec2(dTechArmor, 4.0);
 
         return res;
-    } else if (u.preset.x > 4.5) {
-        // BIFURCATION: a splitting chrome spindle with audio-driven fractured plates.
+    } else if (u.preset.x > 7.5) {
+        // --- PRESET 8: COSMIC UNIVERSE (DEFASTEN CONSTELLATION & THE COSMOLOGICAL HORIZON) ---
+        // Inspired by Defasten's "Constellation (2012)" and The Cosmological Horizon cover art:
+        // Deep cosmological expanse, stellar constellation network, pulsar liquid core,
+        // event horizon accretion rings, and star web conduits reacting to music.
         float dynTime = (u.preset.w > 0.001) ? u.preset.w : t;
-        vec3 q = p;
-        q.xz *= rot2(dynTime * (0.08 + bass * 0.08));
-        q.xy *= rot2(0.24 * sin(dynTime * 0.22 + midPhase));
-        // A split double-prong body opens away from the center as the beat rises.
-        vec3 leftProng = q - vec3(-0.43 - 0.15 * bass, 0.0, 0.0);
-        leftProng.yz *= rot2(-0.20 - 0.10 * sin(dynTime * 0.4));
-        vec3 rightProng = q - vec3(0.43 + 0.15 * bass, 0.0, 0.0);
-        rightProng.yz *= rot2(0.20 + 0.10 * sin(dynTime * 0.4));
-        float core = min(sdOctahedron(leftProng, 0.84 + 0.12 * subBass + 0.08 * beat),
-                         sdOctahedron(rightProng, 0.84 + 0.12 * subBass + 0.08 * beat));
-        float rings = sdTorus(q, vec2(1.48 + 0.16 * bass, 0.032 + 0.020 * beat));
-        float shards = 1e4;
-        for (int i = 0; i < 8; i++) {
-            float a = float(i) * (TAU / 8.0) + dynTime * (0.12 + 0.05 * mid);
-            vec3 s = q - vec3(cos(a) * 1.22, 0.0, sin(a) * 1.22);
-            s.xy *= rot2(0.38 * sin(dynTime * 0.32 + a) + bassPhase * 0.10);
-            s.yz *= rot2(a * 0.35);
-            shards = min(shards, sdHexPrism(s, vec2(0.56 + 0.08 * treble, 0.055)));
+
+        vec3 centerUniv = vec3(
+            0.08 * sin(dynTime * 0.04 + bassPhase * 0.05),
+            0.06 * cos(dynTime * 0.05 + midPhase * 0.04),
+            0.0
+        );
+        vec3 pCore = p - centerUniv;
+
+        // Majestic cosmological gyroscopic precession
+        pCore.yz *= rot2(0.26 + 0.03 * sin(dynTime * 0.03));
+        pCore.xz *= rot2(dynTime * 0.04 + bassPhase * 0.02);
+
+        // 1. Central Pulsar Star Liquid Glass Core (Material 1)
+        float coronaWave = 0.026 * sin(length(pCore) * 16.0 - dynTime * 2.2 + bassPhase * 1.5);
+        float dPulsarOrb = sdSphere(pCore, 0.62 + 0.16 * subBass + 0.08 * beat) + coronaWave;
+        float dCelestialMantle = sdTorus(pCore, vec2(1.25 + 0.12 * mid, 0.14 + 0.03 * lowMid));
+        float dCosmicGlass = smin(dPulsarOrb, dCelestialMantle, 0.18);
+
+        // 2. Cosmological Event Horizon Accretion Rings (Material 2)
+        vec3 pRing1 = pCore;
+        pRing1.yz *= rot2(0.42 + 0.05 * sin(dynTime * 0.04));
+        float dRing1 = sdTorus(pRing1, vec2(2.15 + 0.20 * bass, 0.032 + 0.016 * beat))
+                     + 0.012 * sin(length(pRing1.xz) * 22.0 - dynTime * 1.6);
+
+        vec3 pRing2 = pCore;
+        pRing2.xz *= rot2(1.5707 + dynTime * 0.05);
+        pRing2.xy *= rot2(0.28);
+        float dRing2 = sdTorus(pRing2, vec2(2.65 + 0.24 * subBass, 0.028 + 0.014 * rms));
+        float dAccretionRings = min(dRing1, dRing2);
+
+        // 3. Interconnected Constellation Star Filaments (Material 3)
+        // 6 celestial web conduits connecting the pulsar core to outer nodes
+        float dStarWeb = 1e5;
+        for (int i = 0; i < 6; i++) {
+            float ang = float(i) * (TAU / 6.0) + dynTime * 0.02;
+            vec3 pWeb = pCore;
+            pWeb.xz *= rot2(ang);
+            pWeb.xy *= rot2(0.18 * sin(dynTime * 0.5 + float(i)));
+            float dStrand = length(pWeb.yz) - (0.030 + 0.014 * mid);
+            dStrand = max(dStrand, abs(pWeb.x) - 2.5);
+            dStarWeb = min(dStarWeb, dStrand);
         }
-        vec2 result = vec2(core, 1.0);
-        if (rings < result.x) result = vec2(rings, 2.0);
-        if (shards < result.x) result = vec2(shards, 4.0);
+
+        // 4. Constellation Star Nodes & Diamond Pylons (Material 4)
+        float dStarNodes = 1e5;
+        for (int j = 0; j < 6; j++) {
+            float nodeAng = float(j) * (TAU / 6.0) + dynTime * 0.02;
+            vec3 pNode = pCore;
+            pNode.xz *= rot2(nodeAng);
+            pNode.x -= 2.45;
+            float dOct = sdOctahedron(pNode, 0.18 + 0.05 * treble);
+            dStarNodes = min(dStarNodes, dOct);
+        }
+
+        vec2 res = vec2(dCosmicGlass, 1.0);
+        if (dAccretionRings < res.x) res = vec2(dAccretionRings, 2.0);
+        if (dStarWeb < res.x)        res = vec2(dStarWeb, 3.0);
+        if (dStarNodes < res.x)      res = vec2(dStarNodes, 4.0);
+        return res;
+    } else if (u.preset.x > 6.5) {
+        // --- PRESET 7: PARTICLE ACCELERATOR (DEFASTEN TOROID & VORTEX SYNC) ---
+        // Inspired by Defasten's "TOROID (feat. Yaporigami)" and Vortex Sync cover art:
+        // Relativistic synchrotron particle collider, counter-rotating magnetic toroids,
+        // pinched plasma collision spindle, relativistic helical particle beam sprays,
+        // and electromagnetic quadrupole focusing coils.
+        float dynTime = (u.preset.w > 0.001) ? u.preset.w : t;
+
+        vec3 centerAcc = vec3(0.06 * sin(dynTime * 0.08), 0.0, 0.0);
+        vec3 pCore = p - centerAcc;
+
+        // Rapid magnetic synchrotron rotation
+        pCore.xz *= rot2(dynTime * 0.16 + bassPhase * 0.28);
+        pCore.yz *= rot2(0.22 * sin(dynTime * 0.07));
+
+        // 1. Dual Counter-Rotating Magnetic Confinement Accelerator Toroids (Material 1)
+        float dColliderTorus1 = sdTorus(pCore, vec2(1.65 + 0.18 * bass, 0.10 + 0.03 * lowMid));
+        vec3 pCore2 = pCore;
+        pCore2.xy *= rot2(0.85);
+        pCore2.xz *= rot2(-dynTime * 0.28);
+        float dColliderTorus2 = sdTorus(pCore2, vec2(1.95 + 0.15 * mid, 0.08 + 0.02 * treble));
+
+        // Central pinched plasma collision spindle
+        float dCollisionSpindle = sdSphere(pCore, 0.46 + 0.22 * subBass + 0.12 * beat);
+        float dAcceleratorGlass = smin(dColliderTorus1, dColliderTorus2, 0.14);
+        dAcceleratorGlass = smin(dAcceleratorGlass, dCollisionSpindle, 0.16);
+
+        // 2. Relativistic Particle Beam Pinch Rings & Glow Halos (Material 2)
+        float dBeamHalo1 = sdTorus(pCore, vec2(1.65 + 0.18 * bass, 0.026 + 0.020 * beat));
+        float dBeamHalo2 = sdTorus(pCore2, vec2(1.95 + 0.15 * mid, 0.022 + 0.016 * beat));
+        float dBeamHalos = min(dBeamHalo1, dBeamHalo2);
+
+        // 3. Quad-Sector Relativistic Particle Beams & Helical Sprays (Material 3)
+        float dHelicalBeams = 1e5;
+        for (int i = 0; i < 4; i++) {
+            float yRel = pCore.y;
+            float twistRate = 2.4;
+            float radHelix = 0.95 + 0.15 * sin(yRel * 3.0 + dynTime * 1.5 + float(i) * 1.57) + 0.10 * bass;
+            float theta = yRel * twistRate + dynTime * 1.8 + float(i) * 1.5707 + bassPhase * 0.4;
+            vec2 expectedXz = vec2(cos(theta), sin(theta)) * radHelix;
+            float distToHelix = length(pCore.xz - expectedXz);
+            float dStrand = distToHelix - (0.032 + 0.016 * mid);
+            dStrand = max(dStrand, abs(yRel) - 2.6);
+            dHelicalBeams = min(dHelicalBeams, dStrand);
+        }
+
+        // 4. Electromagnetic Focusing Coils & Quadrupole Shards (Material 4)
+        float dFocusCoils = 1e5;
+        for (int k = 0; k < 4; k++) {
+            float coilAng = float(k) * 1.5707963;
+            vec3 pCoil = pCore;
+            pCoil.xz *= rot2(coilAng);
+            pCoil.x -= (2.05 + 0.12 * bass);
+            float dBox = sdBox(pCoil, vec3(0.24, 0.38, 0.16 + 0.05 * beat));
+            dFocusCoils = min(dFocusCoils, dBox);
+        }
+
+        vec2 res = vec2(dAcceleratorGlass, 1.0);
+        if (dBeamHalos < res.x)    res = vec2(dBeamHalos, 2.0);
+        if (dHelicalBeams < res.x) res = vec2(dHelicalBeams, 3.0);
+        if (dFocusCoils < res.x)   res = vec2(dFocusCoils, 4.0);
+        return res;
+    } else if (u.preset.x > 5.5) {
+        // --- PRESET 6: BEYOND DIMENSIONS (DEFASTEN BEYOND BASEL 2023 & COTANGENT DIMENSIONS) ---
+        // Inspired by Defasten's "BEYOND BASEL 2023" and Cotangent Dimensions cover art:
+        // Multidimensional 4D folding hyper-sphere liquid glass core,
+        // tesseract dimensional lattice, intersecting portal rings,
+        // and non-Euclidean cotangent harmonic distortion waves.
+        float dynTime = (u.preset.w > 0.001) ? u.preset.w : t;
+
+        vec3 centerDim = vec3(
+            0.09 * sin(dynTime * 0.07 + bassPhase * 0.06),
+            0.08 * cos(dynTime * 0.06 + midPhase * 0.05),
+            0.0
+        );
+        vec3 pCore = p - centerDim;
+
+        // 4D hyperdimensional folding orientation
+        pCore.yz *= rot2(dynTime * 0.08 + midPhase * 0.05);
+        pCore.xy *= rot2(0.35 + 0.15 * sin(dynTime * 0.06));
+        pCore.xz *= rot2(dynTime * 0.09 + bassPhase * 0.04);
+
+        // 1. 4D Hypersphere Liquid Glass Core (Material 1)
+        float cotMod = 0.035 * cos(pCore.x * 5.5 + dynTime * 0.8) / max(abs(sin(pCore.y * 5.5 + dynTime * 0.4)), 0.18);
+        float dHyperOrb = sdSphere(pCore, 0.58 + 0.16 * subBass + 0.08 * beat) + clamp(cotMod, -0.05, 0.05);
+        float dOuterShell = sdTorus(pCore, vec2(1.35 + 0.14 * mid, 0.12 + 0.03 * lowMid));
+        float dDimGlass = smin(dHyperOrb, dOuterShell, 0.16);
+
+        // 2. Tesseract Frame Lattice & Dimensional Portal Rings (Material 2)
+        vec3 pPortal1 = pCore;
+        pPortal1.yz *= rot2(0.38 + 0.06 * sin(dynTime * 0.05));
+        float dPortalRing1 = sdTorus(pPortal1, vec2(1.85 + 0.20 * bass, 0.036 + 0.022 * beat));
+
+        vec3 pPortal2 = pCore;
+        pPortal2.xz *= rot2(1.5707);
+        pPortal2.xy *= rot2(0.42);
+        float dPortalRing2 = sdTorus(pPortal2, vec2(2.25 + 0.18 * mid, 0.032 + 0.016 * rms));
+        float dPortalRings = min(dPortalRing1, dPortalRing2);
+
+        // 3. Interdimensional Flux Conduits (Material 3)
+        // Braided dimensional streamers winding along hyper-axes
+        float dFluxConduits = 1e5;
+        for (int i = 0; i < 4; i++) {
+            float yRel = pCore.y;
+            float twistRate = 1.7;
+            float radHelix = 1.05 + 0.18 * sin(yRel * 2.5 + dynTime * 1.1 + float(i) * 1.57) + 0.12 * bass;
+            float theta = yRel * twistRate + dynTime * 0.95 + float(i) * 1.5707 + bassPhase * 0.3;
+            vec2 expectedXz = vec2(cos(theta), sin(theta)) * radHelix;
+            float distToHelix = length(pCore.xz - expectedXz);
+            float dStrand = distToHelix - (0.034 + 0.016 * mid);
+            dStrand = max(dStrand, abs(yRel) - 2.7);
+            dFluxConduits = min(dFluxConduits, dStrand);
+        }
+
+        // 4. Prismatic Rift Crystals & Origami Portal Fins (Material 4)
+        float dRiftCrystals = 1e5;
+        for (int s = 0; s < 4; s++) {
+            float sAng = float(s) * 1.5707963 + dynTime * 0.06;
+            vec3 pShard = pCore;
+            pShard.xz *= rot2(sAng);
+            pShard.x -= (2.10 + 0.15 * subBass);
+            pShard.yz *= rot2(dynTime * 0.4 + float(s));
+            float dOct = sdOctahedron(pShard, 0.22 + 0.05 * treble);
+            dRiftCrystals = min(dRiftCrystals, dOct);
+        }
+
+        vec2 res = vec2(dDimGlass, 1.0);
+        if (dPortalRings < res.x)  res = vec2(dPortalRings, 2.0);
+        if (dFluxConduits < res.x) res = vec2(dFluxConduits, 3.0);
+        if (dRiftCrystals < res.x) res = vec2(dRiftCrystals, 4.0);
+        return res;
+    } else if (u.preset.x > 4.5) {
+        // =========================================================================
+        // PRESET 6: STREAM OF FREQUENCY (MPlanetarian - Stream of Frequency 037)
+        // Inspired by the official "Stream of Frequency" cover art and the
+        // XI-N / MPlanetarian performance capture for Episode 005 ("Who am I?").
+        // 1. Central Resonant Liquid Glass Frequency Core (Material 1)
+        //    A glass oscillator breathing on sub-bass with hydraulic ripple shells.
+        // 2. Dual Harmonic Resonance Rings (Material 2)
+        //    Two counter-phased spectrum halos that tilt and widen with the beat.
+        // 3. Five-tier Audio Ribbons (Material 3)
+        //    Five spectral ribbons driven by live FFT bands, streaming right-to-left.
+        // 4. Orbiting Crystal Octahedron Nodes (Material 4)
+        //    Harmonic crystal nodes orbiting the core, one per frequency decade.
+        // =========================================================================
+        float dynTime = (u.preset.w > 0.001) ? u.preset.w : t;
+
+        // Slow axial spin so the stream reads as travelling right-to-left
+        vec3 q = p;
+        q.xy *= rot2(dynTime * 0.055);
+        q.yz *= rot2(0.14 * sin(dynTime * 0.09 + midPhase * 0.05));
+
+        vec3 coreP = q;
+        coreP.xz *= rot2(dynTime * 0.10 + bassPhase * 0.05);
+
+        // 1. Central resonant liquid glass frequency core
+        float breath = 0.58 + 0.20 * subBass + 0.10 * beat;
+        float shellRipple = 0.030 * (0.35 + 1.15 * bass)
+            * sin(length(coreP) * 14.0 - dynTime * 2.1 + bassPhase * 0.6);
+        float core = sdSphere(coreP, breath) + shellRipple;
+        float collar = sdTorus(coreP, vec2(breath * 0.92, 0.055 + 0.020 * lowMid));
+        float dCore = smin(core, collar, 0.10);
+
+        // 2. Dual harmonic resonance rings
+        vec3 ringP1 = q;
+        ringP1.yz *= rot2(0.42 + 0.05 * sin(dynTime * 0.06));
+        float ring1 = sdTorus(ringP1, vec2(1.42 + 0.18 * bass, 0.026 + 0.014 * beat))
+                    + 0.010 * sin(length(ringP1.xz) * 18.0 - dynTime * 1.9);
+        vec3 ringP2 = q;
+        ringP2.xz *= rot2(1.5707);
+        ringP2.xy *= rot2(-0.34 - 0.05 * cos(dynTime * 0.05));
+        float ring2 = sdTorus(ringP2, vec2(1.86 + 0.20 * mid, 0.022 + 0.012 * rms));
+        float dRings = min(ring1, ring2);
+
+        // 3. Five-tier audio ribbons riding the live spectrum bands
+        float dRibbons = 1e5;
+        for (int i = 0; i < 5; i++) {
+            float fi = float(i);
+            // Tallest band at the centre, tapering toward the outer tiers
+            float band = (i == 0) ? u.bands0.x
+                       : (i == 1) ? u.bands0.w
+                       : (i == 2) ? u.bands1.y
+                       : (i == 3) ? u.bands2.x
+                       :            u.bands3.z;
+            float tier = 0.52 + fi * 0.30;
+            float lift = (fi - 2.0) * 0.16;
+            // The ribbon sweeps left as time advances (right-to-left stream)
+            float travel = -dynTime * (0.42 + 0.06 * fi);
+            float wobble = 0.055 * sin(q.z * 4.2 + travel * 2.4 + fi * 1.7 + bassPhase * 0.4);
+            float bandAmp = 0.16 + 0.34 * band;
+            vec3 rp = q;
+            rp.y -= lift + wobble + bandAmp * 0.35 * sin(q.x * 2.6 + travel);
+            // Undulating horizontal ribbon sheet of the tier's colour
+            float sheet = abs(rp.y) - (0.020 + 0.030 * band);
+            sheet = max(sheet, abs(rp.z) - (0.42 + 0.10 * lowMid));
+            sheet = max(sheet, abs(rp.x) - (1.55 + 0.22 * treble));
+            // Keep the tiers on their own height band
+            sheet = max(sheet, abs(rp.y) - (0.30 + 0.10 * band));
+            dRibbons = min(dRibbons, sheet + 0.004 * tier);
+        }
+
+        // 4. Orbiting crystal octahedron nodes
+        float dNodes = 1e5;
+        for (int j = 0; j < 5; j++) {
+            float fj = float(j);
+            float ang = fj * (TAU / 5.0) + dynTime * 0.16;
+            float rad = 1.72 + 0.10 * sin(dynTime * 0.3 + fj);
+            vec3 np = q - vec3(cos(ang) * rad, (fj - 2.0) * 0.30, sin(ang) * rad);
+            np.xz *= rot2(dynTime * 0.25 + fj);
+            float size = 0.15 + 0.05 * treble;
+            dNodes = min(dNodes, sdOctahedron(np, size));
+        }
+
+        vec2 result = vec2(dCore, 1.0);
+        if (dRings < result.x)   result = vec2(dRings, 2.0);
+        if (dRibbons < result.x) result = vec2(dRibbons, 3.0);
+        if (dNodes < result.x)   result = vec2(dNodes, 4.0);
         return result;
     } else if (u.preset.x > 3.5) {
         // --- PRESET 4: SENSORIUM INTERFACE (MPlanetarian EARTH FLIPPER CELESTIAL GYROSCOPE) ---
@@ -2027,19 +2416,161 @@ vec3 renderCosmicBackground(vec3 rd, vec2 screenUv) {
             + vec3(0.902, 0.945, 0.820) * stars;
 
         return bgFinal;
-    } else if (u.preset.x > 4.5) {
+    } else if (u.preset.x > 7.5) {
+        // --- PRESET 8: COSMIC UNIVERSE (DEFASTEN CONSTELLATION BACKGROUND) ---
+        // 3D ray-projected cosmological deep space void, The Cosmological Horizon cover dispersion,
+        // stellar constellation networks, twinkling pulsar beacons, and cosmic dawn nebulae.
         float dynTime = (u.preset.w > 0.001) ? u.preset.w : t;
-        vec2 p3d = rd.xy / (abs(rd.z) + 0.11);
-        float angle = atan(p3d.y, p3d.x);
-        float fracture = abs(sin(angle * 18.0 + dynTime * 0.11 + bassPhase * 0.2));
-        float shards = smoothstep(0.92, 1.0, fracture) * (0.35 + 0.55 * treble);
-        float dust = pow(hash21(floor(p3d * 34.0 + dynTime * 0.08)), 24.0) * (1.0 + 2.0 * treble);
-        vec2 uv = p3d * 0.25 + 0.5 + 0.035 * vec2(sin(angle * 5.0 + dynTime * 0.2), cos(angle * 7.0 - dynTime * 0.17));
-        vec3 cover = texture(uCoverTex, mirrorUv(uv)).rgb;
-        vec3 pale = mix(vec3(0.72, 0.76, 0.84), vec3(0.94, 0.94, 0.98), 0.5 + 0.5 * sin(angle * 4.0 + dynTime * 0.12));
-        vec3 prism = vec3(0.10, 0.82, 0.92) * (0.5 + 0.5 * sin(angle * 9.0 - dynTime * 0.2))
-                   + vec3(0.95, 0.18, 0.62) * (0.5 + 0.5 * cos(angle * 7.0 + dynTime * 0.18));
-        return mix(pale, cover, 0.52) + prism * (0.12 + 0.28 * shards) + vec3(0.42, 0.48, 0.58) * dust;
+        vec2 p3d = rd.xy / (abs(rd.z) + 0.08);
+
+        vec2 waveUv = p3d * 0.28;
+        waveUv += vec2(
+            sin(p3d.y * 2.2 + dynTime * 0.20 + bassPhase * 0.15),
+            cos(p3d.x * 2.2 - dynTime * 0.18 + highPhase * 0.15)
+        ) * (0.028 + 0.020 * bass);
+
+        vec2 finalCoverUv = mix(mirrorUv(screenUv * 0.90 + 0.05), mirrorUv(waveUv + 0.5), 0.52);
+        float disp = 0.012 * (1.0 + 0.50 * beat);
+        vec3 coverTex;
+        coverTex.r = texture(uCoverTex, mirrorUv(finalCoverUv + rd.xy * disp)).r;
+        coverTex.g = texture(uCoverTex, mirrorUv(finalCoverUv)).g;
+        coverTex.b = texture(uCoverTex, mirrorUv(finalCoverUv - rd.xy * disp)).b;
+
+        vec3 colDeepSpace = mix(
+            vec3(0.008, 0.008, 0.025), // Cosmological Abyssal Black
+            vec3(0.035, 0.080, 0.160), // Deep Space Nebula Blue
+            clamp(length(rd.xy) * 0.75, 0.0, 1.0)
+        );
+
+        // Constellation star grid & pulsing stellar beacons
+        float star = pow(hash21(floor(p3d * 55.0)), 28.0) * (1.0 + 3.0 * treble);
+        vec3 colStars = vec3(0.98, 0.95, 1.00) * star;
+
+        // Nebular cloud glow
+        float neb = 0.5 + 0.5 * sin(atan(rd.y, rd.x) * 4.0 + length(rd.xy) * 4.5 - dynTime * 0.12);
+        vec3 colNeb = mix(vec3(0.22, 0.74, 0.97), vec3(0.98, 0.44, 0.52), neb);
+
+        vec3 bg = mix(colDeepSpace, coverTex, 0.46) + colNeb * 0.16 * (0.7 + 0.6 * mid) + colStars;
+        return bg;
+    } else if (u.preset.x > 6.5) {
+        // --- PRESET 7: PARTICLE ACCELERATOR (DEFASTEN TOROID BACKGROUND) ---
+        // Relativistic synchrotron vacuum chamber, Vortex Sync cover chromatic dispersion,
+        // high-velocity Cherenkov radiation aura, and electromagnetic ionization trails.
+        float dynTime = (u.preset.w > 0.001) ? u.preset.w : t;
+        vec2 p3d = rd.xy / (abs(rd.z) + 0.08);
+
+        vec2 waveUv = p3d * 0.40;
+        waveUv += vec2(
+            sin(p3d.y * 3.5 + dynTime * 0.45 + bassPhase * 0.35),
+            cos(p3d.x * 3.5 - dynTime * 0.40)
+        ) * (0.040 + 0.030 * bass);
+
+        vec2 finalCoverUv = mix(mirrorUv(screenUv * 0.92 + 0.04), mirrorUv(waveUv + 0.5), 0.55);
+        float disp = 0.016 * (1.0 + 0.75 * beat);
+        vec3 coverTex;
+        coverTex.r = texture(uCoverTex, mirrorUv(finalCoverUv + rd.xy * disp)).r;
+        coverTex.g = texture(uCoverTex, mirrorUv(finalCoverUv)).g;
+        coverTex.b = texture(uCoverTex, mirrorUv(finalCoverUv - rd.xy * disp)).b;
+
+        vec3 colHadronVoid = mix(
+            vec3(0.012, 0.015, 0.030), // Hadron Void
+            vec3(0.060, 0.020, 0.100), // Relativistic Plasma Violet
+            clamp(length(rd.xy) * 0.85, 0.0, 1.0)
+        );
+
+        // Cherenkov radiation aura
+        float cherenkov = 0.5 + 0.5 * sin(atan(rd.y, rd.x) * 6.0 + length(rd.xy) * 6.0 - dynTime * 0.30);
+        vec3 colCherenkov = mix(vec3(0.0, 0.82, 1.0), vec3(0.0, 1.0, 0.75), cherenkov);
+
+        // Ionization particle streaks
+        float streak = pow(hash21(floor(p3d * vec2(12.0, 60.0))), 24.0) * (1.0 + 2.5 * treble);
+        vec3 colStreaks = vec3(1.0, 0.0, 0.5) * streak;
+
+        vec3 bg = mix(colHadronVoid, coverTex, 0.48) + colCherenkov * 0.20 * (0.8 + 0.8 * bass) + colStreaks;
+        return bg;
+    } else if (u.preset.x > 5.5) {
+        // --- PRESET 6: BEYOND DIMENSIONS (DEFASTEN BEYOND BASEL BACKGROUND) ---
+        // Non-Euclidean 4D dimensional rift, Cotangent Dimensions cover chromatic dispersion,
+        // dimensional grid warping, ultraviolet auroral waves, and quantum fluctuation starlight.
+        float dynTime = (u.preset.w > 0.001) ? u.preset.w : t;
+        vec2 p3d = rd.xy / (abs(rd.z) + 0.08);
+
+        vec2 waveUv = p3d * 0.32;
+        waveUv += vec2(
+            sin(p3d.y * 3.0 + dynTime * 0.30 + bassPhase * 0.25),
+            cos(p3d.x * 3.0 - dynTime * 0.25 + highPhase * 0.20)
+        ) * (0.035 + 0.025 * bass);
+
+        vec2 finalCoverUv = mix(mirrorUv(screenUv * 0.92 + 0.04), mirrorUv(waveUv + 0.5), 0.56);
+        float disp = 0.015 * (1.0 + 0.60 * beat);
+        vec3 coverTex;
+        coverTex.r = texture(uCoverTex, mirrorUv(finalCoverUv + rd.xy * disp)).r;
+        coverTex.g = texture(uCoverTex, mirrorUv(finalCoverUv)).g;
+        coverTex.b = texture(uCoverTex, mirrorUv(finalCoverUv - rd.xy * disp)).b;
+
+        vec3 colDimVoid = mix(
+            vec3(0.018, 0.020, 0.055), // Interdimensional Void
+            vec3(0.080, 0.025, 0.150), // Hyperdimensional Ultraviolet
+            clamp(length(rd.xy) * 0.80, 0.0, 1.0)
+        );
+
+        // Dimensional rift auroral sheets
+        float rift = 0.5 + 0.5 * sin(atan(rd.y, rd.x) * 4.0 + length(rd.xy) * 5.0 - dynTime * 0.20);
+        vec3 colRift = mix(vec3(0.0, 0.96, 0.83), vec3(0.97, 0.15, 0.52), rift);
+
+        float star = pow(hash21(floor(p3d * 48.0)), 26.0) * (1.0 + 2.5 * treble);
+        vec3 colStars = vec3(0.94, 0.97, 1.00) * star;
+
+        vec3 bg = mix(colDimVoid, coverTex, 0.46) + colRift * 0.18 * (0.7 + 0.7 * mid) + colStars;
+        return bg;
+    } else if (u.preset.x > 4.5) {
+        // --- PRESET 6: STREAM OF FREQUENCY BACKGROUND ---
+        // A deep stream indigo void carrying the cover art as a slow horizontal
+        // spectrum wash, with FFT ripple bands rolling right-to-left and
+        // harmonic crystal starlight drifting through the field.
+        float dynTime = (u.preset.w > 0.001) ? u.preset.w : t;
+        vec2 p3d = rd.xy / (abs(rd.z) + 0.10);
+
+        // Spectrum wash scrolls right-to-left so the whole frame reads as a stream
+        vec2 waveUv = p3d * 0.30;
+        waveUv.x -= dynTime * 0.16;
+        waveUv += vec2(
+            sin(p3d.y * 2.6 + dynTime * 0.30 + bassPhase * 0.25),
+            cos(p3d.x * 2.2 - dynTime * 0.24 + highPhase * 0.18)
+        ) * (0.034 + 0.026 * bass);
+
+        vec2 finalCoverUv = mix(mirrorUv(screenUv * 0.90 + 0.05), mirrorUv(waveUv + 0.5), 0.54);
+        float disp = 0.014 * (1.0 + 0.60 * beat);
+        vec3 coverTex;
+        coverTex.r = texture(uCoverTex, mirrorUv(finalCoverUv + rd.xy * disp)).r;
+        coverTex.g = texture(uCoverTex, mirrorUv(finalCoverUv)).g;
+        coverTex.b = texture(uCoverTex, mirrorUv(finalCoverUv - rd.xy * disp)).b;
+        float lumaTex = dot(coverTex, vec3(0.299, 0.587, 0.114));
+        coverTex = clamp(mix(vec3(lumaTex), coverTex, 1.30), 0.0, 1.0);
+
+        vec3 colStreamVoid = mix(
+            vec3(0.070, 0.075, 0.235), // Deep Stream Indigo
+            vec3(0.010, 0.012, 0.045), // Stream abyss
+            clamp(length(rd.xy) * 0.80, 0.0, 1.0)
+        );
+
+        // Horizontal FFT ripple bands sweeping right-to-left across the void
+        float bands5 = 0.5 * (u.bands0.x + u.bands0.w)
+                     + 0.3 * u.bands1.y
+                     + 0.2 * (u.bands2.x + u.bands3.z);
+        float ripple = 0.5 + 0.5 * sin(p3d.y * 16.0 + dynTime * 1.35 + bands5 * 5.5);
+        ripple *= smoothstep(0.95, 0.15, abs(p3d.y));
+        vec3 colRipple = mix(vec3(0.000, 0.949, 1.000), vec3(0.298, 0.851, 0.482),
+                             0.5 + 0.5 * sin(dynTime * 0.5 + p3d.x * 3.0));
+
+        // Harmonic crystal starlight
+        float star = pow(hash21(floor(p3d * 52.0)), 27.0) * (1.0 + 2.6 * treble);
+        vec3 colStars = vec3(0.94, 0.97, 1.00) * star;
+
+        vec3 bg = mix(colStreamVoid, coverTex, 0.50)
+                + colRipple * ripple * 0.20 * (0.70 + 0.70 * mid)
+                + colStars;
+        return bg;
     } else if (u.preset.x > 3.5) {
         // --- PRESET 4: SENSORIUM INTERFACE (MPlanetarian EARTH FLIPPER CELESTIAL BACKGROUND) ---
         // 3D ray-projected celestial void with primordial liquidstream parallax,
@@ -2605,7 +3136,7 @@ void main() {
                 + rimColor * fresnel * (1.35 + 0.65 * rms)
                 + vec3(1.0, 0.98, 0.92) * spec1 * (1.6 + 0.9 * beat)
                 + rimLight2 * spec2 * 0.85;
-            if (u.preset.x > 4.5) {
+            if (u.preset.x > 4.5 && u.preset.x < 5.5) {
                 vec3 chrome = mix(vec3(0.48, 0.56, 0.68), vec3(0.96, 0.98, 1.0), 0.35 + 0.65 * diff1);
                 vec3 splitPrism = mix(vec3(0.03, 0.88, 1.0), vec3(1.0, 0.12, 0.62), 0.5 + 0.5 * sin(p.x * 5.0 + t * 0.25));
                 col = chrome * (0.42 + 0.48 * ao) + splitPrism * (0.32 + fresnel * 1.25)
@@ -2644,7 +3175,7 @@ void main() {
                     0.5 + 0.5 * ringWave
                 );
                 ringBase = mix(ringBase, vec3(0.996, 0.894, 0.251), smoothstep(0.35, 0.85, sin(p.x * 6.0 + t)));
-            } else if (u.preset.x > 4.5) {
+            } else if (u.preset.x > 4.5 && u.preset.x < 5.5) {
                 ringBase = mix(vec3(0.02, 0.82, 1.0), vec3(1.0, 0.10, 0.58), 0.5 + 0.5 * ringWave);
                 ringBase = mix(ringBase, vec3(0.94, 0.98, 1.0), smoothstep(0.25, 0.9, sin(p.x * 11.0 + t * 1.7)));
             } else if (u.preset.x > 3.5) {
@@ -2721,7 +3252,7 @@ void main() {
             col = mix(vec3(0.02, 0.03, 0.07), envRefl, 0.58 + 0.32 * fresnel) * ao
                 + edgeGlow * fresnel * (1.2 + 0.9 * treble)
                 + vec3(1.0) * spec * 1.35;
-            if (u.preset.x > 4.5) {
+            if (u.preset.x > 4.5 && u.preset.x < 5.5) {
                 float facetPulse = 0.5 + 0.5 * sin(dot(p, vec3(3.0, 5.0, 7.0)) + t * 0.6 + highPhase);
                 vec3 chromeFacet = mix(vec3(0.38, 0.45, 0.58), vec3(0.96, 0.98, 1.0), facetPulse);
                 col = chromeFacet * (0.5 + 0.5 * ao) + edgeGlow * (0.35 + 0.95 * fresnel)

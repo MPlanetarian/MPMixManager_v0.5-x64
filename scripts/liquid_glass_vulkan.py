@@ -1017,6 +1017,7 @@ class LiquidGlassRenderer:
                 64,
                 flush=lambda: self._x11.XFlush(self.x11_display()) if getattr(self, "_x11", None) and self.x11_display() else None,
                 title_contains=self.title,
+                window_size=self.window_size(),
             )
         self._apply_window_icon()
         self._bind_input()
@@ -1226,12 +1227,18 @@ class LiquidGlassRenderer:
             self._recreate_swapchain()
         if self.window_size() != self._shape_size:
             self._apply_shape()
-        visualizer = self._visualizer_state()
-        if visualizer is not None:
-            # The visualizer fills the window; the glass shader is skipped, the
-            # same way the OpenGL host returns straight after its frame.
-            self.sync_player_visualizer_opacity(True)
-            return self._render(capture, visualizer=visualizer)
+        # On Linux the MP Visualizer is a separate window bonded behind this
+        # one, so this host always draws its themed glass pane. It must not
+        # paint the visualizer inside the player: that replaced the glass with
+        # the raw scene and made the window look fully transparent. Platforms
+        # without a companion window still take the in-window path.
+        if not sys.platform.startswith("linux"):
+            visualizer = self._visualizer_state()
+            if visualizer is not None:
+                # The visualizer fills the window; the glass shader is skipped,
+                # the same way the OpenGL host returns after its frame.
+                self.sync_player_visualizer_opacity(True)
+                return self._render(capture, visualizer=visualizer)
         self.sync_player_visualizer_opacity(False)
         colors, effective_opacity, factor = get_dynamic_theme_state(theme_name, opacity)
         win = self.x11_window() if hasattr(self, "x11_window") else None
@@ -1262,7 +1269,16 @@ class LiquidGlassRenderer:
 
         Mirrors the OpenGL host API. The hooks are kept on the renderer so
         the player host can call one name on either backend.
+
+        On Linux the visualizer is a *separate* window bonded behind this one,
+        so this host must not also paint it inside the player. Doing so
+        replaced the themed glass pane with the raw scene, which is why the
+        player window looked entirely transparent with no theme colour on top
+        of the visualizer. Other platforms have no companion window, so they
+        still draw it in-window.
         """
+        if sys.platform.startswith("linux"):
+            return False
         if not getattr(self, "allow_player_visualizer", False):
             return False
         state = self._visualizer_state()
@@ -3118,9 +3134,11 @@ class VisualizerBackground:
         if key == self._tex_key:
             return
         try:
-            from mp_liquid_visualizer_vulkan import load_preset_cover_rgba, preset_by_id
+            from mp_liquid_visualizer_vulkan import load_preset_cover_rgba
+            from liquid_player_visualizer import preset_by_id
         except ImportError:
-            from scripts.mp_liquid_visualizer_vulkan import load_preset_cover_rgba, preset_by_id
+            from scripts.mp_liquid_visualizer_vulkan import load_preset_cover_rgba
+            from scripts.liquid_player_visualizer import preset_by_id
         preset = preset_by_id(int(state.get("preset_id") or 0)) or {
             "id": state.get("preset_id") or 0,
             "key": state.get("preset_key"),

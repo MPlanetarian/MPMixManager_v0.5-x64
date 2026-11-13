@@ -91,7 +91,8 @@ class StreamDeliveryTest(unittest.TestCase):
 
     def test_open_ended_range_emits_206_with_full_tail_length(self):
         handler = self._serve("bytes=9000-", None)
-        with mock.patch.object(mwc.os.path, "getsize", return_value=SIZE), \
+        with mock.patch.object(mwc, "is_streamable_file", return_value=True), \
+             mock.patch.object(mwc.os.path, "getsize", return_value=SIZE), \
              mock.patch("builtins.open", mock.mock_open(read_data=b"x" * SIZE)):
             handler._serve_audio_stream("/tmp/opencode/fake.wav")
         handler.send_response.assert_called_once_with(206)
@@ -101,7 +102,8 @@ class StreamDeliveryTest(unittest.TestCase):
 
     def test_whole_file_request_emits_200(self):
         handler = self._serve(None, None)
-        with mock.patch.object(mwc.os.path, "getsize", return_value=SIZE), \
+        with mock.patch.object(mwc, "is_streamable_file", return_value=True), \
+             mock.patch.object(mwc.os.path, "getsize", return_value=SIZE), \
              mock.patch("builtins.open", mock.mock_open(read_data=b"x" * SIZE)):
             handler._serve_audio_stream("/tmp/opencode/fake.wav")
         handler.send_response.assert_called_once_with(200)

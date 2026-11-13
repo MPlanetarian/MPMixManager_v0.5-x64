@@ -1,4 +1,39 @@
-# Core Python dependencies for MP_Mix_Manager_v0.5.0
-pillow>=10.0.0
-ultralytics>=8.0.0
+# ==============================================================================
+# MP Mix Manager v0.5.0 — Python runtime dependencies
+# ==============================================================================
+# scripts/mp_dependencies.py reads this list, compares it with what the current
+# interpreter can import, and installs whatever is missing (into the per-user
+# venv the launchers use). `pip install -r requirements.txt` still works for a
+# manual install.
+#
+# Anything that needs system headers (PyGObject) is not listed here: it has to
+# come from the operating system. mp_dependencies.py installs it with the
+# platform package manager and names the exact command when it cannot.
+#
+# Required: the four MP windows (Mix Manager, MP Gui, MP Liquid Player, MP
+# Liquid Visualizer) do not start without these.
+numpy>=1.21
+Pillow>=10.0.0
 sounddevice>=0.4.6
+PyOpenGL>=3.1.6
+
+# Optional: powers a secondary feature. mp_dependencies.py reports these and
+# installs them with --optional. The application degrades gracefully without
+# them; each line names the feature it enables.
+soundfile>=0.12.1      # exact mix durations (Web Companion, player)
+psutil>=5.9            # process/transfer monitors (menu 26)
+rich>=13.0             # colourised monitor output
+reportlab>=4.0         # PDF reports and the printed manual
+matplotlib>=3.7        # charts inside generated reports
+mutagen>=1.46          # metadata tagging when metaflac is absent
+pypdf>=3.9             # PDF merge for scheduled email reports (menu 28)
+yt-dlp>=2024.1.0       # YouTube channel downloads (menu 22)
+
+# The shared tray icon is a PySide6 widget. Linux distros package it as
+# python3-pyside6; pip is the fallback.
+PySide6>=6.5
+
+# Heavy optional extra: only used by the standalone people-detection helper
+# script, not by the application. It pulls in PyTorch (~2 GB), so it is
+# commented out and mp_dependencies.py installs it only with --optional.
+# ultralytics>=8.0.0

@@ -161,11 +161,51 @@ _mp_player_eq_field() {
 # Keep painted text on the header panel's right border. Wide glyphs take two
 # columns and colour sequences take none. A │ row gives up columns from its
 # widest field so the fields on the right stay visible.
+# Terminal display width of one painted line. Mirrors the awk glyph table in
+# _fit_block_to_panel: ANSI colour sequences take no columns, four-byte
+# characters and the listed CJK/emoji ranges take two, combining joiners take
+# none, everything else takes one. Used only to take the no-clip fast path.
+_disp_width() {
+  local s="$1" dest="$2" n="${#1}" i=0 ch cp w=0
+  while (( i < n )); do
+    ch="${s:i:1}"
+    if [[ "$ch" == $'\e' ]]; then
+      ((i++))
+      if (( i < n )) && [[ "${s:i:1}" == '[' ]]; then
+        ((i++))
+        while (( i < n )); do
+          ch="${s:i:1}"; ((i++))
+          [[ "$ch" == [@-~] ]] && break
+        done
+      fi
+      continue
+    fi
+    printf -v cp '%d' "'$ch" 2>/dev/null || cp=63
+    ((i++))
+    if (( cp >= 65536 )); then (( w += 2 ))
+    elif (( cp >= 2048 )); then
+      if (( cp == 65039 || cp == 65038 || cp == 8205 || cp == 8203 )); then :
+      elif (( (cp >= 4352 && cp <= 4447) || (cp >= 11904 && cp <= 42191) || (cp >= 44032 && cp <= 55203) || (cp >= 63744 && cp <= 64255) || (cp >= 65072 && cp <= 65103) || (cp >= 65281 && cp <= 65376) || (cp >= 65504 && cp <= 65510) || cp == 9889 || cp == 9200 || cp == 8986 || cp == 8987 || cp == 11088 )); then (( w += 2 ))
+      else (( w += 1 )); fi
+    else (( w += 1 )); fi
+  done
+  printf -v "$dest" '%s' "$w"
+}
 _fit_block_to_panel() {
-  local _dest="$1" _src="$2" _max="$3" _fitted=""
+  local _dest="$1" _src="$2" _max="$3" _fitted="" _expanded="" _line _w _fits=1
   [[ "${_max}" =~ ^[0-9]+$ ]] || _max=118
   (( _max < 4 )) && _max=4
   if [ -z "${_src}" ]; then printf -v "${_dest}" '%s' ""; return 0; fi
+  # Fast path: the awk filter only rewrites lines wider than max. If every
+  # expanded line already fits, return the expansion untouched and skip the
+  # awk process entirely (the common case for the main header every second).
+  printf -v _expanded '%b' "${_src}"
+  while [[ "$_expanded" == *$'\n' ]]; do _expanded="${_expanded%$'\n'}"; done
+  while IFS= read -r _line; do
+    _disp_width "$_line" _w
+    (( _w > _max )) && { _fits=0; break; }
+  done <<< "$_expanded"
+  if (( _fits )); then printf -v "${_dest}" '%s' "${_expanded}"; return 0; fi
   _fitted=$(printf '%b\n' "${_src}" | LC_ALL=C awk -v max="${_max}" '
     # Fit each line to max display columns. LC_ALL=C so substr() is bytes.
     # A line with │ separators loses columns from its widest field, so the
@@ -393,6 +433,8 @@ cosmic_supernova|supernova|cosmic|cosmic_supernova_mp_mix_manager|"Cosmic Supern
 RED='\033[38;2;255;51;102m'; GREEN='\033[38;2;0;245;212m'; YELLOW='\033[38;2;254;228;64m'; BLUE='\033[38;2;94;96;206m'; MAGENTA='\033[38;2;224;86;253m'; CYAN='\033[38;2;76;201;240m'; CURRENT_THEME="cosmic_supernova" ;;
 retro_linux_memories|retro_linux|linux_memories|retro-linux-memories|retro-linux|linux|veracrypt|retrolinux|charcoal_vault|charcoal|veracrypt_dark|vault|dark_vault|"Retro Linux Memories"|"Retro Linux Memories [GTK / VeraCrypt Dark Slate]"|"Charcoal Vault"|"Charcoal Vault (VeraCrypt Dark)")
 RED='\033[38;2;217;83;79m'; GREEN='\033[38;2;92;184;92m'; YELLOW='\033[38;2;240;173;78m'; BLUE='\033[38;2;21;83;158m'; MAGENTA='\033[38;2;145;145;144m'; CYAN='\033[38;2;91;134;187m'; CURRENT_THEME="retro_linux_memories" ;;
+into_darkness_void_out|into_darkness|"Into Darkness (Void Out)"|"Into Darkness"|"Void Out")
+RED='\033[38;2;200;200;200m'; GREEN='\033[38;2;200;200;200m'; YELLOW='\033[1;37m'; BLUE='\033[38;2;72;72;72m'; MAGENTA='\033[38;2;200;200;200m'; CYAN='\033[1;37m'; CURRENT_THEME="into_darkness_void_out" ;;
 retro_terminal|unix_terminal|retro_unix|old_style_unix|unix_retro|white_on_black|retro|terminal|vt100|"Old Style Unix Terminal Retro Mode (White on Black)"|"Old Style Unix Terminal Retro Mode"|"Old Style Unix Terminal")
 RED='\033[1;37m' GREEN='\033[1;37m' YELLOW='\033[1;37m'; BLUE='\033[0;37m' MAGENTA='\033[1;37m' CYAN='\033[1;37m'; CURRENT_THEME="retro_terminal" ;; dracula|dreamworlds_neon) RED='\033[38;5;212m' GREEN='\033[38;5;84m' YELLOW='\033[38;5;228m'; BLUE='\033[38;5;62m' MAGENTA='\033[38;5;141m' CYAN='\033[38;5;117m'; CURRENT_THEME="dracula" ;; nord|ice_cold) RED='\033[38;5;167m' GREEN='\033[38;5;108m' YELLOW='\033[38;5;221m'; BLUE='\033[38;5;110m' MAGENTA='\033[38;5;139m' CYAN='\033[38;5;117m'; CURRENT_THEME="nord" ;; matrix|phosphor) RED='\033[38;5;124m' GREEN='\033[38;5;46m' YELLOW='\033[38;5;190m'; BLUE='\033[38;5;29m' MAGENTA='\033[38;5;35m' CYAN='\033[38;5;120m'; CURRENT_THEME="matrix" ;; solarized) RED='\033[38;5;166m' GREEN='\033[38;5;64m' YELLOW='\033[38;5;136m'; BLUE='\033[38;5;33m' MAGENTA='\033[38;5;125m' CYAN='\033[38;5;37m'; CURRENT_THEME="solarized" ;; tokyo) RED='\033[38;5;203m' GREEN='\033[38;5;114m' YELLOW='\033[38;5;222m'; BLUE='\033[38;5;111m' MAGENTA='\033[38;5;176m' CYAN='\033[38;5;73m'; CURRENT_THEME="tokyo" ;; monokai) RED='\033[38;5;197m' GREEN='\033[38;5;148m' YELLOW='\033[38;5;220m'; BLUE='\033[38;5;141m' MAGENTA='\033[38;5;208m' CYAN='\033[38;5;81m'; CURRENT_THEME="monokai" ;; gruvbox|retro_studio) RED='\033[38;5;167m' GREEN='\033[38;5;142m' YELLOW='\033[38;5;214m'; BLUE='\033[38;5;109m' MAGENTA='\033[38;5;175m' CYAN='\033[38;5;108m'; CURRENT_THEME="gruvbox" ;; emerald) RED='\033[38;5;204m' GREEN='\033[38;5;48m' YELLOW='\033[38;5;221m'; BLUE='\033[38;5;31m' MAGENTA='\033[38;5;78m' CYAN='\033[38;5;86m'; CURRENT_THEME="emerald" ;; classic) RED='\033[0;31m' GREEN='\033[0;32m' YELLOW='\033[0;33m'; BLUE='\033[0;34m' MAGENTA='\033[0;35m' CYAN='\033[0;36m'; CURRENT_THEME="classic" ;; cyberpunk|cyber_neon|*) RED='\033[38;5;196m' GREEN='\033[38;5;48m' YELLOW='\033[38;5;226m'; BLUE='\033[38;5;45m' MAGENTA='\033[38;5;198m' CYAN='\033[38;5;51m'; CURRENT_THEME="cyberpunk" ;; esac
 # Bracketed menu numbers [ 0]. Each theme keeps its own hue. The shared
@@ -411,6 +453,7 @@ ultra|dreamworlds_ultra_mp_mix_manager|dreamworlds_ultra|"Dreamworlds Ultra MP M
 supernova|cosmic|cosmic_supernova_mp_mix_manager|cosmic_supernova|"Cosmic Supernova"|"Cosmic Supernova MP Mix Manager"|"Cosmic Supernova [Special]"|"Cosmic Supernova [Special Edition]") _menu_id=cosmic_supernova ;;
 retro_linux|linux_memories|retro-linux-memories|retro-linux|linux|veracrypt|retrolinux|charcoal_vault|charcoal|veracrypt_dark|vault|dark_vault|retro_linux_memories|"Retro Linux Memories"|"Retro Linux Memories [GTK / VeraCrypt Dark Slate]"|"Charcoal Vault"|"Charcoal Vault (VeraCrypt Dark)") _menu_id=retro_linux_memories ;;
 unix_terminal|retro_unix|old_style_unix|unix_retro|white_on_black|retro|terminal|vt100|retro_terminal|"Old Style Unix Terminal"|"Old Style Unix Terminal Retro Mode"|"Old Style Unix Terminal Retro Mode (White on Black)") _menu_id=retro_terminal ;;
+into_darkness|void_out|into_darkness_void_out|"Into Darkness (Void Out)"|"Into Darkness"|"Void Out") _menu_id=into_darkness_void_out ;;
 dreamworlds_neon) _menu_id=dreamworlds_neon ;;
 ice_cold) _menu_id=ice_cold ;;
 phosphor) _menu_id=phosphor ;;
@@ -444,6 +487,7 @@ cosmic_dreamworlds) _mr=255; _mg=20; _mb=183 ;;
 orbital_void_reflux) _mr=56; _mg=20; _mb=255 ;;
 sensorium_interface) _mr=111; _mg=20; _mb=255 ;;
 retro_linux_memories) _mr=255; _mg=183; _mb=20 ;;
+into_darkness_void_out) _mr=255; _mg=255; _mb=255 ;;
 dreamworlds) _mr=46; _mg=107; _mb=255 ;;
 cyberpunk) _mr=200; _mg=0; _mb=180 ;;
 dracula) _mr=255; _mg=20; _mb=75 ;;
@@ -458,6 +502,43 @@ classic) _mr=230; _mg=200; _mb=80 ;;
 esac
 MENU_NUM="$(printf '\033[38;2;%s;%s;%sm' "$_mr" "$_mg" "$_mb")"
 MENU_NUM_R="$_mr"; MENU_NUM_G="$_mg"; MENU_NUM_B="$_mb"
+# Navigation bar fill. MP Audio Player paints the selected playlist row with
+# the theme's highlight hue (MP_Audio_Player._THEME_PALETTES), so the manager's
+# selected menu row uses the very same RGB. One table and one colour: pressing
+# C in either window lands on the same theme and the bar looks identical in
+# both. The [numbers] keep their own MENU_NUM accent above.
+case "$_menu_id" in
+stream_of_frequency) SEL_BAR_R=0; SEL_BAR_G=242; SEL_BAR_B=255 ;;
+dreamworlds_ultra) SEL_BAR_R=166; SEL_BAR_G=77; SEL_BAR_B=255 ;;
+dynamic_rainbow_liquid_glass) SEL_BAR_R=176; SEL_BAR_G=88; SEL_BAR_B=255 ;;
+cosmic_supernova) SEL_BAR_R=224; SEL_BAR_G=86; SEL_BAR_B=253 ;;
+dreamworlds_liquid) SEL_BAR_R=0; SEL_BAR_G=245; SEL_BAR_B=255 ;;
+dreamworlds_neon) SEL_BAR_R=0; SEL_BAR_G=229; SEL_BAR_B=255 ;;
+retro_studio) SEL_BAR_R=241; SEL_BAR_G=196; SEL_BAR_B=15 ;;
+cyber_neon) SEL_BAR_R=76; SEL_BAR_G=201; SEL_BAR_B=240 ;;
+phosphor) SEL_BAR_R=57; SEL_BAR_G=255; SEL_BAR_B=20 ;;
+ice_cold) SEL_BAR_R=0; SEL_BAR_G=229; SEL_BAR_B=255 ;;
+retro_terminal) SEL_BAR_R=255; SEL_BAR_G=255; SEL_BAR_B=255 ;;
+cosmic_dreamworlds_radioactive) SEL_BAR_R=57; SEL_BAR_G=255; SEL_BAR_B=20 ;;
+cosmic_dreamworlds) SEL_BAR_R=232; SEL_BAR_G=13; SEL_BAR_B=104 ;;
+orbital_void_reflux) SEL_BAR_R=0; SEL_BAR_G=240; SEL_BAR_B=255 ;;
+sensorium_interface) SEL_BAR_R=0; SEL_BAR_G=245; SEL_BAR_B=255 ;;
+retro_linux_memories) SEL_BAR_R=91; SEL_BAR_G=134; SEL_BAR_B=187 ;;
+into_darkness_void_out) SEL_BAR_R=255; SEL_BAR_G=255; SEL_BAR_B=255 ;;
+dreamworlds) SEL_BAR_R=166; SEL_BAR_G=77; SEL_BAR_B=255 ;;
+cyberpunk) SEL_BAR_R=76; SEL_BAR_G=201; SEL_BAR_B=240 ;;
+dracula) SEL_BAR_R=0; SEL_BAR_G=229; SEL_BAR_B=255 ;;
+nord) SEL_BAR_R=0; SEL_BAR_G=229; SEL_BAR_B=255 ;;
+matrix) SEL_BAR_R=57; SEL_BAR_G=255; SEL_BAR_B=20 ;;
+gruvbox) SEL_BAR_R=241; SEL_BAR_G=196; SEL_BAR_B=15 ;;
+classic) SEL_BAR_R=255; SEL_BAR_G=255; SEL_BAR_B=255 ;;
+*) SEL_BAR_R=166; SEL_BAR_G=77; SEL_BAR_B=255 ;;
+esac
+SEL_BAR="$(printf '\033[48;2;%s;%s;%sm' "$SEL_BAR_R" "$SEL_BAR_G" "$SEL_BAR_B")"
+# Black text on light fills, white on dark, the same luminance rule the player
+# uses. Computed from the unbreathing colour so idle breathing cannot flicker.
+SEL_BAR_LUM=$(( (SEL_BAR_R * 299 + SEL_BAR_G * 587 + SEL_BAR_B * 114) / 1000 ))
+if [ "$SEL_BAR_LUM" -ge 140 ]; then SEL_BAR_FG="\033[1;38;2;0;0;0m"; else SEL_BAR_FG="\033[1;38;2;255;255;255m"; fi
 # Dark pane for the CLI console. Keyed on _menu_id so aliases that share
 # CURRENT_THEME (dreamworlds_neon / dracula, phosphor / matrix) still change
 # the background when the menu cycles. Kept dark so the existing light text
@@ -479,6 +560,7 @@ cosmic_dreamworlds) THEME_BG_R=40; THEME_BG_G=6; THEME_BG_B=32 ;;
 orbital_void_reflux) THEME_BG_R=10; THEME_BG_G=6; THEME_BG_B=40 ;;
 sensorium_interface) THEME_BG_R=28; THEME_BG_G=8; THEME_BG_B=36 ;;
 retro_linux_memories) THEME_BG_R=26; THEME_BG_G=30; THEME_BG_B=33 ;;
+into_darkness_void_out) THEME_BG_R=0; THEME_BG_G=0; THEME_BG_B=0 ;;
 dreamworlds) THEME_BG_R=0; THEME_BG_G=0; THEME_BG_B=0 ;;
 cyberpunk) THEME_BG_R=18; THEME_BG_G=4; THEME_BG_B=28 ;;
 dracula) THEME_BG_R=40; THEME_BG_G=42; THEME_BG_B=54 ;;
@@ -492,7 +574,7 @@ emerald) THEME_BG_R=4; THEME_BG_G=32; THEME_BG_B=22 ;;
 classic) THEME_BG_R=0; THEME_BG_G=0; THEME_BG_B=48 ;;
 *) THEME_BG_R=12; THEME_BG_G=12; THEME_BG_B=20 ;;
 esac
-export CURRENT_THEME MENU_NUM MENU_NUM_R MENU_NUM_G MENU_NUM_B THEME_BG_R THEME_BG_G THEME_BG_B
+export CURRENT_THEME MENU_NUM MENU_NUM_R MENU_NUM_G MENU_NUM_B THEME_BG_R THEME_BG_G THEME_BG_B SEL_BAR SEL_BAR_R SEL_BAR_G SEL_BAR_B SEL_BAR_FG
 }
 play_sound_effect() {
 local sound_type="${1:-storage}" sound_file=""; if [[ "$sound_type" == "dreamworlds" || "$sound_type" == "theme" ]]; then for cand in /usr/share/sounds/Oxygen-Sys-Special.ogg /usr/share/sounds/oxygen/stereo/dialog-special.ogg /usr/share/sounds/ocean/stereo/theme-demo.oga /usr/share/sounds/ocean/stereo/desktop-login.oga /usr/share/sounds/freedesktop/stereo/service-login.oga; do [[ -f "$cand" ]] && { sound_file="$cand"; break; }; done; elif [[ "$sound_type" == "storage" ]]; then for cand in /usr/share/sounds/ocean/stereo/device-added.oga /usr/share/sounds/freedesktop/stereo/device-added.oga /usr/share/sounds/Oxygen-Sys-App-Positive.ogg /usr/share/sounds/ocean/stereo/completion-success.oga; do [[ -f "$cand" ]] && { sound_file="$cand"; break; }; done; fi; if [[ -n "$sound_file" ]]; then for player in pw-play paplay canberra-gtk-play aplay; do if command -v "$player" &>/dev/null; then "$player" "$sound_file" &>/dev/null & break; fi; done; fi
@@ -746,22 +828,19 @@ read_nav_key() {
 }
 highlight_menu_line() {
 local key="$1" label="$2" extra="$3" color_idx="${4:-0}" _out_var="$5" box_width="${6:-74}" breath_factor="${7:-100}"
-local c_mod=$(( (color_idx % 4 + 4) % 4 ))
 local base_r base_g base_b
-if [ -n "${MENU_NUM_R:-}" ]; then
-    case "$c_mod" in
-        1) base_r=$(( MENU_NUM_R + (255 - MENU_NUM_R) * 28 / 100 )); base_g=$(( MENU_NUM_G + (255 - MENU_NUM_G) * 28 / 100 )); base_b=$(( MENU_NUM_B + (255 - MENU_NUM_B) * 28 / 100 )) ;;
-        2) base_r=$(( MENU_NUM_R * 72 / 100 )); base_g=$(( MENU_NUM_G * 72 / 100 )); base_b=$(( MENU_NUM_B * 72 / 100 )) ;;
-        3) base_r=$(( MENU_NUM_R + (255 - MENU_NUM_R) * 48 / 100 )); base_g=$(( MENU_NUM_G + (255 - MENU_NUM_G) * 48 / 100 )); base_b=$(( MENU_NUM_B + (255 - MENU_NUM_B) * 48 / 100 )) ;;
-        *) base_r=$MENU_NUM_R; base_g=$MENU_NUM_G; base_b=$MENU_NUM_B ;;
-    esac
+# The fill is the shared navigation-bar hue. set_theme_colors publishes the
+# same RGB that MP Audio Player uses for its playlist selection
+# (_THEME_PALETTES[theme]["highlight"]), so the bar looks the same in MP Gui
+# and MP Liquid Player. Every row shares that one colour; the row index used
+# to shade it differently per row, which made the bar change colour as the
+# user moved down a menu inside a single theme.
+if [ -n "${SEL_BAR_R:-}" ]; then
+    base_r=$SEL_BAR_R; base_g=$SEL_BAR_G; base_b=$SEL_BAR_B
+elif [ -n "${MENU_NUM_R:-}" ]; then
+    base_r=$MENU_NUM_R; base_g=$MENU_NUM_G; base_b=$MENU_NUM_B
 else
-    case "$c_mod" in
-        0) base_r=247; base_g=37; base_b=133 ;;
-        1) base_r=0; base_g=229; base_b=255 ;;
-        2) base_r=255; base_g=140; base_b=0 ;;
-        3) base_r=88; base_g=98; base_b=118 ;;
-    esac
+    base_r=247; base_g=37; base_b=133
 fi
 local bf="${breath_factor:-100}"
 [ "$bf" -lt 15 ] && bf=15
@@ -1114,6 +1193,18 @@ TICK)
     fi
     if [ "$_now_s" != "${_LAST_MENU_TICK_S:-}" ]; then 
         _LAST_MENU_TICK_S="$_now_s"
+        # Follow a theme change made in MP Liquid Player. Its C key writes the
+        # shared theme file; without this the open MP Gui kept its old palette
+        # until the menu was reopened.
+        local _now_stamp; _now_stamp="$(_theme_file_stamp)"
+        if [ "$_now_stamp" != "${_LAST_THEME_STAMP:-}" ]; then
+            _LAST_THEME_STAMP="$_now_stamp"
+            if sync_theme_from_file; then
+                last_term_lines=0
+                _last_menu_frame=""
+                _MENU_FRAME_FRESH=0
+            fi
+        fi
         update_terminal_geometry 0
         if [ -z "$menu_title" ]; then 
             load_header_cache 2>/dev/null || true
@@ -1146,6 +1237,11 @@ if [ -f "$theme_file" ]; then
 fi
 [ -n "$saved_theme" ] || saved_theme="dreamworlds"
 set_theme_colors "$saved_theme"
+# Nothing has to be re-applied on the first menu tick: this is the value that
+# is already on screen, and the stamp in the same moment keeps the watcher
+# quiet until the file actually changes.
+_LAST_THEME_APPLIED="$saved_theme"
+_LAST_THEME_STAMP="$(_theme_file_stamp)"
 # Konsole's scheme reset clears OSC 11. Paint the theme pane after that.
 _ensure_konsole_default_scheme
 _apply_cli_theme_background
@@ -1161,6 +1257,36 @@ if [ -n "$KONSOLE_VERSION" ] || [ -n "$KONSOLE_DBUS_SERVICE" ]; then
     fi
     printf '\033]50;ColorScheme=%s\a\033]111\007\033]110\007' "${def_scheme:-WhiteOnBlack}" 2>/dev/null || true
 fi
+}
+# MP Gui and MP Liquid Player share ~/.config/mix-manager/theme. Pressing C in
+# either window rewrites it, and the other window has to follow without a
+# restart. _theme_file_stamp checksums the file: mtime alone is not enough
+# because two theme names of equal length written in the same second (for
+# example dreamworlds_ultra and cosmic_supernova) share both size and mtime.
+# cksum is one short POSIX process on a one-line file, run once per menu tick.
+_theme_file_stamp() {
+local _tf="$HOME/.config/mix-manager/theme"
+[ -f "$_tf" ] || { printf '%s' ""; return 0; }
+cksum < "$_tf" 2>/dev/null || printf '%s' ""
+}
+_theme_file_name() {
+local _tf="$HOME/.config/mix-manager/theme"
+[ -f "$_tf" ] && tr -d ' \t\n\r' < "$_tf" 2>/dev/null || printf '%s' ""
+}
+sync_theme_from_file() {
+# _LAST_THEME_APPLIED remembers the file value already on screen. The
+# signature compares the palette that actually got painted (not the raw name),
+# so an alias the other window wrote (dracula vs dreamworlds_neon) cannot cause
+# a repaint on every tick while a real change always lands.
+local _saved _before="${MENU_NUM:-}|${SEL_BAR:-}|${THEME_BG_R:-},${THEME_BG_G:-},${THEME_BG_B:-}"
+_saved="$(_theme_file_name)"
+[ -n "$_saved" ] || return 1
+[ "$_saved" = "${_LAST_THEME_APPLIED:-}" ] && return 1
+_LAST_THEME_APPLIED="$_saved"
+set_theme_colors "$_saved"
+[ "$_before" = "${MENU_NUM:-}|${SEL_BAR:-}|${THEME_BG_R:-},${THEME_BG_G:-},${THEME_BG_B:-}" ] && return 1
+_apply_cli_theme_background
+return 0
 }
 # OSC 11 is the common background control. Windows Terminal, iTerm, xterm,
 # VTE, Konsole, and kitty honour it. Terminal.app does not, so macOS Terminal
@@ -1343,7 +1469,12 @@ _restore_cli_theme_background() {
     _apply_macos_terminal_background 0 0 0 restore
 }
 save_theme() {
-local new_theme="$1"; mkdir -p "$HOME/.config/mix-manager" 2>/dev/null; echo "$new_theme" > "$HOME/.config/mix-manager/theme" 2>/dev/null; set_theme_colors "$new_theme"; if [ "$new_theme" = "stream_of_frequency" ]; then echo "stream_of_frequency_eq" > "$HOME/.config/mix-manager/eq_style" 2>/dev/null || true; elif [ "$new_theme" = "sensorium_interface" ]; then echo "sensorium_interface" > "$HOME/.config/mix-manager/visualizer_preset" 2>/dev/null || true; echo "Sensorium Interface" > "$HOME/.config/mix-manager/eq_preset" 2>/dev/null || true; fi; if [ "$new_theme" = "dreamworlds" ] || [ "$new_theme" = "mplanetarian_dreamworlds" ] || [ "$new_theme" = "default" ] || [ "$new_theme" = "dreamworlds_ultra" ] || [ "$new_theme" = "cosmic_supernova" ] || [ "$new_theme" = "dreamworlds_liquid" ] || [ "$new_theme" = "dynamic_rainbow_liquid_glass" ] || [ "$new_theme" = "stream_of_frequency" ] || [ "$new_theme" = "sensorium_interface" ] || [ "$new_theme" = "retro_linux_memories" ]; then play_sound_effect "dreamworlds"; fi; _sync_btop_theme "$new_theme"; _apply_cli_theme_background
+local new_theme="$1"; mkdir -p "$HOME/.config/mix-manager" 2>/dev/null; echo "$new_theme" > "$HOME/.config/mix-manager/theme" 2>/dev/null; set_theme_colors "$new_theme"
+# We just painted this value, so the watcher must not treat our own write as
+# an external change on the next tick.
+_LAST_THEME_APPLIED="$new_theme"
+_LAST_THEME_STAMP="$(_theme_file_stamp)"
+if [ "$new_theme" = "stream_of_frequency" ]; then echo "stream_of_frequency_eq" > "$HOME/.config/mix-manager/eq_style" 2>/dev/null || true; elif [ "$new_theme" = "sensorium_interface" ]; then echo "sensorium_interface" > "$HOME/.config/mix-manager/visualizer_preset" 2>/dev/null || true; echo "Sensorium Interface" > "$HOME/.config/mix-manager/eq_preset" 2>/dev/null || true; fi; if [ "$new_theme" = "dreamworlds" ] || [ "$new_theme" = "mplanetarian_dreamworlds" ] || [ "$new_theme" = "default" ] || [ "$new_theme" = "dreamworlds_ultra" ] || [ "$new_theme" = "cosmic_supernova" ] || [ "$new_theme" = "dreamworlds_liquid" ] || [ "$new_theme" = "dynamic_rainbow_liquid_glass" ] || [ "$new_theme" = "stream_of_frequency" ] || [ "$new_theme" = "sensorium_interface" ] || [ "$new_theme" = "retro_linux_memories" ]; then play_sound_effect "dreamworlds"; fi; _sync_btop_theme "$new_theme"; _apply_cli_theme_background
 }
 # Same order as MP Audio Player's C key. Names are the ones the liquid-glass
 # window reads from ~/.config/mix-manager/theme. Manager names such as dracula
@@ -1366,6 +1497,7 @@ local -a _cycle=(
     orbital_void_reflux
     sensorium_interface
     retro_linux_memories
+    into_darkness_void_out
 )
 local cur="${CURRENT_THEME:-}"
 case "$cur" in

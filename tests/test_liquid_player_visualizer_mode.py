@@ -843,6 +843,107 @@ def compile_visualizer_shader(state_path: str) -> int:
         glfw.glfwTerminate()
 
 
+class TestStandaloneVisualizerPresentation(unittest.TestCase):
+    """The standalone visualizer window must be colourful, movable and driven by keys.
+
+    Regression, reported from the desktop shortcut: the window opened washed
+    out to grey, could not be dragged, and number keys 1-9 did nothing.
+    """
+
+    def test_standalone_draw_disables_the_terminal_text_guard(self):
+        """The guard dims the scene for terminal text; a standalone window has none.
+
+        It was hard-coded on, which is what turned the whole picture grey.
+        """
+        src = (SCRIPTS / "liquid_player_visualizer.py").read_text(encoding="utf-8")
+        # The layer must take the guard as a parameter...
+        self.assertIn("def _draw_scene(", src)
+        self.assertIn("text_guard", src)
+        self.assertIn('GL.glUniform1f(guard, 1.0 if text_guard else 0.0)', src)
+        # ...and the standalone renderer must pass False.
+        self.assertIn("text_guard=False", src)
+        # The hard-coded value that caused the wash must be gone.
+        self.assertNotIn("GL.glUniform1f(guard, 1.0)\n", src)
+
+    def test_text_guard_still_defaults_on_for_the_in_player_overlay(self):
+        """The player draws terminal text over the scene, so it keeps the guard."""
+        layer = vis.PlayerVisualizerLayer()
+        state = {"active": True, "preset_id": 0, "preset_key": "cosmic_dreamworlds_liquid"}
+        seen = {}
+        with patch.object(layer, "_draw", side_effect=lambda *a, **k: seen.update(k) or True) as draw:
+            self.assertTrue(layer.draw_with_state(object(), 64, 64, state))
+        self.assertIs(seen.get("text_guard"), True)
+        draw.assert_called_once()
+
+    def test_standalone_accepts_text_guard_false(self):
+        layer = vis.PlayerVisualizerLayer()
+        state = {"active": True, "preset_id": 0}
+        seen = {}
+        with patch.object(layer, "_draw", side_effect=lambda *a, **k: seen.update(k) or True):
+            self.assertTrue(layer.draw_with_state(object(), 64, 64, state, text_guard=False))
+        self.assertIs(seen.get("text_guard"), False)
+
+    def test_number_keys_reach_the_preset_switch(self):
+        """GLFW key codes 1-9 (49..57) must select that keyboard slot."""
+        renderer = vis.LiquidVisualizerOpenGLRenderer()
+        slots = vulkan_vis.presets_by_slot()
+        self.assertGreaterEqual(len(slots), 9)
+        for slot_index in range(9):
+            renderer._on_key(None, 49 + slot_index, 0, 1, 0)
+            self.assertEqual(renderer.preset["name"], slots[slot_index]["name"],
+                             f"key {slot_index + 1} did not select slot {slot_index + 1}")
+
+    def test_drag_state_is_initialised(self):
+        """The window must have drag state, or a press cannot start a drag."""
+        renderer = vis.LiquidVisualizerOpenGLRenderer()
+        for attr in ("_drag_active", "_drag_origin", "_drag_press_screen", "mouse_down"):
+            self.assertTrue(hasattr(renderer, attr), f"missing {attr}")
+        self.assertFalse(renderer._drag_active)
+
+    def test_left_press_starts_a_drag_and_motion_moves_the_window(self):
+        """Press, move and release must translate the window, not ignore it."""
+        renderer = vis.LiquidVisualizerOpenGLRenderer()
+        renderer.is_fullscreen = False
+        renderer.screensaver = False
+        renderer._cur_pos = (400, 300)
+        renderer._drag_active = False
+        renderer._last_click_at = 0.0
+        renderer._last_click_pos = None
+        renderer.set_window_pos = MagicMock()
+        renderer.root_pointer = MagicMock(return_value=(1000, 500))
+
+        renderer._on_mouse(None, 0, 1, 0)          # GLFW_PRESS, left button
+        self.assertTrue(renderer._drag_active)
+        self.assertTrue(renderer.mouse_down)
+        self.assertEqual(renderer._drag_press_screen, (1000, 500))
+        self.assertEqual(renderer._drag_origin, (400, 300))
+
+        # Pointer moves up-left; the cursor callback drives the window.
+        renderer.root_pointer = MagicMock(return_value=(880, 430))
+        renderer._on_cursor(None, 5.0, 5.0)
+        renderer.set_window_pos.assert_called_once_with(400 - 120, 300 - 70)
+
+        renderer._on_mouse(None, 0, 0, 0)          # release
+        self.assertFalse(renderer._drag_active)
+
+    def test_fullscreen_window_does_not_start_a_drag(self):
+        renderer = vis.LiquidVisualizerOpenGLRenderer()
+        renderer.is_fullscreen = True
+        renderer.screensaver = False
+        renderer._drag_active = False
+        renderer._last_click_at = 0.0
+        renderer._last_click_pos = None
+        renderer.root_pointer = MagicMock(return_value=(10, 20))
+        renderer._on_mouse(None, 0, 1, 0)
+        self.assertFalse(renderer._drag_active)
+
+    def test_glfw_is_pinned_to_x11_on_linux(self):
+        """A Wayland GLFW window has no X11 handle, so it cannot be placed or moved."""
+        src = (SCRIPTS / "liquid_player_visualizer.py").read_text(encoding="utf-8")
+        self.assertIn("glfwInitHint(GLFW_PLATFORM, GLFW_PLATFORM_X11)", src)
+        self.assertIn('os.environ.setdefault("PYOPENGL_PLATFORM", "glx")', src)
+
+
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "--compile-shader":
         raise SystemExit(compile_visualizer_shader(sys.argv[2] if len(sys.argv) > 2 else ""))

@@ -609,9 +609,19 @@ def _remove_stale(directory: Path) -> None:
 
 def _write_text(path: Path, content: str, executable: bool = False) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content, encoding="utf-8", newline="\n")
+    _write_text_newline(path, content, "\n")
     if executable:
         path.chmod(0o755)
+
+
+def _write_text_newline(path: Path, content: str, newline: str) -> None:
+    """Write with an explicit newline.
+
+    Path.write_text(newline=...) only exists from Python 3.10, and macOS still
+    ships 3.9 as /usr/bin/python3, so the installer crashed on the Mac here.
+    """
+    with open(path, "w", encoding="utf-8", newline=newline) as handle:
+        handle.write(content)
 
 
 def _trust_desktop_file(path: Path) -> None:
@@ -719,7 +729,7 @@ def windows_link_target(name: str, spec: dict, root: Path, launcher_dir: Path) -
         return Path(bat), ""
     cmd = launcher_dir / f"{name}.cmd"
     cmd.parent.mkdir(parents=True, exist_ok=True)
-    cmd.write_text(windows_launcher_cmd(name, spec, root), encoding="utf-8", newline="\r\n")
+    _write_text_newline(cmd, windows_launcher_cmd(name, spec, root), "\r\n")
     return cmd, ""
 
 

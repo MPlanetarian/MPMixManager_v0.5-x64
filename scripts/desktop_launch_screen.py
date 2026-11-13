@@ -27,6 +27,11 @@ _WORKAREA_RE = re.compile(r"=\s*(-?\d+),\s*(-?\d+),\s*(-?\d+),\s*(-?\d+)")
 _XWIN_X_RE = re.compile(r"Absolute upper-left X:\s*(-?\d+)")
 _XWIN_Y_RE = re.compile(r"Absolute upper-left Y:\s*(-?\d+)")
 
+# Height of the Plasma panel along the bottom of the primary screen, in KWin
+# logical units. A window centred inside the full monitor rect would have its
+# lower edge under the panel, so centring uses the area above it.
+PANEL_INSET = 56
+
 
 def is_hisense_name(name: str) -> bool:
     label = (name or "").upper()
@@ -185,6 +190,127 @@ def window_launch_origin(
     """GLFW and wmctrl top-left on the primary display."""
     logical_x, logical_y = main_desktop_origin(offset_x, offset_y, outputs)
     return to_x11_position(logical_x, logical_y, x11_coordinate_scale(outputs, monitors))
+
+
+def _x11_monitor_rect(name: str) -> tuple[int, int, int, int]:
+    """X11 rect ``x, y, width, height`` of an xrandr output, or zeros."""
+    text = _read_command(["xrandr", "--query"])
+    for raw in (text or "").splitlines():
+        parts = raw.split()
+        if len(parts) < 2 or parts[0] != name or "connected" not in parts[1]:
+            continue
+        match = re.search(r"(\d+)x(\d+)\+(-?\d+)\+(-?\d+)", raw)
+        if match:
+            width, height, x, y = (int(part) for part in match.groups())
+            return x, y, width, height
+    return 0, 0, 0, 0
+
+
+def _scaled_rect(
+    geo: tuple[int, int, int, int],
+    scale: float,
+) -> tuple[int, int, int, int]:
+    """Convert a KWin logical monitor rect into X11 pixels."""
+    x, y, width, height = geo
+    factor = 1.0 if abs(scale - 1.0) < 0.05 or scale <= 0 else float(scale)
+    return (
+        int(round(x * factor)),
+        int(round(y * factor)),
+        int(round(width * factor)),
+        int(round(height * factor)),
+    )
+
+
+def main_desktop_rect(
+    outputs: list[dict] | None = None,
+    monitors: list[dict] | None = None,
+    panel_inset: int = PANEL_INSET,
+) -> tuple[int, int, int, int]:
+    """X11 rect of the primary desktop: ``x, y, width, height``.
+
+    GLFW and ``wmctrl`` size and position windows in X11 pixels under
+    Xwayland, so this returns X11 pixels for both the origin and the size.
+    The size comes from the chosen output's KWin geometry multiplied by the
+    Xwayland scale, so it matches the supplied ``outputs`` exactly instead of
+    depending on a separate live ``xrandr`` query.
+    The height excludes the bottom panel so a centred window sits in the area
+    the user can actually see. ``select_main`` already skips the Hisense TV.
+    """
+    if outputs is None:
+        outputs = kscreen_outputs()
+    if monitors is None:
+        monitors = parse_xrandr_monitors(_read_command(["xrandr", "--listmonitors"]))
+    scale = x11_coordinate_scale(outputs, monitors)
+    chosen = select_main(outputs)
+    if chosen is not None and chosen.get("geo"):
+        rect_x, rect_y, width, height = _scaled_rect(chosen["geo"], scale)
+        inset = int(max(0, int(panel_inset)) * _panel_scale(outputs, monitors))
+        return rect_x, rect_y, width, max(240, height - inset)
+    desktop = [monitor for monitor in monitors if not is_hisense_name(monitor["name"])] if monitors else []
+    primary = next((monitor for monitor in desktop if monitor["primary"]), desktop[0] if desktop else None)
+    if primary is not None:
+        rect_x, rect_y = primary["geo"][0], primary["geo"][1]
+        width, height = _x11_monitor_size(primary["name"])
+        if width > 0 and height > 0:
+            inset = int(max(0, int(panel_inset)) * _panel_scale(outputs, monitors))
+            return int(rect_x), int(rect_y), int(width), int(max(240, height - inset))
+    # Last resort: the X11 screen the windows actually draw on.
+    return 0, 0, 1920, 1080
+
+
+def _x11_monitor_size(name: str) -> tuple[int, int]:
+    """Pixel size of an xrandr output from its live mode, or ``(0, 0)``."""
+    rect = _x11_monitor_rect(name)
+    return rect[2], rect[3]
+
+
+def _panel_scale(
+    outputs: list[dict] | None = None,
+    monitors: list[dict] | None = None,
+) -> float:
+    """How many X11 pixels make one panel unit (1.0 when the scales agree)."""
+    scale = x11_coordinate_scale(outputs, monitors)
+    if abs(scale - 1.0) < 0.05 or scale <= 0:
+        return 1.0
+    return float(scale)
+
+
+def centered_window_origin(
+    width: int,
+    height: int,
+    outputs: list[dict] | None = None,
+    monitors: list[dict] | None = None,
+    panel_inset: int = PANEL_INSET,
+) -> tuple[int, int]:
+    """X11 position that centres a window, sized in X11 pixels, on the primary desktop."""
+    rect_x, rect_y, rect_w, rect_h = main_desktop_rect(outputs, monitors, panel_inset)
+    return (
+        int(rect_x + max(0, (rect_w - max(1, int(width))) // 2)),
+        int(rect_y + max(0, (rect_h - max(1, int(height))) // 2)),
+    )
+
+
+def main_window_origin(
+    width: int,
+    height: int,
+    offset_x: int = 72,
+    offset_y: int = 64,
+    outputs: list[dict] | None = None,
+    monitors: list[dict] | None = None,
+) -> tuple[int, int]:
+    """X11 top-left that centres an MP window on the primary desktop.
+
+    ``width`` and ``height`` are X11 pixels, the unit GLFW and ``wmctrl`` use.
+    Windows are centred, not dropped at the top-right corner: the historical
+    corner offset (72, 64) pushed a full-size Liquid Player off the bottom and
+    right edges, which is what users saw as "opens top right, not centred".
+    ``offset_x``/``offset_y`` are accepted so existing call sites keep working;
+    the result is always the centred point.
+    """
+    del offset_x, offset_y
+    return centered_window_origin(
+        max(1, int(width)), max(1, int(height)), outputs, monitors
+    )
 
 
 def net_workarea(text: str | None = None) -> tuple[int, int, int, int] | None:
@@ -377,14 +503,24 @@ def visible_origin(x11_window_id: int = 0, title_contains: str = "") -> tuple[in
     return _xwininfo_origin(wanted)
 
 
-def place_on_main_screen(set_pos, x11_window_id: int, offset_x: int = 72, offset_y: int = 64, flush=None, title_contains: str = "") -> tuple[int, int]:
+def place_on_main_screen(set_pos, x11_window_id: int, offset_x: int = 72, offset_y: int = 64, flush=None, title_contains: str = "", window_size: tuple[int, int] | None = None) -> tuple[int, int]:
     """Move a GLFW window onto the primary display.
 
     The request is an X11 position. KWin shows that point divided by the
     Xwayland scale. If the request is applied at a larger scale, measure the
     landing position and correct once.
+
+    Pass ``window_size`` to centre the window on the primary desktop when the
+    corner offset would push it off the right or bottom edge. Without a size
+    the historical corner placement is used, which keeps every existing caller
+    that has not been taught about centring behaving as before.
     """
-    global_x, global_y = window_launch_origin(offset_x, offset_y)
+    if window_size is None:
+        global_x, global_y = window_launch_origin(offset_x, offset_y)
+    else:
+        global_x, global_y = main_window_origin(
+            window_size[0], window_size[1], offset_x, offset_y
+        )
     set_pos(global_x, global_y)
     if flush:
         flush()
@@ -436,7 +572,10 @@ def reposition_off_hisense() -> None:
             )
             if not on_tv:
                 continue
-            x, y = window_launch_origin(offset_x, offset_y, outputs)
+            # window["w"]/["h"] are already the X11 size GLFW reports.
+            x, y = main_window_origin(
+                window["w"], window["h"], offset_x, offset_y, outputs
+            )
             subprocess.run(
                 ["wmctrl", "-i", "-r", window["id"], "-e", f"0,{x},{y},-1,-1"],
                 capture_output=True,
@@ -462,7 +601,6 @@ def ensure_on_main_screen(title_contains: str, offset_x: int = 72, offset_y: int
         if main is None:
             return
         scale = x11_coordinate_scale(outputs)
-        target_x, target_y = window_launch_origin(offset_x, offset_y, outputs)
         for window in _wmctrl_windows():
             if title_contains not in window.get("title", ""):
                 continue
@@ -473,6 +611,11 @@ def ensure_on_main_screen(title_contains: str, offset_x: int = 72, offset_y: int
                 center_y = int(round(center_y / scale))
             if _contains(main, center_x, center_y):
                 continue
+            # Recentre rather than dropping the window in the corner: a window
+            # that arrives off-screen is usually one that never fitted there.
+            target_x, target_y = main_window_origin(
+                window["w"], window["h"], offset_x, offset_y, outputs
+            )
             subprocess.run(
                 ["wmctrl", "-i", "-r", window["id"], "-e", f"0,{target_x},{target_y},-1,-1"],
                 capture_output=True,

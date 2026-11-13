@@ -171,11 +171,36 @@ if [ -f "$_mp_limit_sh" ]; then
 fi
 
 # Start the companion visualizer. The Liquid Player closes this window on exit.
-if ! pgrep -f "MP_Liquid_Visualizer|mp_liquid_visualizer_vulkan" >/dev/null 2>&1; then
+# MP_VISUALIZER_COMPANION marks it as the window the player owns, so it stays
+# bonded behind the player permanently. A visualizer opened later (Z) is a
+# separate window and stays free.
+#
+# The pattern must match the interpreter invocation, not any shell whose text
+# merely mentions the script name, or a wrapper script would look like a
+# running visualizer and suppress the companion.
+_mp_vis_running() {
+    pgrep -f "python[^ ]* [^ ]*MP_Liquid_Visualizer\.py" >/dev/null 2>&1 \
+        || pgrep -f "python[^ ]* [^ ]*mp_liquid_visualizer_vulkan\.py" >/dev/null 2>&1
+}
+if ! _mp_vis_running; then
     VIS_PY="$BASE_DIR/MP_Liquid_Visualizer.py"
     [ ! -f "$VIS_PY" ] && VIS_PY="$BASE_DIR/scripts/mp_liquid_visualizer_vulkan.py"
     if [ -f "$VIS_PY" ]; then
-        nohup "$PYTHON_BIN" "$VIS_PY" --preset random --backend "$VIS_BACKEND" >> "$HOME/.config/mix-manager/liquid_visualizer.log" 2>&1 &
+        # Mark it active before the child starts, or its first poll reads
+        # active:false and the window never bonds to this player.
+        "$PYTHON_BIN" - "$BASE_DIR" <<'PYVIS' >/dev/null 2>&1 || true
+import sys
+from pathlib import Path
+root = Path(sys.argv[1])
+sys.path.insert(0, str(root))
+sys.path.insert(0, str(root / "scripts"))
+try:
+    from liquid_player_visualizer import mark_player_visualizer_attached
+    mark_player_visualizer_attached()
+except Exception:
+    pass
+PYVIS
+        MP_VISUALIZER_COMPANION=1 nohup "$PYTHON_BIN" "$VIS_PY" --preset random --backend "$VIS_BACKEND" >> "$HOME/.config/mix-manager/liquid_visualizer.log" 2>&1 &
     fi
 fi
 

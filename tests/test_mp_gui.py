@@ -123,12 +123,30 @@ cycle_menu_theme
         self.assertEqual(
             result.stdout.splitlines(),
             [
-                "stream_of_frequency",
+                "into_darkness_void_out",
                 "retro_studio",
                 "dynamic_rainbow_liquid_glass",
                 "cosmic_dreamworlds_radioactive",
             ],
         )
+
+    def test_c_cycle_is_the_players_theme_order(self):
+        """Both C keys must walk one list, or the two windows drift apart."""
+        import MP_Audio_Player as player
+
+        text = (ROOT / "Mix_Archive_Manager.sh").read_text(encoding="utf-8")
+        start = text.index("cycle_menu_theme() {")
+        fn = text[start:text.index("_sync_btop_theme()", start)]
+        listed = fn[fn.index("local -a _cycle=(") + len("local -a _cycle=("):]
+        listed = listed[:listed.index(")")]
+        manager_cycle = listed.split()
+        self.assertEqual(manager_cycle, list(player.EqualizerVisualizer.THEMES))
+        # Every theme on the cycle has a navigation-bar colour, through the
+        # player's palette or its default fallback (Dreamworlds Ultra).
+        for theme in manager_cycle:
+            self.assertIn(theme, fn + text, theme)
+            pal = player._THEME_PALETTES.get(theme, player._DEFAULT_PALETTE)
+            self.assertTrue(pal.get("highlight"), theme)
 
 
 class TestGuiLauncher(unittest.TestCase):

@@ -38,9 +38,11 @@ class NoLocalPlaybackTest(unittest.TestCase):
                              f"{name} must not exist: the companion is stream-only")
 
     def test_no_player_ipc_imports(self):
+        """The companion may *read* a running player, never *start* one."""
         source = Path(mwc.__file__).read_text(encoding="utf-8")
-        for forbidden in ("subprocess", "systemd-run", "mp_audio_player.sock"):
+        for forbidden in ("systemd-run", "Popen([", "--daemon"):
             self.assertNotIn(forbidden, source)
+        self.assertFalse(hasattr(mwc, "start_player_daemon"))
 
     def test_startup_never_opens_a_sound_device(self):
         """autoplay_once only catalogs files; it must not spawn a process."""
@@ -63,7 +65,9 @@ class StreamQueueTest(unittest.TestCase):
     def tearDown(self):
         _reset_autoplay()
 
-    def _audio(self, name: str, data: bytes = b"\x00" * 16) -> Path:
+    def _audio(self, name: str, data: bytes = b"\x00" * 64) -> Path:
+        # Above MIN_STREAMABLE_BYTES: these fixtures exist to test playlist
+        # order and filtering, so they must represent playable files.
         path = self.tmp / name
         path.write_bytes(data)
         return path
@@ -115,7 +119,7 @@ class StreamQueueTest(unittest.TestCase):
 
         archive = self.tmp / "archive"
         archive.mkdir()
-        (archive / "good.flac").write_bytes(b"\x00" * 16)
+        (archive / "good.flac").write_bytes(b"\x00" * 1024)
         (archive / "broken.flac").write_bytes(b"")
 
         with mock.patch.object(mwc, "_config_value",
@@ -124,6 +128,150 @@ class StreamQueueTest(unittest.TestCase):
             files = mwc.scan_archive_files()
 
         self.assertEqual([Path(f).name for f in files], ["good.flac"])
+
+    def test_header_only_wav_is_not_streamable(self):
+        """A WAV with a zero-length data chunk made the phone flicker forever.
+
+        The archive contained 44-byte RIFF/WAVE files: a valid header that
+        declares no audio. They passed the old "size > 0" gate, so the queue
+        served them, the <audio> element raised a media error, and the
+        dashboard treated that as "the companion restarted" - reloading the
+        same dead URL in a loop with the restart banner stuck on screen.
+        """
+        archive = self.tmp / "archive"
+        archive.mkdir()
+        header_only = (
+            b"RIFF" + (36).to_bytes(4, "little") + b"WAVE" +
+            b"fmt " + (16).to_bytes(4, "little") +
+            (1).to_bytes(2, "little") + (2).to_bytes(2, "little") +
+            (48000).to_bytes(4, "little") + (192000).to_bytes(4, "little") +
+            (4).to_bytes(2, "little") + (16).to_bytes(2, "little") +
+            b"data" + (0).to_bytes(4, "little")
+        )
+        self.assertEqual(len(header_only), 44)
+        (archive / "empty.wav").write_bytes(header_only)
+        # The same header, but claiming a real data chunk. Length is what the
+        # gate judges, so this one must survive.
+        (archive / "real.wav").write_bytes(
+            header_only[:4] + (1036).to_bytes(4, "little") + header_only[8:40]
+            + (1000).to_bytes(4, "little") + b"\x00" * 1000
+        )
+
+        with mock.patch.object(mwc, "_config_value",
+                               side_effect=lambda k, d="": str(archive) if k == "MIX_ARCHIVE_DIR" else d), \
+             mock.patch.object(mwc, "get_base_dir", return_value=self.tmp / "nope"):
+            files = mwc.scan_archive_files()
+
+        self.assertEqual([Path(f).name for f in files], ["real.wav"])
+
+    def test_header_only_wav_is_refused_by_the_stream_endpoint(self):
+        """Serving the bare header is what the browser turns into a media error."""
+        archive = self.tmp / "archive"
+        archive.mkdir()
+        dead = archive / "empty.wav"
+        dead.write_bytes(b"RIFF" + (36).to_bytes(4, "little") + b"WAVE" +
+                         b"fmt " + (16).to_bytes(4, "little") + b"\x00" * 16 +
+                         b"data" + (0).to_bytes(4, "little"))
+
+        handler = mwc.CompanionHandler.__new__(mwc.CompanionHandler)
+        handler.headers = {}
+        handler.wfile = mock.MagicMock()
+        handler.send_response = mock.MagicMock()
+        handler.send_header = mock.MagicMock()
+        handler.end_headers = mock.MagicMock()
+        handler.close_connection = False
+        handler._serve_audio_stream(str(dead))
+
+        handler.send_response.assert_called_once_with(404)
+
+    def test_a_non_wav_container_is_judged_only_by_size(self):
+        """An MP3 is never header-probed for WAV frames."""
+        path = self.tmp / "track.mp3"
+        path.write_bytes(b"\xff\xfb" + b"\x00" * 2048)
+        self.assertTrue(mwc.is_streamable_file(str(path)))
+        self.assertFalse(mwc.is_streamable_file(str(self.tmp / "missing.mp3")))
+        empty = self.tmp / "empty.mp3"
+        empty.write_bytes(b"")
+        self.assertFalse(mwc.is_streamable_file(str(empty)))
+        # At or below the global floor: too small for any container to hold a
+        # frame, so it is rejected without a read.
+        runt = self.tmp / "runt.mp3"
+        runt.write_bytes(b"\xff\xfb" + b"\x00" * 8)
+        self.assertFalse(mwc.is_streamable_file(str(runt)))
+
+    def test_a_bare_wav_header_is_rejected(self):
+        """44 bytes is exactly a RIFF/WAVE header with no frames.
+
+        This is the file that caused the flicker loop, so it must be refused
+        whichever gate catches it.
+        """
+        hdr = self.tmp / "hdr.wav"
+        hdr.write_bytes(
+            b"RIFF" + (36).to_bytes(4, "little") + b"WAVE"
+            + b"fmt " + (16).to_bytes(4, "little") + b"\x00" * 16
+            + b"data" + (0).to_bytes(4, "little")
+        )
+        self.assertEqual(hdr.stat().st_size, 44)
+        self.assertFalse(mwc.is_streamable_file(str(hdr)))
+
+        # Below the global floor there is certainly no audio.
+        for size in (0, 1, 16, 32):
+            p = self.tmp / f"tiny{size}.wav"
+            p.write_bytes(b"\x00" * size)
+            self.assertFalse(mwc.is_streamable_file(str(p)), f"{size} bytes kept")
+
+        # Claims to be RIFF but is shorter than a complete header: no frames.
+        runt = self.tmp / "runt.wav"
+        runt.write_bytes(b"RIFF" + (35).to_bytes(4, "little") + b"WAVE" + b"\x00" * 30)
+        self.assertEqual(runt.stat().st_size, 42)
+        self.assertFalse(mwc.is_streamable_file(str(runt)))
+
+        # One byte of audio past the header is not a header stub.
+        over = self.tmp / "over.wav"
+        over.write_bytes(
+            b"RIFF" + (37).to_bytes(4, "little") + b"WAVE"
+            + b"fmt " + (16).to_bytes(4, "little") + b"\x00" * 16
+            + b"data" + (1).to_bytes(4, "little") + b"\x00"
+        )
+        self.assertEqual(over.stat().st_size, 45)
+        self.assertTrue(mwc.is_streamable_file(str(over)))
+
+    def test_the_floor_stays_below_the_smallest_real_audio(self):
+        """The size floor must never be able to reject real audio.
+
+        Measured minimums: a single AAC ADTS frame decodes at 43 bytes, FLAC at
+        66, Opus at 172, M4A at 873, WAV at 1,842. A floor at or above 43 would
+        silently delete a valid file, so the constant is kept well under it.
+        The exact WAV/FLAC stub checks do the precise work instead.
+        """
+        self.assertLess(mwc.MIN_STREAMABLE_BYTES, 43)
+        self.assertGreater(mwc.MIN_STREAMABLE_BYTES, 0)
+
+    def test_a_flac_with_metadata_but_no_frames_is_rejected(self):
+        """FLAC shares WAV's failure class: a valid header and no audio.
+
+        A truncated FLAC keeps its STREAMINFO block and no frames at all. Size
+        alone cannot catch it safely (a playable FLAC can be only 66 bytes), so
+        the metadata blocks are walked to find where audio would start.
+        """
+        stub = self.tmp / "stub.flac"
+        minimal = self.tmp / "minimal.flac"
+
+        # fLaC + STREAMINFO (last block, 34 bytes) and nothing after it.
+        streaminfo = (34).to_bytes(3, "big")
+        stub.write_bytes(b"fLaC" + bytes([0x80]) + streaminfo + b"\x00" * 34)
+        # The same metadata plus enough bytes for a frame.
+        minimal.write_bytes(stub.read_bytes() + b"\x00" * 40)
+
+        self.assertFalse(mwc.is_streamable_file(str(stub)))
+        self.assertTrue(mwc.is_streamable_file(str(minimal)))
+
+    def test_a_valid_small_aac_is_not_dropped(self):
+        """A 43-byte ADTS frame decodes to real audio; the gate must keep it."""
+        tiny = self.tmp / "tiny.aac"
+        tiny.write_bytes(b"\xff\xf1" + b"\x50\x80\x03\xdf\xfc" + b"\x00" * 300)
+        self.assertGreater(tiny.stat().st_size, mwc.MIN_STREAMABLE_BYTES)
+        self.assertTrue(mwc.is_streamable_file(str(tiny)))
 
 
 class StreamSessionTest(unittest.TestCase):
@@ -134,16 +282,22 @@ class StreamSessionTest(unittest.TestCase):
         for path in self.queue:
             Path(path).write_bytes(b"\x00" * 16)
         self.patches = [
+            # Isolate host-player detection too: otherwise this suite would
+            # report whatever is playing on the machine running the tests.
+            mock.patch.object(mwc, "CONFIG_DIR", self.tmp),
             mock.patch.object(mwc, "VOLUME_FILE", self.state),
             mock.patch.object(mwc, "build_stream_queue", return_value=self.queue),
             mock.patch.object(mwc, "probe_duration", return_value=600.0),
         ]
         for p in self.patches:
             p.start()
+        # Make sure a real daemon cannot leak in through the module-level cache.
+        mwc.invalidate_queue_cache()
 
     def tearDown(self):
         for p in self.patches:
             p.stop()
+        mwc.invalidate_queue_cache()
 
     def test_mini_playlist_returns_only_three_tracks(self):
         payload = mwc.get_mini_playlist()
@@ -211,10 +365,135 @@ class StreamSessionTest(unittest.TestCase):
         mwc.control_player("set_volume", {"volume": ["-10"]})
         self.assertEqual(mwc.load_stream_session()["volume"], 0)
 
-    def test_status_reports_the_stream_player_not_a_local_daemon(self):
+    def test_status_reports_the_stream_player_when_no_host_player_runs(self):
+        """With no live player, the phone-facing stream cursor is the fallback."""
         status = mwc.get_playback_status(None)
         self.assertEqual(status["player"], "Web Stream")
         self.assertEqual(status["active_file"], self.queue[0])
+        self.assertFalse(status.get("host_player"))
+
+    def test_status_reports_the_host_player_when_one_is_on_air(self):
+        """The bug: the dashboard named a different file than the one playing.
+
+        A live player owns the audio, so its file, title and clock must win
+        over the companion's own idle queue cursor.
+        """
+        live_file = "/run/media/archive/MPlanetarian_-_Stream_of_Frequency_163_THE_CELEBRATION.flac"
+        host_state = {
+            "running": True,
+            "state": "playing",
+            "title": "MPlanetarian_-_Stream_of_Frequency_163_THE_CELEBRATION.flac",
+            "path": live_file,
+            "position_sec": 1240.0,
+            "duration_sec": 6402.95,
+            "volume": 90,
+            "shuffle": False,
+            "repeat": "all",
+            "index": 0,
+            "sample_rate": 48000,
+            "channels": 2,
+            "pid": os.getpid(),
+        }
+        # Seed the stream session with a *different* file, exactly like a stale
+        # session that pointed at The Happy Andrew while 163 played.
+        mwc.save_stream_session({
+            "index": 1,
+            "path": self.queue[1],
+            "playing": True,
+            "position_sec": 3720.99,
+            "duration_sec": 6402.95,
+        })
+        with mock.patch.object(mwc, "host_player_status", return_value=(host_state, "ipc_socket")), \
+             mock.patch.object(mwc, "find_tracklist_for_mix", return_value=""), \
+             mock.patch.object(mwc, "probe_duration", return_value=6402.95):
+            status = mwc.get_playback_status(None)
+            eq = mwc.get_eq_status()
+
+        self.assertEqual(status["player"], "MP Audio Player")
+        self.assertTrue(status["host_player"])
+        self.assertEqual(status["active_file"], live_file)
+        self.assertIn("163", status["title"])
+        self.assertNotIn("Happy Andrew", status["title"])
+        # The clock must be the host's, not the stale session's 3720 s.
+        self.assertAlmostEqual(status["position_sec"], 1240.0, places=1)
+        self.assertAlmostEqual(eq["position_sec"], 1240.0, places=1)
+        self.assertEqual(eq["volume"], 90)
+
+    def test_a_dead_player_state_file_is_not_reported_as_playing(self):
+        """A leftover state file from a stopped daemon must not claim the mix."""
+        dead_pid = 999_999_999
+        (self.tmp / "mp_player_state.json").write_text(
+            json.dumps({"running": True, "state": "playing",
+                        "title": "Stale.flac", "path": "/nonexistent/Stale.flac",
+                        "pid": dead_pid}),
+            encoding="utf-8",
+        )
+        (self.tmp / "mp_player.pid").write_text(str(dead_pid), encoding="utf-8")
+        status = mwc.get_playback_status(None)
+        self.assertFalse(status.get("host_player"))
+        self.assertNotEqual(status["active_file"], "/nonexistent/Stale.flac")
+
+
+
+class ShuffleTest(unittest.TestCase):
+    """Shuffle must reorder playback, not just repaint the badge.
+
+    `switch()` used to advance by a fixed +1 whatever the shuffle flag said, so
+    turning shuffle on still played the queue in order.
+    """
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="mp_companion_shuffle_"))
+        self.queue = [str(self.tmp / f"{i}.flac") for i in range(40)]
+        for path in self.queue:
+            Path(path).write_bytes(b"\x00" * 16)
+        self.patches = [
+            mock.patch.object(mwc, "CONFIG_DIR", self.tmp),
+            mock.patch.object(mwc, "VOLUME_FILE", self.tmp / "web_companion_stream.json"),
+            mock.patch.object(mwc, "build_stream_queue", side_effect=lambda: list(self.queue)),
+            mock.patch.object(mwc, "build_stream_queue_cached", side_effect=lambda: list(self.queue)),
+            mock.patch.object(mwc, "probe_duration", return_value=100.0),
+            # No host player: exercise the browser-owned fallback path.
+            mock.patch.object(mwc, "host_player_status", return_value=(None, "none")),
+        ]
+        for p in self.patches:
+            p.start()
+
+    def tearDown(self):
+        for p in self.patches:
+            p.stop()
+
+    def _next_paths(self, count):
+        seen = []
+        for _ in range(count):
+            mwc.control_player("next")
+            path, _ = mwc.current_stream_file()
+            seen.append(path)
+        return seen
+
+    def test_shuffle_on_does_not_walk_the_queue_in_order(self):
+        mwc.control_player("shuffle")
+        self.assertTrue(mwc.load_stream_session()["shuffle"])
+        paths = self._next_paths(12)
+        ordered = [self.queue[(self.queue.index(self.queue[0]) + i + 1) % len(self.queue)]
+                   for i in range(12)]
+        self.assertNotEqual(paths, ordered)
+        self.assertGreater(len(set(paths)), 4)
+
+    def test_shuffle_off_walks_the_queue_in_order(self):
+        session = mwc.load_stream_session()
+        session.update(shuffle=False, index=0, path=self.queue[0], playing=True)
+        mwc.save_stream_session(session)
+        paths = self._next_paths(5)
+        self.assertEqual(paths, [self.queue[i] for i in range(1, 6)])
+
+    def test_shuffle_never_repeats_the_current_track(self):
+        mwc.control_player("shuffle")
+        for _ in range(20):
+            before, _ = mwc.current_stream_file()
+            mwc.control_player("next")
+            after, _ = mwc.current_stream_file()
+            self.assertNotEqual(before, after)
 
 
 class ThemeSelectionTest(unittest.TestCase):

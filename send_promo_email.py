@@ -605,7 +605,7 @@ WHY IT FITS {recip_org.upper()}:
 - Dedicated listener engagement across progressive, melodic, and trance demographics.
 - Full rights clarity and complete track attribution for all featured artists and labels.
 
-{f"NOTE:\n{custom_msg}\n\n" if custom_msg else ""}We would be thrilled to provide a dedicated syndication package, bespoke station IDs, or exclusive guest editions tailored to {recip_org}.
+{("NOTE:\n" + custom_msg + "\n\n") if custom_msg else ""}We would be thrilled to provide a dedicated syndication package, bespoke station IDs, or exclusive guest editions tailored to {recip_org}.
 
 Thank you very much for your time and consideration.
 
@@ -807,7 +807,7 @@ Featuring {track_count} handpicked progressive and trance records, seamlessly mi
 TRACKLIST:
 {tl_plain}
 
-{f"EDITORIAL NOTE:\n{custom_msg}\n\n" if custom_msg else ""}Artwork, promotional assets, and lossless downloads are available upon request. Feel free to include this release in your upcoming charts, blog roundups, and playlists.
+{("EDITORIAL NOTE:\n" + custom_msg + "\n\n") if custom_msg else ""}Artwork, promotional assets, and lossless downloads are available upon request. Feel free to include this release in your upcoming charts, blog roundups, and playlists.
 
 Thank you for your continued support!
 
@@ -962,7 +962,7 @@ STATION COMPLIANCE:
 - Complete cue times and track-by-track attribution provided.
 - Voiceover intros or custom station id drops available on request.
 
-{f"SPECIAL NOTE:\n{custom_msg}\n\n" if custom_msg else ""}Please let us know if you would like to include this in your upcoming weekly schedule.
+{("SPECIAL NOTE:\n" + custom_msg + "\n\n") if custom_msg else ""}Please let us know if you would like to include this in your upcoming weekly schedule.
 
 Warm regards,
 

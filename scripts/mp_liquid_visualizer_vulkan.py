@@ -9,10 +9,17 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 try:
-    from desktop_launch_screen import fit_square_on_main, place_on_main_screen, window_launch_origin
+    from desktop_launch_screen import (
+        fit_square_on_main,
+        place_on_main_screen,
+        window_launch_origin,
+    )
 except ImportError:
-    from scripts.desktop_launch_screen import fit_square_on_main, place_on_main_screen, window_launch_origin
-
+    from scripts.desktop_launch_screen import (
+        fit_square_on_main,
+        place_on_main_screen,
+        window_launch_origin,
+    )
 try:
     from visualizer_monitor_span import (
         ROLE_SPAWNED,
@@ -66,6 +73,11 @@ try:
 except ImportError:
     from scripts.visualizer_window_shape import DEFAULT_CORNER_RADIUS, RoundedWindowShaper
 
+try:
+    from visualizer_player_bond import PlayerBondMixin
+except ImportError:
+    from scripts.visualizer_player_bond import PlayerBondMixin
+
 ROOT = Path(__file__).resolve().parent.parent
 if not (ROOT / "shaders").is_dir() and (Path(__file__).resolve().parent / "shaders").is_dir():
     ROOT = Path(__file__).resolve().parent
@@ -115,11 +127,13 @@ VISUALIZER_PRESETS: List[Dict[str, Any]] = [
     _mk_preset(4, "sensorium_interface", "Sensorium Interface", "MPlanetarian - Sensorium Interface",
                "sensorium_interface_cover.png", "Sensorium_Interface_Preset.png", _GAMES / "Sensorium_Interface.jpeg",
                aliases=("sensorium", "sensorium interface", "sensorium_interface", "earth_flipper", "earth flipper", "flipper", "yaporigami", "mplanetarian earth flipper")),
-    _mk_preset(5, "infinite_complexity_stream037", "Infinite Complexity", "MPlanetarian - Stream of Frequency 037 (Who am I? - Episode 005)",
+    _mk_preset(5, "stream_of_frequency", "Stream of Frequency", "MPlanetarian - Stream of Frequency",
                "infinite_complexity_stream037_cover.jpg", "Infinite_Complexity_Stream037_Preset.jpg",
                _WDB / "2026-05-21_MPlanetarian - Stream of Frequency 037 (Who am I- - Episode 005).jpg",
                vid="20260212 - XI-N： BIFURCATION (2026) [NMxVKbM8hU8].mkv",
-               aliases=("infinite_complexity_stream037", "bifurcation", "xi-n", "stream 037")),
+               aliases=("stream_of_frequency", "stream of frequency", "stream", "frequency", "sof",
+                        "stream of frequency preset", "infinite_complexity_stream037", "bifurcation",
+                        "xi-n", "stream 037")),
     _mk_preset(6, "beyond_dimensions", "Beyond Dimensions", "MPlanetarian - Beyond Dimensions",
                "beyond_dimensions_cover.png", "Beyond_Dimensions_Preset.png", _WDB / "Cotangent Dimensions (In Progress) [album].png",
                vid="20231129 - BEYOND BASEL 2023： MPLANETARIAN [IoEpQ09v2l4].mkv",
@@ -303,7 +317,7 @@ KEY_SLOTS: List[str] = [
     "dreamworlds_ultra_mplanetarian",
     "infinite_complexity",
     "sensorium_interface",
-    "infinite_complexity_stream037",
+    "stream_of_frequency",
     "beyond_dimensions",
     "particle_accelerator",
     "cosmic_universe",
@@ -479,29 +493,55 @@ class AudioTelemetryBridge:
         self._apply_bands(raw16, rms, p, dt)
 
     def _apply_bands(self, raw16: List[float], rms: float, pitch: float, dt: float):
+        # Runs once per rendered frame, so the smoothing loop is unrolled over
+        # the fixed band count and the constants are kept local.
         b = self.bands16
-        for i in range(16):
-            tg, c = raw16[i], b[i]
-            b[i] = c + (tg - c) * (0.68 if tg > c else 0.22)
+        b0, b1, b2, b3, b4, b5, b6, b7 = b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]
+        b8, b9, b10, b11, b12, b13, b14, b15 = b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15]
+        r0, r1, r2, r3, r4, r5, r6, r7 = raw16[0], raw16[1], raw16[2], raw16[3], raw16[4], raw16[5], raw16[6], raw16[7]
+        r8, r9, r10, r11, r12, r13, r14, r15 = raw16[8], raw16[9], raw16[10], raw16[11], raw16[12], raw16[13], raw16[14], raw16[15]
 
-        self.sub_bass = (b[0] + b[1]) * 0.5
-        self.bass = (b[1] + b[2] + b[3]) * 0.3333333333333333
-        self.low_mid = (b[4] + b[5] + b[6]) * 0.3333333333333333
-        self.mid = (b[6] + b[7] + b[8] + b[9]) * 0.25
-        self.high_mid = (b[10] + b[11] + b[12]) * 0.3333333333333333
-        self.treble = (b[12] + b[13] + b[14]) * 0.3333333333333333
-        self.air = b[15]
-        e = rms * 2.2 + self.bass * 0.35
+        b[0] = n0 = b0 + (r0 - b0) * (0.68 if r0 > b0 else 0.22)
+        b[1] = n1 = b1 + (r1 - b1) * (0.68 if r1 > b1 else 0.22)
+        b[2] = n2 = b2 + (r2 - b2) * (0.68 if r2 > b2 else 0.22)
+        b[3] = n3 = b3 + (r3 - b3) * (0.68 if r3 > b3 else 0.22)
+        b[4] = n4 = b4 + (r4 - b4) * (0.68 if r4 > b4 else 0.22)
+        b[5] = n5 = b5 + (r5 - b5) * (0.68 if r5 > b5 else 0.22)
+        b[6] = n6 = b6 + (r6 - b6) * (0.68 if r6 > b6 else 0.22)
+        b[7] = n7 = b7 + (r7 - b7) * (0.68 if r7 > b7 else 0.22)
+        b[8] = n8 = b8 + (r8 - b8) * (0.68 if r8 > b8 else 0.22)
+        b[9] = n9 = b9 + (r9 - b9) * (0.68 if r9 > b9 else 0.22)
+        b[10] = n10 = b10 + (r10 - b10) * (0.68 if r10 > b10 else 0.22)
+        b[11] = n11 = b11 + (r11 - b11) * (0.68 if r11 > b11 else 0.22)
+        b[12] = n12 = b12 + (r12 - b12) * (0.68 if r12 > b12 else 0.22)
+        b[13] = n13 = b13 + (r13 - b13) * (0.68 if r13 > b13 else 0.22)
+        b[14] = n14 = b14 + (r14 - b14) * (0.68 if r14 > b14 else 0.22)
+        b[15] = n15 = b15 + (r15 - b15) * (0.68 if r15 > b15 else 0.22)
+
+        third = 0.3333333333333333
+        sub_bass = (n0 + n1) * 0.5
+        bass = (n1 + n2 + n3) * third
+        self.sub_bass = sub_bass
+        self.bass = bass
+        self.low_mid = (n4 + n5 + n6) * third
+        mid = (n6 + n7 + n8 + n9) * 0.25
+        self.mid = mid
+        self.high_mid = (n10 + n11 + n12) * third
+        treble = (n12 + n13 + n14) * third
+        self.treble = treble
+        self.air = n15
+        e = rms * 2.2 + bass * 0.35
         self.rms_energy = 0.0 if e < 0.0 else (1.0 if e > 1.0 else e)
 
-        bd = self.bass - self._prev_bass
-        self._prev_bass = self.bass
+        bd = bass - self._prev_bass
+        self._prev_bass = bass
         bp = (self.beat_pulse + bd * 3.2) if bd > 0.065 else (self.beat_pulse - dt * 2.8)
-        self.beat_pulse = 0.0 if bp < 0.0 else (1.0 if bp > 1.0 else bp)
+        beat_pulse = 0.0 if bp < 0.0 else (1.0 if bp > 1.0 else bp)
+        self.beat_pulse = beat_pulse
 
-        self.bass_phase += dt * (1.2 + self.sub_bass * 4.2 + self.beat_pulse * 2.0) * pitch
-        self.mid_phase += dt * (1.0 + self.mid * 3.6) * pitch
-        self.high_phase += dt * (0.9 + self.treble * 4.0) * pitch
+        self.bass_phase += dt * (1.2 + sub_bass * 4.2 + beat_pulse * 2.0) * pitch
+        self.mid_phase += dt * (1.0 + mid * 3.6) * pitch
+        self.high_phase += dt * (0.9 + treble * 4.0) * pitch
 
 
 NVIDIA_VENDOR_ID, DISCRETE_GPU = 0x10DE, 2
@@ -548,6 +588,11 @@ GLFW_KEY_F10, GLFW_KEY_F11 = 299, 300
 # Mouse double-click detection (matches the Liquid Player caption behavior).
 DOUBLE_CLICK_SECONDS = 0.45
 DOUBLE_CLICK_SLOP_PX = 35
+
+# Frame pacing for the draw loops. The visualizer presents with FIFO, so the
+# refresh interval is the natural cadence; this is only used as the deadline
+# the loop sleeps toward and is refreshed from the real monitor when known.
+_FRAME_INTERVAL = 1.0 / 60.0
 
 U32, I32, U64, F32, VP, CP = c_uint32, c_int32, c_uint64, c_float, c_void_p, c_char_p
 def _S(n: str, *f: Tuple[str, Any]): return type(n, (Structure,), {"_fields_": list(f)})
@@ -686,9 +731,24 @@ def saver_screen_plan(monitors: List[Tuple[str, Tuple[int, int, int, int]]]) -> 
     return plan
 
 
-class LiquidVisualizerVulkanRenderer(MonitorSpanMixin, RandomPresetMixin):
+class LiquidVisualizerVulkanRenderer(MonitorSpanMixin, RandomPresetMixin, PlayerBondMixin):
     width = WINDOW_WIDTH
     height = WINDOW_HEIGHT
+
+    @property
+    def preset(self) -> Dict[str, Any]:
+        return self._preset
+
+    @preset.setter
+    def preset(self, value: Dict[str, Any]) -> None:
+        """Keep the presets' shader id cached as a float.
+
+        ``_write_ubo`` runs every frame and publishes the preset id as part of
+        the uniform block, so converting it once per preset switch avoids an
+        int lookup and a float conversion per frame.
+        """
+        self._preset = value
+        self._preset_id_float = float(value.get("id", 0)) if isinstance(value, dict) else 0.0
 
     def __init__(self, preset_name: Optional[str] = None, fullscreen: bool = False, target_4k: bool = False,
                  span_bounds: Optional[Tuple[int, int, int, int]] = None, span_role: str = "",
@@ -735,7 +795,9 @@ class LiquidVisualizerVulkanRenderer(MonitorSpanMixin, RandomPresetMixin):
                 from scripts.liquid_player_visualizer import linux_visualizer_match_window_size
             player_w, player_h = linux_visualizer_match_window_size()
             self._windowed_size = (int(player_w), int(player_h))
-            # Same corner offset the Linux Liquid Player uses on the main monitor.
+            # The offset stays the historical corner value; the window is moved
+            # to the centre of the main monitor once it exists (see
+            # place_on_main_screen with window_size below).
             self._windowed_offset = (72, 64)
         else:
             fitted_w, fitted_h, fitted_x, fitted_y = fit_square_on_main(preferred_window_edge())
@@ -749,8 +811,9 @@ class LiquidVisualizerVulkanRenderer(MonitorSpanMixin, RandomPresetMixin):
             self._windowed_size = (cover, cover)
             self._windowed_offset = (bx + (bw - cover) // 2, by + (bh - cover) // 2)
         self._player_match_at = 0.0
-        self._player_bonded = False
-        self._player_bonded_at = 0.0
+        # Bond to the Liquid Player. The companion window the player starts is
+        # locked behind it; a window opened later stays free.
+        self._init_player_bond()
         # Screensaver mode: any key or mouse input wakes and closes the window.
         self.screensaver = False
         self._wake_event = False
@@ -759,10 +822,6 @@ class LiquidVisualizerVulkanRenderer(MonitorSpanMixin, RandomPresetMixin):
         # The window shares the Liquid Player's rounded silhouette, so the
         # player's corners do not expose square visualizer wedges behind it.
         self._shaper = RoundedWindowShaper(DEFAULT_CORNER_RADIUS)
-        self._unbonded_window_pos = None
-        self._last_player_geometry = None
-        # Size the window owned before it bonded to the Liquid Player.
-        self._restore_size = None
         half_side_w = max(MIN_WINDOW_SIDE, int(self._windowed_size[0]) // 2)
         half_side_h = max(MIN_WINDOW_SIDE, int(self._windowed_size[1]) // 2)
         self._default_windowed_size = tuple(self._windowed_size)
@@ -786,6 +845,25 @@ class LiquidVisualizerVulkanRenderer(MonitorSpanMixin, RandomPresetMixin):
         self._preset_pipelines = {}
         self._ubo_flat = (F32 * 36)()
         self._ubo_flat_ptr = byref(self._ubo_flat)
+        # Hot-loop caches. The framebuffer size only changes when GLFW fires
+        # its resize callback, so querying it every frame (a syscall into the
+        # window system) is wasted work; the corner mask only has to be
+        # reapplied when its key changes; and the preset id is written to the
+        # UBO as a float every frame.
+        self._fb_size: Optional[Tuple[int, int]] = None
+        self._win_size: Optional[Tuple[int, int]] = None
+        self._fb_query = (c_int(), c_int())
+        self._win_query = (c_int(), c_int())
+        self._size_lock_at = 0.0
+        # The X11 window id and display pointer are stable per GLFW window.
+        self._x11_handle: Optional[int] = None
+        self._x11_display_handle: Any = None
+        self._preset_id_float = float(self.preset.get("id", 0))
+        # Written directly into the mapped uniform buffer when the driver
+        # supports it, which removes a staging copy + memmove per frame.
+        self._ubo_mapped = None
+        self._march_width = float(self._march_extent[0])
+        self._march_height = float(self._march_extent[1])
 
     @property
     def summary(self) -> str:
@@ -798,24 +876,29 @@ class LiquidVisualizerVulkanRenderer(MonitorSpanMixin, RandomPresetMixin):
         without this the square corners showed as black wedges through the
         player's rounded ones. Fullscreen and screen-saver windows keep their
         plain rectangle because they are meant to fill the screen.
+
+        The shaper caches the last applied geometry, so a frame with nothing
+        moved costs only the cache lookup. Both the window id and the live size
+        handed to it are cached here as well.
         """
         shaper = getattr(self, "_shaper", None)
         window = getattr(self, "_window", None)
         if shaper is None or not window:
             return False
+        x11_window = self.x11_window()
         if (self.is_fullscreen or getattr(self, "_saver_bounds", None)
                 or self.screensaver or _vr_visualizer_side()):
             # Fullscreen, screensaver, and the VR backdrop fill their area and
             # keep the plain rectangle.
             return shaper.apply(width=1, height=1, enabled=False,
-                                x11_window=self.x11_window(), x11_display=self.x11_display(),
+                                x11_window=x11_window, x11_display=self.x11_display(),
                                 win32_window=self.win32_window(), cocoa_window=self.cocoa_window())
         width, height = self._live_window_size()
         return shaper.apply(
             width=width,
             height=height,
             enabled=True,
-            x11_window=self.x11_window(),
+            x11_window=x11_window,
             x11_display=self.x11_display(),
             win32_window=self.win32_window(),
             cocoa_window=self.cocoa_window(),
@@ -826,15 +909,22 @@ class LiquidVisualizerVulkanRenderer(MonitorSpanMixin, RandomPresetMixin):
 
         ``window_size()`` reports ``_windowed_size`` while windowed, which can
         be a frame ahead of the window manager. The corner mask has to match
-        the pixels GLFW actually owns.
+        the pixels GLFW actually owns. ``_on_ws`` keeps this cached as the
+        window manager reports changes.
         """
+        size = getattr(self, "_win_size", None)
+        if size is not None:
+            return size
         g, w = getattr(self, "_glfw", None), getattr(self, "_window", None)
         if g is not None and w:
             try:
-                lw, lh = c_int(), c_int()
+                lw, lh = getattr(self, "_win_query", None) or (c_int(), c_int())
                 g.glfwGetWindowSize(w, byref(lw), byref(lh))
                 if lw.value >= 8 and lh.value >= 8:
-                    return int(lw.value), int(lh.value)
+                    size = (int(lw.value), int(lh.value))
+                    self._win_size = size
+                    self._win_query = (lw, lh)
+                    return size
             except Exception:
                 pass
         size = getattr(self, "_windowed_size", None) or (self.width, self.height)
@@ -866,6 +956,18 @@ class LiquidVisualizerVulkanRenderer(MonitorSpanMixin, RandomPresetMixin):
         except Exception:
             pass
         self._resize = True
+
+    def _apply_bonded_size_limits(self, width: int, height: int) -> None:
+        """Pin the size while bonded, so the window cannot be resized away."""
+        window = getattr(self, "_window", None)
+        glfw = getattr(self, "_glfw", None)
+        if not window or not glfw:
+            return
+        try:
+            glfw.glfwSetWindowSizeLimits(window, int(width), int(height),
+                                         int(width), int(height))
+        except Exception:
+            pass
 
     def _match_player_window(self, wait: bool = False) -> None:
         """Use the fitted player window, or the MP Gui window when MP Gui started this visualizer."""
@@ -902,109 +1004,6 @@ class LiquidVisualizerVulkanRenderer(MonitorSpanMixin, RandomPresetMixin):
         if not size:
             return
         self._set_windowed_size(size[0], size[1], apply=bool(getattr(self, "_window", None)))
-
-    def _set_bonded_stack(self, bonded: bool) -> None:
-        if not _IS_LINUX or not shutil.which("wmctrl"):
-            return
-        action = "add,below" if bonded else "remove,below"
-        try:
-            subprocess.run(
-                ["wmctrl", "-r", self.title, "-b", action],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=1.0,
-                check=False,
-            )
-        except (OSError, subprocess.TimeoutExpired):
-            pass
-
-    def _sync_player_bond(self) -> None:
-        """Keep the standalone visualizer directly behind the Liquid Player."""
-        if not _IS_LINUX or _vr_visualizer_side() or self._span_role == ROLE_SPAWNED:
-            return
-        now = time.monotonic()
-        if now < self._player_bonded_at:
-            return
-        self._player_bonded_at = now + 0.10
-        try:
-            from liquid_player_visualizer import (
-                read_player_visualizer_state,
-                read_published_player_window_geometry,
-                visualizer_presets,
-            )
-        except ImportError:
-            from scripts.liquid_player_visualizer import (
-                read_player_visualizer_state,
-                read_published_player_window_geometry,
-                visualizer_presets,
-            )
-        state = read_player_visualizer_state()
-        bonded = bool(state.get("active"))
-        # An explicit Z choice owns the window; do not bond it back to the player.
-        if getattr(self, "_user_selected_window_mode", False):
-            return
-        if bonded and self.is_fullscreen:
-            self.toggle_fullscreen()
-        if self.is_fullscreen:
-            return
-        if bonded and not self._player_bonded:
-            self._unbonded_window_pos = self.window_pos()
-            size = getattr(self, "_windowed_size", None)
-            self._restore_size = tuple(size) if size else None
-            self._player_bonded = True
-            self._set_bonded_stack(True)
-        elif not bonded and self._player_bonded:
-            self._player_bonded = False
-            self._set_bonded_stack(False)
-            # While bonded the window took the player's Mini/Micro size and
-            # pinned its size limits to it. Put the unbonded window back at
-            # the size it owned before the bond.
-            restore = getattr(self, "_restore_size", None)
-            if restore:
-                self._set_windowed_size(restore[0], restore[1], apply=True)
-            if self._unbonded_window_pos is not None:
-                self.set_window_pos(*self._unbonded_window_pos)
-            self._unbonded_window_pos = None
-            self._last_player_geometry = None
-            return
-        if not bonded:
-            return
-
-        geometry = read_published_player_window_geometry()
-        if geometry:
-            x, y, width, height = geometry
-            if geometry != self._last_player_geometry:
-                self._set_windowed_size(width, height, apply=True)
-                self.set_window_pos(x, y)
-                self._last_player_geometry = geometry
-            else:
-                # The window manager can move a window while it resizes.
-                # Keep the bonded window on the player's corner.
-                try:
-                    current = self.window_pos()
-                except Exception:
-                    current = None
-                if current is not None and (abs(int(current[0]) - int(x)) > 2 or abs(int(current[1]) - int(y)) > 2):
-                    self.set_window_pos(x, y)
-        else:
-            # A host that publishes only its size still keeps the visualizer
-            # on that size; the position stays where the bond put it.
-            try:
-                from liquid_player_visualizer import read_published_player_window_size
-            except ImportError:
-                from scripts.liquid_player_visualizer import read_published_player_window_size
-            size = read_published_player_window_size()
-            if size and size != tuple(self._windowed_size):
-                self._set_windowed_size(size[0], size[1], apply=True)
-
-        try:
-            presets = visualizer_presets()
-            preset_id = int(state.get("preset_id", 0))
-            preset = next((row for row in presets if int(row.get("id", -1)) == preset_id), None)
-            if preset is not None and int(self.preset.get("id", -1)) != preset_id:
-                self.switch_preset(preset)
-        except Exception:
-            pass
 
     def open(self):
         # The player refits after its font is measured. Wait for that size
@@ -1052,6 +1051,7 @@ class LiquidVisualizerVulkanRenderer(MonitorSpanMixin, RandomPresetMixin):
                     offset_x,
                     offset_y,
                     title_contains=self.title,
+                    window_size=self._windowed_size,
                 )
             except Exception:
                 pass
@@ -1105,6 +1105,7 @@ class LiquidVisualizerVulkanRenderer(MonitorSpanMixin, RandomPresetMixin):
             ("glfwSetWindowShouldClose", None, [VP, CI]), ("glfwSetWindowPos", None, [VP, CI, CI]),
             ("glfwSetWindowSize", None, [VP, CI, CI]), ("glfwSetWindowSizeLimits", None, [VP, CI, CI, CI, CI]),
             ("glfwGetWindowSize", None, [VP, PI, PI]), ("glfwGetWindowPos", None, [VP, PI, PI]),
+            ("glfwSetWindowSizeCallback", VP, [VP, VP]),
             ("glfwGetFramebufferSize", None, [VP, PI, PI]), ("glfwGetPrimaryMonitor", VP, []),
             ("glfwGetMonitors", POINTER(VP), [PI]), ("glfwGetMonitorPos", None, [VP, PI, PI]),
             ("glfwGetVideoMode", POINTER(GLFWvidmode), [VP]), ("glfwGetMonitorName", CP, [VP]),
@@ -1128,20 +1129,44 @@ class LiquidVisualizerVulkanRenderer(MonitorSpanMixin, RandomPresetMixin):
     def win32_window(self): return self._glfw.glfwGetWin32Window(self._window) if _IS_WIN and hasattr(self._glfw, "glfwGetWin32Window") and self._window else 0
     def cocoa_window(self): return self._glfw.glfwGetCocoaWindow(self._window) if _IS_MAC and hasattr(self._glfw, "glfwGetCocoaWindow") and self._window else 0
     def x11_window(self):
-        if not _IS_WIN and not _IS_MAC and hasattr(self._glfw, "glfwGetX11Window") and self._window:
-            try: return self._glfw.glfwGetX11Window(self._window)
-            except Exception: pass
+        # A GLFW window's X11 id never changes while it is alive, so the first
+        # lookup is cached. This is called several times per frame by the
+        # corner mask and the player-bond logic.
+        if not _IS_WIN and not _IS_MAC and getattr(self, "_window", None):
+            cached = getattr(self, "_x11_handle", None)
+            if cached is not None:
+                return cached
+            if hasattr(self._glfw, "glfwGetX11Window"):
+                try:
+                    self._x11_handle = int(self._glfw.glfwGetX11Window(self._window))
+                    return self._x11_handle
+                except Exception:
+                    pass
+            self._x11_handle = 0
         return 0
     def x11_display(self):
-        if not _IS_WIN and not _IS_MAC and hasattr(self._glfw, "glfwGetX11Display") and self._window:
-            try: return self._glfw.glfwGetX11Display(self._window)
-            except Exception: pass
+        if not _IS_WIN and not _IS_MAC and getattr(self, "_window", None):
+            cached = getattr(self, "_x11_display_handle", None)
+            if cached is not None:
+                return cached
+            if hasattr(self._glfw, "glfwGetX11Display"):
+                try:
+                    self._x11_display_handle = self._glfw.glfwGetX11Display(self._window)
+                    return self._x11_display_handle
+                except Exception:
+                    pass
+            self._x11_display_handle = 0
         return None
 
     def _create_window(self):
         g = self._glfw
-        bonded_start = False
-        if _IS_LINUX:
+        # A locked companion opens straight onto the player it sits behind, so
+        # it never flashes in the corner and then snaps into place.
+        bond_geometry = None
+        if not getattr(self, "_saver_bounds", None) and not getattr(self, "_span_bounds", None):
+            bond_geometry = self._bond_initial_geometry()
+        bonded_start = bool(bond_geometry)
+        if _IS_LINUX and not bonded_start:
             try:
                 from liquid_player_visualizer import read_player_visualizer_state
                 bonded_start = bool(read_player_visualizer_state().get("active"))
@@ -1158,6 +1183,10 @@ class LiquidVisualizerVulkanRenderer(MonitorSpanMixin, RandomPresetMixin):
             except Exception: pass
 
         ww, wh = self._windowed_size
+        if bond_geometry:
+            ww = max(MIN_WINDOW_SIDE, int(bond_geometry[2]))
+            wh = max(MIN_WINDOW_SIDE, int(bond_geometry[3]))
+            self._windowed_size = (ww, wh)
         w = g.glfwCreateWindow(ww, wh, self.title.encode("utf-8"), None, None)
         if not w: raise RuntimeError("GLFW could not open a borderless window for Vulkan")
         if hasattr(g, "glfwSetWindowAttrib"):
@@ -1179,6 +1208,14 @@ class LiquidVisualizerVulkanRenderer(MonitorSpanMixin, RandomPresetMixin):
             g.glfwSetWindowPos(w, bx, by)
             self._cur_pos = (bx, by)
             self.width, self.height = bw, bh
+            return w
+
+        if bond_geometry:
+            # Exact player origin in GLFW's own coordinate space, verbatim.
+            bx, by = int(bond_geometry[0]), int(bond_geometry[1])
+            g.glfwSetWindowPos(w, bx, by)
+            self._cur_pos = (bx, by)
+            self.width, self.height = ww, wh
             return w
 
         ox, oy = self._windowed_offset
@@ -1229,6 +1266,7 @@ class LiquidVisualizerVulkanRenderer(MonitorSpanMixin, RandomPresetMixin):
         self._on_mouse_cb = CFUNCTYPE(None, VP, c_int, c_int, c_int)(self._on_mouse)
         self._on_cursor_cb = CFUNCTYPE(None, VP, c_double, c_double)(self._on_cursor)
         self._on_fb_cb = CFUNCTYPE(None, VP, c_int, c_int)(self._on_fb)
+        self._on_ws_cb = CFUNCTYPE(None, VP, c_int, c_int)(self._on_ws)
         self._on_pos_cb = CFUNCTYPE(None, VP, c_int, c_int)(self._on_pos)
         self._on_iconify_cb = CFUNCTYPE(None, VP, c_int)(self._on_iconify)
 
@@ -1237,9 +1275,21 @@ class LiquidVisualizerVulkanRenderer(MonitorSpanMixin, RandomPresetMixin):
         g.glfwSetMouseButtonCallback(w, cast(self._on_mouse_cb, VP))
         g.glfwSetCursorPosCallback(w, cast(self._on_cursor_cb, VP))
         g.glfwSetFramebufferSizeCallback(w, cast(self._on_fb_cb, VP))
+        if hasattr(g, "glfwSetWindowSizeCallback"):
+            g.glfwSetWindowSizeCallback(w, cast(self._on_ws_cb, VP))
         g.glfwSetWindowPosCallback(w, cast(self._on_pos_cb, VP))
         if hasattr(g, "glfwSetWindowIconifyCallback"):
             g.glfwSetWindowIconifyCallback(w, cast(self._on_iconify_cb, VP))
+        # Seed the caches from the freshly created window so the first frame
+        # does not have to ask GLFW for them.
+        size = self._win_query
+        g.glfwGetWindowSize(w, byref(size[0]), byref(size[1]))
+        if size[0].value > 0 and size[1].value > 0:
+            self._win_size = (int(size[0].value), int(size[1].value))
+        fb = self._fb_query
+        g.glfwGetFramebufferSize(w, byref(fb[0]), byref(fb[1]))
+        if fb[0].value > 0 and fb[1].value > 0:
+            self._fb_size = (int(fb[0].value), int(fb[1].value))
         self._is_4k_cached = self.is_4k_display()
 
     def _on_iconify(self, _w, iconified):
@@ -1397,9 +1447,10 @@ class LiquidVisualizerVulkanRenderer(MonitorSpanMixin, RandomPresetMixin):
         """Fullscreen toggle shared by a window double-click.
 
         While the visualizer is bonded behind the Liquid Player the window is
-        owned by the player, so there is nothing to toggle.
+        owned by the player, so there is nothing to toggle. The locked
+        companion must also never cover the player it sits behind.
         """
-        if self._player_bonded:
+        if self._player_bonded or self._bond_is_locked():
             return self.is_fullscreen
         return self.toggle_fullscreen()
 
@@ -1407,9 +1458,10 @@ class LiquidVisualizerVulkanRenderer(MonitorSpanMixin, RandomPresetMixin):
         """The Z key cycle: default -> fullscreen -> half -> default.
 
         While the visualizer is bonded behind the Liquid Player the window is
-        owned by the player, so there is nothing to cycle.
+        owned by the player, so there is nothing to cycle. A locked companion
+        owns no geometry of its own, so Z does nothing for it.
         """
-        if self._player_bonded:
+        if self._player_bonded or self._bond_is_locked():
             return self.window_mode
         return self.cycle_window_mode()
 
@@ -1521,7 +1573,17 @@ class LiquidVisualizerVulkanRenderer(MonitorSpanMixin, RandomPresetMixin):
             if rx or ry:
                 self.set_window_pos(int(self._drag_origin[0] + (rx - self._drag_press_screen[0])), int(self._drag_origin[1] + (ry - self._drag_press_screen[1])))
 
-    def _on_fb(self, _w, _fw, _fh): self._resize = True
+    def _on_fb(self, _w, _fw, _fh):
+        # GLFW owns the framebuffer-size truth: cache it here so draw() can be
+        # a pure lookup instead of a per-frame round trip into the window
+        # system. A zero size means the window is iconified/minimised.
+        self._fb_size = (int(_fw), int(_fh)) if _fw > 0 and _fh > 0 else None
+        self._resize = True
+
+    def _on_ws(self, _w, width, height):
+        # Mirror of _on_fb for the logical window size, which is what the
+        # rounded-corner mask is built from.
+        self._win_size = (int(width), int(height)) if width > 0 and height > 0 else None
 
     def _on_pos(self, _w, x, y):
         self._cur_pos = (int(x), int(y))
@@ -1555,7 +1617,7 @@ class LiquidVisualizerVulkanRenderer(MonitorSpanMixin, RandomPresetMixin):
             return self.window_pos()
 
     def window_size(self) -> Tuple[int, int]:
-        w, h = c_int(), c_int()
+        w, h = self._win_query
         self._glfw.glfwGetWindowSize(self._window, byref(w), byref(h))
         if not self.is_fullscreen: return self._windowed_size
         if self._is_4k_cached or w.value >= FOUR_K_MIN_WIDTH or h.value >= FOUR_K_MIN_HEIGHT:
@@ -1563,12 +1625,25 @@ class LiquidVisualizerVulkanRenderer(MonitorSpanMixin, RandomPresetMixin):
         return int(w.value), int(h.value)
 
     def framebuffer_size(self) -> Tuple[int, int]:
-        w, h = c_int(), c_int()
-        self._glfw.glfwGetFramebufferSize(self._window, byref(w), byref(h))
-        if not self.is_fullscreen: return max(1, int(w.value)), max(1, int(h.value))
-        if self._is_4k_cached or w.value >= FOUR_K_MIN_WIDTH or h.value >= FOUR_K_MIN_HEIGHT:
+        """Current drawable size, without a per-frame window-system round trip.
+
+        ``_on_fb`` receives every framebuffer resize from GLFW, so the cached
+        value is authoritative while the window is alive. Only when nothing
+        has reported a size yet (first frame before any resize event) does
+        this fall back to asking GLFW once.
+        """
+        size = self._fb_size
+        if size is None:
+            w, h = self._fb_query
+            self._glfw.glfwGetFramebufferSize(self._window, byref(w), byref(h))
+            size = (max(1, int(w.value)), max(1, int(h.value)))
+            if w.value > 0 and h.value > 0:
+                self._fb_size = size
+        w, h = size
+        if not self.is_fullscreen: return max(1, w), max(1, h)
+        if self._is_4k_cached or w >= FOUR_K_MIN_WIDTH or h >= FOUR_K_MIN_HEIGHT:
             return RENDER_1080P_WIDTH, RENDER_1080P_HEIGHT
-        return max(1, int(w.value)), max(1, int(h.value))
+        return max(1, w), max(1, h)
 
     def window_pos(self) -> Tuple[int, int]:
         if getattr(self, "_window", None) and getattr(self, "_glfw", None):
@@ -1587,10 +1662,20 @@ class LiquidVisualizerVulkanRenderer(MonitorSpanMixin, RandomPresetMixin):
         self.should_close = True
         if getattr(self, "_window", None): self._glfw.glfwSetWindowShouldClose(self._window, 1)
 
+    # The window-size lock and player-bond checks only need to run a few times
+    # a second: a user cannot drag the window faster than that, and the checks
+    # cost a round trip into the window system. The event pump still runs
+    # every frame, so input stays responsive.
+    _GEOMETRY_POLL_INTERVAL = 0.05
+
     def poll(self) -> bool:
         g, w = self._glfw, self._window
         g.glfwPollEvents()
         if g.glfwWindowShouldClose(w): self.should_close = True
+        now = time.monotonic()
+        if now < getattr(self, "_size_lock_at", 0.0):
+            return not self.should_close
+        self._size_lock_at = now + self._GEOMETRY_POLL_INTERVAL
         self._sync_player_bond()
         self.poll_monitor_span()
         if getattr(self, "_saver_bounds", None):
@@ -1616,7 +1701,7 @@ class LiquidVisualizerVulkanRenderer(MonitorSpanMixin, RandomPresetMixin):
                 if self._is_4k_cached and not getattr(self, "_user_toggled_windowed", False):
                     self.toggle_fullscreen()
                 else:
-                    ww, wh = c_int(), c_int()
+                    ww, wh = getattr(self, "_win_query", (c_int(), c_int()))
                     g.glfwGetWindowSize(w, byref(ww), byref(wh))
                     locked = self._half_windowed_size if self.window_mode == WINDOW_MODE_HALF else self._default_windowed_size
                     locked_w, locked_h = locked
@@ -2145,6 +2230,7 @@ class LiquidVisualizerVulkanRenderer(MonitorSpanMixin, RandomPresetMixin):
     def switch_preset(self, preset: Dict[str, Any]):
         if preset.get("id") == self.preset.get("id"): return
         self.preset = preset
+        self._preset_id_float = float(preset.get("id", 0))
         # A partitioned window is a viewer, not the user's saved choice: F10/F11
         # copies and screensaver windows must not rewrite the active preset.
         if self._span_role != ROLE_SPAWNED and not getattr(self, "screensaver", False):
@@ -2243,6 +2329,13 @@ class LiquidVisualizerVulkanRenderer(MonitorSpanMixin, RandomPresetMixin):
         ptr = VP()
         _check(self._vk.MapMemory(self._device, self._ubo_memory, 0, us, 0, byref(ptr)), "map ubo")
         self._ubo_ptr = ptr
+        # The uniform buffer stays mapped for the life of the renderer, so the
+        # telemetry can be written through this view of it instead of staging
+        # a copy and memmoving it across every frame.
+        try:
+            self._ubo_mapped = (F32 * 36).from_address(ptr.value)
+        except (TypeError, ValueError):
+            self._ubo_mapped = None
 
         ps = (VkDescriptorPoolSize * 2)(VkDescriptorPoolSize(DESCRIPTOR_UNIFORM, 1), VkDescriptorPoolSize(DESCRIPTOR_COMBINED_IMAGE_SAMPLER, 1))
         pi = VkDescriptorPoolCreateInfo(ST_DESCRIPTOR_POOL, None, 0, 1, 2, cast(ps, VP))
@@ -2315,84 +2408,153 @@ class LiquidVisualizerVulkanRenderer(MonitorSpanMixin, RandomPresetMixin):
 
     def _sync_hotloop_extent(self):
         ew, eh = self._march_extent if self._needs_upscale else self._extent
+        self._march_width, self._march_height = float(ew), float(eh)
         self._hot_rp.renderPass = self._march_pass if self._needs_upscale else self._render_pass
         self._hot_rp.renderArea.extent.width, self._hot_rp.renderArea.extent.height = ew, eh
         self._hot_view.width, self._hot_view.height = float(ew), float(eh)
         self._hot_scissor.extent.width, self._hot_scissor.extent.height = ew, eh
         self._hot_swap.value = self._swapchain
 
-    def _write_ubo(self, bridge: AudioTelemetryBridge, _mm=memmove):
-        rw, rh = (float(v) for v in (self._march_extent if self._needs_upscale else self._extent))
-        u = self._ubo_flat
-        u[0], u[1], u[2], u[3] = rw, rh, bridge.accum_time, 1.0 if bridge.is_playing else 0.0
-        u[4], u[5], u[6], u[7] = bridge.sub_bass, bridge.bass, bridge.low_mid, bridge.mid
-        u[8], u[9], u[10], u[11] = bridge.high_mid, bridge.treble, bridge.air, bridge.rms_energy
-        u[12], u[13], u[14], u[15] = bridge.beat_pulse, bridge.bass_phase, bridge.mid_phase, bridge.high_phase
-        u[16:32] = bridge.bands16
-        u[32], u[33], u[34], u[35] = float(self.preset["id"]), bridge.pitch_factor, 1.0, getattr(bridge, "dynamic_time", bridge.accum_time)
-        _mm(self._ubo_ptr, self._ubo_flat_ptr, self._ubo_size)
+    def _write_ubo(self, bridge: AudioTelemetryBridge):
+        """Publish one frame of telemetry. Partial writes go into a staging
+        struct first, but the staging copy is skipped once the mapped buffer
+        can be written directly (see ``_create_descriptors``)."""
+        u = self._ubo_mapped if self._ubo_mapped is not None else self._ubo_flat
+        u[0] = self._march_width
+        u[1] = self._march_height
+        u[2] = bridge.accum_time
+        u[3] = 1.0 if bridge.is_playing else 0.0
+        u[4] = bridge.sub_bass
+        u[5] = bridge.bass
+        u[6] = bridge.low_mid
+        u[7] = bridge.mid
+        u[8] = bridge.high_mid
+        u[9] = bridge.treble
+        u[10] = bridge.air
+        u[11] = bridge.rms_energy
+        u[12] = bridge.beat_pulse
+        u[13] = bridge.bass_phase
+        u[14] = bridge.mid_phase
+        u[15] = bridge.high_phase
+        b16 = bridge.bands16
+        u[16] = b16[0]
+        u[17] = b16[1]
+        u[18] = b16[2]
+        u[19] = b16[3]
+        u[20] = b16[4]
+        u[21] = b16[5]
+        u[22] = b16[6]
+        u[23] = b16[7]
+        u[24] = b16[8]
+        u[25] = b16[9]
+        u[26] = b16[10]
+        u[27] = b16[11]
+        u[28] = b16[12]
+        u[29] = b16[13]
+        u[30] = b16[14]
+        u[31] = b16[15]
+        u[32] = self._preset_id_float
+        u[33] = bridge.pitch_factor
+        u[34] = 1.0
+        u[35] = getattr(bridge, "dynamic_time", bridge.accum_time)
+        if self._ubo_mapped is None:
+            memmove(self._ubo_ptr, self._ubo_flat_ptr, self._ubo_size)
 
     def draw(self, bridge: AudioTelemetryBridge, capture: bool = False):
         if not self.poll(): return None
         # Random mode advances here so it follows the real render clock and
         # never fires while the window is hidden or the screensaver is up.
         self.poll_random_mode()
-        fw, fh = self.framebuffer_size()
+        fb = self._fb_size
+        if fb is None:
+            fb = self.framebuffer_size()
+        fw, fh = fb
         if fw < 2 or fh < 2: return None
         if self._resize or (fw, fh) != self._extent: self._recreate_swapchain()
         # Keep the corner mask in step with every resize, window-mode change,
         # and fullscreen toggle. The shaper caches, so this is a no-op when
         # nothing moved.
         self._apply_window_shape()
+        # Keep the scene alive when no audio is playing. Without this the
+        # raymarch clock stays at zero and the window is a still image, which
+        # is what the desktop shortcut showed while the player was idle.
+        try:
+            from liquid_player_visualizer import march_advance
+        except ImportError:
+            from scripts.liquid_player_visualizer import march_advance
+        march_advance(bridge, self._frame_dt())
         self._write_ubo(bridge)
         return self._render(capture)
 
+    def _frame_dt(self) -> float:
+        """Seconds since the previous draw, clamped to a sane step."""
+        now = time.monotonic()
+        last = getattr(self, "_last_draw_at", 0.0)
+        self._last_draw_at = now
+        if last <= 0.0:
+            return 1.0 / 60.0
+        return max(0.0, min(0.05, now - last))
+
     def _render(self, capture: bool):
+        # Bind everything the frame needs to locals: this method runs once per
+        # frame and attribute lookups on ``self`` dominate its Python cost.
         dev, frame = self._device, self._frame
         fence, fence_ptr = self._fences[frame], self._hot_fence_ptrs[frame]
-        _check(self._fn_wait_fences(dev, 1, fence_ptr, 1, 2_000_000_000), "wait fence")
+        wait_fences, acquire, reset_fences = self._fn_wait_fences, self._fn_acquire, self._fn_reset_fences
+        reset_cmd, begin_cmd, end_cmd = self._fn_reset_cmd, self._fn_begin_cmd, self._fn_end_cmd
+        barrier, begin_rp, end_rp = self._fn_barrier, self._fn_begin_rp, self._fn_end_rp
+        bind_pipe, set_vp, set_sc = self._fn_bind_pipe, self._fn_set_vp, self._fn_set_sc
+        bind_ds, draw, submit, present = self._fn_bind_ds, self._fn_draw, self._fn_submit, self._fn_present
+        queue = self._queue
+        hot_rp = self._hot_rp
+        hot_rp_ptr = self._hot_rp_ptr
+        hot_index = self._hot_index
 
-        acq = self._fn_acquire(dev, self._swapchain, 2_000_000_000, self._image_available[frame], 0, self._hot_index_ptr)
+        if wait_fences(dev, 1, fence_ptr, 1, 2_000_000_000) != SUCCESS:
+            raise RuntimeError("wait fence failed")
+
+        acq = acquire(dev, self._swapchain, 2_000_000_000, self._image_available[frame], 0, self._hot_index_ptr)
         if acq == OUT_OF_DATE:
             self._recreate_swapchain()
             return None
-        if acq not in (SUCCESS, SUBOPTIMAL): _check(acq, "acquire")
-        if acq == SUBOPTIMAL: self._resize = True
+        if acq != SUCCESS and acq != SUBOPTIMAL: _check(acq, "acquire")
+        elif acq == SUBOPTIMAL: self._resize = True
 
-        _check(self._fn_reset_fences(dev, 1, fence_ptr), "reset fence")
+        reset_fences(dev, 1, fence_ptr)
         cmd = self._cmd[frame]
-        _check(self._fn_reset_cmd(cmd, 0), "reset command")
-        _check(self._fn_begin_cmd(cmd, self._hot_begin_ptr), "begin command")
+        reset_cmd(cmd, 0)
+        begin_cmd(cmd, self._hot_begin_ptr)
 
-        self._fn_barrier(cmd, STAGE_HOST, STAGE_FRAGMENT, 0, 0, None, 1, self._hot_barrier_ptr, 0, None)
-        idx = self._hot_index.value
-        if self._needs_upscale:
-            self._hot_rp.renderPass = self._march_pass
-            self._hot_rp.framebuffer = self._march_fb
+        barrier(cmd, STAGE_HOST, STAGE_FRAGMENT, 0, 0, None, 1, self._hot_barrier_ptr, 0, None)
+        idx = hot_index.value
+        upscale = self._needs_upscale
+        if upscale:
+            hot_rp.renderPass = self._march_pass
+            hot_rp.framebuffer = self._march_fb
         else:
-            self._hot_rp.renderPass = self._render_pass
-            self._hot_rp.framebuffer = self._framebuffers[idx]
-        self._fn_begin_rp(cmd, self._hot_rp_ptr, 0)
-        self._fn_bind_pipe(cmd, 0, self._pipeline)
-        self._fn_set_vp(cmd, 0, 1, self._hot_view_ptr)
-        self._fn_set_sc(cmd, 0, 1, self._hot_scissor_ptr)
-        self._fn_bind_ds(cmd, 0, self._layout, 0, 1, self._hot_dset_ptr, 0, None)
-        self._fn_draw(cmd, 3, 1, 0, 0)
-        self._fn_end_rp(cmd)
-        if self._needs_upscale:
-            self._fn_barrier(cmd, STAGE_TOP, STAGE_TRANSFER, 0, 0, None, 0, None, 1, self._dst_ptrs[idx])
+            hot_rp.renderPass = self._render_pass
+            hot_rp.framebuffer = self._framebuffers[idx]
+        begin_rp(cmd, hot_rp_ptr, 0)
+        bind_pipe(cmd, 0, self._pipeline)
+        set_vp(cmd, 0, 1, self._hot_view_ptr)
+        set_sc(cmd, 0, 1, self._hot_scissor_ptr)
+        bind_ds(cmd, 0, self._layout, 0, 1, self._hot_dset_ptr, 0, None)
+        draw(cmd, 3, 1, 0, 0)
+        end_rp(cmd)
+        if upscale:
+            barrier(cmd, STAGE_TOP, STAGE_TRANSFER, 0, 0, None, 0, None, 1, self._dst_ptrs[idx])
             self._vk.CmdBlitImage(cmd, self._march_image, LAYOUT_TRANSFER_SRC, self._images[idx], LAYOUT_TRANSFER_DST, 1, self._blit_ptr, FILTER_LINEAR)
-            self._fn_barrier(cmd, STAGE_TRANSFER, STAGE_BOTTOM, 0, 0, None, 0, None, 1, self._present_ptrs[idx])
-        _check(self._fn_end_cmd(cmd), "end command")
+            barrier(cmd, STAGE_TRANSFER, STAGE_BOTTOM, 0, 0, None, 0, None, 1, self._present_ptrs[idx])
+        end_cmd(cmd)
 
-        _check(self._fn_submit(self._queue, 1, self._hot_submit_ptrs[frame], fence), "queue submit")
+        submit(queue, 1, self._hot_submit_ptrs[frame], fence)
 
         pixels = None
         if capture and self._can_readback:
-            _check(self._fn_wait_fences(dev, 1, fence_ptr, 1, 2_000_000_000), "wait draw")
+            wait_fences(dev, 1, fence_ptr, 1, 2_000_000_000)
             pixels = self._read_image(self._images[idx])
 
-        pres = self._fn_present(self._queue, self._hot_present_ptrs[frame])
+        pres = present(queue, self._hot_present_ptrs[frame])
         if pres in (OUT_OF_DATE, SUBOPTIMAL): self._resize = True
         elif pres != SUCCESS: _check(pres, "present")
 
@@ -2673,9 +2835,10 @@ def _saver_loop(renderer, dwell: float, cycle_to_next: bool,
         renderer.open()
     _saver_hide_cursor(renderer)
 
-    monotonic, sleep = time.monotonic, time.sleep
+    monotonic = time.monotonic
     last_t = start_t = monotonic()
     last_switch = start_t
+    pace = [last_t + _FRAME_INTERVAL, monitor_refresh_interval(renderer)]
     update, draw = bridge.update, renderer.draw
     try:
         while not renderer.should_close:
@@ -2714,7 +2877,7 @@ def _saver_loop(renderer, dwell: float, cycle_to_next: bool,
                         renderer.switch_preset(nxt)
                 except Exception as exc:
                     print(f"[Screensaver] preset switch failed: {exc}", file=sys.stderr)
-            sleep(0.008)
+            _frame_sleep(renderer, pace)
     except KeyboardInterrupt:
         pass
     finally:
@@ -2961,6 +3124,69 @@ def _exit_when_player_closes(signum, _frame):
     os._exit(0)
 
 
+def monitor_refresh_interval(renderer) -> float:
+    """Seconds per refresh on the display the window is sitting on.
+
+    The visualizer presents with FIFO, so this is the cadence the draw loop
+    should sleep toward. Falls back to ``_FRAME_INTERVAL`` when GLFW cannot
+    report a refresh rate (or reports a nonsensical one).
+    """
+    g = getattr(renderer, "_glfw", None)
+    if g is None:
+        return _FRAME_INTERVAL
+    try:
+        mon = None
+        finder = getattr(renderer, "span_monitor", None)
+        if callable(finder):
+            mon = finder()
+        if not mon:
+            current = getattr(renderer, "_current_monitor", None)
+            if callable(current):
+                mon = current()
+        if not mon:
+            mon = g.glfwGetPrimaryMonitor()
+        mode = g.glfwGetVideoMode(mon) if mon else None
+        hz = int(mode.contents.refreshRate) if mode else 0
+        if 20 <= hz <= 360:
+            return 1.0 / float(hz)
+    except Exception:
+        pass
+    return _FRAME_INTERVAL
+
+
+def _frame_sleep(renderer, deadline: List[float]) -> float:
+    """Yield the rest of the current refresh interval, then return the next one.
+
+    The renderer presents with FIFO (vsync), so ``draw`` already blocks until
+    the display is ready. Sleeping a fixed 8 ms *after* that block simply
+    pushes the next frame past its refresh slot, which shows up as periodic
+    25 ms frames even though no work was slow. Sleeping only the slack that is
+    genuinely left over — and capping it — keeps the loop on the display's
+    cadence without burning CPU in a spin.
+
+    ``deadline`` is a one-element list holding the next intended present time,
+    which lets the caller carry pacing state across frames.
+    """
+    mono = time.monotonic
+    interval = deadline[1] if len(deadline) > 1 else _FRAME_INTERVAL
+    now = mono()
+    if now < deadline[0]:
+        # Only sleep when there is enough slack for the sleep to be accurate;
+        # below roughly a millisecond the syscall overhead and the scheduler's
+        # timer resolution overshoot more than they save.
+        slack = deadline[0] - now
+        if slack > 0.0015:
+            time.sleep(slack - 0.0006)
+            now = mono()
+    if now > deadline[0]:
+        # Late: do not try to catch up by shortening the next interval, just
+        # re-anchor so a single long frame cannot cause a burst.
+        deadline[0] = now + interval
+    else:
+        deadline[0] += interval
+    return now
+
+
 def run_visualizer(preset_name: Optional[str] = None, max_seconds: Optional[float] = None,
                    fullscreen: bool = False, target_4k: bool = False,
                    backend: Optional[str] = None,
@@ -2976,8 +3202,9 @@ def run_visualizer(preset_name: Optional[str] = None, max_seconds: Optional[floa
                               backend=backend, span_bounds=span_bounds, span_role=span_role)
     bridge = AudioTelemetryBridge()
     renderer.open()
-    monotonic, sleep = time.monotonic, time.sleep
+    monotonic = time.monotonic
     last_t = start_t = monotonic()
+    pace = [last_t + _FRAME_INTERVAL, monitor_refresh_interval(renderer)]
     update, draw = bridge.update, renderer.draw
     try:
         while not renderer.should_close:
@@ -2989,7 +3216,7 @@ def run_visualizer(preset_name: Optional[str] = None, max_seconds: Optional[floa
             if max_seconds is not None and (now - start_t) >= max_seconds: break
             update(dt)
             draw(bridge, False)
-            sleep(0.008)
+            _frame_sleep(renderer, pace)
     except KeyboardInterrupt: pass
     finally: renderer.close()
     return 0

@@ -212,6 +212,22 @@ class TestPageRestartNotice(unittest.TestCase):
         self.assertIn("mediaRecoveryUsed", self.page)
         self.assertIn("addEventListener('error'", self.page)
 
+    def test_media_recovery_is_bounded_so_it_cannot_flash_forever(self):
+        """A permanently unplayable mix must not loop the reconnect banner.
+
+        The page used to reset its own one-shot recovery flag from inside the
+        recovery path, so a file the browser could never decode (a 44-byte WAV
+        header with no audio frames) re-attached, errored, and re-attached
+        again. On a phone that is a flickering screen with the "companion has
+        been restarted" banner stuck at the top.
+        """
+        self.assertIn("MEDIA_RECOVERY_LIMIT", self.page)
+        self.assertIn("mediaRecoveryAttempts", self.page)
+        self.assertIn("cannot be played on this device", self.page)
+        # The ended handler has its own loop and must be bounded too.
+        self.assertIn("quickEndRestarts", self.page)
+        self.assertIn("if (quickEndRestarts >= 2)", self.page)
+
     def test_page_observes_the_announcement_payload(self):
         self.assertIn("observeAnnouncement", self.page)
         self.assertIn("data.announcement", self.page)

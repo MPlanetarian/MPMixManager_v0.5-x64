@@ -1452,11 +1452,54 @@ def install_tray(base: Path) -> int:
     return 0
 
 
+def display_server_ready(timeout: float = 30.0) -> bool:
+    """Wait until the desktop's socket exists before Qt starts.
+
+    The tray is autostarted at login, often before the Wayland compositor has
+    created its socket. Qt treats a failed platform plugin as fatal: the whole
+    process aborts with SIGABRT (Qt's "could not connect to display" path calls
+    qAbort), which systemd records as a crash and restarts forever. Waiting for
+    the socket turns that crash loop into a short delay.
+    """
+    if sys.platform == "darwin" or os.name == "nt":
+        return True
+    wayland = os.environ.get("WAYLAND_DISPLAY", "")
+    display = os.environ.get("DISPLAY", "")
+    runtime = os.environ.get("XDG_RUNTIME_DIR", "")
+    deadline = time.time() + timeout
+    while True:
+        if wayland:
+            candidates = [wayland]
+            if not wayland.startswith("/") and runtime:
+                candidates.append(os.path.join(runtime, wayland))
+            if any(os.path.exists(c) for c in candidates):
+                return True
+        if display:
+            # Anything accepting connections on the X socket is good enough;
+            # Qt will finish the handshake itself.
+            number = display.split(":")[-1].split(".")[0]
+            if number.isdigit() and os.path.exists(f"/tmp/.X11-unix/X{number}"):
+                return True
+        if not wayland and not display:
+            return False
+        if time.time() >= deadline:
+            return False
+        time.sleep(0.25)
+
+
 def run_tray(base: Path, config: Path, stay: bool = False) -> int:
     os.environ.setdefault("QT_QPA_PLATFORMTHEME", "kde")
     enable_status_notifier_watcher()
     write_desktop_entry(base, applications_dir())
     write_autostart_entry(base, autostart_dir())
+
+    if not display_server_ready():
+        # No usable desktop yet. Say so and exit cleanly instead of letting Qt
+        # abort: a clean exit is not retried as a crash, and the next login or
+        # the next app launch starts the tray when the session is up.
+        print("mp_system_tray: no display server yet; not starting the tray",
+              file=sys.stderr)
+        return 0
 
     from PySide6.QtGui import QAction, QCursor, QIcon
     from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon

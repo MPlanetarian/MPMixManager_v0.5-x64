@@ -395,8 +395,16 @@ def glass_text_rgb(r: int, g: int, b: int, floor: int = 36) -> tuple[int, int, i
 
 
 def glass_foreground_rgb(theme_name) -> tuple[int, int, int]:
-    """Keep MP Liquid terminal text white for every glass theme."""
-    return (255, 255, 255)
+    """Terminal text ink that stays readable on the active glass pane.
+
+    Most themes draw a pale water pane, where white text disappears, so those
+    use a dark ink. Retro Linux Memories is the opaque charcoal pane, so it
+    keeps a light ink instead. This mirrors ``theme_uses_dark_glass``, which
+    decides which of the two panes the shader will paint.
+    """
+    if theme_uses_dark_glass(theme_name):
+        return (236, 240, 244)
+    return (24, 26, 34)
 
 
 # Same hues as the manager menu text. Retro Terminal stays white.
@@ -775,6 +783,7 @@ class LiquidGlassRendererOpenGL:
                 64,
                 flush=lambda: self._x11.XFlush(self.x11_display()) if self._x11 and self.x11_display() else None,
                 title_contains=self.title,
+                window_size=self.window_size(),
             )
         self._apply_window_icon()
         self._bind_input()
@@ -946,6 +955,8 @@ class LiquidGlassRendererOpenGL:
                     print(f"MP Visualizer background unavailable: {exc}", file=sys.stderr)
                 return False
             self._player_vis_layer = layer
+        # The glass window draws terminal text over this background, so keep
+        # the text guard on to hold the scene back behind that text.
         return bool(layer.draw(self, int(fw), int(fh)))
 
     def sync_player_visualizer_opacity(self, active: bool) -> None:
@@ -1509,18 +1520,45 @@ class LiquidGlassRendererOpenGL:
             except Exception:
                 pass
             return
-        del x, y, width, height
         display = self.x11_display()
         if not display or not getattr(self, "_x11", None):
             return
         child = int(child)
         self._x11.XSetTransientForHint(display, child, self.x11_window())
         self._set_opacity(child, 1.0)
+        # Size the terminal to the well. This used to be discarded, so VTE kept
+        # its own (taller) row grid and covered the transparency slider at the
+        # bottom of the window.
+        self._resize_x11_window(child, int(x), int(y), int(width), int(height))
         focused = self.focused_window()
         glass = self.x11_window()
         if focused in (glass, child, self.window_parent(glass), self.window_parent(child)):
             self._x11.XRaiseWindow(display, child)
         self._x11.XFlush(display)
+
+    def _resize_x11_window(self, child, x, y, width, height) -> bool:
+        """Move and resize an X11 child window to the given rectangle.
+
+        ``XMoveResizeWindow`` is used directly because the child is a plain X11
+        window owned by another toolkit; a toolkit-level resize would be
+        overridden by that toolkit's own layout the way VTE's row grid was.
+        """
+        child = int(child or 0)
+        if child <= 0 or width < 2 or height < 2:
+            return False
+        display = self.x11_display()
+        x11 = getattr(self, "_x11", None)
+        if not display or not x11:
+            return False
+        try:
+            x11.XMoveResizeWindow(
+                display, c_uint64(child), c_int(int(x)), c_int(int(y)),
+                c_uint32(int(width)), c_uint32(int(height)),
+            )
+            x11.XFlush(display)
+            return True
+        except Exception:
+            return False
 
     def window_parent(self, child):
         if not child:

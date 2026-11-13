@@ -341,7 +341,9 @@ def _normalize_reveal_path(target_path: Union[str, Path, None]) -> Optional[str]
     raw = os.path.expanduser(raw)
     if os.name == "nt":
         if (m := re.match(r"^/([a-zA-Z])/(.*)$", raw.replace("\\", "/"))) and not os.path.exists(raw):
-            raw = f"{m.group(1).upper()}:\\{m.group(2).replace('/', '\\')}"
+            # Build with concatenation: Python 3.9 (still the macOS system
+            # interpreter) rejects a backslash inside an f-string expression.
+            raw = m.group(1).upper() + ":\\" + m.group(2).replace("/", "\\")
         return os.path.normpath(raw)
     return os.path.abspath(raw)
 
@@ -2174,9 +2176,27 @@ class AudioEngine:
                 self.playlist.insert(0, qi)
                 if self.load_track(0, True): return
         if not (n := len(self.playlist)): return
-        for s in range(1, min(10, n) + 1):
-            idx = random.choice([i for i in range(n) if i != self.current_index]) if (self.shuffle and n > 1) else (self.current_index + s * direction) % n
-            if self.load_track(idx, True): return
+        # Unreadable tracks (a sleeping SMB share, a truncated conversion) return
+        # False from load_track. Trying only the first ten random draws made that
+        # collapse shuffle onto whichever few files happened to be readable:
+        # with 850 of 976 entries unreadable, 120 skips reached only 63 mixes.
+        #
+        # Shuffle now walks a freshly shuffled list of every other entry, so a
+        # dead region can no longer starve it and every playable file stays
+        # reachable. It is shuffled once per track change, not once per attempt.
+        if self.shuffle:
+            if n <= 1:
+                return
+            candidates = [i for i in range(n) if i != self.current_index]
+            random.shuffle(candidates)
+            for idx in candidates:
+                if self.load_track(idx, True):
+                    return
+            return
+        for attempt in range(1, min(10, n) + 1):
+            idx = (self.current_index + attempt * direction) % n
+            if self.load_track(idx, True):
+                return
 
     def next_track(self): self._step_track(1)
     def prev_track(self): self.seek(0) if self.position_sec > 5.0 else self._step_track(-1)
@@ -3278,6 +3298,30 @@ class EqualizerVisualizer:
             self.style_idx = self.STYLES.index("stream_of_frequency_eq")
             try: (CONFIG_DIR / "eq_style").write_text(self.style, encoding="utf-8")
             except Exception: pass
+
+    def sync_theme_from_file(self) -> bool:
+        """Follow a theme the other window selected.
+
+        MP Gui, MP Liquid Player, and the console manager all read
+        ~/.config/mix-manager/theme. Pressing C in one of them rewrites that
+        file, and the others poll it so a single C keypress recolours every
+        open window instead of leaving one on the previous theme.
+
+        Returns True when the theme actually changed, so the caller can clear
+        its frame cache.
+        """
+        try:
+            th_file = CONFIG_DIR / "theme"
+            if not th_file.is_file():
+                return False
+            saved = th_file.read_text(encoding="utf-8").strip().lower()
+        except Exception:
+            return False
+        if not saved or saved == self.theme:
+            return False
+        before = self.theme
+        self.set_theme(saved)
+        return self.theme != before
 
     def get_style_display_name(self) -> str: return self.STYLE_NAMES.get(self.style, self.style.replace("_", " ").title())
     def get_theme_display_name(self) -> str: return self.THEME_NAMES.get(self.theme, self.theme.replace("_", " ").title())
@@ -6531,6 +6575,7 @@ class TerminalPlayerUI:
             while self.running:
                 if not self.is_remote and self.engine: self.engine.check_track_end()
                 _win_hide_console_scrollbar()
+                self._follow_shared_theme()
                 try:
                     self._draw_frame()
                 except (KeyboardInterrupt, SystemExit):
@@ -6921,6 +6966,9 @@ class TerminalPlayerUI:
             self._notify(f"Visualizer: {self.visualizer.get_style_display_name()}", 2.5)
         elif data in (b"c", b"C"):
             self.visualizer.cycle_theme()
+            # Remember our own write so the poll loop does not repaint it as
+            # an external change on the next tick.
+            self._theme_seen = self.visualizer.theme
             self._notify(f"Color Theme: {self.visualizer.get_theme_display_name()}", 2.5)
         elif data in (b"b", b"B", b"\x1b", b"\x03"): self.running = False
         elif data in (b"a", b"A"):
@@ -6969,6 +7017,33 @@ class TerminalPlayerUI:
 
     def _navigate_list(self, delta: int):
         if m := self._get_active_tracks(): self.selected_row = max(0, min(len(m) - 1, self.selected_row + delta))
+
+    def _follow_shared_theme(self):
+        """Adopt a theme selected in MP Gui or the console manager.
+
+        The shared file is one short line, read at most once a second, and the
+        raw text is compared with the last value seen. Comparing the text
+        rather than the mtime means two equal-length theme names written in the
+        same second (dreamworlds_ultra and cosmic_supernova are both 17 bytes)
+        still register. Without this the player kept its old colours when C was
+        pressed elsewhere, which made the playlist navigation bar disagree
+        between windows.
+        """
+        now = time.time()
+        if now - getattr(self, "_theme_poll_at", 0.0) < 1.0:
+            return
+        self._theme_poll_at = now
+        try:
+            seen = (CONFIG_DIR / "theme").read_text(encoding="utf-8").strip().lower()
+        except OSError:
+            return
+        if not seen or seen == getattr(self, "_theme_seen", None):
+            return
+        self._theme_seen = seen
+        if self.visualizer.sync_theme_from_file():
+            global _LIQUID_FRAME_CACHE
+            _LIQUID_FRAME_CACHE = None
+            self._notify(f"Color Theme: {self.visualizer.get_theme_display_name()}", 2.5)
 
     def _draw_frame(self):
         w, h = _win_visible_size((80, 24))

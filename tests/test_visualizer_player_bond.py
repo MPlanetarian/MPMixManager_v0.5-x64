@@ -58,6 +58,28 @@ class TestBothBackendsShareTheBond(unittest.TestCase):
 
         self.assertTrue(issubclass(vulkan_vis.LiquidVisualizerVulkanRenderer, PlayerBondMixin))
 
+    def test_bonded_stack_uses_sibling_stacking_not_below_hint(self):
+        """The visualizer must sit against the player, not below every window.
+
+        ``_NET_WM_STATE_BELOW`` (``wmctrl -b add,below``) means "below every
+        normal window" to KWin, so the visualizer sank under whatever else was
+        on the desktop: it was visible over an empty area but hidden behind a
+        maximised console, and the player then blended with the console.
+        Sibling stacking keeps it adjacent to the player instead.
+        """
+        src = (SCRIPTS / "visualizer_player_bond.py").read_text(encoding="utf-8")
+        self.assertIn("XConfigureWindow", src)
+        self.assertIn("CW_SIBLING", src)
+        self.assertIn("STACK_MODE_BELOW", src)
+        self.assertIn("_find_player_window", src)
+        # The re-assert must run from the periodic sync, otherwise the player
+        # being raised above it pushes the visualizer back on top.
+        self.assertIn("_next_relower_at", src)
+        # The below hint must never be *added* by executable code. It may only
+        # be removed, and the prohibition is documented in prose.
+        self.assertNotIn('["wmctrl", "-r", self.title, "-b", "add,below"]', src)
+        self.assertIn('"remove,below"', src)
+
     def test_opengl_poll_syncs_the_bond(self):
         """The OpenGL twin's poll must call the shared bond sync every frame."""
         renderer = object.__new__(vis.LiquidVisualizerOpenGLRenderer)
@@ -175,17 +197,31 @@ class TestHostsMarkTheCompanionActive(unittest.TestCase):
         self.tmp.cleanup()
         vis._CACHE.update(path="", mtime=None, state=None)
 
-    def _spawn(self, module):
-        with patch("subprocess.Popen") as popen:
+    def _spawn(self, module, companion=False):
+        """Spawn through the host, choosing the companion or a detached window.
+
+        ``pgrep`` is neutralised because the test runner's own command line can
+        contain the visualizer marker text, which would look like a running
+        companion and short-circuit the spawn.
+        """
+        target = module.ensure_random_visualizer_started if companion else module.spawn_new_visualizer
+        with patch.object(module.subprocess, "run", return_value=MagicMock(returncode=1)), \
+             patch("subprocess.Popen") as popen:
             popen.return_value = MagicMock(pid=4242)
-            started = module.spawn_new_visualizer()
+            started = target()
         self.assertTrue(started)
         return popen
 
-    def test_opengl_host_marks_active_and_uses_its_backend(self):
+    def test_opengl_host_marks_the_companion_active(self):
+        """The companion the player starts is marked active before it spawns.
+
+        ``ensure_random_visualizer_started`` is that path. It writes the state
+        file and flags the child as the owned companion, so its first poll
+        already knows it belongs behind this player.
+        """
         import MP_Audio_Player_Liquid_Glass_OpenGL as host
 
-        popen = self._spawn(host)
+        popen = self._spawn(host, companion=True)
         saved = json.loads(self.state.read_text(encoding="utf-8"))
         self.assertTrue(saved["active"], "the child would never bond")
         cmd = popen.call_args[0][0]
@@ -193,16 +229,31 @@ class TestHostsMarkTheCompanionActive(unittest.TestCase):
         # The host is OpenGL, so the companion must be too (the bond is shared
         # now, but the GPU path should still match the window in front of it).
         self.assertEqual(cmd[cmd.index("--backend") + 1], "opengl")
+        self.assertEqual(popen.call_args[1]["env"].get("MP_VISUALIZER_COMPANION"), "1")
 
-    def test_vulkan_host_marks_active_and_uses_its_backend(self):
+    def test_z_spawned_window_is_detached_not_bonded(self):
+        """Z opens an extra window. It must not latch onto the player.
+
+        Only the companion the player launches is permanently attached; every
+        window opened afterwards is explicitly detached.
+        """
+        import MP_Audio_Player_Liquid_Glass_OpenGL as host
+
+        popen = self._spawn(host)
+        env = popen.call_args[1]["env"]
+        self.assertNotIn("MP_VISUALIZER_COMPANION", env)
+        self.assertEqual(env.get("MP_VISUALIZER_DETACHED"), "1")
+
+    def test_vulkan_host_marks_the_companion_active(self):
         import MP_Audio_Player_Liquid_Glass as host
 
         with patch.dict(os.environ, {"MP_LIQUID_GLASS_BACKEND": "vulkan"}):
-            popen = self._spawn(host)
+            popen = self._spawn(host, companion=True)
         saved = json.loads(self.state.read_text(encoding="utf-8"))
         self.assertTrue(saved["active"])
         cmd = popen.call_args[0][0]
         self.assertEqual(cmd[cmd.index("--backend") + 1], "vulkan")
+        self.assertEqual(popen.call_args[1]["env"].get("MP_VISUALIZER_COMPANION"), "1")
 
     def test_spawn_environment_is_not_marked_as_a_player_host(self):
         import MP_Audio_Player_Liquid_Glass_OpenGL as host

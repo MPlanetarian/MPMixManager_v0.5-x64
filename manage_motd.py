@@ -27,6 +27,36 @@ NC = "\033[0m"
 
 AUDIO_EXTS = ['.flac', '.wav', '.mp3', '.m4a', '.aif', '.aiff']
 
+# --- MOTD cache ---
+# The banner is cached on disk so shells can just `cat` it. Alongside the
+# banner we record which kernel it was generated for, so a login after a
+# kernel upgrade can detect the mismatch and regenerate before displaying.
+MOTD_CACHE_DIR = Path.home() / ".config" / "mix-manager"
+MOTD_CACHE_FILE = MOTD_CACHE_DIR / "motd"
+MOTD_KERNEL_STAMP = MOTD_CACHE_DIR / "motd.kernel"
+
+
+def running_kernel():
+    """Release string of the kernel that is actually running right now."""
+    try:
+        return os.uname().release
+    except AttributeError:  # non-POSIX fallback
+        return subprocess.check_output(["uname", "-r"], text=True).strip()
+
+
+def read_previous_kernel():
+    try:
+        return MOTD_KERNEL_STAMP.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+def motd_needs_refresh():
+    """True when the cached banner is missing or was built for another kernel."""
+    if not MOTD_CACHE_FILE.is_file():
+        return True
+    return read_previous_kernel() != running_kernel()
+
 def human_size(bytes_val):
     for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
         if abs(bytes_val) < 1024.0:
@@ -134,7 +164,7 @@ def format_motd_text(mixes, ansi=True):
     nc = NC if ansi else ""
     
     hostname = os.uname().nodename
-    kernel_str = os.uname().release
+    kernel_str = running_kernel()
     now_str = datetime.datetime.now().strftime("%a %b %d %Y, %H:%M:%S")
     
     col_name = "Full File Name"
@@ -184,27 +214,54 @@ def apply_motd(limit=3):
     motd_plain = format_motd_text(mixes, ansi=False)
     
     # 1. User config MOTD
-    user_motd_dir = Path.home() / ".config" / "mix-manager"
+    user_motd_dir = MOTD_CACHE_DIR
     user_motd_dir.mkdir(parents=True, exist_ok=True)
-    user_motd_file = user_motd_dir / "motd"
+    user_motd_file = MOTD_CACHE_FILE
     with open(user_motd_file, "w", encoding="utf-8") as f:
         f.write(motd_ansi)
-        
+
+    # Record the kernel this banner describes, so logins can detect a change.
+    try:
+        MOTD_KERNEL_STAMP.write_text(running_kernel() + "\n", encoding="utf-8")
+    except OSError:
+        pass
+
     # 2. Add / update hook in ~/.bashrc.d or ~/.bashrc if desired
     bashrc = Path.home() / ".bashrc"
     hook_tag = "# >>> MP Mix Archive Manager Dynamic MOTD >>>"
     hook_end = "# <<< MP Mix Archive Manager Dynamic MOTD <<<"
+    # Point the hook at this very file so a version bump can't break it; the
+    # installer rewrites the hook whenever it runs apply_motd().
+    self_path = Path(__file__).resolve()
     hook_code = f"""{hook_tag}
-if [ -f "$HOME/.config/mix-manager/motd" ] && [ -t 1 ]; then
-    cat "$HOME/.config/mix-manager/motd"
+# Regenerate the cached banner when the running kernel has changed since the
+# cache was written, otherwise just print the cache (fast path, no Python).
+_mp_motd_cache="$HOME/.config/mix-manager/motd"
+if [ -t 1 ] && [ -f "$_mp_motd_cache" ]; then
+    _mp_motd_kernel_file="$HOME/.config/mix-manager/motd.kernel"
+    if [ "$(uname -r)" != "$(cat "$_mp_motd_kernel_file" 2>/dev/null)" ]; then
+        python3 "{self_path}" --refresh >/dev/null 2>&1
+    fi
+    cat "$_mp_motd_cache"
 fi
+unset _mp_motd_cache _mp_motd_kernel_file
 {hook_end}"""
-    
+
     if bashrc.is_file():
         try:
             with open(bashrc, "r", encoding="utf-8") as f:
                 content = f.read()
-            if hook_tag not in content and "mix-manager/motd" not in content:
+            if hook_tag in content:
+                # Replace an older hook so existing installs pick up the new one.
+                content = re.sub(
+                    re.escape(hook_tag) + r".*?" + re.escape(hook_end),
+                    hook_code,
+                    content,
+                    flags=re.DOTALL,
+                )
+                with open(bashrc, "w", encoding="utf-8") as f:
+                    f.write(content)
+            elif "mix-manager/motd" not in content:
                 with open(bashrc, "a", encoding="utf-8") as f:
                     f.write(f"\n{hook_code}\n")
         except Exception:
@@ -252,9 +309,20 @@ def main():
     parser = argparse.ArgumentParser(description="System MOTD Generator with Recent Mixes")
     parser.add_argument("--print", action="store_true", help="Print MOTD to stdout")
     parser.add_argument("--apply", action="store_true", help="Generate and apply MOTD")
+    parser.add_argument(
+        "--refresh",
+        action="store_true",
+        help="Regenerate the cached MOTD only if the running kernel changed",
+    )
     parser.add_argument("--limit", type=int, default=3, help="Number of mixes to display (default: 3)")
     args = parser.parse_args()
     
+    if args.refresh:
+        # Called from the shell hook on login. Stay silent and cheap: the
+        # common case is "kernel unchanged" and does nothing at all.
+        if motd_needs_refresh():
+            apply_motd(limit=args.limit)
+        return
     if args.print:
         mixes = find_recent_mixes(limit=args.limit)
         print(format_motd_text(mixes, ansi=True))

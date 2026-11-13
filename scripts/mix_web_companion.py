@@ -16,6 +16,7 @@ import random
 import re
 import shutil
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -793,6 +794,15 @@ PLAYLIST_DIR = CONFIG_DIR / "playlists"
 MUSIC_FOLDERS_FILE = CONFIG_DIR / "music_folders.json"
 WEB_MODE_FILE = CONFIG_DIR / "web_companion_mode"
 
+# The MP Audio Player daemon that is actually making sound on this machine.
+# The companion never starts one and never opens an audio device; it only
+# *reads* what that player is doing (and forwards remote-control taps to it when
+# it is already running). Those files are the player's own contract.
+PLAYER_SOCKET_PATH = CONFIG_DIR / "mp_audio_player.sock"
+PLAYER_PORT_FILE = CONFIG_DIR / "mp_audio_player.port"
+PLAYER_STATE_FILE = CONFIG_DIR / "mp_player_state.json"
+PLAYER_PID_FILE = CONFIG_DIR / "mp_player.pid"
+
 # Same libraries the MP Audio Player switches between with [1], [2] and [3].
 LIBRARY_MODE_MIX = "MIX_ARCHIVE"
 LIBRARY_MODE_MUSIC = "MUSIC"
@@ -1274,6 +1284,142 @@ def is_audio_file(path: Any) -> bool:
         return False
 
 
+# Some recordings are saved as a WAV header only: RIFF/WAVE magic followed by a
+# `data` chunk that declares zero frames (a 44-byte file). They are larger than
+# zero bytes, so a plain size check lets them into the queue, and the phone then
+# pulls a body with nothing to decode. The <audio> element raises `error`, the
+# dashboard reads that as "the companion restarted", and the reconnect banner
+# flashes forever while the page reloads the same dead URL. Treating them as
+# unstreamable removes the loop at its source.
+WAV_HEADER_SIZE = 44
+
+# Anything this small cannot hold audio in any container, so it is rejected
+# without reading the file. The number is deliberately *below* the smallest
+# file that has been measured to decode to real audio: a single AAC ADTS frame
+# at 43 bytes. A floor above that would silently delete valid music, which is
+# the worse failure of the two - a rejected track disappears from the queue with
+# no explanation, whereas a stub that slips through now produces a clear "this
+# mix cannot be played" message after the client's bounded retry.
+#
+# This is only the cheap first gate. The precise "valid header, no audio"
+# checks for WAV and FLAC below are what actually fix the flicker bug, and they
+# need to be per-format because the defect looks different in each container.
+MIN_STREAMABLE_BYTES = 32
+
+# The smallest a FLAC frame can be: a frame header, a subframe header, a
+# constant subframe and the frame CRC. Used to decide whether anything is left
+# after the metadata blocks.
+FLAC_MIN_FRAME_BYTES = 13
+
+
+def _wav_has_no_audio_frames(path: Any) -> bool:
+    """True when a file is a RIFF/WAVE with no audio data in it.
+
+    Only a file that positively identifies itself as WAV is judged here: a
+    non-WAV container is left alone, because the browser may well play it and
+    guessing would silently drop good audio.
+
+    Two shapes are caught: a complete 44-byte header whose `data` chunk
+    declares zero frames (the file that caused the flicker bug), and a file
+    too short to even hold that header - a truncated WAV has no frames either.
+    """
+    try:
+        with open(path, "rb") as f:
+            header = f.read(WAV_HEADER_SIZE)
+    except OSError:
+        return False
+    if header[0:4] != b"RIFF":
+        # Not a WAV at all (or empty): leave it to the size floor.
+        return False
+    if len(header) < WAV_HEADER_SIZE:
+        # Claims RIFF but is shorter than any complete WAV header.
+        return True
+    if header[8:12] != b"WAVE":
+        return False
+    # A canonical PCM WAV puts the `data` subchunk at 36 and its length at 40.
+    # Any other layout (LIST/bext chunks before the audio) is not judged.
+    if header[36:40] != b"data":
+        return False
+    return int.from_bytes(header[40:44], "little") <= 0
+
+
+def _flac_has_no_audio_frames(path: Any) -> bool:
+    """True for a FLAC file that carries metadata but no audio frames.
+
+    FLAC has the same failure class as WAV: a valid `fLaC` marker plus a
+    STREAMINFO block and no frames at all. A truncated file keeps only the
+    metadata, so the audio start offset parsed from the block headers is at or
+    past the end of the file.
+
+    The minimum a frame can be is ~13 bytes (frame header, subframe header, a
+    constant subframe and the CRC), so a file with less than that left after
+    the metadata cannot hold audio. The observed smallest playable FLAC is 66
+    bytes; this rejects the 44-byte stub without guessing at a magic size.
+    """
+    try:
+        with open(path, "rb") as f:
+            if f.read(4) != b"fLaC":
+                return False
+            start = 4
+            # Walk the metadata blocks to find where audio begins. The header
+            # is one byte of flags plus a 3-byte length; the last-block flag is
+            # the high bit of the first byte. A file truncated mid-metadata is
+            # treated as empty, which is correct: there is no audio in it.
+            for _ in range(64):
+                block_header = f.read(4)
+                if len(block_header) < 4:
+                    return True
+                is_last = bool(block_header[0] & 0x80)
+                length = int.from_bytes(block_header[1:4], "big")
+                start += 4 + length
+                if is_last:
+                    break
+                if f.seek(length, os.SEEK_CUR) is None:  # pragma: no cover
+                    return True
+            else:
+                return False
+    except OSError:
+        return False
+    try:
+        return os.path.getsize(str(path)) < (start + FLAC_MIN_FRAME_BYTES)
+    except OSError:
+        return False
+
+
+def is_streamable_file(path: Any, st: Optional[os.stat_result] = None) -> bool:
+    """A file the phone can actually decode and play.
+
+    This is the queue-side gate: existence, more than a bare header's worth of
+    bytes, and at least one audio frame. Anything else is skipped when the queue
+    is built rather than being handed to a browser that can only answer with a
+    media error.
+
+    `st` lets a caller that already has the stat result (the archive walk does)
+    pass it in, so a large library is not stat'ed twice per file.
+    """
+    if not path:
+        return False
+    if st is None:
+        try:
+            st = os.stat(str(path))
+        except OSError:
+            return False
+    if not stat.S_ISREG(st.st_mode) or st.st_size <= MIN_STREAMABLE_BYTES:
+        return False
+    # Only PCM-WAV and FLAC have a cheap, certain "header but no audio" test.
+    # Guarding on the suffix keeps a 51k-track music playlist from opening
+    # every file: it already pays one stat per path in the queue build.
+    try:
+        ext = Path(str(path)).suffix.lower()
+    except Exception:
+        return True
+    if ext in (".wav", ".wave"):
+        return not _wav_has_no_audio_frames(path)
+    if ext == ".flac":
+        return not _flac_has_no_audio_frames(path)
+    return True
+
+
 def get_library_mode() -> str:
     """Which library the companion streams from: MIX_ARCHIVE, MUSIC or FAVORITES.
 
@@ -1657,7 +1803,11 @@ def _scan_dirs(roots: List[Path]) -> List[str]:
                     continue
                 # A zero-byte file (usually an interrupted conversion) would
                 # stall the phone on an empty body, so it is not streamable.
-                if st.st_size <= 0:
+                # Neither is a WAV header with a zero-length data chunk: it has
+                # a size, so the old check passed it through and the browser
+                # failed on it, which is what made the dashboard reconnect in a
+                # loop. is_streamable_file() judges both.
+                if not is_streamable_file(full, st):
                     continue
                 found.append((st.st_mtime, full))
     found.sort(key=lambda item: item[0], reverse=True)
@@ -1677,7 +1827,7 @@ def _read_playlist_file(path: Path) -> List[str]:
                     item = item.get("path") or item.get("file") or ""
                 if isinstance(item, str) and is_audio_file(item):
                     paths.append(item)
-            return [p for p in paths if os.path.isfile(p)]
+            return [p for p in paths if is_streamable_file(p)]
         paths = []
         for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
             line = line.strip()
@@ -1685,7 +1835,10 @@ def _read_playlist_file(path: Path) -> List[str]:
                 continue
             if is_audio_file(line):
                 paths.append(line)
-        return [p for p in paths if os.path.isfile(p)]
+        # A saved playlist can still name a mix that was replaced by a
+        # header-only WAV stub, so the same frame check the archive scan uses
+        # applies here. Otherwise the queue hands the browser a dead file.
+        return [p for p in paths if is_streamable_file(p)]
     except Exception:
         return []
 
@@ -2256,11 +2409,44 @@ def current_stream_file(cached: bool = False) -> Tuple[str, Dict[str, Any]]:
     if saved and saved in queue:
         idx = queue.index(saved)
     else:
+        # The saved file is gone from the queue. That happens when a mix is
+        # renamed, deleted, or dropped by is_streamable_file() because it is a
+        # header-only WAV. The cursor moves to the new entry, so the elapsed
+        # clock belongs to a different file now: carrying it over would resume
+        # the replacement mix at an arbitrary mid-point (or at its very end,
+        # which looks like a dead player). Start the new file at the top.
+        if saved:
+            state["position_sec"] = 0.0
+            state["duration_sec"] = 0.0
+            # started_at must follow `playing`, exactly like switch() and
+            # select_index() do. Leaving it at 0 while playing stays True makes
+            # stream_position() treat the clock as inactive, so the phone would
+            # show a frozen 00:00:00 for the whole mix.
+            state["started_at"] = time.time() if state.get("playing") else 0.0
         state["path"] = queue[idx]
     return queue[idx], state
 
 
 def get_eq_status() -> Dict[str, Any]:
+    # The host player is the authority on what is on air, so the visualizer and
+    # the progress bar must read its clock, not the phone-facing stream cursor.
+    host = host_player_payload()
+    if host is not None:
+        return {
+            "state": host["state"],
+            "position": host["position"],
+            "duration": host["duration"],
+            "position_sec": host["position_sec"],
+            "duration_sec": host["duration_sec"],
+            "progress_pct": host["progress_pct"],
+            "volume": host["volume"],
+            "pitch_percent": host["pitch_percent"],
+            "shuffle": host["shuffle"],
+            "repeat": host["repeat"],
+            "levels": host["levels"],
+            "peaks": host["peaks"],
+        }
+
     active_file, state = current_stream_file(cached=True)
     playing = bool(state.get("playing"))
     pos = stream_position(state)
@@ -2280,6 +2466,7 @@ def get_eq_status() -> Dict[str, Any]:
         "levels": [0.0] * 24,
         "peaks": [0.0] * 24,
     }
+
 
 
 def format_seconds(value: Any) -> str:
@@ -2349,10 +2536,254 @@ def _wav_duration(path: str) -> float:
     return 0.0
 
 
+# ------------------------------------------------------------------------------
+# HOST PLAYER (READ-ONLY)
+#
+# "Now playing" means the track the workstation's MP Audio Player is actually
+# rendering. The companion's own stream session below only knows which file a
+# phone should pull over HTTP, which is not the same thing: it is a queue
+# cursor with an unattended clock, and it drifts away from the host the moment
+# playback is started, stopped or skipped anywhere other than this dashboard.
+#
+# Reading the player is not the same as driving it: nothing here opens a sound
+# device or spawns a player. The IPC command below is only ever called when the
+# player is already running, so a phone tap can never start audio on the host.
+# ------------------------------------------------------------------------------
+def _player_paths() -> Tuple[Path, Path, Path, Path]:
+    """Resolve the player's files from CONFIG_DIR at call time.
+
+    Resolving lazily means a test (or a relocated profile) that redirects
+    CONFIG_DIR also redirects host-player detection.
+    """
+    return (
+        CONFIG_DIR / "mp_audio_player.sock",
+        CONFIG_DIR / "mp_audio_player.port",
+        CONFIG_DIR / "mp_player_state.json",
+        CONFIG_DIR / "mp_player.pid",
+    )
+
+
+def is_pid_alive(pid: Any) -> bool:
+    try:
+        pid_int = int(pid)
+    except (TypeError, ValueError):
+        return False
+    if pid_int <= 0:
+        return False
+    try:
+        os.kill(pid_int, 0)
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def query_player_ipc(timeout: float = 0.35) -> Optional[Dict[str, Any]]:
+    """Live status over the player's socket. None when it is not answering."""
+    socket_path, port_file, _state, _pid = _player_paths()
+    has_unix = hasattr(socket, "AF_UNIX")
+    if has_unix:
+        if not socket_path.exists():
+            return None
+    elif not port_file.is_file():
+        return None
+    sock = None
+    try:
+        if has_unix:
+            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            sock.settimeout(timeout)
+            sock.connect(str(socket_path))
+        else:
+            sock = socket.create_connection(
+                ("127.0.0.1", int(port_file.read_text().strip())), timeout
+            )
+            sock.settimeout(timeout)
+        sock.sendall(json.dumps({"cmd": "status"}).encode("utf-8"))
+        raw = sock.recv(200000)
+        if raw:
+            response = json.loads(raw.decode("utf-8", errors="ignore"))
+            if isinstance(response, dict):
+                data = response.get("data")
+                if response.get("status") == "ok" and isinstance(data, dict):
+                    return data
+                if "path" in response:
+                    return response
+    except Exception:
+        return None
+    finally:
+        if sock is not None:
+            try:
+                sock.close()
+            except Exception:
+                pass
+    return None
+
+
+def read_player_state_file() -> Optional[Dict[str, Any]]:
+    _socket, _port, state_path, _pid = _player_paths()
+    if not state_path.is_file():
+        return None
+    try:
+        data = json.loads(state_path.read_text(encoding="utf-8", errors="ignore"))
+    except Exception:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def host_player_status() -> Tuple[Optional[Dict[str, Any]], str]:
+    """Status of the player that is actually running, plus where it came from.
+
+    Returns (None, "none") when no live player exists. A state file left behind
+    by a dead daemon is deliberately ignored: reporting a stopped mix as "now
+    playing" is the same class of lie as the wrong title.
+    """
+    live = query_player_ipc()
+    if live is not None:
+        pid = live.get("pid")
+        # The socket answering is already proof of a live daemon; the pid field
+        # is only a cross-check for older IPC payloads.
+        if not pid or is_pid_alive(pid):
+            return live, "ipc_socket"
+
+    state = read_player_state_file()
+    if state is None:
+        return None, "none"
+    pid = state.get("pid")
+    if not pid:
+        _socket, _port, _state_path, pid_file = _player_paths()
+        try:
+            pid = int(pid_file.read_text(encoding="utf-8").strip())
+        except (OSError, ValueError):
+            pid = None
+    if is_pid_alive(pid):
+        return state, "state_file"
+    return None, "none"
+
+
+def send_player_command(cmd: str, **kwargs: Any) -> bool:
+    """Forward one remote-control command to an already-running player.
+
+    Never starts a player: if nothing is listening this simply returns False and
+    the caller falls back to its own stream bookkeeping.
+    """
+    socket_path, port_file, _state, _pid = _player_paths()
+    has_unix = hasattr(socket, "AF_UNIX")
+    if has_unix:
+        if not socket_path.exists():
+            return False
+    elif not port_file.is_file():
+        return False
+    sock = None
+    try:
+        if has_unix:
+            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            sock.settimeout(0.5)
+            sock.connect(str(socket_path))
+        else:
+            sock = socket.create_connection(
+                ("127.0.0.1", int(port_file.read_text().strip())), 0.5
+            )
+            sock.settimeout(0.5)
+        sock.sendall(json.dumps({"cmd": cmd, **kwargs}).encode("utf-8"))
+        raw = sock.recv(4096)
+        if raw:
+            response = json.loads(raw.decode("utf-8", errors="ignore"))
+            return response.get("status") == "ok"
+    except Exception:
+        return False
+    finally:
+        if sock is not None:
+            try:
+                sock.close()
+            except Exception:
+                pass
+    return False
+
+
+def host_player_payload() -> Optional[Dict[str, Any]]:
+    """The host player's state as the dashboard's status payload needs it."""
+    data, source = host_player_status()
+    if data is None:
+        return None
+
+    active_file = str(data.get("path", "") or "")
+    raw_title = str(data.get("title", "") or "")
+    duration = float(data.get("duration_sec", 0.0) or 0.0)
+    if duration <= 0 and active_file:
+        duration = probe_duration(active_file)
+    position = max(0.0, float(data.get("position_sec", 0.0) or 0.0))
+
+    title, artist, album = clean_track_title(raw_title, active_file, {})
+    tracklist: List[str] = []
+    if active_file:
+        tl_path = find_tracklist_for_mix(active_file)
+        tl_info = parse_tracklist_file(tl_path) if tl_path else {"metadata": {}, "tracks": []}
+        title, artist, album = clean_track_title(
+            raw_title, active_file, tl_info.get("metadata", {})
+        )
+        tracklist = tl_info.get("tracks", [])
+
+    sample_rate = int(data.get("sample_rate", 0) or 0)
+    channels = int(data.get("channels", 2) or 2)
+    state = str(data.get("state", "stopped")).lower()
+    playing = state == "playing" and bool(active_file)
+
+    # A phone engaging the stream should hear what the host is hearing now. The
+    # same tail guard as the stream session applies: a position on the final
+    # frames is an unfinished run, not a resume point.
+    resume = resume_point({"position_sec": position, "duration_sec": duration}, duration)
+
+    return {
+        "player": "MP Audio Player",
+        "state": "playing" if playing else ("paused" if active_file else "stopped"),
+        "title": title or "No Mix Playing",
+        "raw_title": raw_title,
+        "artist": artist,
+        "album": album,
+        "position": format_seconds(position),
+        "duration": format_seconds(duration) if duration else "00:00:00",
+        "position_sec": round(position, 2),
+        "duration_sec": round(duration, 2),
+        "resume_sec": round(resume, 2),
+        "progress_pct": round(position / duration * 100.0, 1) if duration > 0 else 0.0,
+        "active_file": active_file,
+        "format": Path(active_file).suffix.lstrip(".").upper() if active_file else "",
+        "sample_rate": f"{round(sample_rate / 1000.0, 1)} kHz" if sample_rate else "",
+        "channels": "Stereo" if channels == 2 else ("Mono" if channels == 1 else f"{channels} Ch"),
+        "volume": int(data.get("volume", 100) or 0),
+        "pitch_percent": int(data.get("pitch_percent", 0) or 0),
+        "pitch_factor": float(data.get("pitch_factor", 1.0) or 1.0),
+        "shuffle": bool(data.get("shuffle", False)),
+        "repeat": str(data.get("repeat", "all")),
+        "levels": data.get("levels", [0.0] * 24),
+        "peaks": data.get("peaks", [0.0] * 24),
+        "mini_eq": str(data.get("mini_eq", "")),
+        "tracklist": tracklist,
+        "tracklist_total": len(tracklist),
+        "queue_len": int(data.get("total_tracks", 0) or 0),
+        "queue_position": int(data.get("index", 0) or 0) + 1,
+        "mode": str(data.get("mode", "") or get_library_mode()),
+        "host_player": True,
+        "host_player_source": source,
+    }
+
+
 def get_playback_status(cli_theme: Optional[str] = None) -> Dict[str, Any]:
     active_theme = get_theme_palette(cli_theme)
+
+    # The running host player is the authority on what is on air. The stream
+    # session below is only the phone-facing queue cursor used when nothing is
+    # playing on this machine at all.
+    host = host_player_payload()
+    if host is not None:
+        host["mode_label"] = MODE_LABELS.get(str(host.get("mode", "")), "Library")
+        host["library_fallback"] = bool(_queue_source_state.get("fallback"))
+        host["library_detail"] = _queue_source_state.get("detail", "")
+        host["theme"] = active_theme
+        return host
+
     active_file, state = current_stream_file(cached=True)
     queue = build_stream_queue_cached()
+
 
     duration = probe_duration(active_file) if active_file else 0.0
     if duration > 0 and abs(float(state.get("duration_sec", 0.0) or 0.0) - duration) > 0.5:
@@ -2454,6 +2885,15 @@ def get_mini_playlist(limit: Optional[int] = None) -> Dict[str, Any]:
     saved = str(state.get("path", "") or "")
     if saved and saved in queue:
         idx = queue.index(saved)
+    # When the host player is on air, its file is the one the dashboard names,
+    # so the highlighted row must be that same file. Showing the stream
+    # session's cursor instead is what made the playlist disagree with the
+    # title above it.
+    host = host_player_payload()
+    if host and host.get("active_file"):
+        host_file = str(host["active_file"])
+        if host_file in queue:
+            idx = queue.index(host_file)
     idx = max(0, min(idx, len(queue) - 1))
 
     items: List[Dict[str, Any]] = []
@@ -2564,10 +3004,86 @@ def play_random_track() -> Dict[str, Any]:
 
 
 def control_player(action: str, params: Optional[Dict[str, List[str]]] = None) -> bool:
-    """Drive the stream session. The browser performs the actual playback."""
+    """Drive playback. The running host player owns the audio, so a live one is
+    forwarded to it; otherwise the browser performs the playback of its stream."""
     params = params or {}
     if action in ("random", "play_random", "play_random_track"):
         return bool(play_random_track().get("success"))
+
+    # A running MP Audio Player is what the dashboard is reporting, so the
+    # transport buttons must act on that player. Without this the title would
+    # follow the host while every tap silently edited the unused stream session.
+    host, _source = host_player_status()
+    if host is not None:
+        if action in ("play", "resume"):
+            return send_player_command("play")
+        if action in ("pause",):
+            return send_player_command("pause")
+        if action in ("play-pause", "toggle"):
+            return send_player_command("play_pause")
+        if action == "next":
+            return send_player_command("next")
+        if action in ("previous", "prev"):
+            return send_player_command("prev")
+        if action == "seek_forward":
+            return send_player_command("seek", seconds=30.0)
+        if action == "seek_backward":
+            return send_player_command("seek", seconds=-30.0)
+        if action == "seek":
+            try:
+                delta = float(params.get("seconds", [10.0])[0])
+            except (TypeError, ValueError):
+                delta = 10.0
+            return send_player_command("seek", seconds=delta)
+        if action == "seek_to":
+            try:
+                target = float(params.get("position", [0.0])[0])
+            except (TypeError, ValueError):
+                target = 0.0
+            return send_player_command("seek_to", position=target)
+        if action in ("shuffle", "toggle_shuffle"):
+            return send_player_command("shuffle")
+        if action in ("repeat", "cycle_repeat"):
+            return send_player_command("repeat")
+        if action == "vol_up":
+            return send_player_command("vol_up", step=5)
+        if action == "vol_down":
+            return send_player_command("vol_down", step=5)
+        if action == "set_volume":
+            try:
+                volume = int(params.get("volume", [100])[0])
+            except (TypeError, ValueError):
+                volume = 100
+            return send_player_command("set_volume", volume=volume)
+        if action == "mute":
+            return send_player_command("mute")
+        if action == "pitch_up":
+            return send_player_command("pitch_up", step=1)
+        if action == "pitch_down":
+            return send_player_command("pitch_down", step=1)
+        if action == "reset_pitch":
+            return send_player_command("reset_pitch")
+        if action == "select_index":
+            # Companion queue indices do not match the player's own playlist
+            # indices, so resolve the row to a file and ask the player to load
+            # that file rather than guessing an index.
+            try:
+                target_index = int(params.get("index", [0])[0])
+            except (TypeError, ValueError):
+                target_index = 0
+            host_queue = build_stream_queue()
+            if 0 <= target_index < len(host_queue):
+                return send_player_command("play", file=host_queue[target_index])
+            return False
+        if action == "track_ended":
+            # The host player advances itself; a phone reporting the end of a
+            # file it streamed must not move the host's queue.
+            return True
+        if action == "report_position":
+            # The host's own clock is authoritative, so a phone clock report is
+            # irrelevant and must never be written over it.
+            return True
+
     queue = build_stream_queue()
     if not queue:
         return False
@@ -2602,7 +3118,23 @@ def control_player(action: str, params: Optional[Dict[str, List[str]]] = None) -
             state["started_at"] = time.time() if state.get("playing") else 0.0
 
         def switch(step: int) -> None:
-            state["index"] = (int(state.get("index", 0)) + step) % len(queue)
+            n = len(queue)
+            if n <= 0:
+                return
+            # Shuffle must actually shuffle. This used to be a plain +1 walk, so
+            # the flag only changed the badge: enabling shuffle still played the
+            # queue in order. Pick a random entry instead, never repeating the
+            # one already playing.
+            if state.get("shuffle") and n > 1:
+                current = str(state.get("path", "") or "")
+                try:
+                    avoid = queue.index(current) if current in queue else int(state.get("index", 0) or 0)
+                except ValueError:
+                    avoid = int(state.get("index", 0) or 0)
+                choices = [i for i in range(n) if i != avoid]
+                state["index"] = random.choice(choices) if choices else 0
+            else:
+                state["index"] = (int(state.get("index", 0)) + step) % n
             state["path"] = queue[state["index"]]
             state["position_sec"] = 0.0
             state["started_at"] = time.time() if state.get("playing") else 0.0
@@ -2737,12 +3269,18 @@ def render_launch_pad_html() -> str:
 # ------------------------------------------------------------------------------
 def render_html_page(theme: Dict[str, Any]) -> str:
     t = theme
-    is_rainbow = t.get("is_dynamic_rainbow", False) or t['id'] == "dynamic_rainbow_liquid_glass"
     launch_pad_html = render_launch_pad_html()
 
     # Dynamic Liquid Glass [Rainbow Colours]: the body carries a slowly rotating
     # hue while the glass cards breathe, so the whole dashboard cycles through
     # the spectrum instead of sitting on one static accent colour.
+    #
+    # This block is always emitted, even when the page loads on another theme.
+    # Every rule is scoped to a body class, so it stays inert until the theme is
+    # selected. Previously it was only emitted when the rainbow theme was active
+    # at render time, which meant switching to it from the theme menu added the
+    # class but had no keyframes or rules to animate - the colours only started
+    # cycling after a full page reload.
     rainbow_anim_css = """
         @keyframes rainbowShift {
             0% { background-position: 0% 50%; }
@@ -2814,7 +3352,7 @@ def render_html_page(theme: Dict[str, Any]) -> str:
                 animation: none;
             }
         }
-    """ if is_rainbow else ""
+    """
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -4371,8 +4909,17 @@ def render_html_page(theme: Dict[str, Any]) -> str:
         let statusFailureCount = 0;
         // Native media errors (the server went away mid-stream) are recovered
         // by re-attaching to the fresh instance, not by a full page reload.
+        // The count is what stops an endless retry: re-attach resets the
+        // per-file flag, so a file the browser can never decode (a header-only
+        // WAV, a truncated conversion) used to reload the same dead URL forever
+        // and the "companion has been restarted" banner never went away. After
+        // two failed recoveries for the same file the dashboard stops and says
+        // what is wrong instead of flickering.
         let mediaRecoveryUsed = false;
         let lastMediaErrorAt = 0;
+        let mediaRecoveryAttempts = 0;
+        let mediaRecoveryFile = "";
+        const MEDIA_RECOVERY_LIMIT = 2;
 
         // ---------------------------------------------------------------------
         // Top tabs: MP Liquid Player <-> MP Assistant.
@@ -4937,14 +5484,38 @@ def render_html_page(theme: Dict[str, Any]) -> str:
                     }}
                     sendAction('track_ended');
                 }});
-                // The tray stopped the service while this mix was playing. The
-                // URL is dead, so re-attach once to the fresh instance instead
-                // of leaving a silent player behind. A second error means the
-                // stream really is broken and is left to the normal retry.
+                // The tray stopped the service while this mix was playing, OR
+                // the browser cannot decode the file the queue handed it. The
+                // URL may be dead, so re-attach once to the fresh instance
+                // instead of leaving a silent player behind.
+                //
+                // The attempt counter is the important part: a track that is
+                // genuinely unplayable (a header-only WAV, a truncated
+                // conversion) fails the same way every time, and an unbounded
+                // "reconnect" is what produced the permanently flickering
+                // screen and the restart banner that never cleared. Two
+                // attempts are enough to ride out a real service restart.
                 audioEl.addEventListener('error', () => {{
                     if (!activeAudioFile) return;
                     const now = performance.now();
+                    const sameFile = (mediaRecoveryFile === activeAudioFile);
                     if (mediaRecoveryUsed && (now - lastMediaErrorAt) < 5000) return;
+                    if (sameFile && mediaRecoveryAttempts >= MEDIA_RECOVERY_LIMIT) {{
+                        // Stop retrying and say what is actually wrong.
+                        mediaRecoveryUsed = true;
+                        lastMediaErrorAt = now;
+                        const label = activeAudioFile.split('/').pop() || activeAudioFile;
+                        showStreamOverlay(
+                            'This mix cannot be played on this device (' + label + '). ' +
+                            'It is empty or damaged on the computer — pick another mix ' +
+                            'or re-export it.');
+                        return;
+                    }}
+                    if (!sameFile) {{
+                        mediaRecoveryFile = activeAudioFile;
+                        mediaRecoveryAttempts = 0;
+                    }}
+                    mediaRecoveryAttempts += 1;
                     mediaRecoveryUsed = true;
                     lastMediaErrorAt = now;
                     showRestartNotice('MP Audio Web Companion has been restarted — reconnecting…');
@@ -5260,6 +5831,17 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             }}
             audioEl.play().then(() => {{
                 audioStreamEngaged = true;
+                // Playback really started, so the file is good: clear the
+                // recovery budget for it and drop any leftover error notice.
+                // The guard is the duration: a header-only file can resolve
+                // play() and then end immediately, and the ended handler would
+                // otherwise restart it forever.
+                if (isFinite(audioEl.duration) && audioEl.duration > 0) {{
+                    mediaRecoveryAttempts = 0;
+                    mediaRecoveryUsed = false;
+                    mediaRecoveryFile = activeAudioFile || "";
+                }}
+                hideRestartNotice();
                 hideStreamOverlay();
             }}).catch(() => {{
                 showStreamOverlay(streamUnavailableReason);
@@ -5271,9 +5853,29 @@ def render_html_page(theme: Dict[str, Any]) -> str:
         // no longer sends such a position, but a browser that dropped the seek
         // can still land there, so an end that arrives immediately after an
         // engage restarts the mix instead of skipping it.
+        //
+        // This is bounded on purpose. A file the browser can never play bounces
+        // straight back to "ended" every time, so an unconditional restart here
+        // is another way to spin the page forever: reset, end, reset, end.
+        // After two restarts of the same file, hand it to the normal advance.
+        let quickEndRestarts = 0;
+        let quickEndFile = "";
+
         function restartStreamFromTop() {{
             const audioEl = document.getElementById('mobileAudioStream');
             if (!audioEl) return;
+            if (quickEndFile !== activeAudioFile) {{
+                quickEndFile = activeAudioFile || "";
+                quickEndRestarts = 0;
+            }}
+            if (quickEndRestarts >= 2) {{
+                // Two immediate ends is not a bad seek, it is an unplayable
+                // file. Move on instead of restarting it again.
+                quickEndRestarts = 0;
+                sendAction('track_ended');
+                return;
+            }}
+            quickEndRestarts += 1;
             try {{
                 audioEl.currentTime = 0;
             }} catch (e) {{}}
@@ -5330,13 +5932,44 @@ def render_html_page(theme: Dict[str, Any]) -> str:
         }}
 
         let streamAutoStarted = false;
+        // True when the dashboard is mirroring a running MP Audio Player. In
+        // that mode the host owns the audio: the phone must not open its own
+        // stream, or two devices render the mix out of step with each other.
+        let hostPlayerActive = false;
+        let hostPlayerFile = "";
 
         // Called once the dashboard knows which file the server is streaming.
         function maybeAutoStartStream() {{
             if (streamAutoStarted) return;
             if (!activeAudioFile) return;
+            // A live host player is the source of truth and is already making
+            // sound where it should. Auto-engaging here would start a second,
+            // unsynchronised copy on the phone.
+            if (hostPlayerActive) {{
+                hideStreamOverlay();
+                return;
+            }}
             streamAutoStarted = true;
             engageStreamFromServer(lastServerResume);
+        }}
+
+        // Keep the local element pointed at the host's file so a listener can
+        // opt in with "Engage Audio Stream", without playing automatically.
+        function syncHostPlayerFile() {{
+            const audioEl = document.getElementById('mobileAudioStream');
+            if (!audioEl || !activeAudioFile) return;
+            if (hostPlayerFile === activeAudioFile && audioStreamConfigured) return;
+            hostPlayerFile = activeAudioFile;
+            audioEl.src = '/api/stream?file=' + encodeURIComponent(activeAudioFile);
+            audioStreamConfigured = true;
+            const resumeAt = Number(lastServerResume) || 0;
+            if (resumeAt > 0) {{
+                audioEl.addEventListener('loadedmetadata', function once() {{
+                    audioEl.removeEventListener('loadedmetadata', once);
+                    seekAudioTo(resumeAt, true);
+                }});
+            }}
+            audioEl.load();
         }}
 
         function activateMobileStream() {{
@@ -5504,9 +6137,16 @@ def render_html_page(theme: Dict[str, Any]) -> str:
                 // local audio analysis to fetch - the phone owns playback - so
                 // polling the server for it would only add load.
                 const audioEl = document.getElementById('mobileAudioStream');
-                const hasLocalClock = audioEl && isFinite(audioEl.duration) && audioEl.duration > 0 && audioStreamConfigured;
+                // While mirroring a live host player, the phone element is
+                // idle until the listener opts in, so its clock would sit at
+                // zero and contradict the title. Follow the host clock instead
+                // until the phone is actually the one playing.
+                const phonePlaying = audioEl && !audioEl.paused && !audioEl.ended && audioStreamConfigured;
+                const hasLocalClock = !hostPlayerActive && audioEl &&
+                    isFinite(audioEl.duration) && audioEl.duration > 0 && audioStreamConfigured;
                 const shownPos = hasLocalClock ? audioEl.currentTime : Number(data.position_sec || 0);
                 const shownDur = hasLocalClock ? audioEl.duration : Number(data.duration_sec || 0);
+                if (hostPlayerActive && !phonePlaying) isPlayerActive = false;
 
                 if (hasLocalClock) {{
                     document.getElementById('posTime').innerText = formatClock(shownPos);
@@ -5644,6 +6284,10 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             activeAudioFile = "";
             lastServerPos = -1.0;
             lastServerResume = 0.0;
+            // The per-file one-shot guard is cleared so a genuine restart can
+            // recover again, but the attempt counter is deliberately kept: it
+            // is what bounds recovery for a file that will never play. Only a
+            // successful play (or a track change) resets it.
             mediaRecoveryUsed = false;
             lastMediaErrorAt = 0;
             if (audioEl) {{
@@ -5708,12 +6352,32 @@ def render_html_page(theme: Dict[str, Any]) -> str:
                 streamUnavailableReason = streamUnavailableDetail(data);
                 syncStreamOverlayDetail();
 
+                // A running host player means the workstation is the output.
+                // Mirror its file for an opt-in listen, but never autoplay.
+                const wasHostActive = hostPlayerActive;
+                hostPlayerActive = Boolean(data.host_player);
+                if (!hostPlayerActive && wasHostActive) {{
+                    hostPlayerFile = "";
+                }}
+
                 if (data.active_file && activeAudioFile !== data.active_file) {{
                     const wasPlaying = audioStreamEngaged && audioElIsPlaying();
                     activeAudioFile = data.active_file;
                     audioStreamConfigured = false;
                     lastServerPos = -1.0;
                     lastServerResume = Number(data.resume_sec) || 0;
+                    // A different file is a clean slate: whatever failed before
+                    // must not count against this one. Without this a bad track
+                    // would leave every later track on its last recovery
+                    // attempt and the dashboard would refuse to try them.
+                    if (mediaRecoveryFile !== activeAudioFile) {{
+                        mediaRecoveryAttempts = 0;
+                        mediaRecoveryUsed = false;
+                    }}
+                    if (quickEndFile !== activeAudioFile) {{
+                        quickEndFile = "";
+                        quickEndRestarts = 0;
+                    }}
                     const audioEl = document.getElementById('mobileAudioStream');
                     if (audioEl) {{
                         audioEl.src = '/api/stream?file=' + encodeURIComponent(data.active_file);
@@ -5731,8 +6395,10 @@ def render_html_page(theme: Dict[str, Any]) -> str:
                             }});
                         }}
                         audioEl.load();
-                        // Keep playing across a server-side track change.
-                        if (wasPlaying) {{
+                        // Keep playing across a server-side track change, but
+                        // only when the phone is the one playing. With a live
+                        // host player the phone stays silent unless engaged.
+                        if (wasPlaying && !hostPlayerActive) {{
                             audioEl.play().catch(() => {{}});
                         }}
                     }}
@@ -5741,8 +6407,9 @@ def render_html_page(theme: Dict[str, Any]) -> str:
                     // tap that does engage uses the newest safe position.
                     lastServerResume = Number(data.resume_sec) || 0;
                 }}
-                // First status poll: the service already armed the stream at
-                // startup, so pull it without waiting for a tap.
+                if (hostPlayerActive) syncHostPlayerFile();
+                // First status poll: pull the stream without waiting for a tap,
+                // unless the host player is the one on air.
                 maybeAutoStartStream();
 
                 document.getElementById('specFormat').innerText = data.format || "AUDIO";
@@ -6211,6 +6878,26 @@ class CompanionHandler(http.server.BaseHTTPRequestHandler):
 
     def _serve_audio_stream(self, file_path: str) -> None:
         try:
+            # Refuse a file with no audio frames up front. Serving its 44-byte
+            # header as a 200 makes the <audio> element raise a media error,
+            # which the dashboard historically read as "the companion
+            # restarted" and retried forever. A 404 is unambiguous: the page
+            # stops and can explain that this mix is empty on the computer.
+            if not is_streamable_file(file_path):
+                self.send_response(404)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                try:
+                    self.wfile.write(json.dumps({
+                        "error": "no_audio_frames",
+                        "detail": "The mix file has no playable audio.",
+                    }).encode("utf-8"))
+                except (BrokenPipeError, ConnectionResetError):
+                    self.close_connection = True
+                return
+
             file_size = os.path.getsize(file_path)
             content_type = AUDIO_CONTENT_TYPES.get(Path(file_path).suffix.lower(), "audio/mpeg")
             start, end = self._parse_range_header(file_size)

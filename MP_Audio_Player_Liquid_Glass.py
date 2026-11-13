@@ -159,6 +159,8 @@ class GlassHost:
         self.child_xid = self.child_pid = self._last_top_click_x = self._last_top_click_y = 0
         self.child_done = self.is_maximized = self._term_dragging = False
         self.audio_drop = None
+        self.slider = None
+        self.clear_opacity = 0.70
         self._last_top_click = 0.0
         self._target_cols = 100 if self.mode == "TRACKLIST" else (74 if self.mode in ("MINI", "MICRO") else COLS)
         self._target_rows = 35 if self.mode == "TRACKLIST" else (14 if self.mode == "MINI" else (7 if self.mode == "MICRO" else ROWS))
@@ -186,7 +188,10 @@ class GlassHost:
         gx, gy = self.renderer.window_pos()
         w, h = self.renderer.window_size()
         m = self.renderer.bezel_px
-        return gx + m, gy + m, max(32, w - 2 * m), max(32, h - 2 * m)
+        # Keep the bottom strip free for the transparency slider, exactly as
+        # the OpenGL host does. Without it the terminal covers the slider and
+        # the bar appears to have been removed.
+        return gx + m, gy + m, max(32, w - 2 * m), max(32, h - 2 * m - 44)
 
     def _place_terminal(self):
         x, y, iw, ih = self._well_rect()
@@ -197,7 +202,58 @@ class GlassHost:
                 self.gtk_window.resize(iiw, iih)
                 self._last_term_size = (iiw, iih)
         self.renderer.place_terminal(self.child_xid, x, y, iw, ih)
+        self._place_slider()
         self._sync_panels()
+
+    def _place_slider(self):
+        """Keep the transparency bar on the strip reserved at the bottom."""
+        slider = getattr(self, "slider", None)
+        if slider is None or not slider.available or self.renderer is None:
+            return
+        try:
+            gx, gy = self.renderer.window_pos()
+            w, h = self.renderer.window_size()
+            slider.place(int(gx), int(gy), int(w), int(h))
+        except Exception:
+            pass
+
+    def _on_slider_change(self, opacity):
+        """Apply a drag on the transparency bar to the glass window."""
+        try:
+            self.clear_opacity = float(opacity)
+        except Exception:
+            pass
+        win = 0
+        try:
+            win = int(self.renderer.x11_window() or 0) if self.renderer is not None else 0
+        except Exception:
+            win = 0
+        if win:
+            try:
+                self.renderer._set_opacity(win, float(opacity))
+            except Exception:
+                pass
+
+    def _attach_slider(self, Gtk, Gdk):
+        """Create the transparency bar overlay for this window."""
+        try:
+            from liquid_glass_slider import DEFAULT_OPACITY, GlassSlider
+        except ImportError:
+            from scripts.liquid_glass_slider import DEFAULT_OPACITY, GlassSlider
+        opacity = float(getattr(self, "clear_opacity", DEFAULT_OPACITY) or DEFAULT_OPACITY)
+        slider = GlassSlider(opacity=opacity, on_change=self._on_slider_change)
+        if slider.attach(Gtk, Gdk, parent=self.gtk_window):
+            self.slider = slider
+            try:
+                from liquid_glass_opengl import get_dynamic_theme_state, read_player_theme
+                colors, _, _ = get_dynamic_theme_state(read_player_theme())
+                slider.set_theme(colors)
+            except Exception:
+                pass
+            return True
+        self.slider = None
+        return False
+
 
     def _sync_panels(self):
         r = self.renderer
@@ -452,6 +508,18 @@ class GlassHost:
         self._note_player_window(width, height)
         self.renderer.set_window_size(width, height)
         term.set_size(self._target_cols, self._target_rows)
+        self._recenter_window(width, height)
+
+    def _recenter_window(self, width, height):
+        """Centre the freshly sized window instead of leaving it in the corner."""
+        if IS_WIN or self.renderer is None:
+            return
+        try:
+            from desktop_launch_screen import main_window_origin
+            x, y = main_window_origin(int(width), int(height), 72, 64)
+            self.renderer.set_window_pos(int(x), int(y))
+        except Exception:
+            pass
 
     def run(self):
         m = LiquidGlassRenderer.bezel_px
@@ -607,7 +675,17 @@ class GlassHost:
         self._place_terminal()
         r.focus_window(self.child_xid)
 
-        from gi.repository import Gdk
+        from gi.repository import Gdk, Gtk
+        # The transparency bar. The Vulkan pipeline draws the themed pane and
+        # has no place to paint a bar, so the bar is a GTK overlay pinned to
+        # the strip the terminal well keeps free.
+        try:
+            attached = self._attach_slider(Gtk, Gdk)
+            if not attached:
+                print("MP slider: overlay could not be created", file=sys.stderr)
+        except Exception as exc:
+            self.slider = None
+            print(f"MP slider: {exc}", file=sys.stderr)
         term.add_events(Gdk.EventMask.BUTTON_PRESS_MASK | Gdk.EventMask.BUTTON_RELEASE_MASK |
                         Gdk.EventMask.BUTTON1_MOTION_MASK | Gdk.EventMask.POINTER_MOTION_MASK)
         for sig, cb in (("button-press-event", self._on_term_button_press),
@@ -641,6 +719,13 @@ class GlassHost:
                     theme = new_theme
                     if self.terminal is not None:
                         self._apply_glass_foreground(self.terminal, theme)
+                    if getattr(self, "slider", None) is not None:
+                        try:
+                            from liquid_glass_opengl import get_dynamic_theme_state
+                            colors, _, _ = get_dynamic_theme_state(theme)
+                            self.slider.set_theme(colors)
+                        except Exception:
+                            pass
             self._follow_child_ui_size()
             self._sync_player_window()
             self._publish_player_window_geometry()
@@ -763,6 +848,12 @@ class GlassHost:
 
     def close(self):
         self._release_windows_drag()
+        slider, self.slider = getattr(self, "slider", None), None
+        if slider is not None:
+            try:
+                slider.detach()
+            except Exception:
+                pass
         pid, self.child_pid = self.child_pid, 0
         if pid:
             try:
@@ -796,7 +887,16 @@ def ensure_random_visualizer_started() -> bool:
         if not vis_script:
             return False
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        # Write the active state before the child starts, so its first poll
+        # already knows it belongs behind this player.
+        try:
+            from liquid_player_visualizer import mark_player_visualizer_attached
+            mark_player_visualizer_attached()
+        except Exception:
+            pass
         kw = {"creationflags": 0x00000208} if IS_WIN else {"start_new_session": True}
+        if not IS_WIN:
+            kw["env"] = _visualizer_env(companion=True)
         with open(CONFIG_DIR / "liquid_visualizer.log", "a") as f:
             subprocess.Popen([sys.executable, str(vis_script), "--preset", "random", "--backend", "vulkan"], cwd=str(ROOT), stdin=subprocess.DEVNULL, stdout=f, stderr=f, **kw)
         return True
@@ -804,7 +904,7 @@ def ensure_random_visualizer_started() -> bool:
         return False
 
 
-def _visualizer_env() -> dict:
+def _visualizer_env(companion: bool = False) -> dict:
     """Env for a spawned visualizer.
 
     _import_gtk() pins GDK_BACKEND=x11 and this module pins PYOPENGL_PLATFORM to
@@ -812,9 +912,20 @@ def _visualizer_env() -> dict:
     visualizer uses GLFW with its own context, so inheriting either makes it die
     with "Attempt to retrieve context when no valid context" (plus
     "libdecor-gtk-WARNING: Failed to initialize GTK") and no window appears.
+
+    ``companion=True`` marks the window the player owns, which stays bonded
+    behind the player for its whole life. A window opened later is explicitly
+    detached, so it never latches onto the player.
     """
-    return {k: v for k, v in os.environ.items()
-            if k not in ("GDK_BACKEND", "PYOPENGL_PLATFORM")}
+    env = {k: v for k, v in os.environ.items()
+           if k not in ("GDK_BACKEND", "PYOPENGL_PLATFORM",
+                        "MP_LIQUID_GLASS", "MP_LIQUID_GLASS_BACKEND",
+                        "MP_VISUALIZER_COMPANION", "MP_VISUALIZER_DETACHED")}
+    if companion:
+        env["MP_VISUALIZER_COMPANION"] = "1"
+    else:
+        env["MP_VISUALIZER_DETACHED"] = "1"
+    return env
 
 
 def spawn_new_visualizer() -> bool:
@@ -823,9 +934,16 @@ def spawn_new_visualizer() -> bool:
         if not vis_script:
             return False
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        # Write the active state before the child starts, so its first poll
+        # already knows it belongs behind this player.
+        try:
+            from liquid_player_visualizer import mark_player_visualizer_attached
+            mark_player_visualizer_attached()
+        except Exception:
+            pass
         kw = {"creationflags": 0x00000208} if IS_WIN else {"start_new_session": True}
         if not IS_WIN:
-            kw["env"] = _visualizer_env()
+            kw["env"] = _visualizer_env(companion=True)
         with open(CONFIG_DIR / "liquid_visualizer.log", "a") as f:
             subprocess.Popen([sys.executable, str(vis_script), "--preset", "random", "--backend", "vulkan"], cwd=str(ROOT), stdin=subprocess.DEVNULL, stdout=f, stderr=f, **kw)
         return True

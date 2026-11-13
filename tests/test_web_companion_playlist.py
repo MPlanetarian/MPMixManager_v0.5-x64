@@ -436,10 +436,24 @@ class TestAutoplay(CompanionTestBase):
         self.assertEqual(companion.autoplay_once()["status"], "empty_playlist")
 
     def test_autoplay_never_opens_a_local_audio_device(self):
-        """Streaming only: no player IPC, no player process, no sound output."""
+        """Streaming only: no player process, no sound output.
+
+        Reading a running player's status is allowed and required - it is how
+        the dashboard knows what is actually on air. What must never happen is
+        the companion *starting* playback on the host.
+        """
         source = Path(companion.__file__).read_text(encoding="utf-8")
-        for banned in ("query_mp_player_socket", "SOCKET_PATH", "mp_audio_player.sock"):
+        for banned in (
+            "start_player_daemon",
+            "MP_Audio_Player.py --daemon",
+            "systemd-run",
+            "--autoplay-daemon",
+        ):
             self.assertNotIn(banned, source)
+        self.assertFalse(hasattr(companion, "start_player_daemon"))
+        # Sending commands is gated on a live player, so a tap on a silent
+        # workstation cannot create one.
+        self.assertIn("host_player_status()", source)
 
     def test_resume_position_is_restored(self):
         mix = _touch_audio(self.home / "MIX_ARCHIVE" / "mix_one.flac")

@@ -13,7 +13,7 @@ import re
 import shutil
 import subprocess
 import sys
-from ctypes import POINTER, byref, c_double, c_float, c_int, c_uint64, c_void_p, cast
+from ctypes import POINTER, byref, c_double, c_float, c_int, c_uint32, c_uint64, c_void_p, cast
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -25,8 +25,32 @@ if str(SCRIPTS) not in sys.path:
 if sys.platform == "darwin":
     # Must be set before the first OpenGL import. See the macOS host.
     os.environ.setdefault("PYOPENGL_ERROR_CHECKING", "0")
+elif sys.platform.startswith("linux"):
+    # The standalone visualizer creates an X11 (GLX) window, so PyOpenGL must
+    # bind GLX. Without this it picks EGL, finds no context for the GLX
+    # surface, and raises "Attempt to retrieve context when no valid context"
+    # before the first frame. Must be set before OpenGL is imported.
+    os.environ.setdefault("PYOPENGL_PLATFORM", "glx")
 
 CONFIG_DIR = Path.home() / ".config" / "mix-manager"
+
+# GLFW window hints. These live here because the standalone OpenGL visualizer
+# creates its own window. The numeric values are GLFW's, and VISIBLE/DECORATED
+# are easy to transpose: passing them the wrong way round creates a hidden
+# window that never appears and cannot be positioned.
+GLFW_CLIENT_API = 0x00022001
+GLFW_CONTEXT_VERSION_MAJOR = 0x00022002
+GLFW_CONTEXT_VERSION_MINOR = 0x00022003
+GLFW_OPENGL_PROFILE = 0x00022008
+GLFW_OPENGL_FORWARD_COMPAT = 0x00022006
+GLFW_RESIZABLE = 0x00020003
+GLFW_VISIBLE = 0x00020004
+GLFW_DECORATED = 0x00020005
+GLFW_FOCUSED = 0x00020001
+GLFW_PLATFORM = 0x00050003
+GLFW_PLATFORM_X11 = 0x00060004
+GLFW_OPENGL_API = 0x00030001
+GLFW_OPENGL_CORE_PROFILE = 0x00032001
 _DEFAULT_STATE = CONFIG_DIR / "liquid_player_visualizer.json"
 
 try:
@@ -41,6 +65,10 @@ try:
     from visualizer_window_shape import DEFAULT_CORNER_RADIUS, RoundedWindowShaper
 except ImportError:
     from scripts.visualizer_window_shape import DEFAULT_CORNER_RADIUS, RoundedWindowShaper
+try:
+    from visualizer_player_bond import PlayerBondMixin
+except ImportError:
+    from scripts.visualizer_player_bond import PlayerBondMixin
 _CACHE: Dict[str, Any] = {"path": "", "mtime": None, "state": None}
 
 _TEXT_GUARD = """
@@ -102,6 +130,27 @@ def preset_by_id(preset_id: int) -> Optional[Dict[str, Any]]:
         if int(preset.get("id", -1)) == want:
             return preset
     return None
+
+
+def mark_player_visualizer_attached(preset: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Mark the companion visualizer active *before* its process starts.
+
+    The player spawns the visualizer, and the visualizer starts polling
+    immediately. If the state file were written afterwards, the first poll
+    would read ``active: false`` and the window would never bond. Writing it
+    first means the very first frame already knows it belongs behind the
+    player. A preset is chosen when the caller does not supply one.
+    """
+    if preset is None:
+        try:
+            from mp_liquid_visualizer_vulkan import get_active_preset
+        except ImportError:
+            from scripts.mp_liquid_visualizer_vulkan import get_active_preset
+        try:
+            preset = get_active_preset()
+        except Exception:
+            preset = None
+    return write_player_visualizer_state(True, preset or {})
 
 
 def read_player_visualizer_state() -> Dict[str, Any]:
@@ -715,6 +764,46 @@ def visualizer_internal_size(
     return _scale_long_edge(fw_i, fh_i, macos_visualizer_long_edge())
 
 
+# The CHROMATIC STORM preset blends twelve scenes, and every scene is a full
+# SDF. The crossfade holds one scene at weight 1.0 and fades the next one in, so
+# at most two scenes ever have a nonzero weight; every other weight is exactly
+# 0.0 and contributes seq.x * 0.0 == 0.0 to the blend.
+#
+# The shipped shader builds all twelve anyway, at each of the up-to-84 march
+# steps, so eleven twelfths of that preset's per-pixel cost is work that cannot
+# change a pixel. Guarding each scene keeps the array, the accumulation loop and
+# the material scan exactly as they are, so the distance field and the blend
+# order are unchanged; only the faded-out scenes are skipped.
+#
+# This is applied to the OpenGL GLSL source only. shaders/mp_liquid_visualizer.frag
+# is shared with the Vulkan path, whose SPIR-V modules and manifest digest are
+# generated from it, so that file is deliberately left alone.
+_SWEEP_SEQUENCE_NAMES = (
+    "csSeqFurnaceHull", "csSeqFinCascade", "csSeqSplitKeel", "csSeqBeadSurge",
+    "csSeqEmberWake", "csSeqPlasmaCocoon", "csSeqSpineRing", "csSeqShardBloom",
+    "csSeqHullStrata", "csSeqTwinVessel", "csSeqNozzleFlare", "csSeqStormCollapse",
+)
+
+
+def _guard_faded_sequences(body: str) -> str:
+    """Skip CHROMATIC STORM scenes whose crossfade weight is exactly zero."""
+    import re
+
+    names = "|".join(_SWEEP_SEQUENCE_NAMES)
+    # Whitespace around the index and the assignment moved between revisions of
+    # the shader, so match it loosely instead of pinning one spelling.
+    pattern = re.compile(
+        r"^    seq\[(\d+)\]\s*=\s*(" + names + r")\(p\);$", re.MULTILINE
+    )
+    return pattern.sub(
+        lambda m: (
+            f"    seq[{m.group(1)}] = vec2(0.0, 1.0);\n"
+            f"    if (w[{m.group(1)}] > 0.0) seq[{m.group(1)}] = {m.group(2)}(p);"
+        ),
+        body,
+    )
+
+
 def opengl_visualizer_source() -> str:
     """GLSL 330 port of shaders/mp_liquid_visualizer.frag, with a text guard."""
     cached = _SOURCE_CACHE.get("generic")
@@ -737,6 +826,7 @@ def opengl_visualizer_source() -> str:
         ("u.res", "u_res"),
     ):
         body = body.replace(src, dst)
+    body = _guard_faded_sequences(body)
     needle = "outColor = vec4(col, 1.0);"
     if needle not in body:
         raise RuntimeError("MP Visualizer shader is missing its output")
@@ -935,24 +1025,35 @@ class PlayerVisualizerLayer:
         return self.draw_with_state(renderer, fw, fh, state)
 
     def draw_with_state(self, renderer, fw: int, fh: int, state: Dict[str, Any],
-                        bridge=None) -> bool:
+                        bridge=None, text_guard: Optional[bool] = None) -> bool:
         """Draw ``state``'s preset into the bound framebuffer.
 
         The OpenGL host and the standalone OpenGL visualizer both call this.
         The standalone renderer passes its own already-updated ``bridge`` so
         audio telemetry is read once per frame and shared by both paths.
+
+        ``text_guard`` dims the scene so white terminal text stays readable.
+        That is only wanted when the visualizer is drawn *behind the player's
+        text*. A standalone visualizer window has no text over it, and the
+        guard washed the whole picture out to grey, so the standalone renderer
+        passes ``False``. The default stays on, which is what every existing
+        caller (the in-player overlay) already expected.
         """
         if not state.get("active"):
             return False
+        if text_guard is None:
+            text_guard = True
         try:
-            return self._draw(renderer, fw, fh, state, bridge=bridge)
+            return self._draw(renderer, fw, fh, state, bridge=bridge,
+                              text_guard=text_guard)
         except Exception as exc:
             if not self._error:
                 self._error = str(exc)
                 print(f"MP Visualizer background unavailable: {exc}", file=sys.stderr)
             return False
 
-    def _draw(self, renderer, fw: int, fh: int, state: Dict[str, Any], bridge=None) -> bool:
+    def _draw(self, renderer, fw: int, fh: int, state: Dict[str, Any], bridge=None,
+              text_guard: bool = True) -> bool:
         import time
         from OpenGL import GL
 
@@ -993,16 +1094,17 @@ class PlayerVisualizerLayer:
             GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, self._fbo)
             GL.glViewport(0, 0, rw, rh)
             try:
-                self._draw_scene(GL, renderer, rw, rh, bridge)
+                self._draw_scene(GL, renderer, rw, rh, bridge, text_guard=text_guard)
             finally:
                 GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, 0)
                 GL.glViewport(0, 0, fw_i, fh_i)
             self._draw_upscale(GL, renderer)
             return True
-        self._draw_scene(GL, renderer, fw_i, fh_i, bridge)
+        self._draw_scene(GL, renderer, fw_i, fh_i, bridge, text_guard=text_guard)
         return True
 
-    def _draw_scene(self, GL, renderer, rw: int, rh: int, bridge) -> None:
+    def _draw_scene(self, GL, renderer, rw: int, rh: int, bridge,
+                    text_guard: bool = True) -> None:
         GL.glDisable(GL.GL_DEPTH_TEST)
         GL.glDisable(GL.GL_BLEND)
         GL.glUseProgram(self._prog)
@@ -1023,7 +1125,7 @@ class PlayerVisualizerLayer:
             GL.glUniform1i(cover, 0)
         guard = _loc(locs, "uTextGuard")
         if guard >= 0:
-            GL.glUniform1f(guard, 1.0)
+            GL.glUniform1f(guard, 1.0 if text_guard else 0.0)
         GL.glActiveTexture(GL.GL_TEXTURE0)
         GL.glBindTexture(GL.GL_TEXTURE_2D, self._tex)
         GL.glBindVertexArray(renderer._vao)
@@ -1208,7 +1310,7 @@ class PlayerVisualizerLayer:
         self._target_size = (0, 0)
 
 
-class LiquidVisualizerOpenGLRenderer(MonitorSpanMixin, RandomPresetMixin):
+class LiquidVisualizerOpenGLRenderer(MonitorSpanMixin, RandomPresetMixin, PlayerBondMixin):
     """Standalone MP Visualizer window drawn with OpenGL instead of Vulkan.
 
     This is the OpenGL twin of ``LiquidVisualizerVulkanRenderer``. It exists
@@ -1239,7 +1341,11 @@ class LiquidVisualizerOpenGLRenderer(MonitorSpanMixin, RandomPresetMixin):
         self._saver_render = None
         self._saver_bounds = None
         self._saver_cursor_primed = False
-        self._player_bonded = False
+        # Bond to the Liquid Player. The companion window the player starts is
+        # locked behind it; a window opened later stays free.
+        self._init_player_bond()
+        self._user_selected_window_mode = False
+        self._windowed_size = (700, 700)
         self.width, self.height = 700, 700
         self.cursor = (0.0, 0.0)
         self.mouse_down = False
@@ -1265,6 +1371,14 @@ class LiquidVisualizerOpenGLRenderer(MonitorSpanMixin, RandomPresetMixin):
         self._on_key_cb = None
         self._on_mouse_cb = None
         self._on_cursor_cb = None
+        # Left-drag moves the borderless window, matching the Vulkan renderer
+        # and the Liquid Player glass. Without this the visualizer could not be
+        # moved at all once it opened.
+        self._drag_active = False
+        self._drag_origin = (0, 0)
+        self._drag_press_screen = (0, 0)
+        self._last_click_at = 0.0
+        self._last_click_pos: Optional[tuple] = None
         # Same rounded silhouette as the Liquid Player window.
         self._shaper = RoundedWindowShaper(DEFAULT_CORNER_RADIUS)
 
@@ -1348,23 +1462,32 @@ class LiquidVisualizerOpenGLRenderer(MonitorSpanMixin, RandomPresetMixin):
         glfw = load_glfw_dll()
         self._glfw = glfw
         self._bind_glfw(glfw)
+        # Pin GLFW to X11. The Liquid Player and MP Gui are X11 hosts (GLFW and
+        # GTK), and their windows are positioned by xwininfo/wmctrl. A Wayland
+        # backend window has no X11 handle, so it cannot be placed and is
+        # invisible to every geometry helper here.
+        if sys.platform.startswith("linux") and hasattr(glfw, "glfwInitHint"):
+            try:
+                glfw.glfwInitHint(GLFW_PLATFORM, GLFW_PLATFORM_X11)
+            except Exception:
+                pass
         if not glfw.glfwInit():
             raise RuntimeError("glfwInit failed")
 
         glfw.glfwDefaultWindowHints()
         for hint, value in (
-            (0x00022001, 0x00030001),   # CLIENT_API = OPENGL_API
-            (0x00022002, 3),            # CONTEXT_VERSION_MAJOR
-            (0x00022003, 3),            # CONTEXT_VERSION_MINOR
-            (0x00022008, 0x00032001),   # OPENGL_PROFILE = CORE
-            (0x00020004, 0),            # DECORATED
-            (0x00020005, 1),            # VISIBLE
-            (0x00020001, 1),            # FOCUSED
-            (0x00020003, 0),            # RESIZABLE
+            (GLFW_CLIENT_API, GLFW_OPENGL_API),
+            (GLFW_CONTEXT_VERSION_MAJOR, 3),
+            (GLFW_CONTEXT_VERSION_MINOR, 3),
+            (GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE),
+            (GLFW_DECORATED, 0),
+            (GLFW_VISIBLE, 1),
+            (GLFW_FOCUSED, 1),
+            (GLFW_RESIZABLE, 0),
         ):
             glfw.glfwWindowHint(hint, value)
         if sys.platform == "darwin":
-            glfw.glfwWindowHint(0x00022006, 1)  # FORWARD_COMPAT
+            glfw.glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, 1)
         if hasattr(glfw, "glfwWindowHintString"):
             try:
                 glfw.glfwWindowHintString(0x00024001, b"MP_Visualizer")
@@ -1374,6 +1497,9 @@ class LiquidVisualizerOpenGLRenderer(MonitorSpanMixin, RandomPresetMixin):
 
         saver_bounds = getattr(self, "_saver_bounds", None)
         span_bounds = getattr(self, "_span_bounds", None)
+        # A locked companion opens straight onto the player it belongs behind,
+        # so it never flashes in the corner and then snaps into place.
+        bond_geometry = None if (saver_bounds or span_bounds) else self._bond_initial_geometry()
         if saver_bounds:
             # Screensaver: fill the assigned monitor's desktop rect exactly.
             ww = max(64, int(saver_bounds[2]))
@@ -1383,9 +1509,12 @@ class LiquidVisualizerOpenGLRenderer(MonitorSpanMixin, RandomPresetMixin):
             # after the two-second delay.
             ww = max(64, int(self._size[0]))
             wh = max(64, int(self._size[1]))
+        elif bond_geometry:
+            ww, wh = max(64, int(bond_geometry[2])), max(64, int(bond_geometry[3]))
         else:
             ww, wh = self._initial_size()
         self._size = (ww, wh)
+        self._windowed_size = (ww, wh)
         self.width, self.height = ww, wh
         window = glfw.glfwCreateWindow(ww, wh, self.title.encode("utf-8"), None, None)
         if not window:
@@ -1395,6 +1524,8 @@ class LiquidVisualizerOpenGLRenderer(MonitorSpanMixin, RandomPresetMixin):
             ox, oy = int(saver_bounds[0]), int(saver_bounds[1])
         elif span_bounds:
             ox, oy = int(self._cur_pos[0]), int(self._cur_pos[1])
+        elif bond_geometry:
+            ox, oy = int(bond_geometry[0]), int(bond_geometry[1])
         else:
             ox, oy = self._initial_offset()
         glfw.glfwSetWindowPos(window, ox, oy)
@@ -1405,6 +1536,28 @@ class LiquidVisualizerOpenGLRenderer(MonitorSpanMixin, RandomPresetMixin):
             glfw.glfwSwapInterval(1)
         except Exception:
             pass
+        # libX11 is needed for the root pointer while dragging, and for the
+        # XShape mask that matches the player silhouette.
+        if sys.platform.startswith("linux"):
+            try:
+                import ctypes
+                from ctypes import POINTER, c_char_p
+                x11 = ctypes.CDLL("libX11.so.6")
+                x11.XOpenDisplay.restype = c_void_p
+                x11.XOpenDisplay.argtypes = [c_char_p]
+                x11.XDefaultRootWindow.restype = c_uint64
+                x11.XDefaultRootWindow.argtypes = [c_void_p]
+                x11.XQueryPointer.argtypes = [
+                    c_void_p, c_uint64,
+                    POINTER(c_uint64), POINTER(c_uint64),
+                    POINTER(c_int), POINTER(c_int),
+                    POINTER(c_int), POINTER(c_int), POINTER(c_uint32),
+                ]
+                self._x11 = x11
+            except Exception as exc:
+                if os.environ.get("MP_VISUALIZER_DEBUG"):
+                    print(f"MP Visualizer: X11 setup failed: {exc}", file=sys.stderr)
+                self._x11 = None
         self._init_gl()
         self._alive = True
         self._apply_window_shape()
@@ -1436,7 +1589,11 @@ class LiquidVisualizerOpenGLRenderer(MonitorSpanMixin, RandomPresetMixin):
     def _initial_offset(self) -> tuple:
         from mp_liquid_visualizer_vulkan import _IS_LINUX, window_launch_origin
         if _IS_LINUX:
-            return (72, 64)
+            # Centre the visualizer instead of dropping it in the corner. The
+            # window matches the Liquid Player, which is itself centred, so a
+            # corner offset used to leave the pair hanging off the right edge.
+            from desktop_launch_screen import main_window_origin
+            return main_window_origin(int(self._size[0]), int(self._size[1]), 72, 64)
         x, y = window_launch_origin(160, 80)
         return (int(x), int(y))
 
@@ -1518,6 +1675,7 @@ class LiquidVisualizerOpenGLRenderer(MonitorSpanMixin, RandomPresetMixin):
             pass
         self.width, self.height = bw, bh
         self._size = (bw, bh)
+        self._windowed_size = (bw, bh)
         self._cur_pos = (bx, by)
 
     def _bind_input(self) -> None:
@@ -1545,7 +1703,10 @@ class LiquidVisualizerOpenGLRenderer(MonitorSpanMixin, RandomPresetMixin):
         elif key == 81:  # Q
             self.request_close()
         elif key == 90:  # Z
-            self.cycle_window_mode()
+            # The locked companion owns its geometry: it stays behind the
+            # player and never cycles to half size or fullscreen.
+            if not self._bond_is_locked():
+                self.cycle_window_mode()
         elif key == 82:  # R: toggle random mode
             self.toggle_random_mode()
         elif 49 <= key <= 57:  # 1..9
@@ -1570,19 +1731,77 @@ class LiquidVisualizerOpenGLRenderer(MonitorSpanMixin, RandomPresetMixin):
                 self._wake_event = True
                 self.request_close()
             return
-        if button == 0:
-            self.mouse_down = action == 1
-            if action == 1:
-                self._toggle_fullscreen_if_double_click()
+        if button != 0:
+            return
+        self.mouse_down = action == 1
+        if not self.mouse_down:
+            self._drag_active = False
+            return
+        rx, ry = self._screen_pointer()
+        if self._take_double_click(rx, ry):
+            # A double-click is a window action, never the start of a drag.
+            self._drag_active = False
+            # The locked companion belongs behind the player; it must not cover
+            # it by going fullscreen.
+            if not self._bond_is_locked():
+                self.toggle_fullscreen()
+            return
+        if not self.is_fullscreen and not self._bond_is_locked():
+            self._drag_active = True
+            self._drag_origin = self.window_pos()
+            self._drag_press_screen = (rx, ry)
+        else:
+            self._drag_active = False
 
-    def _toggle_fullscreen_if_double_click(self) -> None:
+    def _screen_pointer(self) -> tuple:
+        """Pointer position in screen coordinates, for drag tracking."""
+        rx, ry = self.root_pointer()
+        if rx or ry:
+            return int(rx), int(ry)
+        wx, wy = self.window_pos()
+        return int(wx + self.cursor[0]), int(wy + self.cursor[1])
+
+    def root_pointer(self) -> tuple:
+        """Pointer position from the X server, or (0, 0) when unavailable."""
+        if not sys.platform.startswith("linux"):
+            return (0, 0)
+        x11 = getattr(self, "_x11", None)
+        display = self.x11_display()
+        if not x11 or not display:
+            return (0, 0)
+        try:
+            from ctypes import POINTER
+            root, child = c_uint64(), c_uint64()
+            rx, ry = c_int(), c_int()
+            wx, wy = c_int(), c_int()
+            mask = c_uint32()
+            if x11.XQueryPointer(
+                display,
+                x11.XDefaultRootWindow(display),
+                byref(root),
+                byref(child),
+                byref(rx),
+                byref(ry),
+                byref(wx),
+                byref(wy),
+                byref(mask),
+            ):
+                return int(rx.value), int(ry.value)
+        except Exception:
+            pass
+        return (0, 0)
+
+    def _take_double_click(self, x: int, y: int) -> bool:
+        """Return True when this press completes a double-click, and consume it."""
         import time as _time
         now = _time.monotonic()
-        last = getattr(self, "_last_click_at", 0.0)
-        self._last_click_at = now
-        if last > 0.0 and now - last < 0.45:
-            self._last_click_at = 0.0
-            self.toggle_fullscreen()
+        last, at = self._last_click_at, self._last_click_pos
+        if last > 0.0 and at is not None and now - last < 0.45:
+            if abs(x - at[0]) <= 35 and abs(y - at[1]) <= 35:
+                self._last_click_at, self._last_click_pos = 0.0, None
+                return True
+        self._last_click_at, self._last_click_pos = now, (int(x), int(y))
+        return False
 
     def _on_cursor(self, _w, x, y) -> None:
         if self.screensaver:
@@ -1593,6 +1812,13 @@ class LiquidVisualizerOpenGLRenderer(MonitorSpanMixin, RandomPresetMixin):
             self._saver_cursor_primed = True
             return
         self.cursor = (float(x), float(y))
+        if self._drag_active and self.mouse_down and not self.is_fullscreen:
+            rx, ry = self.root_pointer()
+            if rx or ry:
+                self.set_window_pos(
+                    int(self._drag_origin[0] + (rx - self._drag_press_screen[0])),
+                    int(self._drag_origin[1] + (ry - self._drag_press_screen[1])),
+                )
 
     def _init_gl(self) -> None:
         import numpy as np
@@ -1642,7 +1868,8 @@ class LiquidVisualizerOpenGLRenderer(MonitorSpanMixin, RandomPresetMixin):
         GL.glViewport(0, 0, fw, fh)
         GL.glClearColor(0.0, 0.0, 0.0, 1.0)
         GL.glClear(GL.GL_COLOR_BUFFER_BIT)
-        if not self._layer.draw_with_state(self, fw, fh, state, bridge=bridge):
+        if not self._layer.draw_with_state(self, fw, fh, state, bridge=bridge,
+                                           text_guard=False):
             raise RuntimeError(self._layer._error or "MP Visualizer could not draw with OpenGL")
         pixels = None
         if capture:
@@ -1659,6 +1886,9 @@ class LiquidVisualizerOpenGLRenderer(MonitorSpanMixin, RandomPresetMixin):
         g.glfwPollEvents()
         if g.glfwWindowShouldClose(w):
             self.should_close = True
+        # Follow the Liquid Player behind it. This is what keeps the companion
+        # window locked to the player through Normal, Mini and Micro.
+        self._sync_player_bond()
         self.poll_monitor_span()
         return not self.should_close
 
@@ -1757,14 +1987,50 @@ class LiquidVisualizerOpenGLRenderer(MonitorSpanMixin, RandomPresetMixin):
 
     def _resize_window(self, width: int, height: int) -> None:
         g, w = self._glfw, self._window
+        width, height = max(64, int(width)), max(64, int(height))
+        self._size = (width, height)
+        self._windowed_size = (width, height)
+        self.width, self.height = width, height
         if not g or not w:
             return
         try:
             g.glfwSetWindowSizeLimits(w, -1, -1, -1, -1)
-            g.glfwSetWindowSize(w, int(width), int(height))
+            g.glfwSetWindowSize(w, width, height)
         except Exception:
             pass
-        self.width, self.height = int(width), int(height)
+
+    def _set_windowed_size(self, width: int, height: int, apply: bool = False) -> None:
+        """Set (and optionally apply) the windowed size.
+
+        Required by ``PlayerBondMixin``: a bonded companion takes the Liquid
+        Player's size, including its Mini/Micro sizes. ``_size`` is this
+        renderer's own name for the windowed size, so keep the two in step.
+        """
+        width, height = max(64, int(width)), max(64, int(height))
+        self._size = (width, height)
+        if apply and not self.is_fullscreen:
+            self._resize_window(width, height)
+        else:
+            self.width, self.height = width, height
+
+    def _apply_bonded_size_limits(self, width: int, height: int) -> None:
+        """Pin the size while bonded, so the window cannot be resized away."""
+        g, w = self._glfw, self._window
+        if not g or not w:
+            return
+        try:
+            g.glfwSetWindowSizeLimits(w, int(width), int(height), int(width), int(height))
+        except Exception:
+            pass
+
+    def _release_bonded_size_limits(self) -> None:
+        g, w = self._glfw, self._window
+        if not g or not w:
+            return
+        try:
+            g.glfwSetWindowSizeLimits(w, -1, -1, -1, -1)
+        except Exception:
+            pass
 
     def switch_preset(self, preset: Dict[str, Any]) -> None:
         self.preset = dict(preset)

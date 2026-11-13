@@ -32,6 +32,44 @@ class TestBundleLauncher(unittest.TestCase):
     def setUp(self):
         self.text = WRAPPER.read_text(encoding="utf-8")
 
+    def test_the_bundle_lives_in_the_system_applications_folder(self):
+        """Finder's sidebar "Applications" is /Applications, not ~/Applications.
+
+        A bundle in ~/Applications is invisible to a user who opens the folder
+        from the sidebar, which is exactly where they go to find the app for the
+        privacy pane. /Applications is group-writable by admin, so an admin
+        account can install there without a password; ~/Applications stays as
+        the fallback for a non-admin account.
+        """
+        self.assertIn("pick_mac_bundle()", self.text)
+        self.assertIn("/Applications", self.text)
+        self.assertIn('MAC_BUNDLE="$(pick_mac_bundle)"', self.text)
+        fn = self.text[self.text.index("pick_mac_bundle()") :]
+        fn = fn[: fn.index("MAC_BUNDLE=")]
+        self.assertIn("for dir in /Applications", fn)
+        self.assertIn("-w", fn)
+
+    def test_stale_bundle_copies_are_removed(self):
+        """Two copies of one bundle id make macOS resolve the wrong one."""
+        self.assertIn("LEGACY_MAC_BUNDLES=", self.text)
+        self.assertIn("remove_legacy_bundles()", self.text)
+        self.assertIn('remove_legacy_bundles "$bundle"', self.text)
+        self.assertIn('remove_legacy_bundles "$MAC_BUNDLE"', self.text)
+
+    def test_the_bundle_is_registered_with_launch_services(self):
+        """Otherwise the app can be absent from the privacy pane until login."""
+        self.assertIn("register_bundle()", self.text)
+        self.assertIn("lsregister", self.text)
+        self.assertIn("register_bundle \"$bundle\"", self.text)
+
+    def test_the_bundle_declares_version_keys_and_an_icon(self):
+        """A version-less, icon-less bundle reads as a stray file in the picker."""
+        fn = self.text[self.text.index("write_launchd_plist()") :]
+        fn = fn[: fn.index("write_service()")]
+        self.assertIn("<key>CFBundleVersion</key>", fn)
+        self.assertIn("<key>CFBundleInfoDictionaryVersion</key>", fn)
+        self.assertIn("CFBundleIconFile", fn)
+
     def test_a_native_launcher_is_compiled_for_the_bundle(self):
         self.assertIn("compile_bundle_launcher()", self.text)
         self.assertIn("compile_bundle_launcher \"$bundle\" \"$macos_dir/mp-web-companion\"", self.text)
@@ -73,7 +111,10 @@ class TestBundleLauncher(unittest.TestCase):
         run = subprocess.run([str(binary)], capture_output=True, text=True, timeout=30)
         # The child's status must survive the resident parent.
         self.assertEqual(run.returncode, 3, run.stderr)
-        self.assertIn("ppid", run.stdout)
+        # The launcher reopens its own log (a LaunchServices-started app gets
+        # "/" as cwd and no launchd StandardOutPath), so the child's output
+        # lands there rather than on the inherited stdout.
+        self.assertIn("ppid", (tmp_path / "bundle.log").read_text(encoding="utf-8"))
 
     @unittest.skipUnless(shutil.which("clang"), "clang not installed")
     def test_the_launcher_forwards_stop_to_python(self):
@@ -82,7 +123,7 @@ class TestBundleLauncher(unittest.TestCase):
         If it is not forwarded, Python is orphaned and keeps port 8888 bound:
         the restart looks successful while the old server still answers.
         """
-        binary, _tmp = self._build_real_launcher(
+        binary, tmp_path = self._build_real_launcher(
             "import signal, sys, time\n"
             "def bye(sig, frm):\n"
             "    print('child got signal', sig, flush=True)\n"
@@ -92,11 +133,12 @@ class TestBundleLauncher(unittest.TestCase):
             "while True:\n"
             "    time.sleep(0.1)\n"
         )
+        log = tmp_path / "bundle.log"
         launcher = subprocess.Popen(
             [str(binary)], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
         )
         try:
-            self.assertIn("child ready", launcher.stdout.readline())
+            self.assertIn("child ready", self._wait_for(log, "child ready"))
             child = subprocess.run(
                 ["pgrep", "-P", str(launcher.pid)], capture_output=True, text=True
             ).stdout.split()
@@ -116,6 +158,26 @@ class TestBundleLauncher(unittest.TestCase):
                 launcher.stdout.close()
             subprocess.run(["pkill", "-9", "-f", "time.sleep(0.1)"], capture_output=True)
 
+    def _wait_for(self, path: Path, needle: str, timeout: float = 20.0) -> str:
+        """Wait for a line to appear in the launcher's log.
+
+        The launcher redirects its own stdout/stderr into $LOG_FILE, so the
+        child's output is no longer readable from the Popen pipe.
+        """
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                text = path.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                text = ""
+            if needle in text:
+                return text
+            time.sleep(0.1)
+        try:
+            return path.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            return ""
+
     def _build_real_launcher(self, child_source: str):
         """Compile the wrapper's own C source against a stub child script."""
         fn = self.text[self.text.index("compile_bundle_launcher()") :]
@@ -129,11 +191,18 @@ class TestBundleLauncher(unittest.TestCase):
         script = tmp_path / "child.py"
         script.write_text(child_source, encoding="utf-8")
         src = c_source.group(1)
+        # The launcher chdirs to $APP_DIR and reopens $LOG_FILE (LaunchServices
+        # starts an app with "/" as its working directory and ignores launchd's
+        # StandardOutPath), so the harness has to substitute those too or every
+        # case fails at chdir before Python ever starts.
+        log_file = tmp_path / "bundle.log"
         src = (
             src.replace("$PYTHON_BIN", "/usr/bin/python3")
             .replace("$PY_SCRIPT", str(script))
             .replace("$HOST", "127.0.0.1")
             .replace("$PORT", "8899")
+            .replace("$APP_DIR", str(tmp_path))
+            .replace("$LOG_FILE", str(log_file))
         )
         c_file = tmp_path / "launcher.c"
         c_file.write_text(src, encoding="utf-8")

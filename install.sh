@@ -174,6 +174,187 @@ case "$(uname -s)" in
 esac
 echo ""
 
+# 1b. Resolve a working Python interpreter.
+#     On Windows "python3" is usually the Microsoft Store *alias*, which exits
+#     with status 49 and prints "Python was not found".  Under `set -e` that
+#     aborted the installer silently at the first python3 call, so steps 4-7
+#     (dependencies, config, symlinks, desktop shortcuts) never ran. Resolve a
+#     real interpreter once, here, and use MP_PYTHON everywhere below.
+#
+#     3.8 is the floor: the app uses f-strings with =, walrus operators and
+#     typing constructs that 3.6 cannot parse. The old 3.6 gate let a 3.6
+#     interpreter through and then every launch failed with a SyntaxError.
+#
+#     scripts/mp_dependencies.py owns the candidate list and the capability
+#     test, so the installer, the reinstall helper and the test harness all get
+#     the same answer. Duplicating that search in bash is what made macOS pick
+#     Apple's /usr/bin/python3 (no PyGObject) over Homebrew's python3 (has it).
+MP_PYTHON=""
+MP_PYTHON_MIN_MAJOR=3
+MP_PYTHON_MIN_MINOR=8
+
+mp_try_python() {
+    local _cand="$1"
+    [ -n "$_cand" ] || return 1
+    [ -x "$_cand" ] || return 1
+    case "$_cand" in
+        */WindowsApps/*) return 1 ;;   # Store alias, not an interpreter
+    esac
+    "$_cand" -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 8) else 1)" >/dev/null 2>&1
+}
+
+# Every probe below may fail, and that must never abort the installer. The
+# script runs under `set -euo pipefail`, so a helper that exits non-zero (the
+# Windows finder exits 1 when it finds nothing) would kill the whole run at
+# step 1 with no message at all. That is exactly what happened on a fresh
+# Windows machine. run_probe captures the output and the status, and callers
+# decide what a failure means.
+run_probe() {
+    local _out="" _rc=0
+    set +e
+    _out="$("$@" 2>/dev/null)"
+    _rc=$?
+    set -e
+    printf '%s\n' "$_out"
+    return "$_rc"
+}
+
+# Windows resolves through the same .cmd the .bat launchers use, because Git
+# Bash cannot execute a Windows python.exe path reliably until it is absolute.
+if [ "$HOST_OS" = "windows" ] && [ -f "$SCRIPT_DIR/scripts/windows_find_python.cmd" ]; then
+    if _found="$( cd "$SCRIPT_DIR/scripts" 2>/dev/null || exit 1
+                  cmd //c "windows_find_python.cmd" 2>/dev/null )"; then
+        _found="$(printf '%s\n' "$_found" | tr -d '\r' | tail -n 1)"
+        if mp_try_python "$_found"; then MP_PYTHON="$_found"; fi
+    fi
+    unset _found
+fi
+
+# Ask the engine. It considers the venv, Homebrew, the Windows install folders,
+# PATH and the system prefixes, and prefers an interpreter that can import gi.
+if [ -z "$MP_PYTHON" ] && [ -f "$SCRIPT_DIR/scripts/mp_dependencies.py" ]; then
+    _found=""
+    for _bootstrap in python3 python; do
+        _cand_bin="$(command -v "$_bootstrap" 2>/dev/null)" || continue
+        [ -n "$_cand_bin" ] || continue
+        case "$_cand_bin" in
+            */WindowsApps/*) continue ;;
+        esac
+        mp_try_python "$_cand_bin" || continue
+        _found="$("$_cand_bin" "$SCRIPT_DIR/scripts/mp_dependencies.py" --python-path 2>/dev/null | tr -d '\r' | head -n 1)" || _found=""
+        [ -n "$_found" ] && break
+    done
+    unset _bootstrap _cand_bin
+    if mp_try_python "$_found"; then MP_PYTHON="$_found"; fi
+    unset _found
+fi
+
+# Last resort when the engine cannot run yet (no usable interpreter on PATH but
+# one exists in a fixed location).
+if [ -z "$MP_PYTHON" ]; then
+    for _cand in \
+        "${MP_PYTHON_OVERRIDE:-}" \
+        "$HOME/.local/share/mp-mix-manager/python-env/bin/python3" \
+        "$SCRIPT_DIR/venv/Scripts/python.exe" "$SCRIPT_DIR/venv/bin/python3" \
+        /opt/homebrew/bin/python3 /opt/homebrew/bin/python3.13 \
+        /opt/homebrew/bin/python3.12 /usr/local/bin/python3 \
+        /home/linuxbrew/.linuxbrew/bin/python3 \
+        /usr/bin/python3 /usr/local/bin/python3.13; do
+        if mp_try_python "$_cand"; then MP_PYTHON="$_cand"; break; fi
+    done
+    unset _cand
+fi
+
+if [ -n "$MP_PYTHON" ]; then
+    echo -e "      Python:       ${GREEN}${MP_PYTHON}${NC} ($("$MP_PYTHON" -c 'import sys;print("%d.%d"%sys.version_info[:2])' 2>/dev/null))"
+else
+    # Nothing usable. Offer the platform's own installer rather than a bare
+    # error: Python is a hard requirement for every part of the application.
+    echo -e "      Python:       ${YELLOW}not found (3.8 or newer is required)${NC}"
+    MP_INSTALL_PYTHON="${MP_INSTALL_PYTHON:-ask}"
+    _mp_py_install=""
+    case "$HOST_OS" in
+        macos)
+            _mp_py_install='if ! command -v brew >/dev/null 2>&1; then echo "Homebrew is required: https://brew.sh"; exit 1; fi; brew install python3'
+            _mp_py_hint="brew install python3"
+            ;;
+        windows|wsl)
+            _mp_py_install='winget install --silent --accept-package-agreements --accept-source-agreements --id Python.Python.3.13 --exact'
+            _mp_py_hint="winget install Python.Python.3.13"
+            ;;
+        freebsd)
+            _mp_py_install='pkg install -y python3'
+            _mp_py_hint="sudo pkg install python3"
+            ;;
+        linux)
+            if [ -f /etc/os-release ]; then
+                # shellcheck source=/dev/null
+                . /etc/os-release
+            fi
+            if command -v rpm-ostree >/dev/null 2>&1; then
+                _mp_py_install='rpm-ostree install --allow-inactive --apply-live python3'
+            elif command -v dnf >/dev/null 2>&1; then
+                _mp_py_install='dnf install -y python3'
+            elif command -v apt-get >/dev/null 2>&1; then
+                _mp_py_install='apt-get install -y python3'
+            elif command -v pacman >/dev/null 2>&1; then
+                _mp_py_install='pacman -S --needed --noconfirm python3'
+            elif command -v zypper >/dev/null 2>&1; then
+                _mp_py_install='zypper --non-interactive install python3'
+            fi
+            _mp_py_hint="sudo dnf install python3  (or apt/pacman/zypper equivalent)"
+            ;;
+    esac
+
+    if [ -n "$_mp_py_install" ]; then
+        _do_py_install=0
+        if [ "$MP_INSTALL_PYTHON" = "always" ]; then
+            _do_py_install=1
+        elif [ "$MP_INSTALL_PYTHON" != "never" ] && [ -t 0 ]; then
+            read -r -p "      Install Python 3 now? [Y/n] " _mp_py_ans
+            case "${_mp_py_ans:-y}" in
+                n|N|no|NO) _do_py_install=0 ;;
+                *) _do_py_install=1 ;;
+            esac
+            unset _mp_py_ans
+        fi
+        if [ "$_do_py_install" -eq 1 ]; then
+            echo -e "${CYAN}      Installing Python 3...${NC}"
+            set +e
+            if [ "$(id -u 2>/dev/null || echo 1)" -ne 0 ] && ! printf '%s' "$_mp_py_install" | grep -qE '^(brew|winget)'; then
+                if command -v sudo >/dev/null 2>&1; then
+                    # shellcheck disable=SC2086
+                    sudo sh -c "$_mp_py_install"
+                else
+                    sh -c "$_mp_py_install"
+                fi
+            else
+                sh -c "$_mp_py_install"
+            fi
+            set -e
+            # Re-resolve after the install; brew and rpm-ostree put python3 in
+            # prefixes that may not be on this shell's PATH yet.
+            for _cand in \
+                /opt/homebrew/bin/python3 /usr/local/bin/python3 \
+                /usr/bin/python3 "$(command -v python3 2>/dev/null)"; do
+                if mp_try_python "$_cand"; then MP_PYTHON="$_cand"; break; fi
+            done
+            unset _cand
+            if [ -n "$MP_PYTHON" ]; then
+                echo -e "${GREEN}      ✓ Python installed: ${CYAN}${MP_PYTHON}${NC}"
+            fi
+        fi
+    fi
+    if [ -z "$MP_PYTHON" ]; then
+        echo -e "${YELLOW}      Install Python 3.8+ manually: ${CYAN}${_mp_py_hint}${NC}"
+        echo -e "${DIM}      The installer will finish the remaining steps, but MP Mix Manager${NC}"
+        echo -e "${DIM}      and its players cannot start until Python is present.${NC}"
+    fi
+    unset _mp_py_install _mp_py_hint
+fi
+unset MP_INSTALL_PYTHON 2>/dev/null || true
+echo ""
+
 # 2. Ensure Executable Permissions
 echo -e "${BOLD}${BLUE}[2/7] Configuring Script & Binary Permissions...${NC}"
 chmod +x "$SCRIPT_DIR"/*.sh "$SCRIPT_DIR"/*.command "$SCRIPT_DIR"/bin/* 2>/dev/null || true
@@ -202,93 +383,96 @@ touch "$SCRIPT_DIR/exported_configs/.gitkeep"
 echo -e "${GREEN}      ✓ Archive, output, and log directories ready.${NC}"
 echo ""
 
-# 4. Check & Report Dependencies
-echo -e "${BOLD}${BLUE}[4/7] Checking System Dependencies...${NC}"
-TOOLS_LIST=(
-    "ffmpeg:Audio/video conversion, encoding, and integrity verification"
-    "ffprobe:Audio stream duration and codec inspection"
-    "sox:Spectrogram and high-resolution signal processing"
-    "flac:Native lossless audio encoding and decoding"
-    "rclone:Automated Google Drive and cloud synchronisation"
-    "jq:JSON parser for cliamp and system inspection"
-)
+# 4. Check & Install Dependencies
+#
+# One engine (scripts/mp_dependencies.py) owns the list of what the app needs,
+# the package name on every distro, and how to install it. The installer just
+# drives it, so the answers cannot drift from the code that imports them.
+echo -e "${BOLD}${BLUE}[4/7] Checking & Installing Dependencies...${NC}"
+MP_DEPS="$SCRIPT_DIR/scripts/mp_dependencies.py"
+MP_DEV_CHOICE="${MP_INSTALL_DEV_DEPS:-ask}"
+MP_DEPS_OK=1
 
-MISSING_TOOLS=()
-for item in "${TOOLS_LIST[@]}"; do
-    tool="${item%%:*}"
-    desc="${item#*:}"
-    if command -v "$tool" >/dev/null 2>&1; then
-        echo -e "      [${GREEN}FOUND${NC}] $tool"
-    else
-        echo -e "      [${RED}MISSING${NC}] ${BOLD}$tool${NC} ($desc)"
-        MISSING_TOOLS+=("$tool")
-    fi
-done
-
-if [ ${#MISSING_TOOLS[@]} -gt 0 ]; then
-    echo ""
+if [ ! -f "$MP_DEPS" ]; then
+    echo -e "${YELLOW}      ⚠ scripts/mp_dependencies.py is missing; skipping dependency setup.${NC}"
+    MP_DEPS_OK=0
+elif [ -z "$MP_PYTHON" ]; then
+    echo -e "      [${RED}MISSING${NC}] No working Python 3.8+ interpreter was found."
+    echo -e "${YELLOW}      Python is required to run MP Mix Manager.${NC}"
     if [ "$HOST_OS" = "macos" ]; then
-        echo -e "${YELLOW}      To install missing dependencies on macOS using Homebrew, run:${NC}"
-        echo -e "${CYAN}      brew install ${MISSING_TOOLS[*]}${NC}"
-        echo -e "${DIM}      Optional GUI apps: brew install --cask vlc audacity strawberry musicbrainz-picard gimp reaper${NC}"
+        echo -e "${CYAN}      Install it with:  brew install python3${NC}"
     elif [ "$HOST_OS" = "windows" ] || [ "$HOST_OS" = "wsl" ]; then
-        echo -e "${YELLOW}      To install missing dependencies on Windows using winget, run:${NC}"
-        echo -e "${CYAN}      winget install Gyan.FFmpeg Rclone.Rclone jqlang.jq${NC}"
-        echo -e "${DIM}      Optional GUI apps: winget install VideoLAN.VLC Audacity.Audacity MusicBrainz.Picard GIMP.GIMP Cockos.REAPER${NC}"
+        echo -e "${CYAN}      Install it with:  winget install Python.Python.3.13${NC}"
+        echo -e "${CYAN}      or download it from https://www.python.org/downloads/windows/${NC}"
     elif [ "$HOST_OS" = "freebsd" ]; then
-        echo -e "${YELLOW}      To install missing dependencies on FreeBSD using pkg, run:${NC}"
-        echo -e "${CYAN}      pkg install -y ${MISSING_TOOLS[*]} spek btop${NC}"
-        echo -e "${DIM}      Optional GUI apps: pkg install -y vlc audacity spek gimp reaper${NC}"
+        echo -e "${CYAN}      Install it with:  sudo pkg install python3${NC}"
     else
-        echo -e "${YELLOW}      To install missing dependencies on Linux, run:${NC}"
-        echo -e "${CYAN}      brew install ${MISSING_TOOLS[*]}${NC}  (or use your system package manager)"
+        echo -e "${CYAN}      Fedora/Bazzite: sudo rpm-ostree install python3${NC}"
+        echo -e "${CYAN}      Debian/Ubuntu:  sudo apt install python3${NC}"
     fi
-fi
-echo ""
-
-# 4b. Check the Python GTK stack used by MP Gui, the Liquid Glass players,
-#     and the MP Liquid Visualizer. Installer scripts cannot always install
-#     these, so report exactly what is missing and which command fixes it.
-echo -e "${BOLD}${BLUE}[4/7] Checking Python GTK / GPU Stack (MP Gui & Liquid Glass)...${NC}"
-if command -v python3 >/dev/null 2>&1; then
-    MP_GTK_MISSING="$(python3 - <<'PY' 2>/dev/null
-import importlib
-missing = []
-for mod, label in (("gi", "PyGObject"), ("numpy", "NumPy")):
-    try:
-        importlib.import_module(mod)
-    except Exception:
-        missing.append(label)
-print(", ".join(missing))
-PY
-)"
-    if [ -n "${MP_GTK_MISSING:-}" ]; then
-        echo -e "      [${RED}MISSING${NC}] ${BOLD}${MP_GTK_MISSING}${NC} for the python3 on PATH"
-        echo -e "${YELLOW}      MP Gui and MP Liquid Player will not open until this is installed.${NC}"
-        if [ "$HOST_OS" = "macos" ]; then
-            echo -e "${CYAN}      brew install pygobject3 numpy${NC}"
-        elif [ "$HOST_OS" = "freebsd" ]; then
-            echo -e "${CYAN}      pkg install -y py311-gobject3 py311-numpy vte3${NC}"
-        elif [ "$HOST_OS" = "windows" ] || [ "$HOST_OS" = "wsl" ]; then
-            echo -e "${CYAN}      python -m pip install PyGObject numpy${NC}"
-            echo -e "${DIM}      PyGObject on Windows also needs the GTK3 runtime from gvsbuild.${NC}"
-        else
-            echo -e "${CYAN}      Fedora/Bazzite: sudo dnf install python3-gobject python3-numpy vte291-gtk4${NC}"
-            echo -e "${CYAN}      Debian/Ubuntu: sudo apt install python3-gi python3-numpy gir1.2-vte-2.91${NC}"
-            echo -e "${DIM}      Arch: sudo pacman -S python-gobject python-numpy vte3${NC}"
-        fi
-    else
-        echo -e "      [${GREEN}FOUND${NC}] PyGObject and NumPy for the python3 on PATH"
-    fi
-    # VTE is what puts a live terminal inside the glass window.
-    if command -v python3 >/dev/null 2>&1 && ! python3 -c "import gi; gi.require_version('Vte','2.91')" >/dev/null 2>&1; then
-        echo -e "      [${YELLOW}OPTIONAL${NC}] VTE 2.91 typelib not found. The glass window still opens,"
-        echo -e "                 but the embedded terminal falls back to a plain pane."
-        echo -e "${DIM}                 Fedora/Bazzite: sudo dnf install vte291-gtk4${NC}"
-        echo -e "${DIM}                 Debian/Ubuntu: sudo apt install gir1.2-vte-2.91${NC}"
-    fi
+    echo -e "${DIM}      Re-run ./install.sh afterwards; it will finish the setup.${NC}"
+    MP_DEPS_OK=0
 else
-    echo -e "      [${RED}MISSING${NC}] python3 was not found on PATH"
+    # --install probes, installs whatever is missing, then probes again. It
+    # exits non-zero only when a *required* dependency is still absent.
+    set +e
+    MP_DEPS_RC=0
+    if [ "${MP_DRY_RUN:-0}" = "1" ]; then
+        "$MP_PYTHON" "$MP_DEPS" --install --dry-run --python "$MP_PYTHON"
+        MP_DEPS_RC=$?
+    else
+        "$MP_PYTHON" "$MP_DEPS" --install --python "$MP_PYTHON"
+        MP_DEPS_RC=$?
+    fi
+    set -e
+
+    # The engine may have created the per-user venv that the launchers prefer.
+    # Point the rest of the installer at it so the desktop entries, tray and
+    # shortcut scripts all use the interpreter that now holds the modules.
+    MP_ENV_PYTHON=""
+    for _cand in \
+        "$HOME/.local/share/mp-mix-manager/python-env/bin/python3" \
+        "$HOME/.local/share/mp-mix-manager/python-env/bin/python" \
+        "$SCRIPT_DIR/venv/Scripts/python.exe" \
+        "$SCRIPT_DIR/venv/bin/python3"; do
+        if [ -x "$_cand" ]; then
+            MP_ENV_PYTHON="$_cand"
+            break
+        fi
+    done
+    if [ -n "$MP_ENV_PYTHON" ] && "$MP_ENV_PYTHON" -c "import numpy" >/dev/null 2>&1; then
+        MP_PYTHON="$MP_ENV_PYTHON"
+        echo -e "${GREEN}      ✓ Python environment: ${CYAN}${MP_ENV_PYTHON}${NC}"
+    fi
+    unset _cand
+
+    if [ "$MP_DEPS_RC" -ne 0 ]; then
+        MP_DEPS_OK=0
+    fi
+
+    # Optional extras: report them, and offer to install them when this is an
+    # interactive run. They are never allowed to fail the install.
+    if [ "$MP_DEPS_RC" -eq 0 ] && [ "${MP_DRY_RUN:-0}" != "1" ]; then
+        if [ "$MP_DEV_CHOICE" = "always" ]; then
+            "$MP_PYTHON" "$MP_DEPS" --install --optional --python "$MP_PYTHON" || true
+        else
+            echo ""
+            if [ "$MP_DEV_CHOICE" = "never" ]; then
+                echo -e "${DIM}      Optional extras skipped (MP_INSTALL_DEV_DEPS=never).${NC}"
+            elif [ -t 0 ]; then
+                echo -e "${DIM}      Optional extras (spectrograms, cloud backup, PDF reports, tray,\n      YouTube downloads) are not required. Install them now?${NC}"
+                read -r -p "      Install optional extras? [y/N] " _mp_opt
+                case "${_mp_opt:-n}" in
+                    y|Y|yes|YES) "$MP_PYTHON" "$MP_DEPS" --install --optional --python "$MP_PYTHON" || true ;;
+                    *) echo -e "${DIM}      Skipped. Run 'scripts/mp_dependencies.py --install --optional' any time.${NC}" ;;
+                esac
+                unset _mp_opt
+            else
+                echo -e "${DIM}      Non-interactive run: optional extras skipped.${NC}"
+                echo -e "${DIM}      Add them with: $MP_PYTHON $MP_DEPS --install --optional${NC}"
+            fi
+        fi
+    fi
 fi
 echo ""
 
@@ -308,34 +492,82 @@ echo ""
 echo -e "${BOLD}${BLUE}[6/7] Installing Local User Symlinks & Launchers...${NC}"
 mkdir -p "$HOME/.local/bin"
 
-ln -sf "$SCRIPT_DIR/bin/cliamp" "$HOME/.local/bin/cliamp" 2>/dev/null || true
-ln -sf "$SCRIPT_DIR/bin/mix-archive-manager" "$HOME/.local/bin/mix-archive-manager" 2>/dev/null || true
-ln -sf "$SCRIPT_DIR/Mix_Archive_Manager.sh" "$HOME/.local/bin/manager" 2>/dev/null || true
-ln -sf "$SCRIPT_DIR/bin/mp-desktop-exec" "$HOME/.local/bin/mp-desktop-exec" 2>/dev/null || true
-ln -sf "$SCRIPT_DIR/bin/launch-manager-fullscreen" "$HOME/.local/bin/launch-manager-fullscreen" 2>/dev/null || true
-ln -sf "$SCRIPT_DIR/bin/transfer-monitor" "$HOME/.local/bin/transfer-monitor" 2>/dev/null || true
-ln -sf "$SCRIPT_DIR/bin/chrome-upload-monitor" "$HOME/.local/bin/chrome-upload-monitor" 2>/dev/null || true
-ln -sf "$SCRIPT_DIR/bin/update-nft-playlist" "$HOME/.local/bin/update-nft-playlist" 2>/dev/null || true
-ln -sf "$SCRIPT_DIR/bin/watch-nft-copy-and-update.sh" "$HOME/.local/bin/watch-nft-copy-and-update.sh" 2>/dev/null || true
-ln -sf "$SCRIPT_DIR/bin/list-midi-devices" "$HOME/.local/bin/list-midi-devices" 2>/dev/null || true
-ln -sf "$SCRIPT_DIR/scripts/view_tracklist_console.sh" "$HOME/.local/bin/view-tracklist" 2>/dev/null || true
-ln -sf "$SCRIPT_DIR/scripts/inspect_playing_audio.sh" "$HOME/.local/bin/view-mix-specs" 2>/dev/null || true
-ln -sf "$SCRIPT_DIR/bin/traktor-monitor" "$HOME/.local/bin/traktor-monitor" 2>/dev/null || true
-ln -sf "$SCRIPT_DIR/scripts/traktor_monitor.sh" "$HOME/.local/bin/traktor_monitor.sh" 2>/dev/null || true
-ln -sf "$SCRIPT_DIR/Cut_Video.sh" "$HOME/.local/bin/cut-video" 2>/dev/null || true
-ln -sf "$SCRIPT_DIR/Split_FLAC_File.sh" "$HOME/.local/bin/split-flac" 2>/dev/null || true
-ln -sf "$SCRIPT_DIR/Split_Video_File.sh" "$HOME/.local/bin/split-video" 2>/dev/null || true
-ln -sf "$SCRIPT_DIR/scripts/kc_start_wan2gp_profile45.sh" "$HOME/.local/bin/wan2gp-start-profile45" 2>/dev/null || true
-ln -sf "$SCRIPT_DIR/scripts/kc_stop_wan2gp.sh" "$HOME/.local/bin/wan2gp-stop" 2>/dev/null || true
-ln -sf "$SCRIPT_DIR/scripts/kc_run_ollama_serve.sh" "$HOME/.local/bin/ollama-serve" 2>/dev/null || true
-ln -sf "$SCRIPT_DIR/scripts/kc_stop_ollama.sh" "$HOME/.local/bin/ollama-stop" 2>/dev/null || true
-ln -sf "$SCRIPT_DIR/scripts/manage_ollama.sh" "$HOME/.local/bin/manage-ollama" 2>/dev/null || true
-ln -sf "$SCRIPT_DIR/scripts/kc_launch_beszel_hub_and_agent.sh" "$HOME/.local/bin/beszel-hub-and-agent" 2>/dev/null || true
-ln -sf "$SCRIPT_DIR/scripts/beszel.sh" "$HOME/.local/bin/beszel" 2>/dev/null || true
-ln -sf "$SCRIPT_DIR/scripts/dsh_mobile.sh" "$HOME/.local/bin/dsh-mobile" 2>/dev/null || true
-ln -sf "$SCRIPT_DIR/scripts/dsh_mobile.sh" "$HOME/.local/bin/manage-dsh-mobile" 2>/dev/null || true
-ln -sf "$SCRIPT_DIR/scripts/kc_run_aider_qwen.sh" "$HOME/.local/bin/aider-qwen" 2>/dev/null || true
-ln -sf "$SCRIPT_DIR/Mix_Archive_Manager.sh" "$HOME/manager.sh" 2>/dev/null || true
+# link <target> <name-in-~/.local/bin>
+# link <target> <name>       publish ~/.local/bin/<name>
+# link <target> <full-path>  publish an explicit path (e.g. ~/manager.sh)
+# Only links a target that exists. A link to a missing file is worse than no
+# link: `cliamp` was published as a dead symlink because bin/cliamp is shipped
+# by the cliamp package (Homebrew/Flatpak) and is not part of this tree.
+MP_LINKED=0
+MP_LINK_SKIPPED=()
+link() {
+    local target="$1" name="$2" dest
+    case "$name" in
+        /*) dest="$name" ;;
+        *)  dest="$HOME/.local/bin/$name" ;;
+    esac
+    if [ ! -e "$target" ]; then
+        MP_LINK_SKIPPED+=("${name##*/}")
+        return 0
+    fi
+    mkdir -p "$(dirname "$dest")" 2>/dev/null || true
+    if ln -sf "$target" "$dest" 2>/dev/null; then
+        MP_LINKED=$((MP_LINKED + 1))
+    else
+        MP_LINK_SKIPPED+=("${name##*/}")
+    fi
+    return 0
+}
+
+link "$SCRIPT_DIR/bin/mix-archive-manager" "mix-archive-manager"
+link "$SCRIPT_DIR/Mix_Archive_Manager.sh" "manager"
+link "$SCRIPT_DIR/Mix_Archive_Manager.sh" "$HOME/manager.sh"
+link "$SCRIPT_DIR/bin/mp-desktop-exec" "mp-desktop-exec"
+link "$SCRIPT_DIR/bin/launch-manager-fullscreen" "launch-manager-fullscreen"
+link "$SCRIPT_DIR/bin/transfer-monitor" "transfer-monitor"
+link "$SCRIPT_DIR/bin/chrome-upload-monitor" "chrome-upload-monitor"
+link "$SCRIPT_DIR/bin/update-nft-playlist" "update-nft-playlist"
+link "$SCRIPT_DIR/bin/watch-nft-copy-and-update.sh" "watch-nft-copy-and-update.sh"
+link "$SCRIPT_DIR/bin/list-midi-devices" "list-midi-devices"
+link "$SCRIPT_DIR/scripts/view_tracklist_console.sh" "view-tracklist"
+link "$SCRIPT_DIR/scripts/inspect_playing_audio.sh" "view-mix-specs"
+link "$SCRIPT_DIR/bin/traktor-monitor" "traktor-monitor"
+link "$SCRIPT_DIR/scripts/traktor_monitor.sh" "traktor_monitor.sh"
+link "$SCRIPT_DIR/Cut_Video.sh" "cut-video"
+link "$SCRIPT_DIR/Split_FLAC_File.sh" "split-flac"
+link "$SCRIPT_DIR/Split_Video_File.sh" "split-video"
+link "$SCRIPT_DIR/scripts/kc_start_wan2gp_profile45.sh" "wan2gp-start-profile45"
+link "$SCRIPT_DIR/scripts/kc_stop_wan2gp.sh" "wan2gp-stop"
+link "$SCRIPT_DIR/scripts/kc_run_ollama_serve.sh" "ollama-serve"
+link "$SCRIPT_DIR/scripts/kc_stop_ollama.sh" "ollama-stop"
+link "$SCRIPT_DIR/scripts/manage_ollama.sh" "manage-ollama"
+link "$SCRIPT_DIR/scripts/kc_launch_beszel_hub_and_agent.sh" "beszel-hub-and-agent"
+link "$SCRIPT_DIR/scripts/beszel.sh" "beszel"
+link "$SCRIPT_DIR/scripts/dsh_mobile.sh" "dsh-mobile"
+link "$SCRIPT_DIR/scripts/dsh_mobile.sh" "manage-dsh-mobile"
+link "$SCRIPT_DIR/scripts/kc_run_aider_qwen.sh" "aider-qwen"
+link "$SCRIPT_DIR/Mix_Archive_Manager.sh" "$HOME/manager.sh"
+
+# A dead link left by an older install would shadow a good one from the
+# package manager, so remove it before publishing the new set.
+if [ -L "$HOME/.local/bin/cliamp" ] && [ ! -e "$HOME/.local/bin/cliamp" ]; then
+    rm -f "$HOME/.local/bin/cliamp"
+fi
+_mp_cliamp=""
+for _c in "$(command -v cliamp 2>/dev/null)" \
+          "/opt/homebrew/bin/cliamp" \
+          "/home/linuxbrew/.linuxbrew/bin/cliamp" \
+          "/var/lib/flatpak/exports/bin/io.github.cliamp" \
+          "$SCRIPT_DIR/bin/cliamp"; do
+    if [ -n "$_c" ] && [ -x "$_c" ]; then _mp_cliamp="$_c"; break; fi
+done
+unset _c
+if [ -n "$_mp_cliamp" ]; then
+    echo -e "${GREEN}      ✓ cliamp found: ${CYAN}${_mp_cliamp}${NC}"
+else
+    echo -e "${DIM}      • cliamp (retro player) is not installed; menu 15 marks it unavailable.${NC}"
+fi
+unset _mp_cliamp
 
 # Record this install tree and publish the resolver library, so launchers and
 # desktop entries do not have to hard-code a user name or a versioned path.
@@ -344,12 +576,21 @@ printf '%s\n' "$SCRIPT_DIR" > "$HOME/.config/mix-manager/install_dir" 2>/dev/nul
 if [ -f "$SCRIPT_DIR/scripts/lib/mp_install_dir.sh" ]; then
     cp -f "$SCRIPT_DIR/scripts/lib/mp_install_dir.sh" "$HOME/.config/mix-manager/lib/mp_install_dir.sh" 2>/dev/null || true
 fi
+# Keep the user config next to the resolver so a launcher started outside this
+# tree still finds the archive and theme settings.
+if [ -f "$SCRIPT_DIR/config.env" ] && [ ! -f "$HOME/.config/mix-manager/config.env" ]; then
+    cp -p "$SCRIPT_DIR/config.env" "$HOME/.config/mix-manager/config.env" 2>/dev/null || true
+fi
 
-echo -e "${GREEN}      ✓ Installed symlinks into ~/.local/bin and ~/manager.sh.${NC}"
+echo -e "${GREEN}      ✓ Installed ${MP_LINKED} launchers into ~/.local/bin and ~/manager.sh.${NC}"
+if [ ${#MP_LINK_SKIPPED[@]} -gt 0 ]; then
+    echo -e "${DIM}      • not linked (not in this build): ${MP_LINK_SKIPPED[*]}${NC}"
+fi
+unset MP_LINKED MP_LINK_SKIPPED
 
 # Register KWin Borderless Window Rule on Bazzite / KDE Plasma
-if [ "$HOST_OS" = "linux" ] && command -v python3 >/dev/null 2>&1; then
-    python3 -c "
+if [ "$HOST_OS" = "linux" ] && [ -n "$MP_PYTHON" ]; then
+    "$MP_PYTHON" -c "
 import configparser, os, uuid, subprocess
 
 rc_path = os.path.expanduser('~/.config/kwinrulesrc')
@@ -411,19 +652,19 @@ if [ "$HOST_OS" = "windows" ] || [ "$HOST_OS" = "wsl" ]; then
     else
         echo -e "${YELLOW}      ⚠ Desktop shortcuts or the system tray icon could not be installed for this user.${NC}"
     fi
-elif command -v python3 >/dev/null 2>&1; then
-    if python3 "$SCRIPT_DIR/scripts/install_desktop_shortcuts.py" --root "$SCRIPT_DIR"; then
+elif [ -n "$MP_PYTHON" ]; then
+    if "$MP_PYTHON" "$SCRIPT_DIR/scripts/install_desktop_shortcuts.py" --root "$SCRIPT_DIR"; then
         echo -e "${GREEN}      ✓ Desktop shortcuts: MP Liquid Player, MP Mix Manager, MP Gui, MP Liquid Visualizer${NC}"
     else
         echo -e "${YELLOW}      ⚠ Desktop shortcuts could not be created.${NC}"
     fi
-    if python3 "$SCRIPT_DIR/scripts/mp_system_tray.py" --install; then
+    if "$MP_PYTHON" "$SCRIPT_DIR/scripts/mp_system_tray.py" --install; then
         echo -e "${GREEN}      ✓ System tray icon installed and started.${NC}"
     else
         echo -e "${YELLOW}      ⚠ System tray icon could not be started.${NC}"
     fi
 else
-    echo -e "${YELLOW}      ⚠ python3 is required to create the desktop shortcuts.${NC}"
+    echo -e "${YELLOW}      ⚠ python3 is required to create the desktop shortcuts. Install Python 3.8+ and re-run this installer.${NC}"
 fi
 if [ "$HOST_OS" = "macos" ] || [ "$HOST_OS" = "windows" ] || [ "$HOST_OS" = "wsl" ]; then
     :
@@ -455,6 +696,45 @@ else
     fi
 fi
 
+# 8. Final verification
+#
+# An installer that ends with a green banner while something is broken is the
+# worst kind: the user has no idea what to fix. Ask the dependency engine for a
+# verdict, say plainly whether the app can start, and exit non-zero when a
+# required piece is missing so scripts and support can tell the difference.
+echo -e "${BOLD}${BLUE}[check] Verifying the installation...${NC}"
+MP_VERIFIED=0
+if [ -f "$MP_DEPS" ] && [ -n "$MP_PYTHON" ]; then
+    set +e
+    "$MP_PYTHON" "$MP_DEPS" --verify --python "$MP_PYTHON" >/dev/null 2>&1
+    MP_FINAL_RC=$?
+    set -e
+    [ "$MP_FINAL_RC" -eq 0 ] && MP_VERIFIED=1
+fi
+
+if [ "$MP_VERIFIED" -ne 1 ]; then
+    echo -e "${RED}      ✗ This install is not ready to run yet.${NC}"
+    if [ -z "$MP_PYTHON" ]; then
+        echo -e "${YELLOW}        Python 3.8+ is required before anything can start.${NC}"
+        case "$HOST_OS" in
+            macos)       _mp_fix="brew install python3" ;;
+            windows|wsl) _mp_fix="winget install Python.Python.3.13" ;;
+            freebsd)     _mp_fix="sudo pkg install python3" ;;
+            *)           _mp_fix="sudo dnf install python3" ;;
+        esac
+        echo -e "${CYAN}        $_mp_fix${NC}"
+        unset _mp_fix
+    else
+        echo -e "${DIM}        The list directly above names each missing dependency and${NC}"
+        echo -e "${DIM}        the command that installs it.${NC}"
+    fi
+    echo -e "${DIM}        Everything else is installed. Re-run ./install.sh when fixed.${NC}"
+    echo ""
+    exit 1
+fi
+
+echo -e "${GREEN}      ✓ All required dependencies are present.${NC}"
+echo -e "${GREEN}      ✓ MP Mix Manager is ready to launch.${NC}"
 echo ""
 echo -e "${BOLD}${GREEN}======================================================================${NC}"
 echo -e "${BOLD}${GREEN}              MP MIX ARCHIVE MANAGER INSTALLATION COMPLETE!              ${NC}"
@@ -487,3 +767,4 @@ else
     echo -e "  3. Open from Desktop or Menu:     ${BOLD}${CYAN}MP Mix Manager${NC}"
 fi
 echo ""
+exit 0

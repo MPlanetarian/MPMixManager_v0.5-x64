@@ -262,10 +262,28 @@ if [ "$NO_VISUALIZER" -eq 0 ] && ! pgrep -f "MP_Liquid_Visualizer|mp_liquid_visu
     VIS_PY="$BASE_DIR/MP_Liquid_Visualizer.py"
     [ ! -f "$VIS_PY" ] && VIS_PY="$BASE_DIR/scripts/mp_liquid_visualizer_vulkan.py"
     if [ -f "$VIS_PY" ]; then
+        # Mark it active before the child starts, so its first poll already
+        # knows it belongs behind MP Gui instead of opening free-floating.
+        "$MP_PY" - "$BASE_DIR" <<'PYVIS' >/dev/null 2>&1 || true
+import sys
+from pathlib import Path
+root = Path(sys.argv[1])
+sys.path.insert(0, str(root))
+sys.path.insert(0, str(root / "scripts"))
+try:
+    from liquid_player_visualizer import mark_player_visualizer_attached
+    mark_player_visualizer_attached()
+except Exception:
+    pass
+PYVIS
         # The standalone visualizer picks its own renderer. Forward the
         # host backend we chose above so the window behind MP Gui uses the
         # same GPU path as the window in front of it.
-        MP_VISUALIZER_MATCH_GUI=1 nohup "$MP_PY" "$VIS_PY" --preset random --backend "$BACKEND" >> "$HOME/.config/mix-manager/liquid_visualizer.log" 2>&1 &
+        # MP_VISUALIZER_COMPANION makes it the owned companion, which stays
+        # bonded behind MP Gui and cannot be detached. MP_VISUALIZER_MATCH_GUI
+        # keeps it at the GUI's size.
+        MP_VISUALIZER_COMPANION=1 MP_VISUALIZER_MATCH_GUI=1 \
+            nohup "$MP_PY" "$VIS_PY" --preset random --backend "$BACKEND" >> "$HOME/.config/mix-manager/liquid_visualizer.log" 2>&1 &
     fi
 fi
 

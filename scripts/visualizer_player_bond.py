@@ -17,6 +17,7 @@ closing the player) restores the size and position the window had on its own.
 """
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import time
@@ -35,11 +36,18 @@ class PlayerBondMixin:
     ``toggle_fullscreen()``, ``switch_preset()``, ``preset``, ``title``,
     ``is_fullscreen``, ``_windowed_size`` and
     ``_set_windowed_size(width, height, apply=True)``.
+
+    A companion started *by* the player (``MP_VISUALIZER_COMPANION=1``) sets
+    ``_bond_locked``. A locked companion is attached for its whole life: the
+    bond comes from the process the player launched, not from a state file the
+    user could flip, and Z/double-click cannot detach it or take it fullscreen.
+    Any other visualizer window is free to move, resize and fullscreen.
     """
 
     _player_bonded: bool
     _player_bonded_at: float
     _windowed_size: tuple
+    _bond_locked: bool
 
     # -- state ------------------------------------------------------------
     def _init_player_bond(self) -> None:
@@ -49,6 +57,10 @@ class PlayerBondMixin:
         self._unbonded_window_pos: Optional[tuple] = None
         self._last_player_geometry: Optional[tuple] = None
         self._restore_size: Optional[tuple] = None
+        self._bond_locked = os.environ.get("MP_VISUALIZER_COMPANION") == "1"
+        # A window opened later (Z) is explicitly detached: it must not adopt
+        # the player's rectangle just because a companion is already running.
+        self._bond_detached = os.environ.get("MP_VISUALIZER_DETACHED") == "1"
 
     # -- eligibility ------------------------------------------------------
     def _bonding_applies(self) -> bool:
@@ -56,8 +68,11 @@ class PlayerBondMixin:
 
         Only the Linux desktop has the separate companion window. A VR
         backdrop places itself, and a spawned F10/F11 window is pinned to its
-        own monitor, so neither bonds.
+        own monitor, so neither bonds. A window the user opened separately is
+        detached on purpose and never bonds.
         """
+        if getattr(self, "_bond_detached", False):
+            return False
         try:
             from mp_liquid_visualizer_vulkan import _IS_LINUX, _vr_visualizer_side
         except ImportError:
@@ -73,15 +88,34 @@ class PlayerBondMixin:
             return False
         return True
 
+    def _bond_is_locked(self) -> bool:
+        """True for the companion the player launched, which never detaches."""
+        return bool(getattr(self, "_bond_locked", False))
+
     # -- stacking ---------------------------------------------------------
     def _set_bonded_stack(self, bonded: bool) -> None:
-        """Ask the window manager to keep this window below the player."""
-        if not shutil.which("wmctrl"):
+        """Put this window directly below the Liquid Player.
+
+        Do **not** use ``_NET_WM_STATE_BELOW`` (or ``wmctrl -b add,below``).
+        KWin reads that as "below every normal window", so the visualizer sank
+        beneath whatever else was on the desktop: it showed on an empty area,
+        but behind a maximised console the player blended with the console
+        instead of with the visualizer. Ordering the two windows against each
+        other keeps them adjacent, which is what "behind the player" means.
+        """
+        if not bonded:
+            self._clear_below_hint()
             return
-        action = "add,below" if bonded else "remove,below"
+        self._lower_below_player()
+
+    def _clear_below_hint(self) -> None:
+        """Drop any _NET_WM_STATE_BELOW left by an earlier build."""
+        title = getattr(self, "title", "") or ""
+        if not title or not shutil.which("wmctrl"):
+            return
         try:
             subprocess.run(
-                ["wmctrl", "-r", self.title, "-b", action],
+                ["wmctrl", "-r", title, "-b", "remove,below"],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 timeout=1.0,
@@ -89,6 +123,120 @@ class PlayerBondMixin:
             )
         except (OSError, subprocess.TimeoutExpired):
             pass
+
+    def _lower_below_player(self) -> None:
+        """Restack this window directly below the Liquid Player.
+
+        ``XLowerWindow`` would send the window to the very bottom of the stack,
+        under every other application, so the player would blend with whatever
+        else happened to be beneath it instead of with the visualizer. Stack it
+        against the player as a sibling instead, which keeps the two adjacent.
+        """
+        try:
+            import ctypes
+            from ctypes import c_char_p, c_int, c_uint, c_uint64, c_void_p
+        except Exception:
+            return
+        window = 0
+        try:
+            window = int(self.x11_window() or 0)
+        except Exception:
+            window = int(getattr(self, "_x11_handle", 0) or 0)
+        if window <= 0:
+            return
+        try:
+            x11 = ctypes.CDLL("libX11.so.6")
+            x11.XOpenDisplay.restype = c_void_p
+            x11.XOpenDisplay.argtypes = [c_char_p]
+            display = x11.XOpenDisplay(None)
+            if not display:
+                return
+            try:
+                player = self._find_player_window(x11)
+                if player:
+                    # XConfigureWindow(display, window, mask, values) with
+                    # CWSibling | CWStackMode and StackModeBelow.
+                    class XWindowChanges(ctypes.Structure):
+                        _fields_ = [
+                            ("x", c_int), ("y", c_int),
+                            ("width", c_int), ("height", c_int),
+                            ("border_width", c_int),
+                            ("sibling", c_uint64),
+                            ("stack_mode", c_int),
+                        ]
+                    CW_SIBLING = 1 << 6
+                    CW_STACK_MODE = 1 << 7
+                    STACK_MODE_BELOW = 1
+                    changes = XWindowChanges()
+                    changes.sibling = c_uint64(int(player)).value
+                    changes.stack_mode = STACK_MODE_BELOW
+                    x11.XConfigureWindow.argtypes = [
+                        c_void_p, c_uint64, c_uint, c_void_p,
+                    ]
+                    x11.XConfigureWindow(
+                        display, c_uint64(window),
+                        c_uint(CW_SIBLING | CW_STACK_MODE),
+                        ctypes.byref(changes),
+                    )
+                else:
+                    x11.XLowerWindow.argtypes = [c_void_p, c_uint64]
+                    x11.XLowerWindow(display, c_uint64(window))
+                x11.XFlush.argtypes = [c_void_p]
+                x11.XFlush(display)
+            finally:
+                x11.XCloseDisplay.argtypes = [c_void_p]
+                x11.XCloseDisplay(display)
+        except Exception:
+            pass
+
+    def _find_player_window(self, x11) -> int:
+        """Window id of the Liquid Player this visualizer sits behind."""
+        try:
+            import ctypes
+            from ctypes import POINTER, byref, c_char_p, c_int, c_uint, c_uint64, c_void_p
+        except Exception:
+            return 0
+        display = x11.XOpenDisplay(None)
+        if not display:
+            return 0
+        try:
+            x11.XDefaultRootWindow.restype = c_uint64
+            x11.XDefaultRootWindow.argtypes = [c_void_p]
+            root = x11.XDefaultRootWindow(display)
+            x11.XQueryTree.argtypes = [
+                c_void_p, c_uint64, POINTER(c_uint64), POINTER(c_uint64),
+                POINTER(POINTER(c_uint64)), POINTER(c_uint),
+            ]
+            rr, parent = c_uint64(), c_uint64()
+            children = POINTER(c_uint64)()
+            count = c_uint()
+            x11.XQueryTree(display, root, byref(rr), byref(parent),
+                           byref(children), byref(count))
+            x11.XFetchName.argtypes = [c_void_p, c_uint64, POINTER(c_char_p)]
+            mine = 0
+            try:
+                mine = int(self.x11_window() or 0)
+            except Exception:
+                mine = 0
+            for i in range(count.value):
+                wid = children[i]
+                if int(wid) == mine:
+                    continue
+                name = c_char_p()
+                x11.XFetchName(display, wid, byref(name))
+                if not name.value:
+                    continue
+                title = name.value.decode("utf-8", "replace")
+                # The player and MP Gui both publish through this title prefix.
+                if title.startswith("MP Audio Player (Liquid Glass") or \
+                        title.startswith("MP Mix Manager (Liquid Glass"):
+                    return int(wid)
+        except Exception:
+            return 0
+        finally:
+            x11.XCloseDisplay.argtypes = [c_void_p]
+            x11.XCloseDisplay(display)
+        return 0
 
     # -- geometry ---------------------------------------------------------
     def _bond_apply_geometry(self, x: int, y: int, width: int, height: int) -> None:
@@ -116,9 +264,15 @@ class PlayerBondMixin:
                 read_player_visualizer_state,
                 read_published_player_window_geometry,
             )
-        try:
-            if not read_player_visualizer_state().get("active"):
+        # A locked companion always bonds; it does not consult the state file,
+        # because the file is written by the player *after* this process starts.
+        if not self._bond_is_locked():
+            try:
+                if not read_player_visualizer_state().get("active"):
+                    return None
+            except Exception:
                 return None
+        try:
             geometry = read_published_player_window_geometry()
         except Exception:
             return None
@@ -160,22 +314,36 @@ class PlayerBondMixin:
                 visualizer_presets,
             )
 
-        state = read_player_visualizer_state()
-        bonded = bool(state.get("active"))
-        # An explicit Z choice owns the window; do not bond it back to the
-        # player. Z is the user saying "show me this window on its own".
-        if getattr(self, "_user_selected_window_mode", False):
-            return
-        if bonded and self.is_fullscreen:
-            self.toggle_fullscreen()
+        locked = self._bond_is_locked()
+        if locked:
+            # The player launched this window to sit behind it. Stay attached
+            # even if the state file says otherwise (it can lag the launch, or
+            # be rewritten by another host), and never let it sit fullscreen
+            # covering the player.
+            bonded = True
+            if self.is_fullscreen:
+                self.toggle_fullscreen()
+        else:
+            state = read_player_visualizer_state()
+            bonded = bool(state.get("active"))
+            # An explicit Z choice owns the window; do not bond it back to the
+            # player. Z is the user saying "show me this window on its own".
+            if getattr(self, "_user_selected_window_mode", False):
+                return
+            if bonded and self.is_fullscreen:
+                self.toggle_fullscreen()
         if self.is_fullscreen:
             return
 
         if bonded and not self._player_bonded:
-            self._unbonded_window_pos = self.window_pos()
-            size = getattr(self, "_windowed_size", None)
-            self._restore_size = tuple(size) if size else None
+            if not locked:
+                self._unbonded_window_pos = self.window_pos()
+                size = getattr(self, "_windowed_size", None)
+                self._restore_size = tuple(size) if size else None
             self._player_bonded = True
+            # Clear any below hint first: it would push the window under every
+            # other application instead of just under the player.
+            self._clear_below_hint()
             self._set_bonded_stack(True)
         elif not bonded and self._player_bonded:
             self._player_bonded = False
@@ -190,12 +358,22 @@ class PlayerBondMixin:
         if not bonded:
             return
 
+        # Re-lower on a slow cadence. The player is raised whenever it is
+        # focused or lifted above another window, and the visualizer must stay
+        # behind it, so a one-off lowering at bond time is not enough.
+        now_relower = time.monotonic()
+        if now_relower >= getattr(self, "_next_relower_at", 0.0):
+            self._next_relower_at = now_relower + 0.5
+            self._lower_below_player()
+
         geometry = read_published_player_window_geometry()
         if geometry:
             x, y, width, height = geometry
             if geometry != self._last_player_geometry:
                 self._bond_apply_geometry(x, y, width, height)
                 self._last_player_geometry = geometry
+                if locked and hasattr(self, "_apply_bonded_size_limits"):
+                    self._apply_bonded_size_limits(width, height)
             else:
                 # The window manager can move a window while it resizes.
                 # Keep the bonded window on the player's corner.
@@ -218,7 +396,7 @@ class PlayerBondMixin:
             if size and size != tuple(getattr(self, "_windowed_size", ())):
                 self._set_windowed_size(size[0], size[1], apply=True)
 
-        self._sync_bonded_preset(state, visualizer_presets)
+        self._sync_bonded_preset(read_player_visualizer_state(), visualizer_presets)
 
     def _sync_bonded_preset(self, state: Dict[str, Any], presets: Any) -> None:
         """Use the same preset the Liquid Player is showing."""
