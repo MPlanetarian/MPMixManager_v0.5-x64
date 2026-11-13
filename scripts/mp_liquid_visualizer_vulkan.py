@@ -1166,7 +1166,12 @@ class LiquidVisualizerVulkanRenderer(MonitorSpanMixin, RandomPresetMixin, Player
         if not getattr(self, "_saver_bounds", None) and not getattr(self, "_span_bounds", None):
             bond_geometry = self._bond_initial_geometry()
         bonded_start = bool(bond_geometry)
-        if _IS_LINUX and not bonded_start:
+        if _IS_LINUX and not bonded_start and not getattr(self, "_bond_detached", False):
+            # Only the owned companion withholds focus. A window the user
+            # opened with Z (``_bond_detached``) is their own window: it must
+            # take focus and come to the front, or it looks like nothing
+            # happened. This used to read the state file unconditionally, so
+            # every Z window opened unfocused while a companion was active.
             try:
                 from liquid_player_visualizer import read_player_visualizer_state
                 bonded_start = bool(read_player_visualizer_state().get("active"))

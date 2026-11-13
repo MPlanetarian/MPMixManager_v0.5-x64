@@ -235,14 +235,21 @@ class TestHostsMarkTheCompanionActive(unittest.TestCase):
         """Z opens an extra window. It must not latch onto the player.
 
         Only the companion the player launches is permanently attached; every
-        window opened afterwards is explicitly detached.
+        window opened afterwards is explicitly detached. Both hosts are checked:
+        the Vulkan host was the only one wired to the companion path, and the
+        original test only covered the OpenGL host, so Z silently opened a
+        second window hidden underneath the player.
         """
-        import MP_Audio_Player_Liquid_Glass_OpenGL as host
+        for name in ("MP_Audio_Player_Liquid_Glass_OpenGL", "MP_Audio_Player_Liquid_Glass"):
+            with self.subTest(host=name):
+                import importlib
 
-        popen = self._spawn(host)
-        env = popen.call_args[1]["env"]
-        self.assertNotIn("MP_VISUALIZER_COMPANION", env)
-        self.assertEqual(env.get("MP_VISUALIZER_DETACHED"), "1")
+                host = importlib.import_module(name)
+                popen = self._spawn(host)
+                env = popen.call_args[1]["env"]
+                self.assertNotIn("MP_VISUALIZER_COMPANION", env,
+                                 f"{name} marked the Z window as the owned companion")
+                self.assertEqual(env.get("MP_VISUALIZER_DETACHED"), "1")
 
     def test_vulkan_host_marks_the_companion_active(self):
         import MP_Audio_Player_Liquid_Glass as host

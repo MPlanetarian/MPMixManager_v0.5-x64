@@ -929,21 +929,28 @@ def _visualizer_env(companion: bool = False) -> dict:
 
 
 def spawn_new_visualizer() -> bool:
+    """Open a new, free-standing MP Liquid Visualizer window. Pressing Z shows it.
+
+    This must NOT reuse the companion path. A companion (``_visualizer_env(
+    companion=True)``) is by definition the window the player owns: it is
+    forced onto the player's exact rectangle, stacked behind the player,
+    denied focus, and refused every Z/double-click/fullscreen action. Spawning
+    one here made Z look like a no-op, because the new window opened perfectly
+    hidden underneath the player it was bonded to.
+
+    Z is the user asking for a window of their own, so the child is explicitly
+    detached and the state file is left alone: ``mark_player_visualizer_attached()``
+    belongs to the companion path only.
+    """
     try:
         vis_script = next((p for p in (ROOT / "MP_Liquid_Visualizer.py", ROOT / "scripts" / "mp_liquid_visualizer_vulkan.py") if p.is_file()), None)
         if not vis_script:
             return False
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-        # Write the active state before the child starts, so its first poll
-        # already knows it belongs behind this player.
-        try:
-            from liquid_player_visualizer import mark_player_visualizer_attached
-            mark_player_visualizer_attached()
-        except Exception:
-            pass
         kw = {"creationflags": 0x00000208} if IS_WIN else {"start_new_session": True}
         if not IS_WIN:
-            kw["env"] = _visualizer_env(companion=True)
+            # companion=False -> MP_VISUALIZER_DETACHED=1: a free window.
+            kw["env"] = _visualizer_env(companion=False)
         with open(CONFIG_DIR / "liquid_visualizer.log", "a") as f:
             subprocess.Popen([sys.executable, str(vis_script), "--preset", "random", "--backend", "vulkan"], cwd=str(ROOT), stdin=subprocess.DEVNULL, stdout=f, stderr=f, **kw)
         return True
