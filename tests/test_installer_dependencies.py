@@ -8,7 +8,7 @@ on macOS, Fedora and Windows came from them drifting apart:
   * scripts/mp_dependencies.py — what the installer actually installs
   * the source tree          — what the code actually imports
 
-They also cover two defects found while auditing the installer for 0.5.0:
+They also cover two defects found while auditing the installer for 0.5.3:
 a `cliamp` symlink published without a target (dead link on every install),
 and the Python version gate accepting 3.6 even though the code needs 3.8.
 """

@@ -124,10 +124,15 @@ class TestShiftKKillPlayer(unittest.TestCase):
         host = MagicMock()
         host.mode = "NORMAL"
 
-        with patch("subprocess.run") as mock_subproc:
+        with patch("subprocess.run") as mock_subproc, \
+             patch.object(lg, "_stop_other_players") as mock_stop:
             res = lg.GlassHost._on_key_press(host, None, mock_event)
             self.assertTrue(res)
-            mock_subproc.assert_called_once_with('pkill -9 -f "MP_Audio_Player"', shell=True)
+            # The host delegates to the argv-aware helper instead of shelling
+            # out to `pkill -9 -f`, which also killed editors that merely had
+            # the file open and other users' players.
+            mock_stop.assert_called_once()
+            mock_subproc.assert_not_called()
 
 
 if __name__ == "__main__":

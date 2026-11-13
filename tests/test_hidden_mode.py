@@ -168,7 +168,9 @@ class TestToggle(unittest.TestCase):
 class TestHostWiring(unittest.TestCase):
     def test_every_shortcut_has_a_key_handler(self):
         hosts = {
-            "MP_Audio_Player.py": 'data in (b"h", b"H")',
+            # The terminal player binds Hidden Mode to Ctrl+H: plain H is
+            # Favorites there, which is the documented binding since 0.4.2.
+            "MP_Audio_Player.py": "_toggle_hidden_mode",
             "MP_Audio_Player_Liquid_Glass.py": "Gdk.KEY_h",
             "MP_Audio_Player_Liquid_Glass_OpenGL.py": "Gdk.KEY_h",
             "scripts/mp_liquid_visualizer_vulkan.py": "GLFW_KEY_H",
@@ -178,10 +180,11 @@ class TestHostWiring(unittest.TestCase):
             source = (ROOT / rel).read_text(encoding="utf-8")
             self.assertIn(marker, source, msg=f"{rel} does not handle H")
 
-    def test_favorites_moved_off_h_in_the_player(self):
-        # H now belongs to Hidden Mode, so Favorites is Shift+F and lowercase
-        # f still opens the file manager.
+    def test_favorites_and_file_manager_keep_their_keys(self):
+        # H stays on Favorites (the README binding); Shift+F is an alias and
+        # lowercase f still opens the file manager.
         source = (ROOT / "MP_Audio_Player.py").read_text(encoding="utf-8")
+        self.assertIn('elif data in (b"h", b"H"): self._toggle_favorite()', source)
         self.assertIn('elif data == b"F": self._toggle_favorite()', source)
         self.assertIn('elif data == b"f": self._open_selected_in_file_manager()', source)
 

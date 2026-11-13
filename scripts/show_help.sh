@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# MP Mix Manager 0.5.0 Stable (Sensorium) - Help Usage & Available Options
+# MP Mix Manager 0.5.3 Stable (Sensorium) - Help Usage & Available Options
 # Purpose: Display help usage and all available options for mix-archive-manager
 # Usage:
 #   mix-archive-manager --help
@@ -30,7 +30,7 @@ if [ -z "$VERSION" ]; then
     if [ -f "$CODEBASE_DIR/VERSION" ]; then
         VERSION="$(head -n 1 "$CODEBASE_DIR/VERSION" | tr -d '\r\n')"
     else
-        VERSION="0.5.0 Stable (Sensorium)"
+        VERSION="0.5.3 Stable (Sensorium)"
     fi
 fi
 export VERSION

@@ -16,7 +16,7 @@ def _get_app_version() -> str:
         if c.is_file():
             try: return c.read_text(encoding="utf-8").strip()
             except Exception: pass
-    return "0.5.0 Stable (Sensorium)"
+    return "0.5.3 Stable (Sensorium)"
 
 VERSION = _get_app_version()
 
@@ -7520,12 +7520,14 @@ class TerminalPlayerUI:
         elif data == b"1": self._switch_library_mode("MIX_ARCHIVE")
         elif data == b"2": self._switch_library_mode("MUSIC")
         elif data == b"3": self._load_favorites()
-        # H is Hidden Mode (hide/restore every MP window). Favorites moved to
-        # Shift+F, and lowercase f still reveals the selected file. H used to
-        # toggle Favorites, which made the advertised Hidden Mode shortcut
-        # impossible to provide.
-        elif data in (b"h", b"H"): self._toggle_hidden_mode()
+        # H toggles Favorites: that is the binding the README documents and
+        # that has shipped since 0.4.2. Shift+F is an alias, and lowercase f
+        # reveals the selected file. Hidden Mode therefore needs a modifier in
+        # the terminal player (Ctrl+H, byte 0x08); the other hosts, which have
+        # no text entry to collide with, bind it to plain H.
+        elif data in (b"h", b"H"): self._toggle_favorite()
         elif data == b"F": self._toggle_favorite()
+        elif data == b"\x08": self._toggle_hidden_mode()
         elif data in (b"o", b"O"): self._open_audio_file()
         elif data == b"T" and os.environ.get("MP_LIQUID_GLASS") == "1":
             self._notify("Traktor playlist import is available in CLI mode only.", 3.5)

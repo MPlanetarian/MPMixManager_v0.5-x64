@@ -438,7 +438,7 @@ write_launchd_plist() {
     local macos_dir="$bundle/Contents/MacOS"
     local version
     version="$(cat "$APP_DIR/VERSION" 2>/dev/null | awk '{print $1}')"
-    [ -n "$version" ] || version="0.5.0"
+    [ -n "$version" ] || version="0.5.3"
     mkdir -p "$macos_dir" "$bundle/Contents/Resources"
 
     # An icon is not cosmetic here: an app without one is drawn as a blank

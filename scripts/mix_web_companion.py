@@ -48,7 +48,7 @@ def _get_app_version() -> str:
                 return cand.read_text(encoding="utf-8").strip()
             except Exception:
                 pass
-    return "0.5.0 Stable (Sensorium)"
+    return "0.5.3 Stable (Sensorium)"
 
 VERSION = _get_app_version()
 
@@ -2940,11 +2940,10 @@ MINI_PLAYLIST_WINDOW = 20
 def get_mini_playlist(limit: Optional[int] = None) -> Dict[str, Any]:
     """A short window of the stream queue: the current track plus the next ones.
 
-    The dashboard renders `show` rows at a time. The endpoint returns exactly
-    `MINI_PLAYLIST_SIZE` entries by default, which is what the box shows; a
-    caller that wants a scrollback (or a test that wants to page) can pass a
-    larger `limit`, up to `MINI_PLAYLIST_WINDOW`. `total` is the full queue
-    length and is what the dashboard prints as the track count.
+    The dashboard renders `show` rows inside a scrollable box and the server
+    sends up to `limit` (default MINI_PLAYLIST_WINDOW) entries, so five tracks
+    are visible at once and the rest can be scrolled. `total` is the full queue
+    length and is what the dashboard shows as the track count.
     """
     queue = build_stream_queue_cached()
     mode = get_library_mode()
@@ -2963,11 +2962,12 @@ def get_mini_playlist(limit: Optional[int] = None) -> Dict[str, Any]:
         }
 
     try:
-        window = int(limit) if limit is not None else show
+        window = int(limit) if limit is not None else MINI_PLAYLIST_WINDOW
     except (TypeError, ValueError):
-        window = show
-    # Never send more than the scrollback can hold, and never fewer than one.
-    window = max(1, min(window, MINI_PLAYLIST_WINDOW))
+        window = MINI_PLAYLIST_WINDOW
+    # The endpoint sends the whole scrollback (20), while the dashboard renders
+    # `show` (5) at a time. Truncation at the end of the queue is handled below.
+    window = max(1, window)
 
     state = load_stream_session()
     idx = int(state.get("index", 0) or 0)
@@ -5141,6 +5141,25 @@ def render_html_page(theme: Dict[str, Any]) -> str:
     </div>
 
     <script>
+        // The server requires this header on every state-changing request
+        // (CSRF defence: a cross-origin form cannot set a custom header
+        // without a preflight). Wrap fetch once here so every POST the
+        // dashboard makes carries it. Without this the server answered
+        // "missing_csrf_header" and every control tap (transport, launch pad,
+        // assistant stop) was silently refused.
+        const MP_CSRF_HEADER = '{sec.REQUIRED_HEADER}';
+        const mpNativeFetch = window.fetch.bind(window);
+        window.fetch = function (input, init) {{
+            const options = Object.assign({{}}, init || {{}});
+            const method = String(options.method || 'GET').toUpperCase();
+            if (method !== 'GET' && method !== 'HEAD') {{
+                const headers = new Headers(options.headers || {{}});
+                if (!headers.has(MP_CSRF_HEADER)) headers.set(MP_CSRF_HEADER, '1');
+                options.headers = headers;
+            }}
+            return mpNativeFetch(input, options);
+        }};
+
         let currentThemeId = "{t['id']}";
         let currentDurationSec = 0;
         let lastLoadedMix = "";

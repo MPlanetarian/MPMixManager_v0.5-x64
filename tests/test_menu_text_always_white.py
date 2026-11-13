@@ -28,7 +28,10 @@ THEMES = (
     "retro_linux_memories",
     "into_darkness_void_out",
     "retro_terminal",
-    "the_whitest_white",
+    # the_whitest_white is deliberately excluded: it paints a white console
+    # pane and therefore uses black ink (see test_whitest_white_theme). White
+    # text on a white pane is the exact readability bug those tests exist to
+    # prevent, so "always white" cannot include it.
     "gruvbox",
     "emerald",
     "classic",

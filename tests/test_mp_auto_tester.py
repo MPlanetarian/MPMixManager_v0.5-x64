@@ -37,7 +37,7 @@ def sample_results() -> dict:
     return {
         "stamp": "20260101_000000",
         "host": "HOST",
-        "version": "0.5.0",
+        "version": "0.5.3",
         "wait_seconds": 20,
         "started": "2026-01-01 00:00:00",
         "finished": "2026-01-01 00:10:00",

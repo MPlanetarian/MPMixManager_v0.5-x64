@@ -301,12 +301,14 @@ class StreamSessionTest(unittest.TestCase):
             p.stop()
         mwc.invalidate_queue_cache()
 
-    def test_mini_playlist_returns_only_five_tracks(self):
-        # 0.5 changed the visible window from three entries to five
-        # (MINI_PLAYLIST_SIZE) with a twenty-entry scrollback.
+    def test_mini_playlist_returns_the_scrollback_window(self):
+        # The endpoint sends the whole scrollback (MINI_PLAYLIST_WINDOW = 20)
+        # and the dashboard renders MINI_PLAYLIST_SIZE (5) of it at a time.
+        # This queue is shorter than the window, so all of it is returned.
         with mock.patch.object(mwc, "host_player_payload", return_value=None):
             payload = mwc.get_mini_playlist()
-        self.assertEqual(len(payload["items"]), mwc.MINI_PLAYLIST_SIZE)
+        self.assertEqual(len(payload["items"]), len(self.queue))
+        self.assertEqual(payload["show"], mwc.MINI_PLAYLIST_SIZE)
         # `total` is the size of the whole queue, not the visible window.
         self.assertEqual(payload["total"], len(self.queue))
         self.assertTrue(payload["items"][0]["current"])
