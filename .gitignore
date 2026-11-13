@@ -124,3 +124,38 @@ MP_MIX_MANAGER_INSTALLERS/
 
 # Editor backup copies (the existing *.bak* rule does not match *.bk)
 *.bk
+
+# --- 0.5.1 security and hygiene -------------------------------------------
+# A committed WebUI secret and SMB password were found in the 0.5.0 tree.
+# These rules keep either from coming back.
+MIX_ARCHIVE/
+*.webui_secret_key
+*secret_key*
+*.token
+companion.token
+
+# Generated test/run evidence must never ship. Each subdirectory of REPORTS is
+# a dated capture; the .gitkeep files are re-included below.
+REPORTS/*/
+!REPORTS/DAILY_REPORTS/
+!REPORTS/WEEKLY_REPORTS/
+!REPORTS/MONTHLY_REPORTS/
+!REPORTS/YEARLY_REPORTS/
+
+# Scratch files that were tracked by accident. Named explicitly because the
+# numeric-only rules above missed them (all four are 7 bytes of "PNGDATA").
+/status
+/clients
+/sinks
+/sink-inputs
+/$state_file
+/Grey
+/.conout.txt
+/.dbg.txt
+/.probe.sh
+/.probe_mgr.sh
+/MP_Error.log
+
+# Large sample media belongs in Git LFS or a release asset, not a blob.
+MP_SAMPLES/*.flac
+

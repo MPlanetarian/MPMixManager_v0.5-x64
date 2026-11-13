@@ -7,7 +7,60 @@ set -uo pipefail
 APP_NAME="MPlanetarians Alarm Clock (Wake Up Edition)"
 APP_VERSION="0.1"
 APP_AUTHOR="MPlanetarian"
-SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
+
+# ------------------------------------------------------------------------------
+# PORTABILITY
+#
+# This script used to assume GNU userland and systemd --user. Neither exists on
+# stock macOS or FreeBSD, where `readlink -f`, `date -d` and `systemd-run`
+# simply fail; the alarm then never fired and the failure was invisible.
+# ------------------------------------------------------------------------------
+
+mp_readlink_f() {
+    # Follow a chain of symlinks without GNU `readlink -f`.
+    local target="$1" dir
+    while [ -L "$target" ]; do
+        dir="$(cd -P "$(dirname "$target")" >/dev/null 2>&1 && pwd)"
+        target="$(readlink "$target")"
+        case "$target" in
+            /*) ;;
+            *) target="$dir/$target" ;;
+        esac
+    done
+    dir="$(cd -P "$(dirname "$target")" >/dev/null 2>&1 && pwd)"
+    printf '%s/%s\n' "$dir" "$(basename "$target")"
+}
+
+mp_date_parse() {
+    # Print `today HH:MM:00` (or `tomorrow HH:MM:00`) as epoch seconds.
+    # GNU `date -d` is replaced with a portable computation from `date +%s`.
+    local hhmm="$1" tomorrow="${2:-0}"
+    local now_s hh mm target_s
+    now_s="$(date '+%s')"
+    hh="${hhmm%%:*}"
+    mm="${hhmm##*:}"
+    # Midnight of today, then add the requested clock time.
+    local day_start
+    day_start="$(date -j -f '%H:%M:%S' '00:00:00' '+%s' 2>/dev/null \
+        || date -d '00:00:00' '+%s' 2>/dev/null \
+        || echo $(( now_s - (now_s % 86400) )))"
+    target_s=$(( day_start + 10#$hh * 3600 + 10#$mm * 60 + tomorrow * 86400 ))
+    printf '%s\n' "$target_s"
+}
+
+mp_date_format() {
+    # Format epoch seconds. BSD date needs -r, GNU date needs -d @.
+    local epoch="$1"
+    date -r "$epoch" '+%F %T' 2>/dev/null || date -d "@$epoch" '+%F %T' 2>/dev/null || date '+%F %T'
+}
+
+mp_have_systemd() {
+    command -v systemctl >/dev/null 2>&1 \
+        && command -v systemd-run >/dev/null 2>&1 \
+        && [ -d "/run/systemd/system" ]
+}
+
+SCRIPT_PATH="$(mp_readlink_f "${BASH_SOURCE[0]}")"
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/mplanetarians-alarm-clock"
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/mplanetarians-alarm-clock"
 SETTINGS_FILE="$CONFIG_DIR/settings.env"
@@ -667,13 +720,14 @@ split_alarm() {
 unit_name() { printf 'mpac-%s\n' "$1"; }
 
 next_occurrence() {
+    # Portable: no `date -d`, which macOS and FreeBSD do not have.
     local hhmm="$1" now target
     now="$(date '+%s')"
-    target="$(date -d "today ${hhmm}:00" '+%s')"
+    target="$(mp_date_parse "$hhmm" 0)"
     if (( target <= now )); then
-        date -d "tomorrow ${hhmm}:00" '+%F %T'
+        mp_date_format "$(mp_date_parse "$hhmm" 1)"
     else
-        date -d "today ${hhmm}:00" '+%F %T'
+        mp_date_format "$target"
     fi
 }
 
@@ -686,6 +740,16 @@ unschedule() {
 
 schedule_with_systemd() {
     local id="$1" hhmm="$2" daily="$3" unit calendar err
+    # The alarm clock is advertised on every platform but only ever worked on
+    # Linux with a user systemd. Fail with an explanation instead of a silent
+    # `systemd-run: not found` that leaves the user believing an alarm is set.
+    if ! mp_have_systemd; then
+        printf 'Alarm scheduling needs systemd --user, which this system does not have.\n' >&2
+        printf 'The alarm is saved but will not ring automatically. On macOS use launchd,\n' >&2
+        printf 'on FreeBSD use cron, and start the ring manually with: %s ring %s\n' \
+            "$0" "$id" >&2
+        return 1
+    fi
     unit="$(unit_name "$id")"
     unschedule "$id"
     if [[ "$daily" == "yes" ]]; then
@@ -1103,7 +1167,7 @@ cmd_snooze() {
         "$SCRIPT_PATH" ring "$(cat "$STATE_DIR/last-id" 2>/dev/null || echo snooze)" >/dev/null 2>&1 \
         || die "Could not schedule the snooze"
     printf 'Snoozing for %s minute(s). It will ring again at %s.\n' \
-        "$minutes" "$(date -d "+${minutes} minutes" '+%H:%M')"
+        "$minutes" "$(mp_date_format "$(( $(date '+%s') + minutes * 60 ))")"
     log_line "SNOOZE ${minutes}"
 }
 

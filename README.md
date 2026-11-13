@@ -309,7 +309,7 @@ The [v0.4.0 Stable notes](#-whats-new-in-v040-stable) below still describe the L
 > 2. ⭐ **Favorites and library switching:** Mark mixes and tracks with **`H`**, open them with **`3`**, switch Mix Archive and Music with **`1`** and **`2`**, and clear a playlist with **`D`** twice without deleting files.
 > 3. 🎧 **SMB playlists that complete:** Generate a playlist per share plus one combined list. A share that does not answer no longer hangs the refresh or wipes a playlist you already have.
 > 4. 🔮 **MP Liquid Player and Visualizer:** Still-water glass on OpenGL, Vulkan, and Apple Silicon Metal, with the windowed visualizer fitted to the main desktop and closed when you leave the player.
-> 5. 💻 **The same launchers:** `./manager.sh` on Linux, `manager_macos.command` on macOS, and `MP Mix Manager.exe` or `manager.bat` on Windows.
+> 5. 💻 **The same launchers:** `./manager.sh` on Linux, `manager_macos.command` on macOS, and `MP_Mix_Manager.exe` (or `manager.exe`) or `manager.bat` on Windows.
 > 6. 🧭 **Shortcuts that survive a move:** launchers and desktop entries resolve the install tree from a marker file, so renaming or relocating the folder no longer breaks every icon.
 
 ## 📜 Previous Release: v0.4.3 Stable (Liquid) — November 12, 2026
@@ -968,7 +968,7 @@ winget install VideoLAN.VLC
 ```
 Download & install MP Mix Manager 0.5.0 (GitHub Only)
 1. git clone https://github.com/MPlanetarian/MPMixManager_v0.5-x64.git "MP Mix Manager"
-2. Run MP Mix Manager.exe
+2. Run MP_Mix_Manager.exe
 
 Starter Tip: Configure your Mix Archive & Music Folders first. 
 
@@ -997,7 +997,7 @@ Play Music Folders using MP Audio Player
 Note: If you plan on git clone it to c:\Program Files then make sure you run it as Administrator (Right Click Run As...)
 
 #### Running MP Mix Manager on Microsoft Windows 10 / 11 (x64)
--  **Double-click `MP Mix Manager.exe` ** (Native 64-bit Windows console executable).
+-  **Double-click `MP_Mix_Manager.exe`** (native 64-bit Windows console executable).
 
 - Or run inside PowerShell:
   ```PowerShell (Right Click > Run with Powershell)

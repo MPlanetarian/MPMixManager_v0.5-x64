@@ -28,6 +28,84 @@ from liquid_glass_opengl import (
     THEME_ALIASES,
 )
 
+def _kill_player_processes() -> List[int]:
+    """SIGKILL every MP Audio Player owned by this user, and return the PIDs.
+
+    The `K` shortcut used to run `pkill -9 -f "MP_Audio_Player"`, which is a
+    substring match over every process command line: it killed a text editor
+    that had the file open, another account's player, and any shell whose
+    arguments mentioned the name. This walks /proc (or falls back to `ps`) and
+    requires the executable basename to be a player script.
+    """
+    import signal
+
+    me = os.getpid()
+    targets: List[int] = []
+
+    def _matches(argv: List[str]) -> bool:
+        if not argv:
+            return False
+        # A real player invocation ends in MP_Audio_Player.py (or a player
+        # derived name). A wrapper or editor mentions the path but its argv[0]
+        # is bash/vim/etc.
+        first = os.path.basename(argv[0])
+        if first not in ("python", "python3", "python3.10", "python3.11",
+                         "python3.12", "python3.13", "python3.14", "pypy3"):
+            return False
+        return any(os.path.basename(a).startswith("MP_Audio_Player") for a in argv[1:])
+
+    proc = Path("/proc")
+    if proc.is_dir():
+        for entry in proc.iterdir():
+            if not entry.name.isdigit():
+                continue
+            pid = int(entry.name)
+            if pid == me:
+                continue
+            try:
+                raw = (entry / "cmdline").read_bytes()
+            except OSError:
+                continue
+            argv = [a.decode("utf-8", "ignore") for a in raw.split(b"\x00") if a]
+            if _matches(argv):
+                targets.append(pid)
+    else:
+        # macOS and FreeBSD have no /proc.
+        try:
+            out = subprocess.run(
+                ["ps", "-u", str(os.getuid()), "-o", "pid=,command="],
+                capture_output=True, text=True, timeout=5,
+            ).stdout
+        except (OSError, subprocess.SubprocessError):
+            out = ""
+        for line in out.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            pid_text, _, command = line.partition(" ")
+            if not pid_text.isdigit():
+                continue
+            if _matches(command.split()):
+                targets.append(int(pid_text))
+
+    killed: List[int] = []
+    for pid in targets:
+        if pid == me:
+            continue
+        try:
+            os.kill(pid, signal.SIGKILL)
+            killed.append(pid)
+        except OSError:
+            continue
+    return killed
+
+
+
+
+
+    LiquidGlassRendererOpenGL,
+
+
 COLS, ROWS = 120, 40
 # Used when Hack is not installed, and when a measured cell has no face yet.
 DEFAULT_FONT = "Monospace 11"
@@ -742,7 +820,11 @@ class GlassHost:
         kv = getattr(event, "keyval", 0)
         # M stays with the player. Search uses it as a letter. A real mode change is published back.
         if kv == Gdk.KEY_K or (kv == Gdk.KEY_k and bool(getattr(event, "state", 0) & Gdk.ModifierType.SHIFT_MASK)):
-            subprocess.run('pkill -9 -f "MP_Audio_Player"', shell=True)
+            # Kill only player processes owned by this user, matched on argv
+            # rather than a substring of a shell command line. `pkill -f` also
+            # hit editors with the file open, other users' players, and any
+            # wrapper whose command string mentioned the name.
+            _kill_player_processes()
             return True
         # Z opens a new MP Liquid Visualizer window, matching the Vulkan host.
         if kv in (Gdk.KEY_z, Gdk.KEY_Z):
