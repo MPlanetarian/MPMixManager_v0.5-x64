@@ -56,6 +56,11 @@ def configure_environment(full: bool) -> None:
     """Make the suite hermetic before any test module is imported."""
     # Never let a test start the Bluetooth monitor or a `pactl subscribe` child.
     os.environ.setdefault("MP_DISABLE_BLUETOOTH_MONITOR", "1")
+    # Never let a test open a real PortAudio output stream. PortAudio blocks on
+    # the device server and, on some drivers, crashes the interpreter during
+    # teardown; the engine reports stream_error instead, which is the path the
+    # tests exercise anyway.
+    os.environ.setdefault("MP_DISABLE_AUDIO_OUTPUT", "1")
     # Keep the player from writing into the developer's real config directory.
     os.environ.setdefault("MP_TEST_MODE", "1")
     # Quiet the sounddevice/numpy warnings that otherwise drown the result line.
@@ -210,6 +215,7 @@ def _run_module(name: str, verbose: bool, failfast: bool):
 
     env = dict(os.environ)
     env.setdefault("MP_DISABLE_BLUETOOTH_MONITOR", "1")
+    env.setdefault("MP_DISABLE_AUDIO_OUTPUT", "1")
     cmd = [sys.executable, "-m", "unittest", f"tests.{name}"]
     if failfast:
         cmd.insert(-1, "-f")

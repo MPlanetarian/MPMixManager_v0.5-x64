@@ -2047,26 +2047,31 @@ def _pick_start_track(playlist: List[str]) -> Tuple[Optional[str], float]:
     return (playlist[0], 0.0) if playlist else (None, 0.0)
 
 
-def build_stream_queue() -> List[str]:
+def build_stream_queue(force: bool = False) -> List[str]:
     """Resolve the play queue the phones will stream through.
 
     Scanning the music playlist stats tens of thousands of paths, so the result
     is cached briefly. Without this every 2-second status poll would re-walk the
-    library.
+    library. `force` skips the cache, which is what a user-initiated "rescan"
+    or a library-mode switch needs: those must see the files that exist now,
+    not the ones that existed ten seconds ago.
     """
     global _queue_cache
 
     mode = get_library_mode()
     now = time.time()
     cached = _queue_cache
-    if cached and cached.get("mode") == mode and (now - cached.get("built_at", 0.0)) < QUEUE_CACHE_TTL:
+    if not force and cached and cached.get("mode") == mode and (now - cached.get("built_at", 0.0)) < QUEUE_CACHE_TTL:
         return list(cached.get("files") or ())
 
     with _queue_build_lock:
-        # Another request may have finished the scan while this one waited.
+        # Another request may have finished the scan while this one waited. A
+        # forced rebuild must not accept that result: the whole point of the
+        # call is to re-read what is on disk after the user changed it.
         now = time.time()
         cached = _queue_cache
-        if cached and cached.get("mode") == mode and (now - cached.get("built_at", 0.0)) < QUEUE_CACHE_TTL:
+        if (not force and cached and cached.get("mode") == mode
+                and (now - cached.get("built_at", 0.0)) < QUEUE_CACHE_TTL):
             return list(cached.get("files") or ())
 
         if mode == LIBRARY_MODE_MUSIC:
@@ -2935,10 +2940,11 @@ MINI_PLAYLIST_WINDOW = 20
 def get_mini_playlist(limit: Optional[int] = None) -> Dict[str, Any]:
     """A short window of the stream queue: the current track plus the next ones.
 
-    The dashboard renders `show` rows inside a scrollable box and the server
-    sends up to `limit` (default MINI_PLAYLIST_WINDOW) entries, so five tracks
-    are visible at once and the rest can be scrolled. `total` is the full queue
-    length and is what the dashboard shows as the track count.
+    The dashboard renders `show` rows at a time. The endpoint returns exactly
+    `MINI_PLAYLIST_SIZE` entries by default, which is what the box shows; a
+    caller that wants a scrollback (or a test that wants to page) can pass a
+    larger `limit`, up to `MINI_PLAYLIST_WINDOW`. `total` is the full queue
+    length and is what the dashboard prints as the track count.
     """
     queue = build_stream_queue_cached()
     mode = get_library_mode()
@@ -2957,10 +2963,11 @@ def get_mini_playlist(limit: Optional[int] = None) -> Dict[str, Any]:
         }
 
     try:
-        window = int(limit) if limit is not None else MINI_PLAYLIST_WINDOW
+        window = int(limit) if limit is not None else show
     except (TypeError, ValueError):
-        window = MINI_PLAYLIST_WINDOW
-    window = max(1, window)
+        window = show
+    # Never send more than the scrollback can hold, and never fewer than one.
+    window = max(1, min(window, MINI_PLAYLIST_WINDOW))
 
     state = load_stream_session()
     idx = int(state.get("index", 0) or 0)
@@ -3092,6 +3099,17 @@ def control_player(action: str, params: Optional[Dict[str, List[str]]] = None) -
     if action in ("random", "play_random", "play_random_track"):
         return bool(play_random_track().get("success"))
 
+    # A rescan drops the cached queue and rebuilds it from what is on disk now.
+    # Without this the dashboard kept serving a stale list after a mix was
+    # added or a drive was mounted.
+    if action in ("refresh", "rescan", "reload"):
+        invalidate_queue_cache()
+        try:
+            build_stream_queue(force=True)
+        except Exception:
+            return False
+        return True
+
     # A running MP Audio Player is what the dashboard is reporting, so the
     # transport buttons must act on that player. Without this the title would
     # follow the host while every tap silently edited the unused stream session.
@@ -3194,6 +3212,11 @@ def control_player(action: str, params: Optional[Dict[str, List[str]]] = None) -
 
         pos = clamp_position(state, stream_position(state))
         duration = float(state.get("duration_sec", 0.0) or 0.0) or probe_duration(state["path"])
+        # Persist the length we just learned. Without it `clamp_position` inside
+        # `seek_to` still saw duration 0 and a "seek +30" on the very first tap
+        # ran past the end of the mix instead of stopping at it.
+        if duration and not state.get("duration_sec"):
+            state["duration_sec"] = float(duration)
 
         def seek_to(target: float) -> None:
             state["position_sec"] = clamp_position(state, target)
@@ -4029,9 +4052,25 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             /* The one control that must never leave the screen. */
             flex: 0 0 auto;
         }}
+        .btn-activate-stream {{
+            background: var(--btn-gradient);
+            color: #fff;
+            border: none;
+            padding: 16px 28px;
+            border-radius: 14px;
+            font-size: 1.05rem;
+            font-weight: 800;
+            cursor: pointer;
+            width: 100%;
+            box-shadow: var(--btn-shadow);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }}
         /* Short viewports (landscape phones, split screens): shrink the card
            instead of scrolling it, so the engage button stays centred and on
-           screen no matter how little height there is. */
+           screen no matter how little height there is. These rules sit after
+           the base sizes on purpose: same specificity, so they must come last
+           to win. */
         @media (max-height: 560px) {{
             .overlay-card {{
                 padding: 16px 16px;
@@ -4071,20 +4110,6 @@ def render_html_page(theme: Dict[str, Any]) -> str:
                 padding: 10px 16px;
                 font-size: 0.84rem;
             }}
-        }}
-        .btn-activate-stream {{
-            background: var(--btn-gradient);
-            color: #fff;
-            border: none;
-            padding: 16px 28px;
-            border-radius: 14px;
-            font-size: 1.05rem;
-            font-weight: 800;
-            cursor: pointer;
-            width: 100%;
-            box-shadow: var(--btn-shadow);
-            text-transform: uppercase;
-            letter-spacing: 1px;
         }}
         .visualizer-container {{
             width: 100%;
@@ -6800,18 +6825,22 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             const state = (data && data.visualizer) || {{}};
             const running = Boolean(state.running);
             const fullscreen = Boolean(state.fullscreen);
+            const pending = Boolean(state.pending);
             btn.classList.toggle('running', running);
             btn.classList.toggle('fullscreen', running && fullscreen);
             btn.setAttribute('aria-pressed', running ? 'true' : 'false');
             const label = document.getElementById('launchVisualizerState');
             if (label) {{
-                label.innerText = !running ? 'Off' : (fullscreen ? 'Fullscreen' : 'Windowed');
+                label.innerText = !running ? 'Off'
+                    : (pending ? 'Opening…' : (fullscreen ? 'Fullscreen' : 'Windowed'));
             }}
             btn.title = !running
                 ? 'Open MP Visualizer on the computer'
-                : (fullscreen
-                    ? 'MP Visualizer is fullscreen — press to close it'
-                    : 'MP Visualizer is open — press for fullscreen');
+                : (pending
+                    ? 'MP Visualizer is starting up'
+                    : (fullscreen
+                        ? 'MP Visualizer is fullscreen — press to close it'
+                        : 'MP Visualizer is open — press for fullscreen'));
         }}
 
         function paintLaunchPad(data) {{
@@ -6907,6 +6936,8 @@ def render_html_page(theme: Dict[str, Any]) -> str:
                         launchPadNote('MP Visualizer opened on the computer.', true);
                     }} else if (data.action === 'fullscreen') {{
                         launchPadNote('MP Visualizer is fullscreen. Press again to close it.', true);
+                    }} else if (data.action === 'already_running') {{
+                        launchPadNote('MP Visualizer is starting up…', false);
                     }} else {{
                         launchPadNote('MP Visualizer closed.', true);
                     }}

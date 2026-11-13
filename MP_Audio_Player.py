@@ -2041,6 +2041,13 @@ class AudioEngine:
         return False
 
     def _ensure_stream(self) -> bool:
+        # A test or a headless tool must never open a real output device:
+        # PortAudio blocks on the device server, which hangs a unit test and
+        # (on some drivers) crashes the interpreter on teardown. The engine
+        # still reports `stream_error`, so callers see a clean "no audio" path.
+        if os.environ.get("MP_DISABLE_AUDIO_OUTPUT") == "1":
+            self.stream_error = "audio output disabled by MP_DISABLE_AUDIO_OUTPUT"
+            return False
         if self._stream_alive(): return True
         if time.time() < self._next_stream_retry: return False
         self._close_stream()

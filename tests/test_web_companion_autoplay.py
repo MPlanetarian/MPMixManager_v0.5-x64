@@ -278,7 +278,9 @@ class StreamSessionTest(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="mp_companion_session_"))
         self.state = self.tmp / "web_companion_stream.json"
-        self.queue = [str(self.tmp / f"{i}.flac") for i in range(5)]
+        # Eight entries: the mini playlist wraps at the end, and a five-entry
+        # window starting at index 4 needs enough rows to wrap into.
+        self.queue = [str(self.tmp / f"{i}.flac") for i in range(8)]
         for path in self.queue:
             Path(path).write_bytes(b"\x00" * 16)
         self.patches = [
@@ -299,19 +301,35 @@ class StreamSessionTest(unittest.TestCase):
             p.stop()
         mwc.invalidate_queue_cache()
 
-    def test_mini_playlist_returns_only_three_tracks(self):
-        payload = mwc.get_mini_playlist()
-        self.assertEqual(len(payload["items"]), 3)
-        self.assertEqual(payload["total"], 5)
+    def test_mini_playlist_returns_only_five_tracks(self):
+        # 0.5 changed the visible window from three entries to five
+        # (MINI_PLAYLIST_SIZE) with a twenty-entry scrollback.
+        with mock.patch.object(mwc, "host_player_payload", return_value=None):
+            payload = mwc.get_mini_playlist()
+        self.assertEqual(len(payload["items"]), mwc.MINI_PLAYLIST_SIZE)
+        # `total` is the size of the whole queue, not the visible window.
+        self.assertEqual(payload["total"], len(self.queue))
         self.assertTrue(payload["items"][0]["current"])
 
-    def test_mini_playlist_wraps_at_end_of_queue(self):
+    def test_mini_playlist_stops_at_the_end_of_the_queue(self):
+        # 0.5 stopped wrapping the window. A list that jumps from the last
+        # track back to the first looks broken once it can be scrolled, so the
+        # window is truncated at the end of the queue instead.
+        last = len(self.queue) - 1
+        mwc.save_stream_session({"index": last, "path": self.queue[last]})
+        with mock.patch.object(mwc, "host_player_payload", return_value=None):
+            payload = mwc.get_mini_playlist()
+        self.assertEqual(len(payload["items"]), 1)
+        self.assertEqual(payload["items"][0]["index"], last)
+
         mwc.save_stream_session({"index": 4, "path": self.queue[4]})
-        payload = mwc.get_mini_playlist()
-        self.assertEqual(len(payload["items"]), 3)
+        with mock.patch.object(mwc, "host_player_payload", return_value=None):
+            payload = mwc.get_mini_playlist()
         self.assertEqual(payload["items"][0]["index"], 4)
-        self.assertEqual(payload["items"][1]["index"], 0)
-        self.assertEqual(payload["items"][2]["index"], 1)
+        self.assertEqual(payload["items"][1]["index"], 5)
+        # Truncated at the end of the queue: four rows remain from index 4, so
+        # the window is shorter than MINI_PLAYLIST_SIZE here.
+        self.assertEqual(len(payload["items"]), len(self.queue) - 4)
 
     def test_next_advances_the_served_file(self):
         mwc.control_player("next")
@@ -582,6 +600,27 @@ class StreamQueueCacheTest(unittest.TestCase):
         mwc.invalidate_stream_queue()
         mwc._queue_cache["files"] = []
         mwc._queue_cache["built_at"] = 0.0
+        # `build_stream_queue` falls through to the real library scan when the
+        # mode-specific scanner is not stubbed. On a 51k-file archive that walks
+        # and opens every FLAC before the test's own mock is consulted, so the
+        # module took minutes and looked like a hang. Redirect both scanners.
+        # A cache test must not walk the developer's archive. `build_stream_queue`
+        # resolves MIX mode through scan_archive_files, so that is the function
+        # whose call count these tests measure. Point it at an empty library and
+        # leave the rest alone; the tests that mock scan_playlist_files patch it
+        # themselves.
+        # These tests mock `scan_playlist_files` and count its calls, so the
+        # archive scanner has to route through it. When nothing is mocked it
+        # returns an empty library instead of walking the real archive.
+        self._patches = [
+            mock.patch.object(mwc, "scan_archive_files",
+                              side_effect=lambda: mwc.scan_playlist_files()),
+            mock.patch.object(mwc, "scan_music_files", return_value=[]),
+            mock.patch.object(mwc, "ensure_music_folders_mounted", return_value=None),
+        ]
+        for patch_ in self._patches:
+            patch_.start()
+            self.addCleanup(patch_.stop)
 
     def tearDown(self):
         mwc.invalidate_stream_queue()

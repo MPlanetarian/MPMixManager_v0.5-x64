@@ -579,12 +579,11 @@ classic) THEME_BG_R=0; THEME_BG_G=0; THEME_BG_B=48 ;;
 *) THEME_BG_R=12; THEME_BG_G=12; THEME_BG_B=20 ;;
 esac
 # Default ink for the CLI console: light text on every dark pane, black on the
-# one white pane. A theme may override THEME_FG_* above.
+# one white pane. MENU_WHITE is the ink for the menu items, the Selection:
+# status line and the player's EQ line, and has to follow the pane: white ink
+# on a white pane is invisible.
 if [ "${_menu_id:-}" = "the_whitest_white" ]; then
     THEME_FG_R=0; THEME_FG_G=0; THEME_FG_B=0
-    # MENU_WHITE is the fixed ink for the menu items, the Selection: status
-    # line and the player's EQ line. On a white pane white ink is invisible, so
-    # this one theme flips it to black.
     MENU_WHITE="\033[38;2;0;0;0m"
 else
     THEME_FG_R=226; THEME_FG_G=230; THEME_FG_B=238
@@ -593,10 +592,6 @@ fi
 export CURRENT_THEME MENU_NUM MENU_NUM_R MENU_NUM_G MENU_NUM_B THEME_BG_R THEME_BG_G THEME_BG_B SEL_BAR SEL_BAR_R SEL_BAR_G SEL_BAR_B SEL_BAR_FG
 }
 
-# Ink for the three areas that must read the same in every theme: the menu
-# items, the "Selection:" status line, and the EQ line in the player panel.
-# Plain white, with no fill of its own -- the text sits directly on the pane.
-MENU_WHITE="\033[38;2;255;255;255m"
 play_sound_effect() {
 local sound_type="${1:-storage}" sound_file=""; if [[ "$sound_type" == "dreamworlds" || "$sound_type" == "theme" ]]; then for cand in /usr/share/sounds/Oxygen-Sys-Special.ogg /usr/share/sounds/oxygen/stereo/dialog-special.ogg /usr/share/sounds/ocean/stereo/theme-demo.oga /usr/share/sounds/ocean/stereo/desktop-login.oga /usr/share/sounds/freedesktop/stereo/service-login.oga; do [[ -f "$cand" ]] && { sound_file="$cand"; break; }; done; elif [[ "$sound_type" == "storage" ]]; then for cand in /usr/share/sounds/ocean/stereo/device-added.oga /usr/share/sounds/freedesktop/stereo/device-added.oga /usr/share/sounds/Oxygen-Sys-App-Positive.ogg /usr/share/sounds/ocean/stereo/completion-success.oga; do [[ -f "$cand" ]] && { sound_file="$cand"; break; }; done; fi; if [[ -n "$sound_file" ]]; then for player in pw-play paplay canberra-gtk-play aplay; do if command -v "$player" &>/dev/null; then "$player" "$sound_file" &>/dev/null & break; fi; done; fi
 }
