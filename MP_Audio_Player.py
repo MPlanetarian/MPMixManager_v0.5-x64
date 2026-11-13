@@ -2967,15 +2967,33 @@ def _clip_display(text: str, max_cols: int) -> str:
     return "".join(out)
 
 def _boxed_rule(left: str, text: str, right: str, inner: int, color: str, text_color: Optional[str] = None) -> str:
+    """One horizontal rule with a label in it: `left ─── label ─── right`.
+
+    Colour is tracked explicitly rather than re-emitted optimistically. A
+    terminal applies SGR codes cumulatively, so writing the border colour, then
+    the text colour, then the border colour again leaves the second half of the
+    rule carrying *both* codes and the outline renders in the wrong hue on one
+    side. Every colour change here is emitted once, and the border colour is
+    restored only when the text actually changed it or `_clip_display` ended
+    with a hard reset.
+    """
     inner = max(4, int(inner))
     text_color = text_color or color
-    if _display_width(text) <= inner:
-        sh, restore = f"{text_color}{text}{color}", ""
-    else:
-        # Clipping ends in a reset. Put the border colour back so the right
-        # corner stays on the panel edge instead of the terminal's default ink.
-        sh, restore = f"{text_color}{_clip_display(text, inner)}", color
-    return f"  {color}{left}{sh}{restore}{'─' * (inner - _display_width(sh))}{right}{NC}"
+
+    clipped = _display_width(text) > inner
+    label = _clip_display(text, inner) if clipped else text
+
+    # `_clip_display` ends with a reset, so after it the border colour must be
+    # re-emitted. The label also needs the border colour back before the
+    # padding dashes when it used a different ink.
+    needs_restore = clipped or text_color != color
+    tail = color if needs_restore else ""
+    padding = "─" * max(0, inner - _display_width(label))
+
+    if text_color == color:
+        return f"  {color}{left}{label}{tail}{padding}{right}{NC}"
+    return f"  {color}{left}{text_color}{label}{tail}{padding}{right}{NC}"
+
 
 def _fit_text_line(cands: List[str], max_cols: int) -> str:
     for l in cands:
@@ -3236,9 +3254,10 @@ _THEME_PALETTES = {
     "sensorium_interface": {"highlight": "\033[38;2;0;245;255m", "active": "\033[38;2;240;168;216m", "border": "\033[38;2;0;245;255m", "accent": "\033[38;2;184;72;196m"},
     "retro_linux_memories": {"highlight": "\033[38;2;91;134;187m", "active": "\033[38;2;21;83;158m", "border": "\033[38;2;84;84;83m", "accent": "\033[38;2;240;173;78m"},
     "into_darkness_void_out": {"highlight": "\033[1;37m", "active": "\033[38;2;200;200;200m", "border": "\033[38;2;72;72;72m", "accent": "\033[1;37m"},
-    # Black ink on a white pane; the highlight is the same ink so a selected
-    # row is a white bar with black text rather than an invisible one.
-    "the_whitest_white": {"highlight": "\033[38;2;0;0;0m", "active": "\033[38;2;0;0;0m", "border": "\033[38;2;0;0;0m", "accent": "\033[38;2;0;0;0m"},
+    # `highlight` is the selected row's *fill*. White, so the row reads as a
+    # bar on the white pane; _selection_bar_ansi picks black text from its
+    # luminance. The remaining keys are ink and are black.
+    "the_whitest_white": {"highlight": "\033[48;2;255;255;255m", "active": "\033[38;2;0;0;0m", "border": "\033[38;2;0;0;0m", "accent": "\033[38;2;0;0;0m"},
 }
 _DEFAULT_PALETTE = {"highlight": COLOR_HOT_PURPLE, "active": COLOR_NEON_PINK, "border": COLOR_HOT_PURPLE, "accent": COLOR_ELECTRIC_CYAN}
 
@@ -6420,6 +6439,39 @@ class TerminalPlayerUI:
         self._publish_mp_visualizer()
         self._notify(f"Visualizer theme {preset.get('id', 0)}: {preset.get('name', '')}", 2.5)
 
+    def _step_mp_visualizer_preset(self, direction: int) -> bool:
+        """Move to the next/previous preset across the whole library.
+
+        Used by Left/Right while the MP Visualizer is on. ``cycle_preset``
+        wraps at both ends, so Right on the last preset returns to the first
+        and Left on the first preset goes to the last. Returns True when the
+        key was consumed, so callers can leave the arrow keys alone while the
+        visualizer is off and seeking keeps working.
+        """
+        if not getattr(self, "mp_visualizer_on", False):
+            return False
+        try:
+            api = _mp_visualizer_api()
+            presets = api.visualizer_presets()
+        except Exception:
+            presets = []
+        if not presets:
+            return False
+        want = int(getattr(self, "mp_visualizer_preset_id", 0) or 0)
+        index = next((i for i, preset in enumerate(presets) if int(preset.get("id", -1)) == want), None)
+        if index is None:
+            index = 0 if direction >= 0 else len(presets) - 1
+        else:
+            index = (index + (1 if direction >= 0 else -1)) % len(presets)
+        preset = presets[index]
+        self.mp_visualizer_preset_id = int(preset.get("id", 0))
+        self._publish_mp_visualizer()
+        # The header shows the preset name, so drop the cached frame to repaint it.
+        global _LIQUID_FRAME_CACHE
+        _LIQUID_FRAME_CACHE = None
+        self._notify(f"Visualizer theme {preset.get('id', 0)}: {preset.get('name', '')}", 2.5)
+        return True
+
     def _append_liquid_action_row(self, lines: List[str], max_cols: int):
         """Favorites and Visualization buttons. Both are clickable in every player size."""
         preset = self._mp_visualizer_preset()
@@ -6435,7 +6487,7 @@ class TerminalPlayerUI:
         gap = "   "
         head = f"  {fav_btn}{gap}{vis_btn}"
         ident = f"{int(preset.get('id', 0))} {preset.get('name', '')}"
-        tail = f"   ON  {ident}   [0-9] theme   [Shift+V] glass" if on else "   [Shift+V] MP Visualizer"
+        tail = f"   ON  {ident}   [0-9] theme  [←/→] preset   [Shift+V] glass" if on else "   [Shift+V] MP Visualizer"
         tail_short = f"   {ident}" if on else "   [Shift+V]"
         room = max_cols - _display_width(head)
         if room >= _display_width(tail):
@@ -6816,6 +6868,7 @@ class TerminalPlayerUI:
                 if not self.is_remote and self.engine: self.engine.check_track_end()
                 _win_hide_console_scrollbar()
                 self._follow_shared_theme()
+                self._follow_visualizer_preset()
                 try:
                     self._draw_frame()
                 except (KeyboardInterrupt, SystemExit):
@@ -7112,8 +7165,15 @@ class TerminalPlayerUI:
         elif data in (b"\x1b[H", b"\x1b[1~", b"\x1b[7~", b"\x1bOH"): self.selected_row = 0
         elif data in (b"\x1b[F", b"\x1b[4~", b"\x1b[8~", b"\x1bOF"):
             if flt := self._get_active_tracks(): self.selected_row = len(flt) - 1
-        elif data in (b"\x1b[D", b"\x1bOD"): self._send_cmd("seek", seconds=-10.0)
-        elif data in (b"\x1b[C", b"\x1bOC"): self._send_cmd("seek", seconds=10.0)
+        elif data in (b"\x1b[D", b"\x1bOD"):
+            # While the MP Visualizer is on, Left/Right step through every preset
+            # (wrapping at both ends) instead of seeking. The MP Liquid Player
+            # keeps +/- for pitch, so the arrows are the preset keys here.
+            if not self._step_mp_visualizer_preset(-1):
+                self._send_cmd("seek", seconds=-10.0)
+        elif data in (b"\x1b[C", b"\x1bOC"):
+            if not self._step_mp_visualizer_preset(1):
+                self._send_cmd("seek", seconds=10.0)
         elif data in (b"\r", b"\n"):
             mixes = self._get_active_tracks()
             if mixes and 0 <= self.selected_row < len(mixes):
@@ -7262,6 +7322,37 @@ class TerminalPlayerUI:
     def _navigate_list(self, delta: int):
         if m := self._get_active_tracks(): self.selected_row = max(0, min(len(m) - 1, self.selected_row + delta))
 
+    def _follow_visualizer_preset(self):
+        """Adopt a preset chosen inside the MP Visualizer window.
+
+        The bonded visualizer and the player share one preset, and a key pressed
+        while the visualizer has focus is published to the shared state file.
+        Reading it back here (at most twice a second) keeps the player's header
+        and the ``[0-9] theme`` hint on the preset that is actually on screen.
+        """
+        if not (getattr(self, "mp_visualizer_on", False) and os.environ.get("MP_LIQUID_GLASS") == "1"):
+            return
+        now = time.time()
+        if now - getattr(self, "_visualizer_preset_poll_at", 0.0) < 0.5:
+            return
+        self._visualizer_preset_poll_at = now
+        try:
+            state = _mp_visualizer_api().read_player_visualizer_state()
+        except Exception:
+            return
+        if not state.get("active"):
+            return
+        try:
+            preset_id = int(state.get("preset_id") or 0)
+        except (TypeError, ValueError):
+            return
+        if preset_id == int(getattr(self, "mp_visualizer_preset_id", 0) or 0):
+            return
+        self.mp_visualizer_preset_id = preset_id
+        global _LIQUID_FRAME_CACHE
+        _LIQUID_FRAME_CACHE = None
+        self._notify(f"Visualizer theme {preset_id}: {state.get('preset_name', '')}", 2.5)
+
     def _follow_shared_theme(self):
         """Adopt a theme selected in MP Gui or the console manager.
 
@@ -7309,7 +7400,10 @@ class TerminalPlayerUI:
         pal = self.visualizer.get_theme_palette()
         text_col = theme_body_ansi(self.visualizer.theme)
         is_lg = bool(os.environ.get("MP_LIQUID_GLASS"))
-        playlist_text_col = WHITE
+        # Unselected playlist rows use the theme's body ink. A hard-coded WHITE
+        # made them unreadable on light themes and identical across every
+        # theme, which defeats the point of a palette.
+        playlist_text_col = text_col
         g_key = "MP Gui" if is_lg else "Spek"
         bold_s = "" if is_lg else BOLD
         hl_col, act_col = pal.get("highlight", COLOR_HOT_PURPLE), pal.get("active", COLOR_NEON_PINK)
@@ -7327,13 +7421,17 @@ class TerminalPlayerUI:
         if is_lg and self.mp_visualizer_on:
             preset = self._mp_visualizer_preset()
             btitle = f"✦ MP LIQUID GLASS VISUALIZER — {preset.get('id', 0)} {preset.get('name', '')} ✦"
-            bsub = "Press 0-9 to change the visualizer theme  •  Shift+V returns to liquid glass"
+            bsub = "Press 0-9 or Left/Right arrows to change the visualizer theme  •  Shift+V returns to liquid glass"
         btitle, bsub = btitle[:max(0, iw - 1)], bsub[:max(0, iw - 1)]
         # Side bars stay on the border colour. Accent colours the subtitle text only,
         # so the header edge is one colour all the way around.
         lines.extend([
             f"  {b_col}╭{'─'*iw}╮{NC}",
-            f"  {b_col}│{text_col}{btitle.center(iw)}{b_col}│{NC}",
+            # Reset after the title ink, then re-apply the border, so the
+            # closing bar carries the border colour alone. Emitting the bar
+            # before the reset left it painted with border+title codes stacked,
+            # which is why one side of the header differed from the other three.
+            f"  {b_col}│{NC}{text_col}{btitle.center(iw)}{NC}{b_col}│{NC}",
             f"  {b_col}│{NC}{bold_s}{accent_col}{bsub.center(iw)}{NC}{b_col}│{NC}",
             f"  {b_col}╰{'─'*iw}╯{NC}",
         ])
@@ -7395,7 +7493,10 @@ class TerminalPlayerUI:
                 list_title = f"── MUSIC LIBRARY: {music_library_label(self.folder_name)} ({len(active_tracks)} Tracks{qb}) "
             else:
                 list_title = f"── MP MIX ARCHIVE PLAYLIST ({len(active_tracks)} Mixes Available{qb}) "
-            lines.append(_boxed_rule("┌", list_title, "┐", iw, b_col, text_col))
+            # The title text is part of the rule, so it shares the border ink.
+            # Passing the body colour here left the title's own `──` and `─`
+            # glyphs in a different hue from the rest of the panel outline.
+            lines.append(_boxed_rule("┌", list_title, "┐", iw, b_col, b_col))
             # Bottom rule, one blank row, the Vol status line, and two control rows.
             vrows = max(0, h - len(lines) - 5)
             if vrows <= 0: self.scroll_offset = max(0, self.selected_row)
@@ -7439,7 +7540,10 @@ class TerminalPlayerUI:
                     if len(f_str) > 6:
                         ex_l = len(f_str) - 6
                         npad = npad[:-ex_l] if len(npad) >= ex_l else ""
+                    # The favourite star keeps a neutral white so it reads the
+                    # same on every theme; the row text carries the theme ink.
                     star = favorite_glyph(self._favorites_store().is_favorite(m.get("path")))
+                    star = f"{WHITE}{star}{NC}" if star.strip() else star
                     self._playlist_star_col = _display_width(f"  │ {pfx}[{i+1:4d}] ") + 1
                     self._playlist_star_rows[len(lines) + 1] = i
                     ip = f" {pfx}[{i+1:4d}] {star} {mn}{npad} {ext_s} {f_str} "
@@ -7450,7 +7554,12 @@ class TerminalPlayerUI:
                         # fixed grey (console) or reverse video (Liquid Glass).
                         sel_bg, sel_fg = _selection_bar_ansi(self.visualizer.theme)
                         lines.append(f"  {b_col}│{NC}{sel_bg}{sel_fg}{ip}{NC}{b_col}│{NC}")
-                    elif act: lines.append(f"  {b_col}│{NC}{bold_s}{playlist_text_col}{ip}{NC}{b_col}│{NC}")
+                    # The playing row is tinted with the theme's `active` hue so
+                    # it is distinguishable from the cursor row (which carries the
+                    # selection fill). The tint stops at the row text: both panel
+                    # bars must stay the border colour so the box outline is
+                    # unbroken on every row.
+                    elif act: lines.append(f"  {b_col}│{NC}{bold_s}{act_col}{ip}{NC}{b_col}│{NC}")
                     elif in_q: lines.append(f"  {b_col}│{NC}{bold_s}{playlist_text_col}{ip}{NC}{b_col}│{NC}")
                     else: lines.append(f"  {b_col}│{NC}{playlist_text_col}{ip}{NC}{b_col}│{NC}")
             if self.mode == "FAVORITES":
@@ -7459,7 +7568,9 @@ class TerminalPlayerUI:
                 list_footer = f"── ↑/↓: Scroll • Enter: Play • [1] Mix • [2] Music • [3] Favorites • [H] Mark • Q: Queue • D: Clear • G: {g_key} • /: Search "
             else:
                 list_footer = f"── ↑/↓: Scroll  •  Enter: Play  •  [1] Mix Archive  •  [2] Music  •  [3] Favorites  •  [H] Mark  •  Q: Queue  •  D: Clear  •  G: {g_key}  •  O: Open  •  T: Tracklist "
-            lines.append(_boxed_rule("└", list_footer, "┘", iw, b_col, text_col))
+            # The footer is part of the rule, so it shares the border ink and
+            # the panel outline stays one colour all the way around.
+            lines.append(_boxed_rule("└", list_footer, "┘", iw, b_col, b_col))
             if self.mode == "FAVORITES":
                 # Clickable "Export DJ Set" label on the list footer, when the
                 # clipped footer still shows it. SGR mouse columns are 1-based.

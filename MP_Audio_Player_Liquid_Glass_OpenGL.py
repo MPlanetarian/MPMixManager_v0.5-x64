@@ -860,12 +860,20 @@ class GlassHost:
             ctx.iteration(False)
 
     def _on_term_button_press(self, _term, event):
+        # `Gdk` is None when PyGObject could not be imported (a headless run, a
+        # Windows console host, a unit test). Reaching into Gdk.EventType then
+        # raised AttributeError from an input handler, which takes the whole
+        # render loop down; fall back to the numeric constants instead.
+        gdk_event_type = getattr(Gdk, "EventType", None) if Gdk else None
+        gdk_modifiers = getattr(Gdk, "ModifierType", None) if Gdk else None
+        double_press = getattr(gdk_event_type, "_2BUTTON_PRESS", 5)
         if event.button == 1:
-            if event.type == getattr(Gdk.EventType, "_2BUTTON_PRESS", 5) and event.y <= 90:
+            if event.type == double_press and event.y <= 90:
                 self.toggle_maximize()
                 self._term_dragging = self._slider_dragging = False
                 return True
-            mods = getattr(Gdk.ModifierType, "MOD1_MASK", 8) | getattr(Gdk.ModifierType, "SUPER_MASK", 0x4000000)
+            mods = (getattr(gdk_modifiers, "MOD1_MASK", 8)
+                    | getattr(gdk_modifiers, "SUPER_MASK", 0x4000000))
             if (event.y <= 90 or bool(getattr(event, "state", 0) & mods)) and not self.is_maximized:
                 self._term_dragging = True
                 self._term_drag_origin = self.renderer.window_pos()

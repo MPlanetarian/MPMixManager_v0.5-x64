@@ -582,8 +582,13 @@ esac
 # one white pane. A theme may override THEME_FG_* above.
 if [ "${_menu_id:-}" = "the_whitest_white" ]; then
     THEME_FG_R=0; THEME_FG_G=0; THEME_FG_B=0
+    # MENU_WHITE is the fixed ink for the menu items, the Selection: status
+    # line and the player's EQ line. On a white pane white ink is invisible, so
+    # this one theme flips it to black.
+    MENU_WHITE="\033[38;2;0;0;0m"
 else
     THEME_FG_R=226; THEME_FG_G=230; THEME_FG_B=238
+    MENU_WHITE="\033[38;2;255;255;255m"
 fi
 export CURRENT_THEME MENU_NUM MENU_NUM_R MENU_NUM_G MENU_NUM_B THEME_BG_R THEME_BG_G THEME_BG_B SEL_BAR SEL_BAR_R SEL_BAR_G SEL_BAR_B SEL_BAR_FG
 }

@@ -34,8 +34,10 @@ class TestAudioPlayerBannerAlignment(unittest.TestCase):
             'player_banner+="  ${BOLD}${MAGENTA}│${NC} ${l1_left}${l1_sp}${l1_right} ${BOLD}${MAGENTA}│\\033[K${NC}\\n"',
             text,
         )
+        # The EQ line uses MENU_WHITE (theme-aware ink, black on the white
+        # theme) and the raw band glyphs, not the DIM/eq_disp form.
         self.assertIn(
-            'player_banner+="  ${BOLD}${MAGENTA}│${NC}   ${DIM}EQ:${NC} ${eq_disp}${l2_sp}${DIM}Controls: ${line2_ctrl}${NC} ${BOLD}${MAGENTA}│\\033[K${NC}\\n"',
+            'player_banner+="  ${BOLD}${MAGENTA}│${NC}   ${MENU_WHITE}EQ: ${eq_raw}${l2_sp}Controls: ${line2_ctrl}${NC} ${BOLD}${MAGENTA}│\\033[K${NC}\\n"',
             text,
         )
         self.assertIn(

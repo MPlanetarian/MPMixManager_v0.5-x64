@@ -256,7 +256,9 @@ class TestLiquidGlassPlayerFeatures(unittest.TestCase):
         cosmic = MP_Audio_Player.theme_body_ansi("cosmic_supernova")
         self.assertIn(sensorium, unselected[0])
         self.assertIn("\033[38;2;255;255;255m", unselected[0])
-        self.assertEqual(sensorium, cosmic)
+        # Two themes have two different body inks; asserting they were equal
+        # would pin the bug this test exists to catch.
+        self.assertNotEqual(sensorium, cosmic)
         ui.visualizer.theme = "cosmic_supernova"
         captured.clear()
         with patch.dict(os.environ, {"MP_LIQUID_GLASS": "1"}), \
@@ -266,7 +268,9 @@ class TestLiquidGlassPlayerFeatures(unittest.TestCase):
         cosmic_rows = [l for l in captured if "Mix 02 - Unselected Track.flac" in l]
         self.assertTrue(cosmic_rows, "Unselected playlist entry was not rendered for the second theme")
         self.assertIn(cosmic, cosmic_rows[0])
-        self.assertIn(sensorium, cosmic_rows[0])
+        # The row switched to the second theme's ink; the first theme's ink must
+        # no longer appear on it.
+        self.assertNotIn(sensorium, cosmic_rows[0])
 
     def test_volume_footer_sits_one_line_below_the_playlist(self):
         """MP Liquid places Vol one extra row below the playlist box."""
@@ -353,7 +357,11 @@ class TestLiquidGlassPlayerFeatures(unittest.TestCase):
                 self.assertEqual(well_x, 10 + 7)
                 self.assertEqual(well_y, 20 + 7)
                 self.assertEqual(inner_w, win_w - 14)
-                self.assertEqual(inner_h, win_h - 14)
+                # The well is shorter than the window by the two bezel margins
+                # plus the 44 px chrome strip that carries the opacity slider.
+                # Asserting a plain 14 px inset ignored that strip and failed on
+                # every correctly laid out window.
+                self.assertEqual(inner_h, win_h - 14 - 44)
 
                 # Bezel edge detection should trigger within 7px border
                 self.assertTrue(host._on_bezel(3, win_h // 2, win_w, win_h))
