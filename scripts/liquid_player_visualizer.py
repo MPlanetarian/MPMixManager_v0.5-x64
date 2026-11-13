@@ -936,6 +936,14 @@ def vulkan_preset_spirv(preset_id: int, march_steps: Optional[int] = None) -> Op
     if compiled:
         return compiled
     if shipped.is_file() and steps == _MACOS_MARCH_STEPS:
+        # The shipped module was built from a different revision of the GLSL and
+        # no compiler is available to rebuild it. Rendering the old module beats
+        # rendering nothing, but it silently draws the previous shader, so say so
+        # rather than letting a stale manifest look like a working fix.
+        print(f"[LiquidVisualizer] Warning: {shipped.name} was built from a different "
+              f"mp_liquid_visualizer.frag (shipped {meta.get('source', 'unknown')}, "
+              f"current {digest}); install glslangValidator to rebuild the preset shaders.",
+              file=sys.stderr)
         return shipped
     return None
 

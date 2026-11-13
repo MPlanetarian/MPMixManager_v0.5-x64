@@ -1048,19 +1048,39 @@ vec2 csMapSequences(vec3 p) {
         w[(seg + 1) % 12] = f;
     }
 
+    // The crossfade holds one sequence at weight 1.0 and fades the next one in,
+    // so at most TWO weights are ever nonzero and the other ten are exactly
+    // 0.0. Their contribution to the blend is seq.x * 0.0 == 0.0, so evaluating
+    // ten full SDF scenes at every one of the up to 84 march steps (which is
+    // what made this preset run at ~5 fps) cannot change a single pixel.
+    // Each scene is therefore skipped while its weight is zero, which leaves
+    // the array, the accumulation loop and the material scan untouched and so
+    // keeps the distance field and blend order byte-identical.
     vec2 seq[12];
-    seq[0]  = csSeqFurnaceHull(p);
-    seq[1]  = csSeqFinCascade(p);
-    seq[2]  = csSeqSplitKeel(p);
-    seq[3]  = csSeqBeadSurge(p);
-    seq[4]  = csSeqEmberWake(p);
-    seq[5]  = csSeqPlasmaCocoon(p);
-    seq[6]  = csSeqSpineRing(p);
-    seq[7]  = csSeqShardBloom(p);
-    seq[8]  = csSeqHullStrata(p);
-    seq[9]  = csSeqTwinVessel(p);
-    seq[10] = csSeqNozzleFlare(p);
-    seq[11] = csSeqStormCollapse(p);
+    seq[0]  = vec2(0.0, 1.0);
+    seq[1]  = vec2(0.0, 1.0);
+    seq[2]  = vec2(0.0, 1.0);
+    seq[3]  = vec2(0.0, 1.0);
+    seq[4]  = vec2(0.0, 1.0);
+    seq[5]  = vec2(0.0, 1.0);
+    seq[6]  = vec2(0.0, 1.0);
+    seq[7]  = vec2(0.0, 1.0);
+    seq[8]  = vec2(0.0, 1.0);
+    seq[9]  = vec2(0.0, 1.0);
+    seq[10] = vec2(0.0, 1.0);
+    seq[11] = vec2(0.0, 1.0);
+    if (w[0]  > 0.0) seq[0]  = csSeqFurnaceHull(p);
+    if (w[1]  > 0.0) seq[1]  = csSeqFinCascade(p);
+    if (w[2]  > 0.0) seq[2]  = csSeqSplitKeel(p);
+    if (w[3]  > 0.0) seq[3]  = csSeqBeadSurge(p);
+    if (w[4]  > 0.0) seq[4]  = csSeqEmberWake(p);
+    if (w[5]  > 0.0) seq[5]  = csSeqPlasmaCocoon(p);
+    if (w[6]  > 0.0) seq[6]  = csSeqSpineRing(p);
+    if (w[7]  > 0.0) seq[7]  = csSeqShardBloom(p);
+    if (w[8]  > 0.0) seq[8]  = csSeqHullStrata(p);
+    if (w[9]  > 0.0) seq[9]  = csSeqTwinVessel(p);
+    if (w[10] > 0.0) seq[10] = csSeqNozzleFlare(p);
+    if (w[11] > 0.0) seq[11] = csSeqStormCollapse(p);
 
     float dMix = 0.0;
     for (int i = 0; i < 12; i++) dMix += seq[i].x * w[i];

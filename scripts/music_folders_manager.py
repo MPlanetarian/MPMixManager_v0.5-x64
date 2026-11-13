@@ -858,6 +858,15 @@ def save_playlist_files(tracks: List[Dict[str, Any]], target: str, config: Dict[
             f.write(f"{t['path']}\n")
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump(tracks, f, indent=2, ensure_ascii=False)
+    # Pre-build the MP Audio Player's fast sidecar so the next window open does
+    # not have to parse this JSON. Best effort: a failure only costs one slow start.
+    try:
+        if str(Path(__file__).resolve().parent) not in sys.path:
+            sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import playlist_cache
+        playlist_cache.write(json_path, tracks)
+    except Exception:
+        pass
     return m3u_path, json_path
 
 def rebuild_all_playlist(folders: List[Dict[str, Any]], config: Dict[str, Any]) -> int:
