@@ -21,6 +21,7 @@ layout(set = 0, binding = 0) uniform VisualizerUBO {
     vec4 bands2;  // 4 spectrum bands (8..11)
     vec4 bands3;  // 4 spectrum bands (12..15)
     vec4 preset;  // x: preset_id (0 = Cosmic Dreamworlds (Liquid)), y: pitch_factor, z: dyn_range, w: seed
+    vec4 stream;  // x: stream_id (0 horizontal river, 1 vertical), y: PID phase, z: PID heat, w: PID serial
 } u;
 
 layout(set = 0, binding = 1) uniform sampler2D uCoverTex;
@@ -1229,8 +1230,146 @@ vec3 streamOfFrequencyPalette(float t, vec2 uvHint) {
     return mix(procCol, coverSample, 0.46);
 }
 
+// ------------------------------------------------------------------------------
+// Stream of Frequency — Dynamic Waves
+//
+// Two rivers, one shader. They are drawn as a full-frame pass rather than the
+// raymarched vessel the other presets use: a river of frequency bands reads as
+// light on a page, and the PID event vector lights it up.
+//
+// The page is white, so everything here composites with coverage and alpha. The
+// usual additive bloom would wash the page out to a flat white rectangle.
+// ------------------------------------------------------------------------------
+const float SOF_COVERAGE = 0.82;
+
+// The arc that bends each band. Slow on purpose: the bands are drawn along a
+// long curve, so the phase must creep rather than wiggle per cell.
+float sofArcOffset(float along, float t) {
+    return sin(along * PI + t * 0.071) * 0.055;
+}
+
+float sofHash(float n) {
+    return fract(sin(n * 127.1) * 43758.5453);
+}
+
+// Pixel fireworks thrown out behind the travelling front. Composited OVER the
+// page with alpha, never added to it: additive light on a white page is a no-op.
+vec4 sofPidBursts(vec2 uv, float along, float across, float heat) {
+    if (heat <= 0.001) {
+        return vec4(0.0);
+    }
+    vec2 cell = floor(vec2(along * 140.0, across * 90.0));
+    float h = sofHash(cell.x * 1.7 + cell.y * 13.1 + u.stream.w * 37.0);
+    float life = clamp(1.0 - abs(along - u.stream.y) * 6.0, 0.0, 1.0);
+    float spark = step(0.86, h) * life * heat;
+    float pop = smoothstep(0.0, 0.3, life) * (0.35 + 0.65 * heat);
+    float glyph = step(0.965, h) * pop;
+    vec3 col = mix(vec3(0.10, 0.85, 0.95), vec3(0.98, 0.30, 0.75), fract(h * 7.0));
+    float a = clamp(max(spark, glyph), 0.0, 1.0);
+    return vec4(col, a);
+}
+
+vec3 sofRiverPalette(float t, vec2 uvHint, float vertical) {
+    return vertical > 0.5 ? vec3(0.10, 0.85, 0.95) : vec3(0.98, 0.30, 0.75);
+}
+
+// Horizontal river: a bright head sweeps left to right, bands trail it.
+vec3 sofHorizontalRiver(vec2 uv, float t) {
+    float along = clamp(uv.x, 0.0, 1.0);
+    float across = uv.y;
+    float head = fract(t * 0.115);
+    float arc = sofArcOffset(along, t);
+    float bend = arc + 0.085 * sin(along * PI * 2.0 + t * 0.19);
+
+    // Twelve bands stacked down the page, each with a hard core and a soft
+    // fall-off. The core is what reads as a band; a pure gradient just looks
+    // like a bright page.
+    float bands = 0.0;
+    float cores = 0.0;
+    for (int i = 0; i < 12; i++) {
+        float fi = float(i);
+        float centre = (fi + 0.5) / 12.0 + bend * 0.6;
+        float d = abs(across - centre);
+        float strip = smoothstep(0.052, 0.0, d);
+        float core = smoothstep(0.014, 0.0, d);
+        float bandVal = i < 4 ? u.bands0[i] : (i < 8 ? u.bands1[i - 4] : (i < 12 ? u.bands2[i - 8] : u.bands3[i - 12]));
+        float level = 0.55 + 0.45 * bandVal;
+        bands = max(bands, strip * level);
+        cores = max(cores, core * level);
+    }
+
+    // The travelling front: a bright head with a long visible tail behind it.
+    // The tail is what makes the sweep legible in a still frame.
+    float behind = head - along;
+    float tail = exp(-max(0.0, behind) * 2.6) * step(0.0, behind);
+    float headGlow = exp(-abs(behind) * 120.0);
+    // Fade the head near both edges: at 0 it would sit on the first column and
+    // read as a black bar rather than a sweep.
+    headGlow *= smoothstep(0.0, 0.06, head) * smoothstep(1.0, 0.94, head);
+    float heat = u.stream.z;
+
+    vec3 ink = vec3(0.03, 0.04, 0.07);
+    // Base coverage keeps every band faintly visible; the core line is the band
+    // itself. The sweep is light, not ink: a dark bar crossing a white page
+    // reads as a rendering fault, so the front and its tail tint with the
+    // preset accent instead of adding coverage.
+    float coverage = bands * 0.22 * SOF_COVERAGE;
+    coverage += cores * 0.55 * SOF_COVERAGE;
+
+    vec3 col = mix(vec3(1.0), ink, clamp(coverage, 0.0, SOF_COVERAGE));
+    vec3 accent = sofRiverPalette(t, uv, 0.0);
+    float lit = tail * bands * 0.55 + headGlow * (0.75 + 0.25 * heat);
+    col = mix(col, accent, clamp(lit, 0.0, 0.85));
+    vec4 burst = sofPidBursts(uv, along, across, heat);
+    return mix(col, burst.rgb, burst.a);
+}
+
+// Vertical river: the same idea rotated, head sweeping top to bottom.
+vec3 sofVerticalRiver(vec2 uv, float t) {
+    float along = clamp(uv.y, 0.0, 1.0);
+    float across = uv.x;
+    float arc = sin(along * PI + t * 0.071) * 0.055 + 0.075 * sin(along * PI * 2.0 + t * 0.21);
+
+    float columns = 0.0;
+    float edges = 0.0;
+    for (int i = 0; i < 12; i++) {
+        float fi = float(i);
+        float centre = (fi + 0.5) / 12.0 + arc;
+        float d = abs(across - centre);
+        float strip = smoothstep(0.040, 0.0, d);
+        float edge = smoothstep(0.009, 0.0, d);
+        float bandVal = i < 4 ? u.bands0[i] : (i < 8 ? u.bands1[i - 4] : u.bands2[i - 8]);
+        float level = 0.55 + 0.45 * bandVal;
+        columns = max(columns, strip * level);
+        edges = max(edges, edge * level);
+    }
+
+    // Each column marches at its own speed, so the rain is not one flat line.
+    float hCol = across;
+    float speed = 0.075 + 0.055 * sofHash(floor(hCol * 12.0));
+    float head = fract(t * speed + hCol * 7.0);
+    float drop = head - along;
+    float trail = exp(-max(0.0, drop) * 2.2) * step(0.0, drop);
+    float headGlow = exp(-abs(drop) * 110.0);
+
+    vec3 ink = vec3(0.03, 0.04, 0.07);
+    float coverage = columns * 0.20 * SOF_COVERAGE;
+    coverage += edges * 0.60 * SOF_COVERAGE;
+
+    vec3 col = mix(vec3(1.0), ink, clamp(coverage, 0.0, SOF_COVERAGE));
+    vec3 accent = sofRiverPalette(t, uv, 1.0);
+    float lit = trail * columns * 0.55 + headGlow * 0.70;
+    col = mix(col, accent, clamp(lit, 0.0, 0.85));
+    vec4 burst = sofPidBursts(uv, along, across, u.stream.z);
+    return mix(col, burst.rgb, burst.a);
+}
+
 vec3 getPresetPalette(float t, vec2 uvHint) {
-    if (u.preset.x > 9.5) {
+    if (u.preset.x > 11.5) {
+        return sofRiverPalette(t, uvHint, 1.0);
+    } else if (u.preset.x > 10.5) {
+        return sofRiverPalette(t, uvHint, 0.0);
+    } else if (u.preset.x > 9.5) {
         return chromaticStormPalette(t, uvHint);
     } else if (u.preset.x > 8.5) {
         return resonantFluidDynamicsPalette(t, uvHint);
@@ -2949,6 +3088,19 @@ void main() {
     float camRoll = 0.08 * sin(t * 0.21);
     vec2 rotUv = uv * rot2(camRoll);
     vec3 rd = normalize(rotUv.x * uu + rotUv.y * vv + (1.32 - 0.12 * beat) * ww);
+
+    // The Dynamic Waves pair is a full-frame river, not a raymarched vessel.
+    // Return early: marching the vessel would cost a full frame's GPU time for
+    // pixels the river is about to cover anyway. The branches are written as an
+    // explicit range so the two ids are unambiguous.
+    if (u.preset.x > 10.5) {
+        if (u.preset.x < 11.5) {
+            outColor = vec4(sofHorizontalRiver(screenUv, t), 1.0);
+        } else {
+            outColor = vec4(sofVerticalRiver(screenUv, t), 1.0);
+        }
+        return;
+    }
 
     // Background Cosmic Dreamworlds canvas
     vec3 bgCol = renderCosmicBackground(rd, screenUv);

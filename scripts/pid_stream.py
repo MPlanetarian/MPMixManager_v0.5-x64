@@ -191,7 +191,6 @@ class PidStreamSource:
 
 
 def demoSweep(now: float, period: float = 4.0) -> PidStreamState:
-    """A synthetic PID event clock, used by tests and previews."""
     cycle = (now % max(0.1, period)) / max(0.1, period)
     phase = 1.0 - (1.0 - cycle) ** 1.35
     return PidStreamState(
@@ -219,7 +218,8 @@ class StreamDriver:
     def __init__(self, mode: str = "pid", event_seconds: float = EVENT_SECONDS,
                  pid_source: Optional[PidStreamSource] = None,
                  min_audio_gap: float = 0.55):
-        self.mode = "audio" if str(mode).lower() == "audio" else "pid"
+        self.mode = "audio" if str(mode).lower() == "audio" else (
+            "demo" if str(mode).lower() == "demo" else "pid")
         self.event_seconds = max(0.2, float(event_seconds))
         self._pid = pid_source if pid_source is not None else PidStreamSource(
             event_seconds=self.event_seconds
@@ -249,6 +249,11 @@ class StreamDriver:
         """
         if self.mode == "audio" and bridge is not None:
             self._poll_audio(now, bridge)
+        elif self.mode == "demo":
+            # No player and no /proc: keep the river sweeping for previews and
+            # for the renderer's own smoke tests.
+            state = demoSweep(now, period=max(1.0, self.event_seconds * 2.2))
+            return (0.0, state.phase, state.heat, state.serial)
         else:
             state = self._pid.update(dt, now=now)
             return (0.0, state.phase, state.heat, state.serial)
@@ -275,3 +280,57 @@ class StreamDriver:
         self._event_at = now
         self._event_heat = float(min(1.0, 0.45 + 0.55 * max(beat, rms)))
 
+
+
+# ------------------------------------------------------------------------------
+# Shared stream vector
+#
+# Three renderers want the same numbers: the Vulkan visualizer, the OpenGL
+# player layer and the glass host. They all call stream_vector(), which owns the
+# per-window drivers so two windows cannot share one event clock.
+# ------------------------------------------------------------------------------
+_DRIVERS: Dict[str, StreamDriver] = {}
+
+# Only these two preset ids drive a river; everything else gets a zero vector.
+SOF_STREAM_PRESET_IDS = (11, 12)
+
+
+def reset_stream_drivers() -> None:
+    """Forget every driver. Tests call this; so does a full renderer restart."""
+    _DRIVERS.clear()
+
+
+def stream_vector(mode: str, preset_id: int, now: float, dt: float,
+                  bridge=None, key: str = "default") -> tuple:
+    """Return ``(stream_id, phase, heat, serial)`` for one window.
+
+    ``stream_id`` is 0 for the horizontal river and 1 for the vertical one, which
+    is what the shader branches on. Any preset other than the Dynamic Waves pair
+    gets an all-zero vector, so ordinary presets are unaffected.
+
+    ``key`` namespaces the driver: two visualizer windows pass different keys and
+    therefore keep independent event clocks.
+    """
+    try:
+        pid = int(preset_id)
+    except (TypeError, ValueError):
+        return (0.0, 0.0, 0.0, 0.0)
+    if pid not in SOF_STREAM_PRESET_IDS:
+        return (0.0, 0.0, 0.0, 0.0)
+
+    mode = str(mode or "pid").lower()
+    if mode not in ("pid", "audio", "demo"):
+        mode = "pid"
+
+    driver = _DRIVERS.get(key)
+    if driver is None:
+        driver = StreamDriver(mode=mode)
+        _DRIVERS[key] = driver
+    elif driver.mode != mode:
+        # Reopening a window as the saver must not inherit the player's heat.
+        driver.mode = mode
+        driver.reset()
+
+    _sid, phase, heat, serial = driver.update(dt, now, bridge=bridge)
+    stream_id = 0.0 if pid == 11 else 1.0
+    return (stream_id, float(phase), float(heat), float(serial))

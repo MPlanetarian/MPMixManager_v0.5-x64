@@ -94,6 +94,7 @@ uniform vec4 u_bands1;
 uniform vec4 u_bands2;
 uniform vec4 u_bands3;
 uniform vec4 u_preset;
+uniform vec4 u_stream;
 uniform sampler2D uCoverTex;
 uniform float uTextGuard;
 """
@@ -101,7 +102,7 @@ uniform float uTextGuard;
 _UNIFORM_NAMES = (
     "u_res", "u_audio0", "u_audio1", "u_audio2",
     "u_bands0", "u_bands1", "u_bands2", "u_bands3",
-    "u_preset", "uCoverTex", "uTextGuard",
+    "u_preset", "u_stream", "uCoverTex", "uTextGuard",
 )
 
 
@@ -823,6 +824,7 @@ def opengl_visualizer_source() -> str:
         ("u.audio1", "u_audio1"),
         ("u.audio2", "u_audio2"),
         ("u.preset", "u_preset"),
+        ("u.stream", "u_stream"),
         ("u.res", "u_res"),
     ):
         body = body.replace(src, dst)
@@ -1127,7 +1129,21 @@ class PlayerVisualizerLayer:
         self._uniform4(GL, _loc(locs, "u_bands1"), bands[4], bands[5], bands[6], bands[7])
         self._uniform4(GL, _loc(locs, "u_bands2"), bands[8], bands[9], bands[10], bands[11])
         self._uniform4(GL, _loc(locs, "u_bands3"), bands[12], bands[13], bands[14], bands[15])
-        self._uniform4(GL, _loc(locs, "u_preset"), 0.0, float(bridge.pitch_factor), 1.0, float(bridge.dynamic_time))
+        # The preset id used to be hard-coded 0.0 here, so every preset looked
+        # like Cosmic Dreamworlds on the OpenGL backend and the Dynamic Waves
+        # rivers never drew at all.
+        preset_id = float(getattr(renderer, "_preset_id_float", 0.0) or 0.0)
+        self._uniform4(GL, _loc(locs, "u_preset"), preset_id, float(bridge.pitch_factor), 1.0, float(bridge.dynamic_time))
+        try:
+            import pid_stream
+            sid, sprime, sheat, sserial = pid_stream.stream_vector(
+                "pid" if getattr(renderer, "screensaver", False) else "audio",
+                int(preset_id), float(bridge.accum_time), 1.0 / 60.0,
+                bridge=bridge, key=f"gl-{id(renderer)}",
+            )
+        except Exception:
+            sid = sprime = sheat = sserial = 0.0
+        self._uniform4(GL, _loc(locs, "u_stream"), sid, sprime, sheat, sserial)
         cover = _loc(locs, "uCoverTex")
         if cover >= 0:
             GL.glUniform1i(cover, 0)
@@ -1331,6 +1347,21 @@ class LiquidVisualizerOpenGLRenderer(MonitorSpanMixin, RandomPresetMixin, Player
     # The public surface below mirrors LiquidVisualizerVulkanRenderer.
     preset: Dict[str, Any]
     title = "MP Liquid Visualizer"
+
+    @staticmethod
+    def _saver_fullscreen_supported() -> bool:
+        """Whether a per-monitor saver screen may switch to fullscreen.
+
+        On Wayland the client cannot change its own fullscreen state without
+        the compositor's agreement. GLFW's request there crashes the window on
+        some drivers, so the saver places the window with KWin instead and
+        skips the mode switch. On X11 the switch is the normal path.
+        """
+        try:
+            import wayland_window_place as place
+            return not place.is_wayland()
+        except Exception:
+            return True
 
     def __init__(self, preset_name: Optional[str] = None, fullscreen: bool = False,
                  target_4k: bool = False,

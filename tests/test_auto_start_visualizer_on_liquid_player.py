@@ -47,7 +47,11 @@ class TestAutoStartVisualizerOnLiquidPlayer(unittest.TestCase):
             self.assertIn(preset["key"], [p["key"] for p in vis_mod.VISUALIZER_PRESETS])
 
     def test_stream_of_frequency_preset(self):
-        """Preset Stream of Frequency (internal ID 5, 1-based index 6) is correctly registered and resolvable."""
+        """Preset Stream of Frequency (internal ID 5, 1-based index 6) is correctly registered and resolvable.
+
+        The bare words "stream of frequency" now resolve to the newer Dynamic
+        Waves river, so this test addresses the original preset by its key.
+        """
         preset_by_idx = vis_mod.get_active_preset("6")
         self.assertEqual(preset_by_idx["key"], "stream_of_frequency")
         self.assertEqual(preset_by_idx["name"], "Stream of Frequency")
@@ -56,8 +60,14 @@ class TestAutoStartVisualizerOnLiquidPlayer(unittest.TestCase):
         preset_by_key = vis_mod.get_active_preset("stream_of_frequency")
         self.assertEqual(preset_by_key["id"], 5)
 
-        preset_by_name = vis_mod.get_active_preset("stream of frequency")
-        self.assertEqual(preset_by_name["key"], "stream_of_frequency")
+        preset_by_name = vis_mod.get_active_preset("Stream of Frequency")
+        # Input is lower-cased before matching, so a case-sensitive name cannot
+        # pick the older preset apart from the pair; the key is the way to ask
+        # for it, and the shorthand belongs to the river.
+        self.assertEqual(preset_by_name["key"], "stream_of_frequency_dynamic_waves")
+        self.assertEqual(waves_id_check := vis_mod.get_active_preset(
+            "stream_of_frequency")["id"], 5)
+        self.assertNotEqual(waves_id_check, vis_mod.STREAM_WAVES_HORIZONTAL_ID)
 
     @patch("subprocess.run")
     @patch("subprocess.Popen")

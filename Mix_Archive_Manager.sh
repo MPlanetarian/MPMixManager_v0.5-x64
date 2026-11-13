@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-if [[ "$OSTYPE" == "darwin"* && "${BASH_VERSINFO[0]:-0}" -lt 4 ]]; then for bash in /opt/homebrew/bin/bash /usr/local/bin/bash; do [[ -x "$bash" ]] && exec "$bash" "$0" "$@"; done; fi; _mp_self="${BASH_SOURCE[0]}"; while [ -h "$_mp_self" ]; do _mp_dir="$(cd -P "$(dirname "$_mp_self")" >/dev/null 2>&1 && pwd)"; _mp_self="$(readlink "$_mp_self")"; case "$_mp_self" in /*) ;; *) _mp_self="$_mp_dir/$_mp_self" ;; esac; done; SCRIPT_DIR="$(cd -P "$(dirname "$_mp_self")" >/dev/null 2>&1 && pwd)"; unset _mp_self _mp_dir; MANAGER_START_EPOCH="${MANAGER_START_EPOCH:-${EPOCHSECONDS:-$(date +%s 2>/dev/null || echo 0)}}"; export MANAGER_START_EPOCH; shopt -s checkwinsize 2>/dev/null || true; export PYTHONIOENCODING="utf-8" PYTHONUTF8=1; UNAME_S="${UNAME_S:-$(uname -s 2>/dev/null)}"; UNAME_M="${UNAME_M:-$(uname -m 2>/dev/null)}"; _TERM_LINES=""; _TERM_COLS=""; _TERM_RESIZED=1; _on_winch() { _TERM_RESIZED=1; }; trap '_on_winch' WINCH; S70="======================================================================"; D70="----------------------------------------------------------------------"; if [ -z "${VERSION:-}" ]; then if [ -f "$SCRIPT_DIR/VERSION" ]; then VERSION="$(head -n 1 "$SCRIPT_DIR/VERSION" | tr -d '\r\n')"; else VERSION="0.5.0 Stable (Sensorium)"; fi; fi; export VERSION
+if [[ "$OSTYPE" == "darwin"* && "${BASH_VERSINFO[0]:-0}" -lt 4 ]]; then for bash in /opt/homebrew/bin/bash /usr/local/bin/bash; do [[ -x "$bash" ]] && exec "$bash" "$0" "$@"; done; fi; _mp_self="${BASH_SOURCE[0]}"; while [ -h "$_mp_self" ]; do _mp_dir="$(cd -P "$(dirname "$_mp_self")" >/dev/null 2>&1 && pwd)"; _mp_self="$(readlink "$_mp_self")"; case "$_mp_self" in /*) ;; *) _mp_self="$_mp_dir/$_mp_self" ;; esac; done; SCRIPT_DIR="$(cd -P "$(dirname "$_mp_self")" >/dev/null 2>&1 && pwd)"; unset _mp_self _mp_dir; MANAGER_START_EPOCH="${MANAGER_START_EPOCH:-${EPOCHSECONDS:-$(date +%s 2>/dev/null || echo 0)}}"; export MANAGER_START_EPOCH; shopt -s checkwinsize 2>/dev/null || true; export PYTHONIOENCODING="utf-8" PYTHONUTF8=1; UNAME_S="${UNAME_S:-$(uname -s 2>/dev/null)}"; UNAME_M="${UNAME_M:-$(uname -m 2>/dev/null)}"; _TERM_LINES=""; _TERM_COLS=""; _TERM_RESIZED=1; _on_winch() { _TERM_RESIZED=1; }; trap '_on_winch' WINCH; S70="======================================================================"; D70="----------------------------------------------------------------------"; if [ -z "${VERSION:-}" ]; then if [ -f "$SCRIPT_DIR/VERSION" ]; then VERSION="$(head -n 1 "$SCRIPT_DIR/VERSION" | tr -d '\r\n')"; else VERSION="0.5.3 Stable (Sensorium)"; fi; fi; export VERSION
 _has_flatpak() { [[ -d "/var/lib/flatpak/app/$1" || -d "$HOME/.local/share/flatpak/app/$1" ]] && return 0; command -v flatpak &>/dev/null || return 1; [[ -z "${_FP_LIST_CACHE+x}" ]] && _FP_LIST_CACHE="$(flatpak list --columns=application 2>/dev/null)"; [[ "$_FP_LIST_CACHE" == *"$1"* ]]; }
 _fmt_sec() { local t=${1:-0}; ((t<0)) && t=0; ((t>=3600)) && printf "%02d:%02d:%02d" $((t/3600)) $(((t%3600)/60)) $((t%60)) || printf "%02d:%02d" $(((t%3600)/60)) $((t%60)); }
 format_seconds_aud() { _fmt_sec "$1"; }
@@ -5882,12 +5882,86 @@ else echo -e "${BOLD}Enter full path to the Additional Mix Archive folder:${NC}"
 fi; _norm_path "$raw_in"; local target_dir="$REPLY"; [ -z "$target_dir" ] && continue; if [ ! -d "$target_dir" ]; then echo -e "\n${YELLOW}Directory does not exist:${NC} ${target_dir}"; read -r -p "Create this directory now? [y/N]: " ans; [[ ! "$ans" =~ ^[yY] ]] && continue; mkdir -p "$target_dir" 2>/dev/null || { echo -e "${RED}Error: Failed to create directory.${NC}"; sleep 2; continue; }; fi; if [ "$opt" = 1 ]; then _set_primary_dir "$target_dir" 1; echo -e "\n${GREEN}✓ Primary Mix Archive Folder successfully configured and saved!${NC}\n  Primary Location: ${BOLD}${WHITE}${target_dir}${NC}"; else add_extra_mix_archive_dir "$target_dir"; play_sound_effect "storage"; echo -e "\n${GREEN}✓ Additional Mix Archive Location successfully added and saved!${NC}\n  Location: ${BOLD}${WHITE}${target_dir}${NC}"; fi; sleep 2 ;; 2|6) echo -e "\n${CYAN}Scanning mounted drives and volumes for candidate mix folders...${NC}"; shopt -s nullglob; local candidates=("/run/media/$USER"/* "/Volumes"/* "/media/$USER"/* "/mnt"/*); if [ "$is_win" -eq 1 ]; then local ltr; for ltr in {a..z}; do [ -d "/$ltr" ] && candidates+=("/$ltr"); done; fi; local found=() d sub; for d in "${candidates[@]}"; do [ ! -d "$d" ] && continue; if [ "$opt" = 6 ]; then for sub in "FLAC_CONVERTED_OUTPUTS" "MIX_ARCHIVE/FLAC_CONVERTED_OUTPUTS" "MIX_ARCHIVE2/FLAC_CONVERTED_OUTPUTS" "My Drive/MIX_ARCHIVE/FLAC_CONVERTED_OUTPUTS"; do [ -d "$d/$sub" ] && found+=("$d/$sub"); done; fi; for sub in "MIX_ARCHIVE" "MIX_ARCHIVE2" "My Drive/MIX_ARCHIVE" "Mixes" "MIXES"; do [ -d "$d/$sub" ] && found+=("$d/$sub"); done; [ "$opt" = 2 ] && found+=("$d"); done; shopt -u nullglob; local unique=() seen=" " prim_real=""; [ "$opt" = 6 ] && prim_real="$(cd "${MIX_ARCHIVE_DIR:-$SCRIPT_DIR/MIX_ARCHIVE}" 2>/dev/null && pwd -P)"; for d in "${found[@]}"; do local rd="$(cd "$d" 2>/dev/null && pwd -P || echo "$d")"; if [ "$opt" = 6 ]; then [ "$rd" = "$prim_real" ] && continue; local skip=0 ex; for ex in "${_EXTRA_LIST[@]}"; do [ "$rd" = "$(cd "$ex" 2>/dev/null && pwd -P || echo "$ex")" ] && { skip=1; break; }; done; [ "$skip" -eq 1 ] && continue; fi; if [[ "$seen" != *" $rd "* ]]; then seen+="$rd "; unique+=("$d"); fi; done; if [ ${#unique[@]} -eq 0 ]; then echo -e "\n${YELLOW}No candidate mix archive folders detected on mounted drives.${NC}"; sleep 1.5; continue; fi; echo -e "\n${BOLD}Available Storage Locations:${NC}"; local idx=1 u note; for u in "${unique[@]}"; do if [ "$opt" = 2 ]; then note=""; [ -d "$u/FLAC_CONVERTED_OUTPUTS" ] && note=" ${GREEN}(Contains FLAC_CONVERTED_OUTPUTS)${NC}"
 else note=" ${GREEN}($(_cnt_flacs "$u" 2) FLAC files)${NC}"; fi; echo -e "  ${BOLD}${CYAN}${idx})${NC} ${u}${note}"; ((idx++)); done; echo -e "  ${BOLD}0)${NC} Back"; read -r -p "Select a location [1-${#unique[@]}, 0]: " sel; if [[ "$sel" =~ ^[0-9]+$ ]] && [ "$sel" -ge 1 ] && [ "$sel" -le "${#unique[@]}" ]; then local chosen="${unique[$((sel - 1))]//\\//}"; if [ "$opt" = 2 ]; then _set_primary_dir "$chosen" 1; echo -e "\n${GREEN}✓ Primary Mix Archive Folder successfully set to:${NC} ${BOLD}${WHITE}${chosen}${NC}"; else add_extra_mix_archive_dir "$chosen"; play_sound_effect "storage"; echo -e "\n${GREEN}✓ Added additional mix archive location:${NC} ${chosen}"; fi; sleep 2; fi ;; 3) local root_arch="$SCRIPT_DIR/MIX_ARCHIVE"; _set_primary_dir "$root_arch" 0; echo -e "\n${GREEN}✓ Primary Mix Archive Folder reset to Application Root Folder:${NC} ${BOLD}${WHITE}${root_arch}${NC}"; sleep 2 ;; 5) if [ ${#_EXTRA_LIST[@]} -eq 0 ]; then echo -e "\n${YELLOW}No additional mix archive locations currently configured.${NC}"; sleep 1.5; continue; fi; echo -e "\n${BOLD}Select an Additional Mix Archive Location to Remove:${NC}"; local r_idx=1 ed; for ed in "${_EXTRA_LIST[@]}"; do echo -e "  ${BOLD}${CYAN}${r_idx})${NC} ${ed}"; ((r_idx++)); done; echo -e "  ${BOLD}0)${NC} Cancel"; read -r -p "Enter number to remove [1-${#_EXTRA_LIST[@]}, 0]: " rem; if [[ "$rem" =~ ^[0-9]+$ ]] && [ "$rem" -ge 1 ] && [ "$rem" -le "${#_EXTRA_LIST[@]}" ]; then local target="${_EXTRA_LIST[$((rem - 1))]}"; remove_extra_mix_archive_dir "$target"; echo -e "\n${GREEN}✓ Removed:${NC} ${target}"; sleep 1.5; fi ;; 7) show_mix_drive_space ;; 8) read -r -p $'\n'"${YELLOW}Are you sure you want to clear all additional mix archive locations? [y/N]:${NC} " clr; if [[ "$clr" =~ ^[yY] ]]; then EXTRA_MIX_ARCHIVE_DIRS=""; export EXTRA_MIX_ARCHIVE_DIRS; clear_archive_dir_cache; save_config_setting "EXTRA_MIX_ARCHIVE_DIRS" ""; echo -e "\n${GREEN}✓ All additional storage locations cleared.${NC}"; sleep 1.5; fi ;; 0|[qQ]|ESC) return 0 ;; esac; done
 }
+# ------------------------------------------------------------------------------
+# Audio conversion suite bridge
+#
+# The 21 output formats, their table and the statistics all live in
+# scripts/audio_conversion_suite.py. These helpers ask it, so the menu can never
+# drift from the encoder that actually runs.
+# ------------------------------------------------------------------------------
+_mgr_suite_py() {
+local py="$SCRIPT_DIR/scripts/audio_conversion_suite.py"
+[ -f "$py" ] || py="$SCRIPT_DIR/audio_conversion_suite.py"
+[ -f "$py" ] || py="$PWD/scripts/audio_conversion_suite.py"
+[ -f "$py" ] && { printf '%s' "$py"; return 0; }
+return 1
+}
+mgr_suite() {
+local py; py="$(_mgr_suite_py)" || return 1
+python3 "$py" "$@" 2>/dev/null
+}
+mgr_format_count() {
+local n; n="$(mgr_suite count)"
+n="${n//[[:space:]]/}"
+case "$n" in ''|*[!0-9]*) echo "$_MGR_FORMAT_COUNT" ;; *) echo "$n" ;; esac
+}
+# The registry size at the time this was written; only used if Python is absent.
+_MGR_FORMAT_COUNT=21
+mgr_conversion_stats() {
+mgr_suite stats
+}
+mgr_converted_folders_table() {
+mgr_suite folders
+}
+mgr_converted_folder_rows() {
+mgr_suite folder-rows "$@"
+}
+mgr_show_formats_table() {
+mgr_suite show-formats
+}
+# Registry rows, one per format, for the menu body.
+mgr_format_rows() {
+mgr_suite choices
+}
+manage_converted_audio_folders() {
+local rows=() line idx path count label total nice
+mapfile -t rows < <(mgr_converted_folder_rows)
+if [ ${#rows[@]} -eq 0 ]; then
+clear
+echo -e "\n${BOLD}${CYAN}=== CONVERTED AUDIO OUTPUT FOLDERS ===${NC}\n"
+mgr_converted_folders_table
+press_enter
+return 0
+fi
+local opts=()
+while IFS='|' read -r idx path count label total; do
+[ -z "$idx" ] && continue
+nice="$(printf '%s' "$label" | sed 's/^MPlanetarian - Stream of Frequency - //')"
+opts+=("${idx}|${label}|(${count} file(s))")
+done <<< "${rows[*]}"
+opts+=("0|Return|(Back to the conversion menu)")
+local pick=""
+run_interactive_submenu "CONVERTED AUDIO FOLDERS" "  ${BOLD}${CYAN}Open a published output folder in the file manager.${NC}\n" opts 0
+pick="$REPLY"
+case "$pick" in
+0|[qQ]|ESC) return 0 ;;
+*)
+local want_path=""
+while IFS='|' read -r idx path count label total; do
+[ "$idx" = "$pick" ] && { want_path="$path"; break; }
+done <<< "${rows[*]}"
+if [ -n "$want_path" ] && [ -d "$want_path" ]; then
+open_path "$want_path"
+fi ;;
+esac
+}
 manage_mix_conversion() {
 local conv_sh="" s
 for s in "$SCRIPT_DIR/Make_SOF_FLAC_CONVERSION.sh" "$SCRIPT_DIR/scripts/Make_SOF_FLAC_CONVERSION.sh" "./Make_SOF_FLAC_CONVERSION.sh"; do
 [ -f "$s" ] && { conv_sh="$s"; break; };
 done
 [ -z "$conv_sh" ] && { echo -e "\n${RED}Error: Make_SOF_FLAC_CONVERSION.sh script not found!${NC}"; press_enter; return 1; }
+local _fmt_total; _fmt_total="$(mgr_format_count)"
 local conv_opts=(
 "1|Run Mix Conversion Wizard|(Interactive Output Format, Tags & Artwork Selection)"
 "2|Convert to FLAC Lossless|(24-bit Lossless Archive Standard)"
@@ -5895,11 +5969,25 @@ local conv_opts=(
 "4|Convert to 24-bit WAV|(Mastering Quality Uncompressed Studio Audio)"
 "5|Convert to YouTube Video MP4|(1080p / 4K with Static Cover Art)"
 "6|Convert to OGG Vorbis|(320 kbps / Quality 8)"
-"7|Retrieve Unconverted WAVs from Archive|(MOVE_NOT_CONVERTED_WAVS.sh)"
-"8|Review Recent Conversion Logs & History|(FLAC_CONVERSION_SOF.log & JSONL)"
+"7|Convert to EVERY Format|(Batch all ${_fmt_total} output formats)"
+"8|Show All Output Formats|(Table generated from the format registry)"
+"9|Open Converted Output Folders|(Published *_CONVERTED_OUTPUTS trees)"
+"10|Conversion Statistics & History|(Previous runs, sizes and totals)"
+"11|Retrieve Unconverted WAVs from Archive|(MOVE_NOT_CONVERTED_WAVS.sh)"
+"12|Review Recent Conversion Logs & History|(FLAC_CONVERSION_SOF.log & JSONL)"
 "0|Return to Main Menu|(or Esc / q)"
 )
-local conv_hdr="  ${BOLD}Stream of Frequency — Automated Ingestion & Batch Audio Conversion${NC}\n  Converts live DJ mixes into tagged, mastered formats with spectrograms & playlists.\n"
+local conv_hdr="  ${BOLD}Stream of Frequency — Automated Ingestion & Batch Audio Conversion${NC}\n  Audio Output Formats Available: ${BOLD}${GREEN}${_fmt_total}${NC}  ${DIM}│${NC} Converts live DJ mixes into tagged, mastered formats with spectrograms & playlists.\n"
+# The format rows come from the shared registry rather than a hand-written list,
+# so a new format appears here the moment it is added to the suite.
+local _fmt_key _fmt_label _fmt_note
+while IFS='|' read -r _fmt_key _fmt_label _fmt_note; do
+[ -z "$_fmt_key" ] && continue
+conv_opts+=("fmt:${_fmt_key}|Convert to ${_fmt_label}|(${_fmt_note})")
+done < <(mgr_suite choices)
+if [ ${#conv_opts[@]} -gt 0 ]; then
+conv_opts+=("0|Return to Main Menu|(or Esc / q)")
+fi
 while true; do
 run_interactive_submenu "STREAM OF FREQUENCY — RUN MIX CONVERSION SUITE" "$conv_hdr" conv_opts 1
 case "$REPLY" in
@@ -5929,11 +6017,36 @@ SOF_OUTPUT_FORMAT="ogg" bash "$conv_sh"
 press_enter
 ;;
 7)
+SOF_OUTPUT_FORMAT="any" bash "$conv_sh"
+press_enter
+;;
+fmt:*)
+# Any registry format, selected from the generated rows above.
+SOF_OUTPUT_FORMAT="${REPLY#fmt:}" bash "$conv_sh"
+press_enter
+;;
+8)
+clear
+echo -e "\n${BOLD}${CYAN}=== AUDIO OUTPUT FORMATS ===${NC}\n"
+mgr_show_formats_table
+press_enter
+;;
+9)
+manage_converted_audio_folders
+press_enter
+;;
+10)
+clear
+echo -e "\n${BOLD}${CYAN}=== PREVIOUS CONVERSION STATISTICS ===${NC}\n"
+mgr_conversion_stats
+press_enter
+;;
+11)
 echo -e "\n${BOLD}${YELLOW}Retrieving unconverted WAV files...${NC}\n"
 run_sub_script "MOVE_NOT_CONVERTED_WAVS.sh"
 press_enter
 ;;
-8)
+12)
 local log_file="FLAC_CONVERSION_SOF.log"
 [ ! -f "$log_file" ] && log_file="$SCRIPT_DIR/FLAC_CONVERSION_SOF.log"
 if [ -s "$log_file" ]; then
@@ -6719,7 +6832,7 @@ local s4_opts=(
 "6|Open Official Native Instruments PDF Manuals|(Controller Editor & S4 MK2 Guides)"
 "0|Return to Previous Menu|(or Esc / q)"
 )
-run_interactive_submenu "TRAKTOR KONTROL S4 MIDI HARDWARE CONTROL & MAPPING (v0.5.0)" "$s4_hdr" s4_opts 0
+run_interactive_submenu "TRAKTOR KONTROL S4 MIDI HARDWARE CONTROL & MAPPING (v0.5.3)" "$s4_hdr" s4_opts 0
 local opt="$REPLY"
 case "$opt" in
 1)

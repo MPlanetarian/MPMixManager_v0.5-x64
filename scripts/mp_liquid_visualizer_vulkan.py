@@ -94,6 +94,16 @@ MIN_WINDOW_SIDE = 64
 # other screen falls back to 1920x1080.
 SAVER_MAX_WIDTH, SAVER_MAX_HEIGHT = 1920, 1200
 SAVER_FALLBACK_WIDTH, SAVER_FALLBACK_HEIGHT = 1920, 1080
+# The screen saver is a background effect on a machine that may be running
+# something else, so it renders 80% of the capped area: one fifth of the pixels
+# are simply not shaded. The river is a soft gradient, so the reduction is
+# invisible at viewing distance and saves a measurable amount of GPU time.
+SAVER_PIXEL_SCALE = 0.80
+# The pair the screen saver cycles by default, in order.
+DEFAULT_SAVER_POOL = (
+    "stream_of_frequency_dynamic_waves",
+    "stream_of_frequency_dynamic_waves_p2",
+)
 SAVER_FULLSCREEN_DELAY = 0.35
 # Z cycles the window through these modes: default -> fullscreen -> half -> default.
 WINDOW_MODE_FULLSCREEN, WINDOW_MODE_HALF, WINDOW_MODE_DEFAULT = "fullscreen", "half", "default"
@@ -111,6 +121,14 @@ _REF = Path(os.environ.get("MP_VISUALIZER_REF_DIR", "")
 _GAMES = Path(os.environ.get("MP_VISUALIZER_COVERS_DIR", "")
               or (_HOME / "MPlanetarian Bandcamp Covers"))
 _WDB = _GAMES
+
+_BC = "https://mplanetarian.bandcamp.com"
+
+# The two Stream of Frequency — Dynamic Waves presets. The shader dispatches on
+# these ids, so they are defined here rather than written as bare numbers.
+STREAM_WAVES_HORIZONTAL_ID = 11
+STREAM_WAVES_VERTICAL_ID = 12
+
 
 def _mk_preset(pid: int, key: str, name: str, album: str, c_asset: str, c_cov: str, extra: Optional[Path] = None,
                vid: Optional[str] = None, url: str = _BC, aliases: Tuple[str, ...] = ()) -> Dict[str, Any]:
@@ -164,6 +182,22 @@ VISUALIZER_PRESETS: List[Dict[str, Any]] = [
                vid="20260212 - XI-N： BIFURCATION (2026) [NMxVKbM8hU8].mkv",
                aliases=("chromatic storm", "chromatic_storm", "dreamworlds chromatic storm", "dreamworlds_chromatic_storm",
                         "storm", "chromatic", "dreamworlds storm", "dreamworlds lockscreen", "lockscreen", "11")),
+    # The Dynamic Waves pair closes the library on purpose: the shader branches
+    # on id > 10.5 / < 11.5, and the saver pools name them directly.
+    _mk_preset(STREAM_WAVES_HORIZONTAL_ID, "stream_of_frequency_dynamic_waves",
+               "Stream of Frequency — Dynamic Waves",
+               "MPlanetarian - Stream of Frequency [Dynamic Waves]",
+               "infinite_complexity_stream037_cover.jpg", "Infinite_Complexity_Stream037_Preset.jpg",
+               _WDB / "2026-05-21_MPlanetarian - Stream of Frequency 037 (Who am I- - Episode 005).jpg",
+               aliases=("dynamic waves", "dynamic_waves", "dynamic", "waves", "wave",
+                        "stream_of_frequency_dynamic_waves", "sof waves", "river")),
+    _mk_preset(STREAM_WAVES_VERTICAL_ID, "stream_of_frequency_dynamic_waves_p2",
+               "Stream of Frequency — Dynamic Waves P2",
+               "MPlanetarian - Stream of Frequency [Dynamic Waves P2]",
+               "infinite_complexity_stream037_cover.jpg", "Infinite_Complexity_Stream037_Preset.jpg",
+               _WDB / "2026-05-21_MPlanetarian - Stream of Frequency 037 (Who am I- - Episode 005).jpg",
+               aliases=("dynamic waves p2", "dynamic_waves_p2", "p2", "matrix", "matrix rain",
+                        "vertical", "vertical river", "sof p2", "stream_of_frequency_dynamic_waves_p2")),
 ]
 
 # The MPlanetarian reference clips live on more than one drive. Prefer a path that
@@ -358,6 +392,15 @@ def ensure_macos_vulkan_loader() -> None:
 
 _RAND_KEYS = {"random", "rand", "rnd", "-1", "any", "shuffle"}
 
+# Bare library words that now mean the Dynamic Waves river. They are checked
+# before the generic exact-match pass because "stream_of_frequency" would
+# otherwise win the prefix comparison.
+_SOF_WAVES_ALIASES = frozenset({
+    "dynamic waves", "dynamic_waves", "dynamic", "waves", "wave",
+    "12", "stream", "sof", "stream of frequency", "frequency",
+    "river", "sof waves",
+})
+
 # The presets bound to number keys 1-9, in slot order. Extra entries in
 # VISUALIZER_PRESETS beyond these are reachable with the +/- cycle keys.
 KEY_SLOTS: List[str] = [
@@ -418,6 +461,13 @@ def get_active_preset(preset_arg: Optional[str] = None) -> Dict[str, Any]:
             elif th in ("stream_of_frequency", "stream", "frequency", "sof", "frequency_stream"): t = "stream_of_frequency"
         except OSError: pass
     if t:
+        # The Dynamic Waves pair owns the bare "stream"/"sof"/"frequency" words.
+        # It is the newest thing those words mean, and the older
+        # stream_of_frequency preset keeps its explicit key.
+        if t in _SOF_WAVES_ALIASES:
+            for p in VISUALIZER_PRESETS:
+                if p["key"] == "stream_of_frequency_dynamic_waves":
+                    return p
         for p in VISUALIZER_PRESETS:
             kl = p["key"].lower()
             if t in (str(p["id"] + 1), str(p["id"]), kl, p["name"].lower(), kl.replace("_", "-"), kl.replace("_", " ")) or t in p.get("_aliases", ()): return p
@@ -440,6 +490,11 @@ def load_preset_cover_rgba(preset: Dict[str, Any], tex_size: int = 1024) -> Tupl
         if p.is_file():
             with Image.open(p) as im:
                 return tex_size, tex_size, im.convert("RGBA").resize((tex_size, tex_size), Image.Resampling.LANCZOS).tobytes()
+    # The Dynamic Waves rivers never sample the texture -- they are drawn from
+    # stream telemetry -- so a missing cover must not be fatal there. The page
+    # is paper white, so that is the fill.
+    if str(preset.get("key", "")).startswith("stream_of_frequency_dynamic_waves"):
+        return tex_size, tex_size, bytes([0xFF]) * (tex_size * tex_size * 4)
     raise FileNotFoundError(f"Cover art file not found for preset '{preset.get('name')}'")
 
 
@@ -726,7 +781,7 @@ VkBufferImageCopy = _S("VkBufferImageCopy", ("bufferOffset", U64), ("bufferRowLe
 VkImageBlit = _S("VkImageBlit", ("srcSubresource", VkImageSubresourceLayers), ("srcOffsets", VkOffset3D * 2), ("dstSubresource", VkImageSubresourceLayers), ("dstOffsets", VkOffset3D * 2))
 VkFenceCreateInfo = _S("VkFenceCreateInfo", ("sType", U32), ("pNext", VP), ("flags", U32))
 VkSemaphoreCreateInfo = _S("VkSemaphoreCreateInfo", ("sType", U32), ("pNext", VP), ("flags", U32))
-VisualizerUBO = _S("VisualizerUBO", ("res", F32 * 4), ("audio0", F32 * 4), ("audio1", F32 * 4), ("audio2", F32 * 4), ("bands0", F32 * 4), ("bands1", F32 * 4), ("bands2", F32 * 4), ("bands3", F32 * 4), ("preset", F32 * 4))
+VisualizerUBO = _S("VisualizerUBO", ("res", F32 * 4), ("audio0", F32 * 4), ("audio1", F32 * 4), ("audio2", F32 * 4), ("bands0", F32 * 4), ("bands1", F32 * 4), ("bands2", F32 * 4), ("bands3", F32 * 4), ("preset", F32 * 4), ("stream", F32 * 4))
 _VkExtProp = _S("_VkExtProp", ("extensionName", c_char * 256), ("specVersion", U32))
 _WinPOINT = _S("_WinPOINT", ("x", c_int), ("y", c_int))
 
@@ -751,24 +806,26 @@ def select_vulkan_device(devices: List[Dict[str, Any]]) -> int:
     raise RuntimeError("MP_Liquid_Visualizer requires a Vulkan-capable GPU.")
 
 
-def saver_target_resolution(monitor_width: int, monitor_height: int) -> Tuple[int, int]:
-    """Render size for one screensaver screen.
-
-    The screensaver fills every attached display, but the render target is
-    capped at 1920x1200. A display that can natively do 1920x1200 (or taller,
-    16:10 workstation panels) is driven at 1920x1200; anything else falls back
-    to 1920x1080. The cap never upscales past the panel's own native size, so a
-    smaller screen still renders at its native resolution.
-    """
+def saver_render_cap(monitor_width: int, monitor_height: int) -> Tuple[int, int]:
+    """The pre-reduction cap: 1920x1200, 1920x1080, or the panel's own size."""
     mw, mh = max(1, int(monitor_width)), max(1, int(monitor_height))
     if mw >= SAVER_MAX_WIDTH and mh >= SAVER_MAX_HEIGHT:
-        # Panel can hold the full 16:10 target.
         return SAVER_MAX_WIDTH, SAVER_MAX_HEIGHT
     if mw >= SAVER_FALLBACK_WIDTH and mh >= SAVER_FALLBACK_HEIGHT:
-        # Panel holds 1920x1080 but not 1920x1200.
         return SAVER_FALLBACK_WIDTH, SAVER_FALLBACK_HEIGHT
-    # Smaller panel: render at its native size rather than upscaling.
     return mw, mh
+
+
+def saver_target_resolution(monitor_width: int, monitor_height: int) -> Tuple[int, int]:
+    """The pixels actually shaded for one saver screen.
+
+    The cap above is the contract ceiling; this applies the 80% pixel budget on
+    top of it. Scaling both axes by sqrt keeps the aspect ratio, so the picture
+    is identical, just cheaper to draw.
+    """
+    width, height = saver_render_cap(monitor_width, monitor_height)
+    scale = math.sqrt(SAVER_PIXEL_SCALE)
+    return (max(1, int(width * scale) & ~1), max(1, int(height * scale) & ~1))
 
 
 def saver_screen_plan(monitors: List[Tuple[str, Tuple[int, int, int, int]]]) -> List[Dict[str, Any]]:
@@ -785,7 +842,7 @@ def saver_screen_plan(monitors: List[Tuple[str, Tuple[int, int, int, int]]]) -> 
             continue
         if w < MIN_WINDOW_SIDE or h < MIN_WINDOW_SIDE:
             continue
-        rw, rh = saver_target_resolution(w, h)
+        rw, rh = saver_render_cap(w, h)
         plan.append({
             "index": index,
             "name": name,
@@ -2519,6 +2576,29 @@ class LiquidVisualizerVulkanRenderer(MonitorSpanMixin, RandomPresetMixin, Player
         self._hot_scissor.extent.width, self._hot_scissor.extent.height = ew, eh
         self._hot_swap.value = self._swapchain
 
+    def _stream_vector(self, bridge: AudioTelemetryBridge):
+        """The ``u.stream`` vector for this frame.
+
+        The screen saver has no player, so it is driven by new Linux PIDs; the
+        player window is driven by beats. Both come from pid_stream, which owns
+        one driver per window so two windows keep separate clocks.
+        """
+        try:
+            import pid_stream
+        except Exception:
+            return (0.0, 0.0, 0.0, 0.0)
+        mode = "pid" if getattr(self, "screensaver", False) else "audio"
+        now = float(getattr(bridge, "accum_time", 0.0) or 0.0)
+        dt = 1.0 / 60.0
+        try:
+            dt = float(getattr(bridge, "frame_dt", dt) or dt)
+        except (TypeError, ValueError):
+            pass
+        return pid_stream.stream_vector(
+            mode, int(self._preset_id_float), now, dt,
+            bridge=bridge, key=f"viz-{id(self)}",
+        )
+
     def _write_ubo(self, bridge: AudioTelemetryBridge):
         """Publish one frame of telemetry. Partial writes go into a staging
         struct first, but the staging copy is skipped once the mapped buffer
@@ -2561,6 +2641,15 @@ class LiquidVisualizerVulkanRenderer(MonitorSpanMixin, RandomPresetMixin, Player
         u[33] = bridge.pitch_factor
         u[34] = 1.0
         u[35] = getattr(bridge, "dynamic_time", bridge.accum_time)
+        # Dynamic Waves: the river reads this vector. Other presets get zeros,
+        # so nothing else changes behaviour. Guard the width because a test
+        # double (or an older staging buffer) may be exactly 36 floats.
+        sid, sprime, sheat, sserial = self._stream_vector(bridge)
+        if len(u) >= 40:
+            u[36] = sid
+            u[37] = sprime
+            u[38] = sheat
+            u[39] = sserial
         if self._ubo_mapped is None:
             memmove(self._ubo_ptr, self._ubo_flat_ptr, self._ubo_size)
 
@@ -2942,6 +3031,7 @@ def _saver_loop(renderer, dwell: float, cycle_to_next: bool,
     monotonic = time.monotonic
     last_t = start_t = monotonic()
     last_switch = start_t
+    session_started = float((shared_session or {}).get("started_at") or 0.0)
     pace = [last_t + _FRAME_INTERVAL, monitor_refresh_interval(renderer)]
     update, draw = bridge.update, renderer.draw
     try:
@@ -2957,10 +3047,25 @@ def _saver_loop(renderer, dwell: float, cycle_to_next: bool,
 
             # A spawned screen exits when the owner closes (or is woken).
             if shared_session is not None:
-                if read_span_session() is None:
+                live = read_span_session()
+                if live is None:
                     break
-                owner_pid = getattr(renderer, "_saver_owner_pid", 0)
-                if owner_pid and not pid_alive(owner_pid):
+                owner_pid = int(getattr(renderer, "_saver_owner_pid", 0) or 0)
+                is_owner = bool(getattr(renderer, "_saver_is_owner", False))
+                if is_owner:
+                    live_pid = int(live.get("owner_pid", 0) or 0)
+                    newer = (live.get("started_at") or 0) > (session_started or 0)
+                    if live_pid != owner_pid and newer:
+                        if pid_alive(live_pid):
+                            # A live newer wall has taken over: step down so it
+                            # can own the screen.
+                            break
+                        # The newer owner is gone. Reclaim the file rather than
+                        # leaving the machine with no saver at all.
+                        reclaimed = dict(shared_session)
+                        reclaimed["owner_pid"] = owner_pid
+                        write_span_session(reclaimed)
+                elif owner_pid and not pid_alive(owner_pid):
                     break
 
             if cycle_to_next and dwell > 0 and (now - last_switch) >= dwell:
@@ -2990,9 +3095,19 @@ def _saver_loop(renderer, dwell: float, cycle_to_next: bool,
         except Exception:
             pass
 
-    # A woken owner takes the whole wall down with it.
+    # A woken owner takes the whole wall down with it -- but only its own
+    # session. A newer wall may have replaced the file, and deleting that would
+    # close a saver the user is still watching.
     if shared_session is not None and renderer._wake_event:
-        clear_span_session()
+        live = read_span_session()
+        ours = (
+            live is not None
+            and int(live.get("owner_pid", 0) or 0) == int(
+                getattr(renderer, "_saver_owner_pid", 0) or 0)
+            and live.get("started_at") == shared_session.get("started_at")
+        )
+        if ours:
+            clear_span_session()
     return 0
 
 
@@ -3000,7 +3115,8 @@ def run_screensaver_screen(preset_name: Optional[str] = None, dwell: float = 45.
                            bounds: Optional[Tuple[int, int, int, int]] = None,
                            render: Optional[Tuple[int, int]] = None,
                            cycle_to_next: bool = True,
-                           backend: Optional[str] = None) -> int:
+                           backend: Optional[str] = None,
+                           preset_pool: Optional[Sequence[str]] = None) -> int:
     """Drive one spawned screensaver window on a specific monitor.
 
     ``bounds`` is that monitor's desktop rect, so the window can be placed and
@@ -3015,7 +3131,7 @@ def run_screensaver_screen(preset_name: Optional[str] = None, dwell: float = 45.
     renderer = _make_saver_renderer(
         preset_name or get_active_preset()["name"], bounds, render, backend=backend
     )
-    pool = [p["key"] for p in VISUALIZER_PRESETS] if cycle_to_next else None
+    pool = list(preset_pool or DEFAULT_SAVER_POOL) if cycle_to_next else None
     session = read_span_session() or {}
     owner_pid = int(session.get("owner_pid", 0) or 0)
     if owner_pid:
@@ -3035,7 +3151,8 @@ def _saver_monitor_rects(renderer) -> List[Tuple[str, Tuple[int, int, int, int]]
 def run_screensaver(preset_name: Optional[str] = None, dwell: float = 45.0,
                     fullscreen: bool = True, target_4k: bool = False,
                     cycle_to_next: bool = True, backend: Optional[str] = None,
-                    all_screens: bool = True) -> int:
+                    all_screens: bool = True,
+                    preset_pool: Optional[Sequence[str]] = None) -> int:
     """Run the visualizer as a screensaver across every connected screen.
 
     Behaviour:
@@ -3047,6 +3164,11 @@ def run_screensaver(preset_name: Optional[str] = None, dwell: float = 45.0,
       - keeps the scene animating even with no audio player running
       - exits on the first keypress or mouse event, on any screen
     """
+    # The saver cycles the Dynamic Waves pair by default rather than the whole
+    # library, so the wall reads as one effect. An explicit preset still locks
+    # it, and an explicit pool wins over both.
+    if not preset_pool and not preset_name:
+        preset_pool = DEFAULT_SAVER_POOL
     # A screensaver owner must clean up its child windows on a normal stop, so
     # SIGTERM sets a flag the loop honours instead of exiting immediately and
     # orphaning the windows on the other screens.
@@ -3090,7 +3212,7 @@ def run_screensaver(preset_name: Optional[str] = None, dwell: float = 45.0,
 
     # Single-screen fallback: fill the default display.
     if len(screens) <= 1:
-        pool = [p["key"] for p in VISUALIZER_PRESETS] if cycle_to_next else None
+        pool = list(preset_pool or DEFAULT_SAVER_POOL) if cycle_to_next else None
         return _saver_loop(renderer, dwell, cycle_to_next, preset_pool=pool,
                            already_open=True, stop_flag=_stop)
 
@@ -3102,7 +3224,7 @@ def run_screensaver(preset_name: Optional[str] = None, dwell: float = 45.0,
         renderer = _make_saver_renderer(first, None, None, backend=backend)
         return _saver_loop(renderer, dwell, cycle_to_next)
 
-    pool = [p["key"] for p in VISUALIZER_PRESETS] if cycle_to_next else None
+    pool = list(preset_pool or DEFAULT_SAVER_POOL) if cycle_to_next else None
     session = {
         "owner_pid": os.getpid(),
         "mode": "screensaver",
@@ -3164,7 +3286,18 @@ def run_screensaver(preset_name: Optional[str] = None, dwell: float = 45.0,
                 pass
         for proc in children:
             _stop_saver_child(proc)
-        clear_span_session()
+        # Only the wall that still owns the file may delete it. A newer saver
+        # that took over must keep its session, or both walls die.
+        live = read_span_session()
+        ours = (
+            live is None
+            or (
+                int(live.get("owner_pid", 0) or 0) == os.getpid()
+                and live.get("started_at") == session.get("started_at")
+            )
+        )
+        if ours:
+            clear_span_session()
 
 
 def _stop_saver_child(proc: subprocess.Popen) -> None:
@@ -3367,6 +3500,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--screensaver", action="store_true", help="Run as a screensaver: fullscreen, auto-cycling presets, exits on any key or mouse input")
     p.add_argument("--saver-dwell", type=float, default=45.0, help="Seconds to hold each preset while in screensaver mode (default: 45)")
     p.add_argument("--saver-preset", type=str, default=None, help="Lock screensaver mode to one preset instead of cycling")
+    p.add_argument("--saver-presets", type=str, default=None,
+                   help="Comma-separated preset keys the screensaver cycles (default: the Dynamic Waves pair)")
     p.add_argument("--saver-windowed", action="store_true", help="Run the screensaver in a window instead of fullscreen")
     p.add_argument("--saver-bounds", type=str, default=None, help=argparse.SUPPRESS)
     p.add_argument("--saver-render", type=str, default=None, help=argparse.SUPPRESS)
@@ -3422,6 +3557,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         # A spawned screen is one window of a multi-monitor saver. It fills its
         # assigned monitor and marches at the capped resolution, then exits when
         # the owner closes the session (or when the user wakes the saver here).
+        # --saver-presets names the pool to tour when no single preset is locked.
+        pool = None
+        if not locked and getattr(args, "saver_presets", None):
+            pool = [k.strip() for k in str(args.saver_presets).split(",") if k.strip()]
+
         if (args.saver_role or "").strip() == "spawned":
             return run_screensaver_screen(
                 preset_name=locked,
@@ -3430,6 +3570,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 render=_parse_pair(args.saver_render),
                 cycle_to_next=not bool(locked),
                 backend=args.backend,
+                preset_pool=pool,
             )
 
         return run_screensaver(
@@ -3439,6 +3580,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             target_4k=target_4k,
             cycle_to_next=not bool(locked),
             backend=args.backend,
+            preset_pool=pool,
         )
 
     return run_visualizer(

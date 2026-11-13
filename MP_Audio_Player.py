@@ -8648,5 +8648,36 @@ def main():
         except OSError: pass
         sys.exit(0)
 
+# ------------------------------------------------------------------------------
+# Stream of Frequency — Dynamic Waves, console twin
+#
+# The console river is drawn with half-block cells, one column per character
+# cell. Shading every cell of a 200-column terminal at 60 fps is wasted work for
+# a soft gradient, so one column in five is filled from its neighbour. That is
+# the console twin of the saver's SAVER_PIXEL_SCALE = 0.80.
+# ------------------------------------------------------------------------------
+SOF_CELL_BUDGET = 0.80
+skip_mod = 5
+
+
+def _sof_skip_column(col: int) -> bool:
+    """True when this column is filled from its neighbour instead of drawn."""
+    return skip_mod > 0 and (col % skip_mod) == (skip_mod - 1)
+
+
+def _sof_river_row(col: int, row: int, rows: int, phase: float) -> int:
+    """Half-block index for one river cell: the bright head near `phase`.
+
+    Kept deliberately cheap: one multiply-add and a clamp per cell, which is
+    what lets the river run inside the player's render loop.
+    """
+    along = col / max(1.0, float(rows))
+    head = phase % 1.0
+    delta = abs(along - head)
+    glow = max(0.0, 1.0 - delta * 6.0)
+    return int(round(glow * (rows - 1)))
+
+
+
 if __name__ == "__main__":
     main()

@@ -857,6 +857,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     sub.add_parser("count", help="print how many output formats are available")
     sub.add_parser("choices", help="print key|label|note for the format picker")
+    sub.add_parser("format-map", help="print key|extension|lossless|supports_cover rows")
     sub.add_parser("show-formats", help="print the themed output format table")
 
     stats_p = sub.add_parser("stats", help="print the previous conversion statistics table")
@@ -884,6 +885,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     cmd_p.add_argument("--front-cover", default="")
     cmd_p.add_argument("--back-cover", default="")
     cmd_p.add_argument("--disc-image", default="")
+    cmd_p.add_argument("--argv", action="store_true",
+                       help="emit NUL-separated argv instead of a quoted string")
 
     run_p = sub.add_parser("run", help="run one conversion")
     run_p.add_argument("source")
@@ -909,6 +912,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if args.command == "choices":
         for key, label, note in format_choices():
             print(f"{key}|{label}|{note}")
+        return 0
+    if args.command == "format-map":
+        # The shell loop needs the container extension and the cover rule per
+        # target; asking Python keeps the registry the only place they live.
+        for fmt in OUTPUT_FORMATS:
+            print(f"{fmt.key}|{fmt.extension}|{'1' if fmt.lossless else '0'}|"
+                  f"{'1' if fmt.supports_cover else '0'}")
         return 0
     if args.command == "show-formats":
         print(describe_formats_table(theme))
@@ -957,7 +967,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             front_cover=args.front_cover, back_cover=args.back_cover,
             disc_image=args.disc_image,
         )
-        print(describe_command(request))
+        if args.argv:
+            # NUL-separated so the shell can read the argv into an array without
+            # guessing how a filename with spaces was meant to split.
+            sys.stdout.write("\0".join(build_ffmpeg_command(request)) + "\0")
+        else:
+            print(describe_command(request))
         return 0
     if args.command == "run":
         request = ConversionRequest(

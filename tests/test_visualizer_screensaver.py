@@ -138,27 +138,32 @@ class TestScreensaverMode(unittest.TestCase):
 
 
 class TestSaverResolutionPolicy(unittest.TestCase):
-    """The screensaver fills every screen but caps its render resolution."""
+    """The screensaver fills every screen but caps its render resolution.
+
+    These assertions cover the pre-reduction cap. The 80% pixel budget is
+    applied on top by saver_target_resolution and is covered separately in
+    test_sof_dynamic_waves.
+    """
 
     def test_1920x1200_panel_uses_1920x1200(self):
-        self.assertEqual(vis.saver_target_resolution(1920, 1200), (1920, 1200))
+        self.assertEqual(vis.saver_render_cap(1920, 1200), (1920, 1200))
 
     def test_16_9_panel_falls_back_to_1920x1080(self):
-        self.assertEqual(vis.saver_target_resolution(1920, 1080), (1920, 1080))
+        self.assertEqual(vis.saver_render_cap(1920, 1080), (1920, 1080))
 
     def test_4k_panel_is_capped_not_native(self):
-        self.assertEqual(vis.saver_target_resolution(3840, 2160), (1920, 1200))
+        self.assertEqual(vis.saver_render_cap(3840, 2160), (1920, 1200))
 
     def test_1440p_panel_capped_to_1920x1200(self):
-        self.assertEqual(vis.saver_target_resolution(2560, 1440), (1920, 1200))
+        self.assertEqual(vis.saver_render_cap(2560, 1440), (1920, 1200))
 
     def test_smaller_panel_is_not_upscaled(self):
-        self.assertEqual(vis.saver_target_resolution(1600, 900), (1600, 900))
-        self.assertEqual(vis.saver_target_resolution(1280, 1024), (1280, 1024))
+        self.assertEqual(vis.saver_render_cap(1600, 900), (1600, 900))
+        self.assertEqual(vis.saver_render_cap(1280, 1024), (1280, 1024))
 
     def test_cap_never_exceeds_max(self):
         for w, h in ((3840, 2160), (5120, 2880), (2560, 1600)):
-            rw, rh = vis.saver_target_resolution(w, h)
+            rw, rh = vis.saver_render_cap(w, h)
             self.assertLessEqual(rw, vis.SAVER_MAX_WIDTH)
             self.assertLessEqual(rh, vis.SAVER_MAX_HEIGHT)
 
