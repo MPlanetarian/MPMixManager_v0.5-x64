@@ -17,7 +17,7 @@ DIM='\033[2m'
 NC='\033[0m' # No Color
 export PATH="$HOME/bin:$HOME/.local/bin:$PATH"
 
-HARMONY_DIR="${HARMONY_DIR:-/var/home/mplanetarian/OpenAI/MP_Harmony_Agent}"
+HARMONY_DIR="${HARMONY_DIR:-$HOME/OpenAI/MP_Harmony_Agent}"
 if [ ! -d "$HARMONY_DIR" ] && [ -d "$HOME/OpenAI/MP_Harmony_Agent" ]; then
     HARMONY_DIR="$HOME/OpenAI/MP_Harmony_Agent"
 elif [ ! -d "$HARMONY_DIR" ] && [ -d "$HOME/OpenAI/Harmony_Agent" ]; then
@@ -495,7 +495,7 @@ view_audio_responses() {
     fi
 
     # Sync any recent recordings from voice-ai audio responses directory if present
-    local voice_ai_audio="/var/home/mplanetarian/voice-ai/audio_responses"
+    local voice_ai_audio="${VOICE_AI_AUDIO_DIR:-$HOME/voice-ai/audio_responses}"
     [ ! -d "$voice_ai_audio" ] && [ -d "$HOME/voice-ai/audio_responses" ] && voice_ai_audio="$HOME/voice-ai/audio_responses"
     if [ -d "$voice_ai_audio" ] && [ -d "$AUDIO_DIR" ] && [ "$voice_ai_audio" != "$AUDIO_DIR" ]; then
         cp -u "$voice_ai_audio"/*.wav "$voice_ai_audio"/*.txt "$AUDIO_DIR/" 2>/dev/null || true

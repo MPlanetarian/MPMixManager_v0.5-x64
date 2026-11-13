@@ -86,6 +86,14 @@ ${BOLD}LAUNCH FLAGS & OPTIONS:${NC}
         ${GREEN}--check, -c${NC}    Check for updates without installing
         ${GREEN}--force, -f${NC}    Force re-pull and reinstall from remote repository
 
+  ${BOLD}${GREEN}reinstall, --reinstall${NC}
+      Reinstall or factory-reset this install. Keeps the application tree and
+      rebuilds the launchers, desktop entries and Python environment.
+      ${DIM}Sub-options:${NC}
+        ${GREEN}--yes, -y${NC}       Do not prompt for confirmation
+        ${GREEN}--fresh${NC}         Factory reset: also drop playlists, music folders and archive config
+        ${GREEN}--dry-run${NC}       Print what would change, then exit
+
   ${BOLD}${GREEN}-p, --track, --current-track${NC}
       Print the absolute filesystem path of the currently playing mix track.
 
@@ -204,6 +212,7 @@ ${BOLD}HEADER SESSION:${NC}
 ${BOLD}SYSTEM TRAY:${NC}
   MP Mix Manager, MP Gui, and MP Liquid Player share one tray icon while any of them is open.
   Right-click it for ${CYAN}Launch MP Gui${NC}, ${CYAN}Launch MP Liquid Player${NC}, and ${CYAN}Launch MP Mix Manager${NC}.
+  ${CYAN}Start / Stop MP Web Audio${NC} starts or stops the phone companion without stopping the apps.
   ${CYAN}Close MP Mix Manager (Closes everything)${NC} stops the console manager, MP Gui, MP Liquid Player, playback, and the visualizer.
 
 ${BOLD}DIRECT COMMAND SHORTCUTS:${NC}

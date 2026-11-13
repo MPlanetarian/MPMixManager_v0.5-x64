@@ -145,7 +145,13 @@ fi
 
 if [ -f "$SCRIPT" ]; then
     printf '\033]0;%s\007' "MP Mix Archive Manager" 2>/dev/null || true
-    cd "$TARGET_DIR" && exec bash "$SCRIPT" "$@"
+    # `cd && exec` as the last statement of the if-branch meant a failed `cd`
+    # (archive unmounted after the 15 s wait) exited 0 with no output at all.
+    cd "$TARGET_DIR" || {
+        echo "Error: cannot enter '$TARGET_DIR' (is the archive mounted?)" >&2
+        exit 1
+    }
+    exec bash "$SCRIPT" "$@"
 else
     echo "Error: MP Mix Archive Manager main script not found at '$SCRIPT'."
     read -rp "Press Enter to exit..."

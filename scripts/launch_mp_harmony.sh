@@ -382,7 +382,7 @@ harmony_load_model() {
 }
 
 harmony_resolve_script() {
-    local dir="${HARMONY_DIR:-/var/home/mplanetarian/OpenAI/MP_Harmony_Agent}"
+    local dir="${HARMONY_DIR:-$HOME/OpenAI/MP_Harmony_Agent}"
     if [ ! -d "$dir" ] && [ -d "${HOME}/OpenAI/MP_Harmony_Agent" ]; then
         dir="${HOME}/OpenAI/MP_Harmony_Agent"
     elif [ ! -d "$dir" ] && [ -d "${HOME}/OpenAI/Harmony_Agent" ]; then

@@ -82,7 +82,7 @@ fi
 
 # Load config if present
 _SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-for _cfg in "$_SCRIPT_DIR/config.env" "$_SCRIPT_DIR/../config.env" "$PWD/config.env" "/x/MP_Mix_Manager_v0.3/config.env" "X:/MP_Mix_Manager_v0.3/config.env" "$HOME/MP_Mix_Manager_v0.3/config.env"; do
+for _cfg in "${MP_CONFIG:-}" "$HOME/.config/mix-manager/config.env" "$_SCRIPT_DIR/config.env" "$_SCRIPT_DIR/../config.env"; do
     if [ -f "$_cfg" ]; then
         # shellcheck disable=SC1090
         source "$_cfg" 2>/dev/null || true
@@ -131,14 +131,11 @@ status_wan2gp() {
 resolve_wan2gp_paths() {
     # Resolve WAN2GP App Root
     APP_DIR="${WAN2GP_DIR:-}"
-    [ -z "$APP_DIR" ] && [ -d "X:/WAN2GP/Wan2GP" ] && APP_DIR="X:/WAN2GP/Wan2GP"
-    [ -z "$APP_DIR" ] && [ -d "D:/WAN2GP/Wan2GP" ] && APP_DIR="D:/WAN2GP/Wan2GP"
-    [ -z "$APP_DIR" ] && [ -d "/var/home/mplanetarian/pinokio/api/wan.git/app" ] && APP_DIR="/var/home/mplanetarian/pinokio/api/wan.git/app"
     [ -z "$APP_DIR" ] && [ -d "$HOME/pinokio/api/wan.git/app" ] && APP_DIR="$HOME/pinokio/api/wan.git/app"
+    [ -z "$APP_DIR" ] && [ -d "$HOME/WAN2GP/Wan2GP" ] && APP_DIR="$HOME/WAN2GP/Wan2GP"
 
     # Resolve Python environment
     PYTHON_BIN="${WAN2GP_PYTHON:-}"
-    [ -z "$PYTHON_BIN" ] && [ -x "X:/WAN2GP/conda_envs/wan2gp/python.exe" ] && PYTHON_BIN="X:/WAN2GP/conda_envs/wan2gp/python.exe"
     [ -z "$PYTHON_BIN" ] && [ -x "$APP_DIR/venv/Scripts/python.exe" ] && PYTHON_BIN="$APP_DIR/venv/Scripts/python.exe"
     [ -z "$PYTHON_BIN" ] && [ -x "$APP_DIR/venv/bin/python" ] && PYTHON_BIN="$APP_DIR/venv/bin/python"
     if [ -z "$PYTHON_BIN" ] || [ ! -x "$PYTHON_BIN" ]; then
@@ -288,7 +285,6 @@ cd "$APP_DIR" || exit 1
 
 # Resolve Python environment
 PYTHON_BIN="${WAN2GP_PYTHON:-}"
-[ -z "$PYTHON_BIN" ] && [ -x "X:/WAN2GP/conda_envs/wan2gp/python.exe" ] && PYTHON_BIN="X:/WAN2GP/conda_envs/wan2gp/python.exe"
 [ -z "$PYTHON_BIN" ] && [ -x "$APP_DIR/venv/Scripts/python.exe" ] && PYTHON_BIN="$APP_DIR/venv/Scripts/python.exe"
 [ -z "$PYTHON_BIN" ] && [ -x "$APP_DIR/venv/bin/python" ] && PYTHON_BIN="$APP_DIR/venv/bin/python"
 if [ -z "$PYTHON_BIN" ] || [ ! -x "$PYTHON_BIN" ]; then
@@ -345,4 +341,10 @@ echo -e "  Python:            \033[1;36m$PYTHON_BIN\033[0m\n"
 export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
 export CUDA_VISIBLE_DEVICES="0"
 
-"$PYTHON_BIN" wgp.py --multiple-images --advanced --listen --profile "$PROFILE" --attention sage --output-dir "$WAN_OUTPUT_DIR"
+# `--listen` exposes the Gradio UI to the whole LAN with no login. That is a
+# deliberate choice, so it is now opt-in via WAN2GP_LISTEN=1.
+WAN2GP_LISTEN_ARGS=()
+if [ "${WAN2GP_LISTEN:-0}" = "1" ]; then
+    WAN2GP_LISTEN_ARGS=(--listen)
+fi
+"$PYTHON_BIN" wgp.py --multiple-images --advanced "${WAN2GP_LISTEN_ARGS[@]}" --profile "$PROFILE" --attention sage --output-dir "$WAN_OUTPUT_DIR"

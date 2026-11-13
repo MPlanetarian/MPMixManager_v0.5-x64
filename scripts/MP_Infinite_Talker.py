@@ -15,7 +15,6 @@ done
 APP_DIR="${WAN2GP_DIR:-}"
 [ -z "$APP_DIR" ] && [ -d "X:/WAN2GP/Wan2GP" ] && APP_DIR="X:/WAN2GP/Wan2GP"
 [ -z "$APP_DIR" ] && [ -d "D:/WAN2GP/Wan2GP" ] && APP_DIR="D:/WAN2GP/Wan2GP"
-[ -z "$APP_DIR" ] && [ -d "/var/home/mplanetarian/pinokio/api/wan.git/app" ] && APP_DIR="/var/home/mplanetarian/pinokio/api/wan.git/app"
 [ -z "$APP_DIR" ] && [ -d "$HOME/pinokio/api/wan.git/app" ] && APP_DIR="$HOME/pinokio/api/wan.git/app"
 
 # Resolve Python Environment
@@ -133,9 +132,9 @@ def load_config_env():
 load_config_env()
 
 # Directory Resolution
-PRIMARY_DATA_DIR = Path("/run/media/mplanetarian/GAMES1/DATA_DRIVE_MOVED")
+PRIMARY_DATA_DIR = Path(os.environ.get("WAN2GP_OUTPUTS", "") or (Path.home() / "WAN2GP_OUTPUTS"))
 WIN_DATA_DIR = Path("D:/DATA_DRIVE_MOVED")
-FALLBACK_DATA_DIR = Path("/run/media/mplanetarian/DATA")
+FALLBACK_DATA_DIR = Path(os.environ.get("WAN2GP_FALLBACK_DIR", "") or (Path.home() / "WAN2GP_OUTPUTS"))
 
 if PRIMARY_DATA_DIR.exists():
     BASE_DATA_DIR = PRIMARY_DATA_DIR
@@ -154,8 +153,6 @@ CONFIG_FILE = Path.home() / ".config" / "mp_infinite_talker_config.json"
 wan_candidate = os.environ.get("WAN2GP_DIR")
 if wan_candidate and Path(wan_candidate).exists():
     WAN_APP_ROOT = Path(wan_candidate)
-elif Path("/var/home/mplanetarian/pinokio/api/wan.git/app").exists():
-    WAN_APP_ROOT = Path("/var/home/mplanetarian/pinokio/api/wan.git/app")
 elif (Path.home() / "pinokio/api/wan.git/app").exists():
     WAN_APP_ROOT = Path.home() / "pinokio/api/wan.git/app"
 elif Path("X:/WAN2GP/Wan2GP").exists():
@@ -163,7 +160,7 @@ elif Path("X:/WAN2GP/Wan2GP").exists():
 elif Path("D:/WAN2GP/Wan2GP").exists():
     WAN_APP_ROOT = Path("D:/WAN2GP/Wan2GP")
 else:
-    WAN_APP_ROOT = Path("/var/home/mplanetarian/pinokio/api/wan.git/app")
+    WAN_APP_ROOT = Path.home() / "pinokio/api/wan.git/app"
 
 # Supported file extensions
 SUPPORTED_TEXT_EXTS = {".txt", ".text", ".md", ".log"}
@@ -327,7 +324,7 @@ def ensure_batch_directory_structure(batch_dir: Path, outputs_dir: Path):
     default_img = batch_dir / "CTRL_IMAGE" / "Stephen_Hawking.png"
     if not default_img.exists():
         # Look for alternative location
-        alt = Path("/run/media/mplanetarian/GAMES1/DATA_DRIVE_MOVED/WAN2GP_INFTLKBATCH/CTRL_IMAGE/Stephen_Hawking.png")
+        alt = PRIMARY_DATA_DIR / "WAN2GP_INFTLKBATCH/CTRL_IMAGE/Stephen_Hawking.png"
         if alt.exists():
             try:
                 shutil.copy2(str(alt), str(default_img))
@@ -590,7 +587,7 @@ def generate_infinite_talk_video(
             for p in [
                 WAN_APP_ROOT / "venv" / "bin" / "python",
                 WAN_APP_ROOT / "venv" / "Scripts" / "python.exe",
-                Path("/var/home/mplanetarian/pinokio/api/wan.git/app/venv/bin/python"),
+                Path(os.environ.get("WAN2GP_PYTHON", "") or (Path.home() / "pinokio/api/wan.git/app/venv/bin/python")),
             ]:
                 if p.exists():
                     venv_candidate = str(p)
@@ -862,7 +859,7 @@ def run_single_video_flow(config: dict):
         audio_path = p
     elif ch == "4":
         # Search MP Reporter TTS Audio directory
-        rep_tts = Path("/var/home/mplanetarian/MP_REPORTER/TTS_AUDIO")
+        rep_tts = Path(os.environ.get("MP_REPORTER_DIR", "") or (Path.home() / "MP_REPORTER")) / "TTS_AUDIO"
         candidates = []
         if rep_tts.exists():
             for f in rep_tts.rglob("*.wav"):
@@ -1264,7 +1261,7 @@ def interactive_main_menu():
             input("\nPress Enter to return to menu...")
         elif ch == "4":
             # MP Reporter Report Selector
-            rep_pdf = Path("/var/home/mplanetarian/MP_REPORTER/PDF_REPORTS")
+            rep_pdf = Path(os.environ.get("MP_REPORTER_DIR", "") or (Path.home() / "MP_REPORTER")) / "PDF_REPORTS"
             pdfs = list(rep_pdf.rglob("*.pdf")) if rep_pdf.exists() else []
             if pdfs:
                 pdfs.sort(key=lambda x: x.stat().st_mtime, reverse=True)

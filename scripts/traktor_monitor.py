@@ -45,10 +45,6 @@ RECORDING_DIRS = [
     Path.home() / "Music/Traktor/Recordings",
     *(Path.home() / f"Documents/Native Instruments/Traktor {v}/Recordings" for v in ("3.11.1", "3", "Pro 3", "Pro 4")),
     Path.home() / "Documents/Native Instruments/Traktor 3.11.1",
-    Path("D:/MIX_ARCHIVE/CONVERTED_WAV_FILES"),
-    Path("D:/MIX_ARCHIVE"),
-    Path("/run/media/mplanetarian/WD BLACK B/MIX_ARCHIVE/CONVERTED_WAV_FILES"),
-    Path("/run/media/mplanetarian/WD BLACK B/MIX_ARCHIVE"),
 ]
 if os.environ.get("MIX_ARCHIVE_DIR"):
     _ea = Path(os.environ["MIX_ARCHIVE_DIR"])

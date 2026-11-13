@@ -50,6 +50,29 @@ class CompanionTestBase(unittest.TestCase):
         ]
         for p in self._patches:
             p.start()
+
+        # Default every library to an empty fixture. Without this, a test that
+        # calls set_library_mode() without first calling use_archive() scans the
+        # developer's real archive: on a 51k-file tree the suite took minutes
+        # and looked like a hang. Tests opt in to files with the use_* helpers.
+        # Only the *queue build* is redirected; the scanner functions keep
+        # their real behaviour so a test can exercise them directly.
+        self._archive_files = []
+        self._archive_patch = patch.object(
+            companion, "_scan_dirs", side_effect=lambda dirs: list(self._archive_files)
+        )
+        self._archive_patch.start()
+        self.addCleanup(self._archive_patch.stop)
+
+        self._music_files = []
+
+        # The SMB/LAN mount probe blocks for 15 s and must never run in a test.
+        self._mount_patch = patch.object(
+            companion, "ensure_music_folders_mounted", return_value=None
+        )
+        self._mount_patch.start()
+        self.addCleanup(self._mount_patch.stop)
+
         companion.invalidate_queue_cache()
         companion._queue_source_state.update({"fallback": False, "detail": ""})
         self._reset_autoplay()
@@ -67,16 +90,12 @@ class CompanionTestBase(unittest.TestCase):
 
     def use_archive(self, files):
         """Point the mix archive at the given file list."""
-        self._archive_files = [str(Path(f)) for f in files]
-        self._archive_patch = patch.object(
-            companion, "scan_archive_files", side_effect=lambda: list(self._archive_files)
-        )
-        self._archive_patch.start()
-        self.addCleanup(self._archive_patch.stop)
+        self._archive_files[:] = [str(Path(f)) for f in files]
         companion.invalidate_queue_cache()
 
     def use_music(self, files):
-        self._music_files = [str(Path(f)) for f in files]
+        """Point the MUSIC library at the given file list."""
+        self._music_files[:] = [str(Path(f)) for f in files]
         self._music_patch = patch.object(
             companion, "scan_music_files", side_effect=lambda: list(self._music_files)
         )

@@ -99,7 +99,7 @@ find_loader_video_path() {
         "$SCRIPT_DIR/MP_loader.mp4"
         "$SCRIPT_DIR/assets/MP_loader.mp4"
         "$SCRIPT_DIR/gemini_generated_video_BEB1D608.mp4"
-        "/var/home/mplanetarian/GoogleDrive/gemini_generated_video_BEB1D608.mp4"
+        "$HOME/GoogleDrive/gemini_generated_video_BEB1D608.mp4"
     )
     for cand in "${cand_list[@]}"; do
         if [ -n "$cand" ] && [ -f "$cand" ] && [ -s "$cand" ]; then

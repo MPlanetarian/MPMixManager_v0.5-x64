@@ -26,7 +26,9 @@ class ClearPlaylistTests(unittest.TestCase):
 
     def tearDown(self):
         try:
-            self.engine.stop_playback()
+            # shutdown() also stops the Bluetooth monitor and closes the stream;
+            # stop_playback() alone left both alive for the rest of the process.
+            self.engine.shutdown()
         except Exception:
             pass
         self.tmp.cleanup()

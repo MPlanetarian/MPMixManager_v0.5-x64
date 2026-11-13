@@ -95,8 +95,8 @@ echo -e "${GREEN}[✓] Plasma Wayland (plasma.desktop) preselected for next sess
 # 4. Gracefully close X11 background applications (preserving terminal/manager)
 echo ""
 echo -e "${BOLD}${BLUE}[4/5] Closing open desktop application windows...${NC}"
-if [ -x "/home/mplanetarian/Desktop/DESKTOP/close_allapps.sh" ]; then
-    /home/mplanetarian/Desktop/DESKTOP/close_allapps.sh >/dev/null 2>&1 || true
+if [ -x "$HOME/Desktop/DESKTOP/close_allapps.sh" ]; then
+    "$HOME/Desktop/DESKTOP/close_allapps.sh" >/dev/null 2>&1 || true
 fi
 pkill -f "play_mplanetarian" 2>/dev/null || true
 pkill -f "MPlanetarian" 2>/dev/null || true

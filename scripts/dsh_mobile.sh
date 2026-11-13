@@ -51,12 +51,8 @@ if [ -z "${DSH_DIR:-}" ]; then
         DSH_DIR="/x/DEEPSEEK/deepseek-harness"
     elif [ -d "C:/DEEPSEEK/deepseek-harness" ]; then
         DSH_DIR="C:/DEEPSEEK/deepseek-harness"
-    elif [ -d "/var/home/mplanetarian/beszel-hub/deepseek-harness" ]; then
-        DSH_DIR="/var/home/mplanetarian/beszel-hub/deepseek-harness"
     elif [ -d "$HOME/beszel-hub/deepseek-harness" ]; then
         DSH_DIR="$HOME/beszel-hub/deepseek-harness"
-    elif [ -d "/var/home/mplanetarian/deepseek-harness" ]; then
-        DSH_DIR="/var/home/mplanetarian/deepseek-harness"
     elif [ -d "$HOME/deepseek-harness" ]; then
         DSH_DIR="$HOME/deepseek-harness"
     else

@@ -31,7 +31,7 @@ safe_clear() {
 }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-MP_REPORTER_DIR="/var/home/mplanetarian/MP_REPORTER"
+MP_REPORTER_DIR="${MP_REPORTER_DIR:-$HOME/MP_REPORTER}"
 TASKS_DIR="${MP_REPORTER_DIR}/tasks"
 EMAIL_CONFIG="${MP_REPORTER_DIR}/email_config.env"
 REPORTER_SH="${MP_REPORTER_DIR}/MP_Reporter.sh"

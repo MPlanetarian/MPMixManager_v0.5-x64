@@ -117,14 +117,38 @@ def _read_command(args: list[str]) -> str:
     return result.stdout or ""
 
 
+# One launch asks for the same monitor layout several times (origin, scale,
+# panel work area). Each answer costs a kscreen-doctor or xrandr process, which
+# is about 40 ms, and the window cannot appear until they return. Layout does
+# not change inside a couple of seconds, so memoise per command briefly.
+_COMMAND_TTL = 2.0
+_command_cache: dict[tuple[str, ...], tuple[float, str]] = {}
+
+
+def _read_command_cached(args: list[str]) -> str:
+    key = tuple(args)
+    now = time.monotonic()
+    hit = _command_cache.get(key)
+    if hit is not None and now - hit[0] < _COMMAND_TTL:
+        return hit[1]
+    text = _read_command(args)
+    _command_cache[key] = (now, text)
+    return text
+
+
+def clear_command_cache() -> None:
+    """Forget memoised layout answers. For tests and display reconfiguration."""
+    _command_cache.clear()
+
+
 def kscreen_outputs(text: str | None = None) -> list[dict]:
     if text is None:
-        text = _read_command(["kscreen-doctor", "-o"])
+        text = _read_command_cached(["kscreen-doctor", "-o"])
     return parse_kscreen(text or "")
 
 
 def _xrandr_origin() -> tuple[int, int] | None:
-    monitors = parse_xrandr_monitors(_read_command(["xrandr", "--listmonitors"]))
+    monitors = parse_xrandr_monitors(_read_command_cached(["xrandr", "--listmonitors"]))
     if not monitors:
         return None
     desktop = [monitor for monitor in monitors if not is_hisense_name(monitor["name"])]
@@ -154,7 +178,7 @@ def x11_coordinate_scale(outputs: list[dict] | None = None, monitors: list[dict]
     if outputs is None:
         outputs = kscreen_outputs()
     if monitors is None:
-        monitors = parse_xrandr_monitors(_read_command(["xrandr", "--listmonitors"]))
+        monitors = parse_xrandr_monitors(_read_command_cached(["xrandr", "--listmonitors"]))
     by_name = {monitor["name"]: monitor for monitor in monitors}
     ordered = [output for output in outputs if not is_hisense_name(output.get("name", ""))]
     ordered.extend(output for output in outputs if is_hisense_name(output.get("name", "")))
@@ -194,7 +218,7 @@ def window_launch_origin(
 
 def _x11_monitor_rect(name: str) -> tuple[int, int, int, int]:
     """X11 rect ``x, y, width, height`` of an xrandr output, or zeros."""
-    text = _read_command(["xrandr", "--query"])
+    text = _read_command_cached(["xrandr", "--query"])
     for raw in (text or "").splitlines():
         parts = raw.split()
         if len(parts) < 2 or parts[0] != name or "connected" not in parts[1]:
@@ -239,7 +263,7 @@ def main_desktop_rect(
     if outputs is None:
         outputs = kscreen_outputs()
     if monitors is None:
-        monitors = parse_xrandr_monitors(_read_command(["xrandr", "--listmonitors"]))
+        monitors = parse_xrandr_monitors(_read_command_cached(["xrandr", "--listmonitors"]))
     scale = x11_coordinate_scale(outputs, monitors)
     chosen = select_main(outputs)
     if chosen is not None and chosen.get("geo"):

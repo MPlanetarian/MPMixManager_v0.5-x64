@@ -92,7 +92,11 @@ def player_panel_rects(cols, rows, cw, ch, ox, oy, mode="NORMAL"):
 
 
 def _import_gtk():
-    if IS_WIN:
+    # Read the live platform, not the IS_WIN snapshot taken at import time.
+    # The host must be able to answer "what would happen on Windows?" (the
+    # cross-platform tests do exactly that), and on Windows this is the guard
+    # that stops a Linux GTK import from being attempted at all.
+    if IS_WIN or sys.platform == "win32":
         return None, None, None
     os.environ["GDK_BACKEND"] = "x11"
     from local_vte import reexec_with_local_vte

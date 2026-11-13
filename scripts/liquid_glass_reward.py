@@ -269,16 +269,40 @@ def _welcome_items(items, color, nc, label_for, width=72):
     return lines
 
 
+def _active_theme_name() -> str:
+    """The theme the manager saved, or an empty string on a fresh install."""
+    for name in ("theme", "menu_theme"):
+        try:
+            value = (CONFIG_DIR / name).read_text(encoding="utf-8").strip()
+            if value:
+                return value
+        except OSError:
+            continue
+    return ""
+
+
 def show_welcome_message(wait_for_input=True):
     NC = "\033[0m"
     BOLD = "\033[1m"
     DIM = "\033[2m"
-    CYAN = "\033[38;2;0;245;255m"
-    MINT = "\033[38;2;0;245;212m"
-    PURPLE = "\033[38;2;199;125;255m"
-    BLUE = "\033[38;2;72;149;239m"
-    WHITE = "\033[38;2;255;255;255m"
-    GOLD = "\033[38;2;255;215;0m"
+
+    # The banner used to paint a fixed Dreamworlds palette. On the Whitest
+    # White theme that put cyan and pink text on a white pane, which is
+    # unreadable, so it now follows the active theme: one ink colour for a
+    # single-colour theme, the usual accent set otherwise.
+    if _active_theme_name().strip().lower().replace(" ", "_") in (
+        "the_whitest_white", "whitest_white", "whitest", "white",
+    ):
+        BLACK = "\033[38;2;0;0;0m"
+        CYAN = MINT = PURPLE = BLUE = WHITE = GOLD = BLACK
+        DIM = BLACK
+    else:
+        CYAN = "\033[38;2;0;245;255m"
+        MINT = "\033[38;2;0;245;212m"
+        PURPLE = "\033[38;2;199;125;255m"
+        BLUE = "\033[38;2;72;149;239m"
+        WHITE = "\033[38;2;255;255;255m"
+        GOLD = "\033[38;2;255;215;0m"
 
     w = 78
     title = "✦ WELCOME TO MP MIX MANAGER ✦"

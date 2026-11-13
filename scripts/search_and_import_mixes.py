@@ -29,24 +29,51 @@ NC = "\033[0m"
 # Audio extensions to look for
 DEFAULT_AUDIO_EXTS = ['.wav', '.flac', '.aif', '.aiff', '.m4a', '.mp3']
 
-# Known SMB Sources
-DEFAULT_SMB_SOURCES = [
-    {
-        "name": "STREAM_OF_FREQUENCY_RECORDINGS_TRAKTOR_2026 NEW",
-        "url": "smb://192.168.1.138/mplanetarian/Documents/TRAKTOR_RECORDINGS/",
-        "rclone_path": ':smb,host="192.168.1.138",user="mplanetarian",pass="Bl5Ejf6SBQivAUu_JvImDn__AKLASZcq":mplanetarian/Documents/TRAKTOR_RECORDINGS/'
-    },
-    {
-        "name": "STREAM_OF_FREQUENCY_RECORDINGS_TRAKTOR_2026",
-        "url": "smb://192.168.1.138/mplanetarian/.../STREAM_OF_FREQUENCY_RECORDINGS_TRAKTOR_2026/",
-        "rclone_path": ':smb,host="192.168.1.138",user="mplanetarian",pass="Bl5Ejf6SBQivAUu_JvImDn__AKLASZcq":mplanetarian/Documents/MPlanetarian/M_PRODUCTION/STREAM_OF_FREQUENCY_RECORDINGS_TRAKTOR_2026/'
-    },
-    {
-        "name": "STREAM_OF_FREQUENCY_MIX_ARCHIVE",
-        "url": "smb://192.168.1.138/DATAMAC1/M_PRODUCTION/MIX_ARCHIVE/STREAM_OF_FREQUENCY_MIX_ARCHIVE/",
-        "rclone_path": ':smb,host="192.168.1.138",user="mplanetarian",pass="Bl5Ejf6SBQivAUu_JvImDn__AKLASZcq":DATAMAC1/M_PRODUCTION/MIX_ARCHIVE/STREAM_OF_FREQUENCY_MIX_ARCHIVE/'
-    }
-]
+# Default SMB sources. Host, share and credentials come from config.env so no
+# password is ever committed; a workstation with no SMB configured simply
+# presents the "custom share" option instead of a broken preset.
+def _default_smb_sources():
+    env_vars = load_config_env()
+
+    def setting(*names):
+        for name in names:
+            value = os.environ.get(name) or env_vars.get(name)
+            if value:
+                return str(value).strip()
+        return ""
+
+    host = setting("MUSIC_SMB_HOST", "TRAKTOR_SMB_HOST", "SMB_DEFAULT_HOST")
+    share = setting("TRAKTOR_SMB_SHARE", "MUSIC_SMB_SHARE") or "mplanetarian"
+    user = setting("MUSIC_SMB_USER", "TRAKTOR_SMB_USER")
+    password = setting("MUSIC_SMB_PASSWORD", "TRAKTOR_SMB_PASSWORD")
+
+    # No host configured: return an empty list rather than inventing one, so a
+    # fresh install cannot try to reach somebody else's LAN address.
+    if not host:
+        return []
+
+    auth = [f'host="{host}"']
+    if user:
+        auth.append(f'user="{user}"')
+    if password:
+        auth.append(f'pass="{password}"')
+    prefix = ":smb," + ",".join(auth) + ":"
+
+    def source(name, share_name, sub):
+        path = f"{share_name}/{sub}".rstrip("/") + "/"
+        return {
+            "name": name,
+            "url": f"smb://{host}/{path}",
+            "rclone_path": prefix + path,
+        }
+
+    return [
+        source("TRAKTOR RECORDINGS (SMB)", share,
+               setting("TRAKTOR_RECORDINGS_DIR") or "Documents/TRAKTOR_RECORDINGS"),
+        source("MIX ARCHIVE (SMB)", share,
+               setting("MIX_ARCHIVE_SMB_DIR") or "Documents/MPlanetarian/M_PRODUCTION/MIX_ARCHIVE"),
+    ]
+
 
 def load_config_env():
     """Load settings from config.env if present."""
@@ -71,6 +98,10 @@ def load_config_env():
             except Exception:
                 pass
     return env_vars
+
+
+# Resolved after load_config_env is defined so the import has the settings.
+DEFAULT_SMB_SOURCES = _default_smb_sources()
 
 def get_destination_dir(env_vars):
     """Determine target mix archive directory."""
@@ -121,7 +152,6 @@ def get_existing_archive_keys(dest_dir):
         dest_dir,
         os.path.join(dest_dir, "CONVERTED_WAV_FILES"),
         os.path.join(dest_dir, "FLAC_CONVERTED_OUTPUTS"),
-        "/run/media/mplanetarian/VROC/M_PRODUCTION/STREAM_OF_FREQUENCY/CONVERTED_WAV_FILES_MOVED"
     ]
     
     env_vars = load_config_env()

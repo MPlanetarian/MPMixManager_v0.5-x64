@@ -18,24 +18,76 @@ START_DATE = datetime.datetime.now().strftime('%A, %Y-%m-%d')
 START_TIME = datetime.datetime.now().strftime('%H:%M:%S')
 start_seconds = datetime.datetime.now().timestamp()
 
+def load_config_env():
+    """Read config.env so SMB host and credentials are not baked into the file."""
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    candidates = [
+        os.environ.get("MP_CONFIG", ""),
+        os.path.join(script_dir, "config.env"),
+        os.path.join(os.path.dirname(script_dir), "config.env"),
+        os.path.expanduser("~/.config/mix-manager/config.env"),
+    ]
+    env_vars = {}
+    for config_file in candidates:
+        if config_file and os.path.isfile(config_file):
+            try:
+                with open(config_file, "r", encoding="utf-8", errors="ignore") as handle:
+                    for line in handle:
+                        line = line.strip()
+                        if not line or line.startswith("#") or "=" not in line:
+                            continue
+                        key, val = line.split("=", 1)
+                        env_vars[key.strip()] = val.strip().strip('"').strip("'")
+                break
+            except OSError:
+                continue
+    return env_vars
+
+
+def _default_smb_sources():
+    """Build the SMB source list from configuration, never from literals.
+
+    The previous version embedded a host, a user and a password. A password in
+    tracked source is not a default, it is a leak, and it is also visible in
+    `ps` because rclone received it as an argument.
+    """
+    env_vars = load_config_env()
+
+    def setting(*names):
+        for name in names:
+            value = os.environ.get(name) or env_vars.get(name)
+            if value:
+                return str(value).strip()
+        return ""
+
+    host = setting("MUSIC_SMB_HOST", "TRAKTOR_SMB_HOST", "SMB_DEFAULT_HOST")
+    share = setting("TRAKTOR_SMB_SHARE", "MUSIC_SMB_SHARE") or "mplanetarian"
+    user = setting("MUSIC_SMB_USER", "TRAKTOR_SMB_USER")
+    password = setting("MUSIC_SMB_PASSWORD", "TRAKTOR_SMB_PASSWORD")
+    if not host:
+        return []
+
+    auth = [f'host="{host}"']
+    if user:
+        auth.append(f'user="{user}"')
+    if password:
+        auth.append(f'pass="{password}"')
+    prefix = ":smb," + ",".join(auth) + ":"
+
+    def source(name, sub):
+        path = f"{share}/{sub}".rstrip("/") + "/"
+        return {"name": name, "url": f"smb://{host}/{path}", "rclone_path": prefix + path}
+
+    return [
+        source("TRAKTOR RECORDINGS (SMB)",
+               setting("TRAKTOR_RECORDINGS_DIR") or "Documents/TRAKTOR_RECORDINGS"),
+        source("MIX ARCHIVE (SMB)",
+               setting("MIX_ARCHIVE_SMB_DIR") or "Documents/MPlanetarian/M_PRODUCTION/MIX_ARCHIVE"),
+    ]
+
+
 # SMB Sources
-SMB_SOURCES = [
-    {
-        "name": "STREAM_OF_FREQUENCY_RECORDINGS_TRAKTOR_2026 NEW",
-        "url": "smb://192.168.1.138/mplanetarian/Documents/TRAKTOR_RECORDINGS/",
-        "rclone_path": ':smb,host="192.168.1.138",user="mplanetarian",pass="Bl5Ejf6SBQivAUu_JvImDn__AKLASZcq":mplanetarian/Documents/TRAKTOR_RECORDINGS/'
-    },
-    {
-        "name": "STREAM_OF_FREQUENCY_RECORDINGS_TRAKTOR_2026",
-        "url": "smb://192.168.1.138/mplanetarian/.../STREAM_OF_FREQUENCY_RECORDINGS_TRAKTOR_2026/",
-        "rclone_path": ':smb,host="192.168.1.138",user="mplanetarian",pass="Bl5Ejf6SBQivAUu_JvImDn__AKLASZcq":mplanetarian/Documents/MPlanetarian/M_PRODUCTION/STREAM_OF_FREQUENCY_RECORDINGS_TRAKTOR_2026/'
-    },
-    {
-        "name": "STREAM_OF_FREQUENCY_MIX_ARCHIVE",
-        "url": "smb://192.168.1.138/DATAMAC1/M_PRODUCTION/MIX_ARCHIVE/STREAM_OF_FREQUENCY_MIX_ARCHIVE/",
-        "rclone_path": ':smb,host="192.168.1.138",user="mplanetarian",pass="Bl5Ejf6SBQivAUu_JvImDn__AKLASZcq":DATAMAC1/M_PRODUCTION/MIX_ARCHIVE/STREAM_OF_FREQUENCY_MIX_ARCHIVE/'
-    }
-]
+SMB_SOURCES = _default_smb_sources()
 
 # Audio extensions to look for
 AUDIO_EXTS = ['.wav', '.flac', '.mp3', '.m4a', '.ogg', '.wma']

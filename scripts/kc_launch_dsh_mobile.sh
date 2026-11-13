@@ -8,7 +8,7 @@ export WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-wayland-0}"
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 export PATH="$HOME/.local/bin:$PATH"
 
-DSH_DIR="/var/home/mplanetarian/beszel-hub/deepseek-harness"
+DSH_DIR="${DSH_DIR:-$HOME/beszel-hub/deepseek-harness}"
 _KCSCRIPT_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 if [ -f "$_KCSCRIPT_DIR/dsh_mobile.sh" ]; then
     exec bash "$_KCSCRIPT_DIR/dsh_mobile.sh" start

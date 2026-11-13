@@ -122,6 +122,18 @@ class TestInWindowVisualizerOnBothBackends(unittest.TestCase):
         renderer._shape_size = (640, 480)
         renderer._pipeline = 999
         renderer._ubo = 555
+        # State the glass pass touches after the visualizer has drawn. It is
+        # irrelevant to this test (which asserts pipeline binding) but the code
+        # path reads it, so it has to exist.
+        renderer._layout = 700
+        renderer._layout_sets = 1
+        renderer._dset = 701
+        renderer.panels = ()
+        renderer.premultiplied = True
+        renderer.bezel_px = 7
+        renderer.radius_px = 36
+        renderer.cursor = (0.0, 0.0)
+        renderer._start = 0.0
         for name in ("WaitForFences", "ResetFences", "ResetCommandBuffer", "BeginCommandBuffer",
                      "EndCommandBuffer", "QueueSubmit", "QueuePresentKHR"):
             getattr(renderer._vk, name).return_value = 0
@@ -145,8 +157,17 @@ class TestInWindowVisualizerOnBothBackends(unittest.TestCase):
         renderer.window_size = lambda: (640, 480)
         renderer._visualizer_state = lambda: {"active": True, "preset_id": 3}
         renderer.sync_player_visualizer_opacity = MagicMock()
+        # This test asserts which pipeline is bound, not how the uniform buffer
+        # is uploaded. Stub the upload so the assertion is about its subject
+        # instead of about a fully constructed Vulkan device.
+        renderer._write_ubo = MagicMock()
 
-        liquid_glass_vulkan.LiquidGlassRenderer.draw(renderer, "dreamworlds_ultra")
+        # `draw` deliberately skips the in-window visualizer on Linux, because
+        # there the visualizer is its own bonded window. This test is about the
+        # non-Linux in-window path, so it has to say so explicitly; otherwise
+        # it silently asserts nothing on a Linux runner.
+        with patch.object(liquid_glass_vulkan.sys, "platform", "darwin"):
+            liquid_glass_vulkan.LiquidGlassRenderer.draw(renderer, "dreamworlds_ultra")
 
         self.assertEqual(len(calls), 1, "the visualizer must draw once")
         bound = [call.args[2] for call in renderer._vk.CmdBindPipeline.call_args_list]

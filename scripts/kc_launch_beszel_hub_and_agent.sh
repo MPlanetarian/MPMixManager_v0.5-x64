@@ -8,7 +8,7 @@ export WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-wayland-0}"
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 export PATH="$HOME/.local/bin:$PATH"
 
-BESZEL_DIR="/var/home/mplanetarian/beszel-hub"
+BESZEL_DIR="${BESZEL_DIR:-$HOME/beszel-hub}"
 
 hub_running=false
 agent_running=false

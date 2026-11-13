@@ -2,7 +2,7 @@
 from __future__ import annotations
 import os, re, sys, time, datetime, math, random, json, socket, select, shutil, argparse, threading, subprocess, unicodedata, queue, collections, signal, functools, colorsys, re
 from pathlib import Path
-from typing import Optional, List, Dict, Any, Tuple, Union
+from typing import Optional, List, Dict, Any, Tuple, Union, Sequence
 
 for _s in (sys.stdout, sys.stderr):
     if _s and hasattr(_s, "reconfigure"):
@@ -97,6 +97,15 @@ FAVORITES_FILE = CONFIG_DIR / "favorites.json"
 DAEMON_LOCK_FILE = CONFIG_DIR / "mp_player.lock"
 RESUME_STATE_FILE = CONFIG_DIR / "playback_resume.json"
 _DAEMON_LOCK_FH = None
+
+# Generated playlists (DJ_Tracks_*.json) reach tens of megabytes once a library
+# passes ~50k tracks. Parsing that much JSON on every window open is what made
+# the player show "Loading library..." for seconds, so it reads a fast sidecar
+# cache written beside the playlist instead (see scripts/playlist_cache.py).
+try:
+    import playlist_cache as _playlist_cache
+except ImportError:
+    from scripts import playlist_cache as _playlist_cache
 
 try:
     from audio_formats import (
@@ -339,6 +348,12 @@ def _normalize_reveal_path(target_path: Union[str, Path, None]) -> Optional[str]
         raw = unquote(urlparse(raw).path or "")
         if os.name == "nt" and len(raw) >= 3 and raw[0] == "/" and raw[2] == ":": raw = raw[1:]
     raw = os.path.expanduser(raw)
+    # A Windows path is not host-relative. `abspath` would prefix the Linux
+    # working directory and turn C:\\Music\\My Mix.flac into
+    # /var/home/.../C:\\Music\\My Mix.flac, which is what made the Explorer
+    # plan wrong whenever it was computed on a non-Windows host.
+    if re.match(r"^[a-zA-Z]:[\\/]", raw):
+        return raw.replace("/", "\\") if os.name != "nt" else os.path.normpath(raw)
     if os.name == "nt":
         if (m := re.match(r"^/([a-zA-Z])/(.*)$", raw.replace("\\", "/"))) and not os.path.exists(raw):
             # Build with concatenation: Python 3.9 (still the macOS system
@@ -353,8 +368,17 @@ def choose_file_manager_target(current_path: Union[str, Path, None], selected_pa
     return None
 
 def windows_explorer_select_command(path: str) -> str:
+    """Build the Explorer "select this file" command line for a Windows path.
+
+    `os.path.normpath` is host-dependent: running this on Linux collapses
+    `C:\\Music\\My Mix.flac` to `C:\\Music\\My Mix.flac`-as-a-single-segment and
+    the backslashes are lost, so the plan was wrong whenever it was computed
+    off-Windows (cross-platform tests, or a WSL helper). Only normalise when the
+    host actually speaks Windows paths.
+    """
     s = path.replace('"', "")
-    return f'explorer.exe /select,"{os.path.normpath(s) if os.name == "nt" else s}"'
+    normalised = os.path.normpath(s) if os.name == "nt" else s.replace("/", "\\")
+    return f'explorer.exe /select,"{normalised}"'
 
 def _windows_shell_select(path: str) -> bool:
     if os.name != "nt": return False
@@ -750,6 +774,55 @@ def choose_audio_file_gui() -> Optional[str]:
                 except Exception: pass
     return None
 
+def load_playlist_json(playlist_path: Union[Path, str]) -> Optional[List[Dict[str, Any]]]:
+    """Read a generated playlist .json, preferring the fast sidecar cache.
+
+    Returned rows always carry ``duration_fmt``. A cache miss parses the JSON and
+    refreshes the sidecar so the next launch is fast. The cache is derived data:
+    if it is missing, stale, truncated, or from another version it is ignored.
+    """
+    p = Path(playlist_path)
+    rows = _playlist_cache.read(p)
+    if rows is None:
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            return None
+        if not isinstance(data, list):
+            return None
+        for row in data:
+            row.setdefault("duration_fmt", "00:00")
+        _playlist_cache.write(p, data)
+        return data
+    for row in rows:
+        row.setdefault("duration_fmt", "00:00")
+    return rows
+
+def _search_index(rows: Sequence[Dict[str, Any]]) -> List[Tuple[Dict[str, Any], str, str]]:
+    """Lower-cased search text per row, built once per playlist object.
+
+    Building this used to run a regex per row, which cost about a second on a
+    55k-track library the first time someone typed in the filter box. One
+    str.translate with a shared table gives the same cleaned text far cheaper.
+    """
+    table = _search_clean_table()
+    index: List[Tuple[Dict[str, Any], str, str]] = []
+    append = index.append
+    for row in rows:
+        raw_text = " ".join(str(value) for value in row.values()).lower()
+        append((row, raw_text, raw_text.translate(table)))
+    return index
+
+@functools.lru_cache(maxsize=1)
+def _search_clean_table() -> Dict[int, str]:
+    # Keep a-z, 0-9 and whitespace; every other character becomes a space, which
+    # is what re.sub(r'[^a-z0-9\\s]', ' ', ...) produced before. Input is already
+    # lower-cased, so A-Z and non-ASCII alphanumerics both map to a space here.
+    return {
+        cp: " " for cp in range(0x110000)
+        if not (0x61 <= cp <= 0x7a or 0x30 <= cp <= 0x39 or chr(cp).isspace())
+    }
+
 class MixArchiveScanner:
     def __init__(self, base_dir: Union[Path, str]):
         self.base_dir = Path(base_dir)
@@ -787,33 +860,49 @@ class MixArchiveScanner:
         return dirs
 
     def _load_and_scan(self):
-        seen, collected, home_p, skip = set(), [], Path.home(), {'__pycache__', 'node_modules', '.git', 'venv', '.venv'}
+        # os.scandir carries the directory entry's type and stat data with it, so
+        # a library walk costs one syscall per file instead of one per entry plus
+        # an os.stat. Sorting the walk with os.walk was measurable on a share.
+        seen, collected, home_p = set(), [], Path.home()
+        skip = {'__pycache__', 'node_modules', '.git', 'venv', '.venv'}
+        add = collected.append
         for ad in self._get_archive_dirs():
             if not ad.is_dir() or ad in (home_p, Path("/")): continue
-            for root, subdirs, files in os.walk(ad):
-                subdirs[:] = [d for d in subdirs if not d.startswith('.') and d not in skip]
-                for f in files:
-                    ext = os.path.splitext(f)[1].lower()
-                    if ext in AUDIO_EXTENSIONS and (fp := os.path.join(root, f)) not in seen:
-                        seen.add(fp)
-                        try:
-                            st = os.stat(fp)
-                            collected.append({"name": f, "path": fp, "size_mb": st.st_size / 1048576.0, "mtime": st.st_mtime, "ext": ext[1:].upper()})
-                        except OSError: pass
-        self.mixes = sorted(collected, key=lambda x: x["mtime"], reverse=True)
+            stack = [str(ad)]
+            while stack:
+                current = stack.pop()
+                try:
+                    with os.scandir(current) as entries:
+                        for entry in entries:
+                            try:
+                                if entry.is_dir(follow_symlinks=False):
+                                    if not entry.name.startswith('.') and entry.name not in skip:
+                                        stack.append(entry.path)
+                                    continue
+                                if not entry.is_file(follow_symlinks=False):
+                                    continue
+                                ext = os.path.splitext(entry.name)[1].lower()
+                                if ext not in AUDIO_EXTENSIONS or entry.path in seen:
+                                    continue
+                                seen.add(entry.path)
+                                st = entry.stat()
+                                add({"name": entry.name, "path": entry.path, "size_mb": st.st_size / 1048576.0,
+                                     "mtime": st.st_mtime, "ext": ext[1:].upper()})
+                            except OSError:
+                                continue
+                except OSError:
+                    continue
+        collected.sort(key=lambda x: x["mtime"], reverse=True)
+        self.mixes = collected
 
     def get_mixes(self, query: str = "") -> List[Dict[str, Any]]:
             if not (q := query.lower().strip()): 
                 return self.mixes
             tokens = q.split()
 
-            # Cache the processed search strings on the tracks themselves if it hasn't been done yet
+            # Build the searchable text once per playlist object, not per keystroke.
             if not hasattr(self, '_search_cache_initialized') or self._search_cache_initialized != id(self.mixes):
-                self._cached_search_data = []
-                for m in self.mixes:
-                    raw_text = " ".join(str(v) for v in m.values()).lower()
-                    clean_text = re.sub(r'[^a-z0-9\s]', ' ', raw_text)
-                    self._cached_search_data.append((m, raw_text, clean_text))
+                self._cached_search_data = _search_index(self.mixes)
                 self._search_cache_initialized = id(self.mixes)
 
             results = []
@@ -866,13 +955,10 @@ class MusicFolderPlaylistScanner:
                     break
         if not self.playlist_path or not self.playlist_path.is_file(): return
         if str(self.playlist_path).endswith(".json"):
-            try:
-                data = json.loads(self.playlist_path.read_text(encoding="utf-8"))
-                if isinstance(data, list):
-                    for m in data: m.setdefault("duration_fmt", "00:00")
-                    self.mixes = data
-                    return
-            except Exception: pass
+            data = load_playlist_json(self.playlist_path)
+            if data is not None:
+                self.mixes = data
+                return
         try:
             cur_t, cur_d, now = "", "00:00", time.time()
             for line in self.playlist_path.read_text(encoding="utf-8", errors="ignore").splitlines():
@@ -895,13 +981,9 @@ class MusicFolderPlaylistScanner:
                 return self.mixes
             tokens = q.split()
 
-            # Cache the processed search strings on the tracks themselves if it hasn't been done yet
+            # Build the searchable text once per playlist object, not per keystroke.
             if not hasattr(self, '_search_cache_initialized') or self._search_cache_initialized != id(self.mixes):
-                self._cached_search_data = []
-                for m in self.mixes:
-                    raw_text = " ".join(str(v) for v in m.values()).lower()
-                    clean_text = re.sub(r'[^a-z0-9\s]', ' ', raw_text)
-                    self._cached_search_data.append((m, raw_text, clean_text))
+                self._cached_search_data = _search_index(self.mixes)
                 self._search_cache_initialized = id(self.mixes)
 
             results = []
@@ -1724,11 +1806,56 @@ class AudioEngine:
         self.eq_manager = EqualizerManager()
         self.eq_filter = EqualizerFilter()
         self.eq_filter.set_gains(self.eq_manager.get_current_bands(), self.sample_rate)
-        if BluetoothAudioRouter is not None:
-            try:
-                self.bt_router = BluetoothAudioRouter(target_pid=os.getpid(), on_route_change=self._on_bt_route_change, auto_switch=self.auto_bluetooth)
-                self.bt_router.start()
-            except Exception: pass
+        # Bluetooth routing runs a heartbeat thread that shells out to `wpctl`
+        # every 1.2 s and a `pactl subscribe` child. It is only useful when
+        # automatic Bluetooth switching was actually requested, and starting it
+        # unconditionally leaked a daemon (and a subprocess) for every engine
+        # ever constructed -- including in the test suite, where the leftovers
+        # blocked on wpctl and made the run appear to hang.
+        self._start_bluetooth_router()
+
+    def _start_bluetooth_router(self) -> None:
+        if BluetoothAudioRouter is None or not self.auto_bluetooth:
+            return
+        if os.environ.get("MP_DISABLE_BLUETOOTH_MONITOR") == "1":
+            return
+        try:
+            self.bt_router = BluetoothAudioRouter(
+                target_pid=os.getpid(),
+                on_route_change=self._on_bt_route_change,
+                auto_switch=self.auto_bluetooth,
+            )
+            self.bt_router.start()
+        except Exception:
+            self.bt_router = None
+
+    def shutdown(self) -> None:
+        """Release the stream, the Bluetooth monitor and its child process.
+
+        Nothing did this before: an engine object that went out of scope left a
+        PortAudio stream open and a `pactl subscribe` child running. In a test
+        run that accumulated until the machine ran out of file descriptors.
+        """
+        try:
+            self.stop_playback(reset_position=False)
+        except Exception:
+            pass
+        self.stop_bluetooth_router()
+        try:
+            self._close_stream()
+        except Exception:
+            pass
+
+    def stop_bluetooth_router(self) -> None:
+        """Stop the routing monitor and reap its `pactl subscribe` child."""
+        router = getattr(self, "bt_router", None)
+        if not router:
+            return
+        try:
+            router.stop()
+        except Exception:
+            pass
+        self.bt_router = None
 
     def _setup_fft_bins(self, sr: int):
         freqs = np.fft.rfftfreq(1024, 1.0 / sr)
@@ -2662,6 +2789,78 @@ def _pid_alive(pid: int) -> bool:
         return True
     except (OSError, ValueError, TypeError):
         return False
+
+def _kill_player_processes() -> List[int]:
+    """SIGKILL every MP Audio Player owned by this user, and return the PIDs.
+
+    The `K` shortcut used to run `pkill -9 -f "MP_Audio_Player"`, which is a
+    substring match over every process command line: it killed a text editor
+    that had the file open, another account's player, and any shell whose
+    arguments mentioned the name. This walks /proc (or falls back to `ps`) and
+    requires the executable basename to be a player script.
+    """
+    import signal
+
+    me = os.getpid()
+    targets: List[int] = []
+
+    def _matches(argv: List[str]) -> bool:
+        if not argv:
+            return False
+        # A real player invocation ends in MP_Audio_Player.py (or a player
+        # derived name). A wrapper or editor mentions the path but its argv[0]
+        # is bash/vim/etc.
+        first = os.path.basename(argv[0])
+        if first not in ("python", "python3", "python3.10", "python3.11",
+                         "python3.12", "python3.13", "python3.14", "pypy3"):
+            return False
+        return any(os.path.basename(a).startswith("MP_Audio_Player") for a in argv[1:])
+
+    proc = Path("/proc")
+    if proc.is_dir():
+        for entry in proc.iterdir():
+            if not entry.name.isdigit():
+                continue
+            pid = int(entry.name)
+            if pid == me:
+                continue
+            try:
+                raw = (entry / "cmdline").read_bytes()
+            except OSError:
+                continue
+            argv = [a.decode("utf-8", "ignore") for a in raw.split(b"\x00") if a]
+            if _matches(argv):
+                targets.append(pid)
+    else:
+        # macOS and FreeBSD have no /proc.
+        try:
+            out = subprocess.run(
+                ["ps", "-u", str(os.getuid()), "-o", "pid=,command="],
+                capture_output=True, text=True, timeout=5,
+            ).stdout
+        except (OSError, subprocess.SubprocessError):
+            out = ""
+        for line in out.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            pid_text, _, command = line.partition(" ")
+            if not pid_text.isdigit():
+                continue
+            if _matches(command.split()):
+                targets.append(int(pid_text))
+
+    killed: List[int] = []
+    for pid in targets:
+        if pid == me:
+            continue
+        try:
+            os.kill(pid, signal.SIGKILL)
+            killed.append(pid)
+        except OSError:
+            continue
+    return killed
+
 
 def _audio_player_daemon_pids() -> List[int]:
     me = os.getpid()
@@ -5246,6 +5445,9 @@ class TerminalPlayerUI:
                 if isinstance(ld := json.loads(DURATION_CACHE_FILE.read_text(encoding="utf-8")), dict): self._duration_cache.update(ld)
             except Exception: pass
         self._duration_in_queue, self._duration_worker_started = set(self._duration_cache.keys()), False
+        # Seed the first frame from the saved resume state so the now-playing row
+        # shows the real track straight away instead of "Loading..." until the
+        # playback engine writes its first status file.
         self.cached_status = {
             "title": "Loading...", "path": "", "state": "stopped", "position_fmt": "00:00", "duration_fmt": "00:00",
             "progress_pct": 0.0, "volume": 85, "muted": False, "shuffle": False, "repeat": "all", "mode": self.mode,
@@ -5253,6 +5455,8 @@ class TerminalPlayerUI:
             "levels": [0.0]*24, "peaks": [0.0]*24, "levels_left": [0.0]*24, "levels_right": [0.0]*24,
             "peaks_left": [0.0]*24, "peaks_right": [0.0]*24, "waveform": [0.0]*80, "rms_level": 0.0, "peak_db": -60.0
         }
+        if self.is_remote:
+            self._seed_status_from_resume_state()
         try:
             script_reward_path = Path(__file__).resolve().parent / "scripts"
             if str(script_reward_path) not in sys.path:
@@ -5265,6 +5469,37 @@ class TerminalPlayerUI:
                 self.notification_time = time.time() + 6.0
         except Exception:
             pass
+
+    def _seed_status_from_resume_state(self):
+        """Fill the first frame from the resume file, when it is usable.
+
+        The status file is written by the playback engine, which may still be
+        starting. Reading the resume state here keeps the now-playing row from
+        showing "Loading..." in between.
+        """
+        try:
+            if not RESUME_STATE_FILE.is_file():
+                return
+            saved = json.loads(RESUME_STATE_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            return
+        if not isinstance(saved, dict):
+            return
+        path = str(saved.get("path") or "")
+        if not path:
+            return
+        title = str(saved.get("title") or os.path.basename(path))
+        duration_sec = float(saved.get("duration_sec", 0.0) or 0.0)
+        position_sec = float(saved.get("position_sec", 0.0) or 0.0)
+        self.cached_status.update(
+            title=title, path=path, duration_sec=duration_sec, duration_fmt=format_seconds(duration_sec),
+            position_fmt=format_seconds(position_sec),
+            progress_pct=round(position_sec / duration_sec * 100.0, 1) if duration_sec > 0 else 0.0,
+        )
+        for index, mix in enumerate(getattr(self.scanner, "mixes", []) or []):
+            if str(mix.get("path")) == path:
+                self.selected_row = index
+                break
 
     def _save_duration_cache(self):
         try:
@@ -6773,7 +7008,11 @@ class TerminalPlayerUI:
         if data == b"K":
             self._cleanup_terminal()
             try:
-                subprocess.run('pkill -9 -f "MP_Audio_Player"', shell=True)
+                # Kill only player processes owned by this user, matched on argv rather
+                # than a substring of a shell command line. `pkill -f` also hit
+                # editors with the file open, other users' players, and any
+                # wrapper whose command string mentioned the name.
+                _kill_player_processes()
             except Exception:
                 pass
             self.running = False
@@ -7877,18 +8116,9 @@ def main():
         _tty_rt = _load_tty_runtime()
         if _tty_rt is not None:
             _tty_rt.configure_stdio()
-        # Paint before the library scan. A Mix Archive walk or a slow status
-        # reply used to leave the new Konsole on an empty gray profile.
-        if sys.stdout.isatty():
-            try:
-                sys.stdout.write(
-                    "\033[?1049h\033[?25l\033[H\033[2J"
-                    "\033[1;38;2;0;229;255m  MP Audio Player\033[0m\n"
-                    "  Loading library...\033[K\n"
-                )
-                sys.stdout.flush()
-            except Exception:
-                pass
+        # No "Loading library..." splash. The playlist comes from the fast
+        # sidecar cache before the first frame, so the first thing painted is the
+        # real player screen, the same instant-on feel a native player has.
         d_status = send_ipc_command("status") if daemon_running else None
         if daemon_running and not d_status:
             daemon_running = False
@@ -7903,6 +8133,7 @@ def main():
         mixes = scanner.get_mixes()
         requested = (args.play or args.file or "") if args.play is not None else (args.file or "")
         tf = (_existing_audio_path(requested) or None) if requested else None
+        spawned_pid = None
 
         if not daemon_running:
             resume_f, resume_pos = None, 0.0
@@ -7946,10 +8177,13 @@ def main():
                 init_pos = resume_pos
             else:
                 init_pos = 0.0
-            spawned_pid = _spawn_player_daemon(init_f, auto_bluetooth=auto_bt, mode=current_mode, music_folder=folder_target, playlist_path=args.playlist, seek_to=init_pos)
-            for _ in range(75):
-                time.sleep(0.04)
-                if (SOCKET_PATH.exists() or PORT_FILE.exists()) and is_player_daemon_running(): break
+            # Spawn the playback engine now, but do not wait for its socket. The
+            # wait loop used to hold the window back for a second or more; the
+            # playlist on screen does not need playback to be ready, and the
+            # status file fills in as soon as the engine is up.
+            spawned_pid = _spawn_player_daemon(init_f, auto_bluetooth=auto_bt, mode=current_mode,
+                                               music_folder=folder_target, playlist_path=args.playlist,
+                                               seek_to=init_pos)
         else:
             spawned_pid = None
             d_data = d_status.get("data", {}) if d_status else {}

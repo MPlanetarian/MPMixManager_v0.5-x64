@@ -43,7 +43,12 @@ WHITE = "\033[1;37m"
 RED, GREEN, YELLOW = COLOR_TRAFFIC_RED, COLOR_TRAFFIC_GREEN, COLOR_TRAFFIC_AMBER
 MAGENTA, CYAN = COLOR_HOT_PURPLE, COLOR_LILAC
 
-AUDIO_EXTENSIONS = ('.flac', '.wav', '.mp3', '.ogg', '.m4a', '.aac', '.aiff', '.wma')
+# Shared registry. A local eight-extension tuple meant a track the player could
+# open (an .opus, an .aiff, a .dsf) was invisible to the Music library.
+try:
+    from audio_formats import AUDIO_EXTENSIONS
+except ImportError:  # imported as scripts.music_folders_manager
+    from scripts.audio_formats import AUDIO_EXTENSIONS
 SKIP_DIR_NAMES = {
     "$recycle.bin", "system volume information", "@eadir", "#recycle", 
     "#snapshot", ".trashes", ".spotlight-v100", ".fseventsd", "logic pro library.bundle"

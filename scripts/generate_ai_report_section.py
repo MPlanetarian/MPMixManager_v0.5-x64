@@ -59,8 +59,8 @@ def _early_daily_done() -> bool:
         return False
     try:
         today = datetime.now().strftime("%Y-%m-%d")
-        for cand in (Path("/var/home/mplanetarian/MP_REPORTER/tasks/ai_brain_reporter_state.json"),
-                     Path("/var/home/mplanetarian/Documents/BASH_SCRIPTS/ai_brain_reporter_state.json")):
+        for cand in (MP_REPORTER_DIR / "tasks" / "ai_brain_reporter_state.json",
+                     FALLBACK_STATE_FILE):
             if not cand.is_file():
                 continue
             with open(cand, "r", encoding="utf-8") as fp:
@@ -94,11 +94,17 @@ from reportlab.platypus import (
 )
 from reportlab.pdfgen import canvas
 
-# State & Persistence Paths
-MP_REPORTER_DIR = Path("/var/home/mplanetarian/MP_REPORTER")
+# State & Persistence Paths. Every path used to be pinned to one machine; on
+# any other install the reporter silently found "0 sessions". MP_REPORTER_DIR
+# overrides, else the conventional location under the user's home.
+_HOME = Path.home()
+MP_REPORTER_DIR = Path(os.environ.get("MP_REPORTER_DIR", "") or (_HOME / "MP_REPORTER"))
 TASKS_DIR = MP_REPORTER_DIR / "tasks"
 STATE_FILE = TASKS_DIR / "ai_brain_reporter_state.json"
-FALLBACK_STATE_FILE = Path("/var/home/mplanetarian/Documents/BASH_SCRIPTS/ai_brain_reporter_state.json")
+FALLBACK_STATE_FILE = Path(
+    os.environ.get("MP_BRAIN_STATE_FILE", "")
+    or (_HOME / "Documents/BASH_SCRIPTS/ai_brain_reporter_state.json")
+)
 PDF_DIR = MP_REPORTER_DIR / "PDF_REPORTS" / "DAILY_REPORTS"
 
 def load_state() -> Dict[str, Any]:
@@ -207,8 +213,8 @@ def harvest_gemini_brain(since_timestamp: Optional[float] = None,
         processed_map = {}
     sessions = []
     gemini_dirs = [
-        Path("/home/mplanetarian/.gemini/antigravity-cli/brain"),
-        Path("/home/mplanetarian/.gemini/antigravity/brain")
+        _HOME / ".gemini/antigravity-cli/brain",
+        _HOME / ".gemini/antigravity/brain"
     ]
 
     for g_dir in gemini_dirs:
@@ -323,7 +329,7 @@ def harvest_grok_brain(since_timestamp: Optional[float] = None,
     if processed_map is None:
         processed_map = {}
     sessions = []
-    grok_base = Path("/home/mplanetarian/.grok/sessions")
+    grok_base = Path(os.environ.get("GROK_SESSIONS_DIR", "") or (_HOME / ".grok/sessions"))
     if not grok_base.exists():
         return sessions
 
@@ -445,7 +451,7 @@ def harvest_harmony_agent(since_timestamp: Optional[float] = None,
     if processed_map is None:
         processed_map = {}
     responses = []
-    audio_dir = Path("/var/home/mplanetarian/OpenAI/MP_Harmony_Agent/audio_responses")
+    audio_dir = Path(os.environ.get("HARMONY_AUDIO_DIR", "") or (_HOME / "OpenAI/MP_Harmony_Agent/audio_responses"))
     if not audio_dir.exists():
         return responses
 
@@ -497,7 +503,7 @@ def harvest_open_webui(since_timestamp: Optional[float] = None,
     if processed_map is None:
         processed_map = {}
     chats = []
-    db_path = Path("/home/mplanetarian/pinokio/api/open-webui/app/data/webui.db")
+    db_path = Path(os.environ.get("OPEN_WEBUI_DB", "") or (_HOME / "pinokio/api/open-webui/app/data/webui.db"))
     if not db_path.exists():
         return chats
 
@@ -529,7 +535,7 @@ def harvest_open_webui(since_timestamp: Optional[float] = None,
 def harvest_deepseek_harness(since_timestamp: Optional[float] = None) -> List[Dict[str, Any]]:
     """Harvest DeepSeek Harness active sessions."""
     sessions = []
-    dsh_base = Path("/home/mplanetarian/.dsh/sessions")
+    dsh_base = Path(os.environ.get("DSH_SESSIONS_DIR", "") or (_HOME / ".dsh/sessions"))
     if not dsh_base.exists():
         return sessions
 

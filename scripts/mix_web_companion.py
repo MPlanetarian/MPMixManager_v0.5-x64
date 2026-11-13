@@ -8,6 +8,8 @@ Automatically synchronizes with the active theme currently running in Manager.
 """
 
 import argparse
+import hashlib
+import hmac
 import html
 import http.server
 import json
@@ -27,6 +29,11 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+
+try:
+    import mp_companion_security as sec
+except ImportError:  # when imported as scripts.mix_web_companion
+    from scripts import mp_companion_security as sec
 
 PORT = 8888
 
@@ -794,6 +801,16 @@ PLAYLIST_DIR = CONFIG_DIR / "playlists"
 MUSIC_FOLDERS_FILE = CONFIG_DIR / "music_folders.json"
 WEB_MODE_FILE = CONFIG_DIR / "web_companion_mode"
 
+# Authentication and containment. The token is created on first run and lives
+# mode 0600 beside the other companion state; `--rotate-token` replaces it.
+COMPANION_TOKEN = ""
+COMPANION_CIDRS: List[Any] = []
+COMPANION_REQUIRE_AUTH = True
+# Requests that change state must carry this header. A cross-origin form
+# cannot set a custom header without a preflight, and the bearer token makes
+# that preflight fail, so this is the second half of the CSRF defence.
+CSRF_HEADER = sec.REQUIRED_HEADER
+
 # The MP Audio Player daemon that is actually making sound on this machine.
 # The companion never starts one and never opens an audio device; it only
 # *reads* what that player is doing (and forwards remote-control taps to it when
@@ -822,7 +839,12 @@ _autoplay_result: Dict[str, Any] = {"status": "pending", "detail": ""}
 # The resolved stream queue is expensive to build for a large music library, so
 # it is cached per mode for a few seconds while the dashboard polls.
 QUEUE_CACHE_TTL = 10.0
-_queue_cache: Optional[Tuple[str, float, Tuple[str, ...]]] = None
+# {"mode": str, "built_at": float, "files": tuple[str, ...]}
+#
+# A dict rather than a tuple: callers and tests need to read and reset the
+# fields by name, and a positional tuple silently changed meaning the last time
+# a field was added.
+_queue_cache: Optional[Dict[str, Any]] = None
 _queue_source_state: Dict[str, Any] = {"fallback": False, "detail": ""}
 # Resolving the queue can take seconds (a 51k-entry music playlist), and the
 # dashboard polls hard. Only one thread may scan; the rest wait and then read
@@ -891,6 +913,43 @@ _SPEECH_CACHE_MAX = 8
 
 def harmony_agent_url() -> str:
     return f"http://{HARMONY_AGENT_HOST}:{_harmony_agent_port()}"
+
+
+# Conversation limits for the proxied agent. The web dashboard is a public
+# surface on the LAN, so the payload is bounded and the roles are restricted:
+# a client-supplied `system` message would otherwise replace the agent's
+# instructions, and the agent holds shell tools.
+AGENT_MAX_MESSAGES = 24
+AGENT_MAX_CONTENT_CHARS = 16384
+AGENT_ALLOWED_ROLES = ("user", "assistant")
+
+
+def sanitize_agent_messages(messages: Any) -> List[Dict[str, str]]:
+    """Keep only well-formed user/assistant turns, bounded in size and count.
+
+    Anything else - a `system` role, a nested object, a 10 MB string - is
+    dropped rather than forwarded, so a malicious client cannot use the
+    conversation body to steer the agent or to burn memory. The *last* user
+    message always survives when it is the only one, because that is what the
+    `/voice` command parser and the model both need.
+    """
+    if not isinstance(messages, list):
+        return []
+    cleaned: List[Dict[str, str]] = []
+    for message in messages[-AGENT_MAX_MESSAGES:]:
+        if not isinstance(message, dict):
+            continue
+        role = str(message.get("role") or "").strip().lower()
+        if role not in AGENT_ALLOWED_ROLES:
+            continue
+        content = message.get("content")
+        if not isinstance(content, str):
+            continue
+        content = content.strip()
+        if not content:
+            continue
+        cleaned.append({"role": role, "content": content[:AGENT_MAX_CONTENT_CHARS]})
+    return cleaned
 
 
 def _harmony_agent_port() -> int:
@@ -1990,15 +2049,15 @@ def build_stream_queue() -> List[str]:
     mode = get_library_mode()
     now = time.time()
     cached = _queue_cache
-    if cached and cached[0] == mode and (now - cached[1]) < QUEUE_CACHE_TTL:
-        return list(cached[2])
+    if cached and cached.get("mode") == mode and (now - cached.get("built_at", 0.0)) < QUEUE_CACHE_TTL:
+        return list(cached.get("files") or ())
 
     with _queue_build_lock:
         # Another request may have finished the scan while this one waited.
         now = time.time()
         cached = _queue_cache
-        if cached and cached[0] == mode and (now - cached[1]) < QUEUE_CACHE_TTL:
-            return list(cached[2])
+        if cached and cached.get("mode") == mode and (now - cached.get("built_at", 0.0)) < QUEUE_CACHE_TTL:
+            return list(cached.get("files") or ())
 
         if mode == LIBRARY_MODE_MUSIC:
             files = scan_music_files()
@@ -2050,14 +2109,27 @@ def build_stream_queue() -> List[str]:
             files = list(files)
             random.shuffle(files)
 
-        _queue_cache = (mode, now, tuple(files))
+        _queue_cache = {"mode": mode, "built_at": now, "files": tuple(files)}
         return list(files)
 
 
 def invalidate_queue_cache() -> None:
     global _queue_cache, _music_scan_cache
-    _queue_cache = None
+    # Reset in place so a caller holding the dict (or a test that reads it by
+    # key) keeps a valid object rather than a dangling None.
+    if not isinstance(_queue_cache, dict):
+        _queue_cache = {}
+    _queue_cache["mode"] = ""
+    _queue_cache["built_at"] = 0.0
+    _queue_cache["files"] = ()
     _music_scan_cache = None
+
+
+# Older name for the same operation, still used by callers and by the control
+# API's "rescan" action. Kept as a real alias rather than deleted so an
+# out-of-tree caller does not crash on an AttributeError.
+def invalidate_stream_queue() -> None:
+    invalidate_queue_cache()
 
 
 # The dashboard polls /api/status, /api/playlist and /api/eq continuously, and
@@ -2106,10 +2178,10 @@ def build_stream_queue_cached() -> List[str]:
     """
     mode = get_library_mode()
     cached = _queue_cache
-    if cached and cached[0] == mode:
-        if (time.time() - cached[1]) >= QUEUE_CACHE_TTL:
+    if cached and cached.get("mode") == mode:
+        if (time.time() - cached.get("built_at", 0.0)) >= QUEUE_CACHE_TTL:
             _refresh_queue_in_background()
-        return list(cached[2])
+        return list(cached.get("files") or ())
     return build_stream_queue()
 
 
@@ -4758,11 +4830,11 @@ def render_html_page(theme: Dict[str, Any]) -> str:
 
         <!-- Primary Controls -->
         <div class="controls-row">
-            <button class="btn-sub" onclick="sendAction('seek_backward')">⏪ 30s</button>
+            <button class="btn-sub" onclick="skipBy(-30)">⏪ 30s</button>
             <button onclick="sendAction('previous')">⏮</button>
             <button class="btn-main" id="btnPlayPause" onclick="handlePlayPauseClick()">⏯ Play</button>
             <button onclick="sendAction('next')">⏭</button>
-            <button class="btn-sub" onclick="sendAction('seek_forward')">30s ⏩</button>
+            <button class="btn-sub" onclick="skipBy(30)">30s ⏩</button>
         </div>
 
         <!-- Mode Controls -->
@@ -5433,7 +5505,65 @@ def render_html_page(theme: Dict[str, Any]) -> str:
         // Seek the phone's element only once per request and clear the guard
         // when the element reports it actually moved. Without this the 100 ms
         // poll can re-issue the same seek while the previous one is settling.
-        function seekAudioTo(pos, fromResume) {{
+        // A seek requested before the stream has a timeline (metadata not yet
+        // loaded) is parked here and applied once the duration is known.
+        // Stacking matters: two taps of +30 s before load must land at +60 s,
+        // not each start again from a currentTime of 0.
+        let pendingSeek = null;
+
+        document.addEventListener('DOMContentLoaded', function () {{
+            const audioEl = document.getElementById('mobileAudioStream');
+            if (audioEl) {{
+                audioEl.addEventListener('loadedmetadata', applyPendingSeek);
+            }}
+        }});
+
+        function applyPendingSeek() {{
+            if (pendingSeek === null) return;
+            const audioEl = document.getElementById('mobileAudioStream');
+            if (!audioEl) return;
+            const dur = Number(audioEl.duration);
+            if (!isFinite(dur) || dur <= 0) return;
+            let target = pendingSeek;
+            pendingSeek = null;
+            if (target < 0) target = 0;
+            if (target > dur) target = dur - 0.25;
+            seekAudioTo(target);
+        }}
+
+        function seekAudioTo(pos) {{
+            seekAudioToWithResume(pos, false);
+        }}
+
+        function skipBy(delta) {{
+            const audioEl = document.getElementById('mobileAudioStream');
+            if (!audioEl) return;
+            const dur = Number(audioEl.duration);
+            const configured = isFinite(dur) && dur > 0;
+            let target;
+            if (!configured) {{
+                // No timeline yet: stack on the parked offset, and tell the
+                // server so its bookkeeping clock stays in step.
+                let base;
+                if (pendingSeek === null) {{
+                    base = Number(audioEl.currentTime || 0);
+                }} else if (pendingSeek !== null) {{
+                    base = pendingSeek;
+                }}
+                pendingSeek = Math.max(0, base + delta);
+                sendAction(delta > 0 ? 'seek_forward' : 'seek_backward');
+                return;
+            }}
+            target = Number(audioEl.currentTime || 0) + delta;
+            if (target < 0) target = 0;
+            if (dur > 0 && target > dur) target = dur - 0.25;
+            seekAudioTo(target);
+        }}
+
+        // Two-argument form kept internal; the single documented entry point
+        // is seekAudioTo(pos). Resume callers pass `true` through the helper
+        // below so a stale server position can never silence the player.
+        function seekAudioToWithResume(pos, fromResume) {{
             const audioEl = document.getElementById('mobileAudioStream');
             if (!audioEl || !isFinite(pos) || pos < 0) return;
             // A resume that lands on the last frames ends the media the moment
@@ -5826,7 +5956,7 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             if (isFinite(startAt) && startAt > 0) {{
                 audioEl.addEventListener('loadedmetadata', function once() {{
                     audioEl.removeEventListener('loadedmetadata', once);
-                    seekAudioTo(startAt, true);
+                    seekAudioToWithResume(startAt, true);
                 }});
             }}
             audioEl.play().then(() => {{
@@ -5966,7 +6096,7 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             if (resumeAt > 0) {{
                 audioEl.addEventListener('loadedmetadata', function once() {{
                     audioEl.removeEventListener('loadedmetadata', once);
-                    seekAudioTo(resumeAt, true);
+                    seekAudioToWithResume(resumeAt, true);
                 }});
             }}
             audioEl.load();
@@ -6391,7 +6521,7 @@ def render_html_page(theme: Dict[str, Any]) -> str:
                             // assignment is discarded by the new source load.
                             audioEl.addEventListener('loadedmetadata', function once() {{
                                 audioEl.removeEventListener('loadedmetadata', once);
-                                seekAudioTo(resumeAt, true);
+                                seekAudioToWithResume(resumeAt, true);
                             }});
                         }}
                         audioEl.load();
@@ -6665,6 +6795,86 @@ class CompanionHandler(http.server.BaseHTTPRequestHandler):
     # closed connection, which is the correct outcome.
     timeout = 30
 
+    # HTTP/1.1 so the dashboard's several polls per second reuse one connection
+    # instead of opening a fresh socket each time and filling TIME_WAIT.
+    protocol_version = "HTTP/1.1"
+
+    # Security headers collected during a request, appended by end_headers so
+    # every response path gets them without touching each handler.
+    _extra_headers: List[Tuple[str, str]] = []
+
+    def send_response(self, code, message=None):
+        self._extra_headers = sec.security_headers()
+        super().send_response(code, message)
+
+    def end_headers(self):
+        try:
+            for name, value in self._extra_headers:
+                self.send_header(name, value)
+        finally:
+            self._extra_headers = []
+        super().end_headers()
+
+    # ------------------------------------------------------------------
+    # ACCESS CONTROL
+    # ------------------------------------------------------------------
+    def _client_allowed(self) -> bool:
+        """Refuse a peer outside WEB_COMPANION_ALLOW_CIDR (empty = allow all)."""
+        if sec.is_allowed_client(self.client_address, COMPANION_CIDRS):
+            return True
+        self._send_plain(403, "This device is not on the companion allowlist.")
+        return False
+
+    def _authorized(self, path: str, query: dict) -> bool:
+        if not COMPANION_REQUIRE_AUTH:
+            return True
+        if sec.is_authorized(self.headers, COMPANION_TOKEN, path, query):
+            return True
+        presented = sec.extract_presented_token(self.headers, query)
+        if COMPANION_TOKEN and presented and hmac.compare_digest(
+            presented, COMPANION_TOKEN
+        ):
+            # A bookmarked `?token=` link is promoted to a cookie so the phone
+            # keeps working after the URL is cleaned from the address bar.
+            self._extra_headers = sec.security_headers()
+            self._extra_headers.extend(
+                sec.auth_challenge_headers(COMPANION_TOKEN, path)
+            )
+        body = json.dumps({
+            "error": "unauthorized",
+            "detail": "This companion requires an access token. Open the URL "
+                      "printed by the service, or set MP_COMPANION_TOKEN.",
+        }).encode("utf-8")
+        self.send_response(401)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("WWW-Authenticate", 'Bearer realm="MP Mix Manager"')
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        try:
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            self.close_connection = True
+        return False
+
+    def _send_plain(self, code: int, message: str) -> None:
+        body = json.dumps({"error": message}).encode("utf-8")
+        try:
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            self.close_connection = True
+
+    def _require_mutation(self) -> bool:
+        """CSRF gate for a state-changing POST."""
+        problem = sec.validate_mutation(self.headers)
+        if not problem:
+            return True
+        self._send_plain(403, f"Request refused: {problem}.")
+        return False
+
     def do_HEAD(self):
         url = urllib.parse.urlparse(self.path)
         if url.path in ("/", "/index.html"):
@@ -6680,7 +6890,6 @@ class CompanionHandler(http.server.BaseHTTPRequestHandler):
                           "/api/assistant/abort"):
             self.send_response(200)
             self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
         else:
             self.send_response(404)
@@ -6689,6 +6898,11 @@ class CompanionHandler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         url = urllib.parse.urlparse(self.path)
         parsed_query = urllib.parse.parse_qs(url.query)
+
+        if not self._client_allowed():
+            return
+        if not self._authorized(url.path, parsed_query):
+            return
 
         if url.path in ("/", "/index.html"):
             current_theme = get_theme_palette(CLI_THEME)
@@ -6702,7 +6916,6 @@ class CompanionHandler(http.server.BaseHTTPRequestHandler):
             eq_data = get_eq_status()
             self.send_response(200)
             self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(eq_data).encode("utf-8"))
         elif url.path == "/api/status":
@@ -6715,20 +6928,17 @@ class CompanionHandler(http.server.BaseHTTPRequestHandler):
                 status["announcement_at"] = announcement["at"]
             self.send_response(200)
             self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(status).encode("utf-8"))
         elif url.path == "/api/autoplay":
             self.send_response(200)
             self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(autoplay_state()).encode("utf-8"))
         elif url.path == "/api/theme":
             theme = get_theme_palette(CLI_THEME)
             self.send_response(200)
             self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(theme).encode("utf-8"))
         elif url.path == "/api/themes":
@@ -6738,7 +6948,6 @@ class CompanionHandler(http.server.BaseHTTPRequestHandler):
             }
             self.send_response(200)
             self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(payload).encode("utf-8"))
         elif url.path == "/api/set_theme":
@@ -6753,7 +6962,6 @@ class CompanionHandler(http.server.BaseHTTPRequestHandler):
             self.send_response(200 if success else 400)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Cache-Control", "no-store")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(payload).encode("utf-8"))
         elif url.path == "/api/mode":
@@ -6770,7 +6978,6 @@ class CompanionHandler(http.server.BaseHTTPRequestHandler):
             self.send_response(200 if chosen else 400)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Cache-Control", "no-store")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(payload).encode("utf-8"))
         elif url.path == "/api/playlist":
@@ -6779,7 +6986,6 @@ class CompanionHandler(http.server.BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Cache-Control", "no-store")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(payload).encode("utf-8"))
         elif url.path == "/api/play-random":
@@ -6788,7 +6994,6 @@ class CompanionHandler(http.server.BaseHTTPRequestHandler):
             self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Cache-Control", "no-store")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(payload).encode("utf-8"))
         elif url.path == "/api/launchpad":
@@ -6796,7 +7001,6 @@ class CompanionHandler(http.server.BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Cache-Control", "no-store")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(payload).encode("utf-8"))
         elif url.path == "/api/announce":
@@ -6806,7 +7010,6 @@ class CompanionHandler(http.server.BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Cache-Control", "no-store")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(
                 {"announcement": current_announcement()}
@@ -6816,7 +7019,6 @@ class CompanionHandler(http.server.BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Cache-Control", "no-store")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(payload).encode("utf-8"))
         elif url.path == "/api/assistant/voices":
@@ -6831,7 +7033,6 @@ class CompanionHandler(http.server.BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Cache-Control", "no-store")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(payload).encode("utf-8"))
         elif url.path == "/api/assistant/speech":
@@ -6850,15 +7051,28 @@ class CompanionHandler(http.server.BaseHTTPRequestHandler):
             self.send_response(200 if payload.get("success") else 501)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Cache-Control", "no-store")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(payload).encode("utf-8"))
+        elif url.path == "/healthz":
+            payload = {"ok": True, "service": "mp-web-companion", "version": VERSION}
+            body = json.dumps(payload).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
         elif url.path == "/api/stream":
-            file_path = parsed_query.get("file", [""])[0]
-            if file_path and os.path.isfile(file_path):
-                self._serve_audio_stream(file_path)
+            # Containment: the value arrives from the network, so resolve it,
+            # require it to live inside a configured library root, and require
+            # an audio suffix. Missing and forbidden answer identically so the
+            # status code cannot be used to probe the filesystem.
+            requested = parsed_query.get("file", [""])[0]
+            safe_path = sec.safe_stream_path(requested, _archive_dirs())
+            if safe_path is not None:
+                self._serve_audio_stream(str(safe_path))
                 return
             self.send_response(404)
+            self.send_header("Content-Length", "0")
             self.end_headers()
         else:
             self.send_response(404)
@@ -6887,7 +7101,6 @@ class CompanionHandler(http.server.BaseHTTPRequestHandler):
                 self.send_response(404)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
                 self.send_header("Cache-Control", "no-store")
-                self.send_header("Access-Control-Allow-Origin", "*")
                 self.end_headers()
                 try:
                     self.wfile.write(json.dumps({
@@ -6921,7 +7134,6 @@ class CompanionHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("Content-Type", content_type)
             self.send_header("Accept-Ranges", "bytes")
             self.send_header("Cache-Control", "no-store")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
 
             with open(file_path, "rb") as f:
@@ -6975,7 +7187,13 @@ class CompanionHandler(http.server.BaseHTTPRequestHandler):
 
         if start >= file_size:
             return None, 0
-        return start, min(end, file_size - 1)
+        end = min(end, file_size - 1)
+        # RFC 7233: a range whose last byte precedes its first is unsatisfiable.
+        # Without this, `bytes=100-50` produced `Content-Length: -49`, which is
+        # an invalid header: the phone read nothing and the player errored.
+        if end < start:
+            return None, 0
+        return start, end
 
     def _read_json_body(self, limit: int = 65536) -> Dict[str, Any]:
         try:
@@ -7005,7 +7223,6 @@ class CompanionHandler(http.server.BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
-        self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         try:
@@ -7032,12 +7249,19 @@ class CompanionHandler(http.server.BaseHTTPRequestHandler):
         self.send_header("Content-Type", "audio/wav")
         self.send_header("Content-Length", str(len(audio)))
         self.send_header("Cache-Control", "no-store")
-        self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
         try:
             self.wfile.write(audio)
         except (BrokenPipeError, ConnectionResetError):
             self.close_connection = True
+
+    # A hung agent used to pin a companion worker for half an hour. The phone
+    # gives up long before that, so the relay is bounded and emits a heartbeat
+    # the dashboard can use to tell "thinking" from "connection died".
+    ASSISTANT_TIMEOUT = 180.0
+    ASSISTANT_HEARTBEAT = 10.0
+    ASSISTANT_MAX_MESSAGES = 24
+    ASSISTANT_MAX_CONTENT = 16384
 
     def _stream_assistant_sse(self, payload: Dict[str, Any]) -> None:
         """Relay the agent's token stream as SSE to the dashboard.
@@ -7046,12 +7270,18 @@ class CompanionHandler(http.server.BaseHTTPRequestHandler):
         verbatim, so the page can render tokens as they arrive and the whole
         reply is concatenated at the end for speech.
         """
-        session_id = "web-companion"
+        # A per-browser session id keeps two phones from overwriting each
+        # other's conversation. It is derived from the token the client
+        # already presents, so no extra state is needed; the header is
+        # preferred because the agent keys on X-Session-Id.
+        session_id = (
+            (self.headers.get("X-MP-Session") or "").strip()
+            or "web-companion"
+        )[:64]
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
         self.send_header("Cache-Control", "no-cache")
         self.send_header("Connection", "close")
-        self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
 
         def emit(obj: Any) -> bool:
@@ -7084,7 +7314,11 @@ class CompanionHandler(http.server.BaseHTTPRequestHandler):
 
         body = {
             "model": payload.get("model") or "mp-harmony-agent",
-            "messages": payload.get("messages") or [],
+            # Sanitise the client-supplied conversation. A client that injects
+            # a `system` role can rewrite the agent's instructions, which is a
+            # prompt-injection route into its shell tools; oversized bodies are
+            # a cheap way to exhaust the worker pool.
+            "messages": sanitize_agent_messages(payload.get("messages")),
             "stream": True,
         }
         request = urllib.request.Request(
@@ -7094,7 +7328,9 @@ class CompanionHandler(http.server.BaseHTTPRequestHandler):
             method="POST",
         )
         try:
-            response = urllib.request.urlopen(request, timeout=1800.0)
+            response = urllib.request.urlopen(
+                request, timeout=self.ASSISTANT_TIMEOUT
+            )
         except (urllib.error.URLError, OSError) as exc:
             emit({"object": "mp.assistant.error",
                   "message": f"The MP Harmony Agent is not reachable: {exc}"})
@@ -7133,6 +7369,15 @@ class CompanionHandler(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self):
         url = urllib.parse.urlparse(self.path)
+        parsed_query = urllib.parse.parse_qs(url.query)
+
+        if not self._client_allowed():
+            return
+        if not self._authorized(url.path, parsed_query):
+            return
+        if not self._require_mutation():
+            return
+
         if url.path == "/api/assistant/chat":
             payload = self._read_json_body()
             messages = payload.get("messages") or []
@@ -7196,7 +7441,6 @@ class CompanionHandler(http.server.BaseHTTPRequestHandler):
             success = control_player(action, params)
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps({"success": success, "action": action}).encode("utf-8"))
         elif url.path == "/api/announce":
@@ -7217,7 +7461,6 @@ class CompanionHandler(http.server.BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Cache-Control", "no-store")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(
                 {"success": queued is not None, "announcement": queued}
@@ -7234,7 +7477,6 @@ class CompanionHandler(http.server.BaseHTTPRequestHandler):
             self.send_response(status)
             self.send_header("Content-Type", "application/json")
             self.send_header("Cache-Control", "no-store")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(payload).encode("utf-8"))
         else:
@@ -7308,8 +7550,11 @@ class CompanionServer(http.server.ThreadingHTTPServer):
 
 
 def main():
-    global CLI_THEME
-    default_host = os.environ.get("WEB_COMPANION_HOST", "0.0.0.0")
+    global CLI_THEME, COMPANION_TOKEN, COMPANION_CIDRS, COMPANION_REQUIRE_AUTH
+    # Loopback by default: LAN exposure is an explicit opt-in, because the
+    # library and the playback controls are personal. `WEB_COMPANION_HOST=0.0.0.0`
+    # (or `--host 0.0.0.0`) restores the old behaviour.
+    default_host = sec.default_host()
     default_port = int(os.environ.get("WEB_COMPANION_PORT", str(PORT)))
 
     parser = argparse.ArgumentParser(description="MP Mix Manager Mobile Web Companion")
@@ -7318,7 +7563,24 @@ def main():
     parser.add_argument("--theme", "-t", type=str, default=None)
     parser.add_argument("--stream-status", action="store_true",
                         help="Print the resolved stream queue as JSON and exit")
+    parser.add_argument("--print-token", action="store_true",
+                        help="Print the companion access token and exit")
+    parser.add_argument("--rotate-token", action="store_true",
+                        help="Replace the access token, then start")
+    parser.add_argument("--no-auth", action="store_true",
+                        help="Disable token authentication (not recommended)")
+    parser.add_argument("--allow-cidr", type=str, default="",
+                        help="Comma-separated CIDRs allowed to connect")
     args = parser.parse_args()
+
+    COMPANION_TOKEN = sec.ensure_token(CONFIG_DIR, rotate=args.rotate_token)
+    COMPANION_REQUIRE_AUTH = not args.no_auth
+    cidr_config = args.allow_cidr or _config_value("WEB_COMPANION_ALLOW_CIDR", "")
+    COMPANION_CIDRS = sec.parse_cidr_list(cidr_config)
+
+    if args.print_token:
+        print(COMPANION_TOKEN)
+        return 0
 
     if args.stream_status:
         playlist = scan_playlist_files()
@@ -7331,10 +7593,24 @@ def main():
         }, indent=2))
         return 0
 
+    # `WEB_COMPANION_ENABLED=false` was documented but never read, so setting
+    # it did nothing. Honour it now, but only when the operator did not pass an
+    # explicit flag, so a command-line start always wins.
+    if not _env_flag("WEB_COMPANION_ENABLED", True):
+        print("MP Web Companion is disabled (WEB_COMPANION_ENABLED=false).")
+        return 0
+
     CLI_THEME = args.theme
     active_theme = get_theme_palette(CLI_THEME)
     lan_ip = get_local_ip()
     host_display = lan_ip if args.host in ("0.0.0.0", "", "::") else args.host
+
+    def _access_url(host: str) -> str:
+        """URL that carries the token once, so a phone can just tap it."""
+        base = f"http://{host}:{args.port}/"
+        if COMPANION_REQUIRE_AUTH and COMPANION_TOKEN:
+            return f"{base}?token={COMPANION_TOKEN}"
+        return base
 
     server_address = (args.host, args.port)
     try:
@@ -7344,8 +7620,8 @@ def main():
             print(f"\n======================================================================")
             print(f"  🌌 MP MIX ARCHIVE MANAGER — MOBILE WEB COMPANION (ACTIVE)")
             print(f"======================================================================")
-            print(f"  • Local Machine:  http://localhost:{args.port}")
-            print(f"  • Phone / Tablet: http://{host_display}:{args.port}")
+            print(f"  • Local Machine:  {_access_url('localhost')}")
+            print(f"  • Phone / Tablet: {_access_url(host_display)}")
             print(f"======================================================================\n")
             return 0
         raise
@@ -7359,10 +7635,21 @@ def main():
     print(f"======================================================================")
     print(f"  • Active Theme:   {active_theme['name']} ({active_theme['id']})")
     print(f"  • Library Mode:   {MODE_LABELS.get(get_library_mode(), 'Library')}")
-    print(f"  • Local Machine:  http://localhost:{args.port}")
-    print(f"  • Phone / Tablet: http://{host_display}:{args.port}")
+    print(f"  • Local Machine:  {_access_url('localhost')}")
+    print(f"  • Phone / Tablet: {_access_url(host_display)}")
     print(f"  • Audio Output:   STREAM ONLY (no local device)")
     print(f"  • Autoplay:       {'ON' if _env_flag('WEB_COMPANION_AUTOPLAY', True) else 'OFF'}")
+    if COMPANION_REQUIRE_AUTH:
+        print(f"  • Access Token:   {sec.redact(COMPANION_TOKEN)} "
+              f"(stored in {sec.token_path(CONFIG_DIR)})")
+    else:
+        print("  • Access Token:   DISABLED (--no-auth) — any device on the "
+              "network can control this workstation")
+    if COMPANION_CIDRS:
+        print(f"  • Allowed CIDRs:  {', '.join(str(n) for n in COMPANION_CIDRS)}")
+    if not sec.is_loopback_bind(args.host):
+        print("  ⚠  Listening on a network interface. The URL above contains a "
+              "secret; treat it like a password.")
     print(f"======================================================================\n")
 
     def _report_stream_queue() -> None:

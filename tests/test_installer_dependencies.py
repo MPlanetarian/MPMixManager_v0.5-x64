@@ -18,6 +18,7 @@ from __future__ import annotations
 import ast
 import json
 import re
+import os
 import subprocess
 import sys
 import tempfile
@@ -304,12 +305,21 @@ class TestInstallerWiring(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
 
 
+@unittest.skipUnless(
+    os.environ.get("MP_RUN_SLOW_INSTALLER_TESTS") == "1",
+    "slow: copies the whole tree and runs install.sh "
+    "(set MP_RUN_SLOW_INSTALLER_TESTS=1 to run)",
+)
 class TestInstallerRunsInATempHome(unittest.TestCase):
     """Run the real installer against a throwaway HOME and check the result.
 
     The installer is run once for the whole class: a full run creates the Python
-    environment and can take several minutes, and every assertion below inspects
-    the same end state.
+    environment and takes minutes, and every assertion below inspects the same
+    end state. It also `cp -a`s the entire 157 MB tree, which made a default
+    `unittest discover` take over twenty minutes with no progress output.
+
+    It is now opt-in via MP_RUN_SLOW_INSTALLER_TESTS=1 (the CI release job sets
+    it); the fast checks in this module still run everywhere.
     """
 
     home: Path

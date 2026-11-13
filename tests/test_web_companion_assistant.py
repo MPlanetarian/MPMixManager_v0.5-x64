@@ -185,9 +185,15 @@ class TestLocalVoiceCommand(AssistantTestBase):
 class _LiveServer:
     """Tiny stdlib HTTP server around CompanionHandler for endpoint tests."""
 
+    # The companion now refuses a mutating request that does not carry a
+    # custom header (CSRF defence), so every test POST sends one. Auth itself
+    # is disabled here and exercised by test_web_companion_security.
+    CSRF_HEADERS = {"X-MP-Companion": "1"}
+
     def __init__(self):
         import http.server
 
+        companion.COMPANION_REQUIRE_AUTH = False
         self.httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), companion.CompanionHandler)
         self.port = self.httpd.server_address[1]
         self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
@@ -202,10 +208,12 @@ class _LiveServer:
             return response.status, response.read()
 
     def post(self, path, payload, timeout=60):
+        headers = {"Content-Type": "application/json"}
+        headers.update(self.CSRF_HEADERS)
         request = urllib.request.Request(
             self.base + path,
             data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
+            headers=headers,
             method="POST",
         )
         try:
@@ -218,6 +226,7 @@ class _LiveServer:
     def close(self):
         self.httpd.shutdown()
         self.httpd.server_close()
+        companion.COMPANION_REQUIRE_AUTH = True
 
 
 class TestAssistantEndpoints(AssistantTestBase):

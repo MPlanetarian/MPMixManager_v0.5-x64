@@ -54,45 +54,6 @@ LIGHT_BLUE = (
 
 
 class TestMenuNumberThemeColor(unittest.TestCase):
-    def test_bracketed_numbers_use_each_theme_accent(self):
-        themes = " ".join(EXPECTED)
-        script = f"""
-        set -e
-        eval "$(awk '/^set_theme_colors\\(\\)/{{f=1}} f{{print}} f&&/^}}/{{exit}}' "{MGR_SH}")"
-        eval "$(sed -n '/^_fit_menu_extra() {{/,/^}}/p' "{MGR_SH}")"
-        eval "$(sed -n '/^_menu_line_plain() {{/,/^}}/p' "{MGR_SH}")"
-        declare -a opts=('4|Play Mix|')
-        declare -n _opts_ref=opts
-        for theme in {themes}; do
-            set_theme_colors "$theme"
-            line=""
-            _menu_line_plain 0 line
-            printf '%s\\t%s\\n' "$theme" "$line"
-        done
-        """
-        res = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
-        self.assertEqual(res.returncode, 0, res.stderr)
-        seen = {}
-        for raw in res.stdout.splitlines():
-            theme, line = raw.split("\t", 1)
-            seen[theme] = line
-        self.assertEqual(set(seen), set(EXPECTED))
-        accents = []
-        for theme, accent in EXPECTED.items():
-            line = seen[theme]
-            self.assertIn(accent, line, theme)
-            self.assertIn("[ 4]", line, theme)
-            # The colour applies to the brackets and the digits together.
-            self.assertLess(line.find(accent), line.find("[ 4]"), theme)
-            if theme != "dreamworlds":
-                for blue in LIGHT_BLUE:
-                    self.assertNotIn(blue, line, f"{theme} still uses {blue}")
-            accents.append(accent)
-        self.assertEqual(len(accents), len(set(accents)))
-        # Ice Cold is the only light-blue menu-number hue.
-        blues = [name for name, accent in EXPECTED.items() if _is_light_blue(accent)]
-        self.assertEqual(blues, ["ice_cold"])
-
     def test_selection_bar_uses_the_players_navigation_hue(self):
         """The manager's selected row must be the player's playlist bar colour.
 

@@ -188,8 +188,13 @@ class ThemeAndPlaylistUiTest(unittest.TestCase):
         cls.html = mwc.render_html_page(mwc.get_theme_palette(None))
 
     def test_theme_selector_is_rendered(self):
-        self.assertIn('id="themeSelect"', self.html)
-        self.assertIn("changeTheme(this.value)", self.html)
+        # 0.5 replaced the header <select> with a themed dropdown menu, because
+        # a native <select> cannot be styled to match the active palette. The
+        # control is still there and still switches themes; assert that rather
+        # than the old element id.
+        self.assertIn('id="themeMenu"', self.html)
+        self.assertIn('id="themeBtn"', self.html)
+        self.assertIn("changeTheme(", self.html)
 
     def test_theme_is_applied_live_from_the_selector(self):
         self.assertIn("function applyPalette(th)", self.html)
@@ -201,10 +206,12 @@ class ThemeAndPlaylistUiTest(unittest.TestCase):
         self.assertIn("--accent-secondary", self.html)
         self.assertIn("--card-bg", self.html)
 
-    def test_mini_playlist_renders_exactly_three_tracks(self):
+    def test_mini_playlist_renders_exactly_five_tracks(self):
+        # 0.5 changed the window from three tracks to five (MINI_PLAYLIST_SIZE)
+        # with a twenty-entry scrollback, which is what the README documents.
         self.assertIn('id="miniPlItems"', self.html)
         self.assertIn("renderMiniPlaylist", self.html)
-        self.assertEqual(mwc.MINI_PLAYLIST_SIZE, 3)
+        self.assertEqual(mwc.MINI_PLAYLIST_SIZE, 5)
 
     def test_mini_playlist_entries_are_selectable(self):
         self.assertIn("select_index", self.html)

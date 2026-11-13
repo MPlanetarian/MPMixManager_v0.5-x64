@@ -40,4 +40,8 @@ if [ ! -x "$LAUNCHER" ]; then
     LAUNCHER="$CODEBASE_DIR/Mix_Archive_Manager.sh"
 fi
 
-exec /usr/bin/konsole --fullscreen --separate --workdir "$CODEBASE_DIR" -p tabtitle="MP Mix Archive Manager" -e "$LAUNCHER" "$@"
+# Windowed on purpose. A maximised launch covered the whole desktop, so the
+# manager hid the player, cover art and tracklist windows it had just opened
+# and the user could not switch back without closing it. The manager asks for
+# the size it wants itself; forcing it to fill the screen fights that.
+exec /usr/bin/konsole --separate --workdir "$CODEBASE_DIR" -p tabtitle="MP Mix Archive Manager" -e "$LAUNCHER" "$@"

@@ -129,13 +129,16 @@ if [ -z "$PYTHON_BIN" ]; then
 fi
 
 # If a previous window opened on the Hisense, bring it back to the main screen.
-"$PYTHON_BIN" - "$BASE_DIR" << 'PY' || true
+# Run it in the background: it only repositions windows that are already open,
+# and the new window must not wait on wmctrl before it can appear.
+"$PYTHON_BIN" - "$BASE_DIR" << 'PY' >/dev/null 2>&1 &
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(sys.argv[1]) / "scripts"))
 from desktop_launch_screen import reposition_off_hisense
 reposition_off_hisense()
 PY
+disown 2>/dev/null || true
 
 # One tray icon shared with MP Mix Manager and MP Gui.
 _mp_tray=""
@@ -233,7 +236,8 @@ for _py in \
         break
     fi
 done
-# Reset the shared equalizer whenever MP Liquid is launched on Linux.
+# Reset the shared equalizer whenever MP Liquid is launched on Linux. This must
+# finish before the player reads the equalizer, so it stays synchronous.
 if [ "$(uname -s 2>/dev/null)" = "Linux" ] && [ -f "$BASE_DIR/MP_Audio_Player.py" ]; then
     "$PYTHON_BIN" "$BASE_DIR/MP_Audio_Player.py" --reset-eq >/dev/null 2>&1 || true
 fi

@@ -98,11 +98,19 @@ SAVER_FULLSCREEN_DELAY = 0.35
 # Z cycles the window through these modes: default -> fullscreen -> half -> default.
 WINDOW_MODE_FULLSCREEN, WINDOW_MODE_HALF, WINDOW_MODE_DEFAULT = "fullscreen", "half", "default"
 
-_BC = "https://mplanetarian.bandcamp.com"
-_REF = Path("/run/media/mplanetarian/EXT_004_P1_1TB/MPlanetarian")
-_GAMES = Path("/run/media/mplanetarian/GAMES1/DATA_DRIVE_MOVED/MPlanetarian Bandcamp Covers")
-_WDB = Path("/run/media/mplanetarian/WD BLACK B/MPlanetarian Bandcamp Covers")
-_HOME = Path("/home/mplanetarian")
+_BC = os.environ.get("MP_BANDCAMP_URL", "https://mplanetarian.bandcamp.com")
+
+# Reference material (cover art and the video clips behind each preset) used to
+# be pinned to one machine: /home/mplanetarian and three /run/media drives.
+# On any other install every extra cover silently failed to load. The
+# environment variables let a user point at their own reference folder, and
+# Path.home() means the fallbacks below are at least *their* home.
+_HOME = Path.home()
+_REF = Path(os.environ.get("MP_VISUALIZER_REF_DIR", "")
+            or (_HOME / "MPlanetarian"))
+_GAMES = Path(os.environ.get("MP_VISUALIZER_COVERS_DIR", "")
+              or (_HOME / "MPlanetarian Bandcamp Covers"))
+_WDB = _GAMES
 
 def _mk_preset(pid: int, key: str, name: str, album: str, c_asset: str, c_cov: str, extra: Optional[Path] = None,
                vid: Optional[str] = None, url: str = _BC, aliases: Tuple[str, ...] = ()) -> Dict[str, Any]:
@@ -170,7 +178,23 @@ for _preset in VISUALIZER_PRESETS:
         if _candidate.is_file():
             _preset["video_path"] = _candidate
             break
-VISUALIZER_PRESETS[5]["video_path"] = Path("/run/media/mplanetarian/WD BLACK B/MPlanetarian/20260212 - XI-N： BIFURCATION (2026) [NMxVKbM8hU8].mkv")
+
+# Preset 5 used to be overwritten here with one hard-coded absolute path no
+# matter what the search above found, so a machine without that drive got a
+# preset pointing at a file that does not exist. Only override when the clip
+# is actually present, and only the presets that specify one.
+for _preset in VISUALIZER_PRESETS:
+    _vid = _preset.get("mplanetarian_video")
+    if not _vid:
+        continue
+    _existing = _preset.get("video_path")
+    if _existing and Path(_existing).is_file():
+        continue
+    for _root in _VIDEO_SEARCH_DIRS:
+        _candidate = _root / _vid
+        if _candidate.is_file():
+            _preset["video_path"] = _candidate
+            break
 
 _SYS = platform.system().lower()
 _IS_WIN = sys.platform == "win32" or _SYS == "windows"
@@ -200,10 +224,32 @@ def _vr_visualizer_offset() -> Tuple[int, int]:
     except (KeyError, TypeError, ValueError):
         return (0, 0)
 
-def is_windows() -> bool: return _IS_WIN
-def is_windows_10_or_11() -> bool: return _IS_WIN and getattr(sys.getwindowsversion(), "major", 10) >= 10 if hasattr(sys, "getwindowsversion") else _IS_WIN
-def is_macos() -> bool: return _IS_MAC
-def is_apple_silicon() -> bool: return _IS_ARM
+# These read the live interpreter state rather than the module-level constants
+# computed at import. The constants are kept for the hot paths, but a function
+# that only ever returns a snapshot cannot be exercised on another platform, and
+# the cross-platform tests (and any future platform probe) need it to answer for
+# the platform they claim to be on.
+def is_windows() -> bool:
+    return sys.platform == "win32" or platform.system().lower() == "windows"
+
+
+def is_windows_10_or_11() -> bool:
+    if not is_windows():
+        return False
+    try:
+        return getattr(sys.getwindowsversion(), "major", 10) >= 10
+    except AttributeError:
+        return True
+
+
+def is_macos() -> bool:
+    return sys.platform == "darwin" or platform.system().lower() == "darwin"
+
+
+def is_apple_silicon() -> bool:
+    if not is_macos():
+        return False
+    return platform.machine().lower() in ("arm64", "aarch64")
 
 def _load_cdll(cands: List[str], names: Tuple[str, ...], bad: Tuple[str, ...], err: str, fb: Optional[str] = None):
     try:
@@ -218,10 +264,13 @@ def _load_cdll(cands: List[str], names: Tuple[str, ...], bad: Tuple[str, ...], e
     raise RuntimeError(err)
 
 def load_glfw_dll():
-    if _IS_WIN:
+    # Branch on the live probe, not the import-time constant, so a caller that
+    # forces a platform (a test, or a cross-build check) gets that platform's
+    # candidate list instead of the host's.
+    if is_windows():
         from liquid_glass_opengl import load_glfw_dll as _load_opengl_glfw
         return _load_opengl_glfw()
-    if _IS_MAC:
+    if is_macos():
         return _load_cdll(["/opt/homebrew/lib/libglfw.3.dylib", "/opt/homebrew/lib/libglfw.dylib", "/usr/local/lib/libglfw.3.dylib",
                            "/usr/local/lib/libglfw.dylib", "libglfw.3.dylib", "libglfw.dylib"],
                           ("glfw3", "glfw"), (".so", ".dll"), "Could not load GLFW on macOS. Please install GLFW (e.g. 'brew install glfw') or ensure libglfw is available.")
@@ -230,11 +279,11 @@ def load_glfw_dll():
 
 def load_vulkan_dll():
     sdk = os.environ.get("VULKAN_SDK")
-    if _IS_WIN:
+    if is_windows():
         sr = os.environ.get("SystemRoot", "C:\\Windows")
         return _load_cdll(([os.path.join(sdk, "Bin", "vulkan-1.dll")] if sdk else []) + ["vulkan-1.dll", os.path.join(sr, "System32", "vulkan-1.dll"), os.path.join(sr, "SysWOW64", "vulkan-1.dll")],
                           ("vulkan-1", "vulkan"), (".so", ".dylib"), "Could not load Vulkan loader on Windows. Ensure vulkan-1.dll is installed.")
-    if _IS_MAC:
+    if is_macos():
         return _load_cdll(([os.path.join(sdk, "lib", x) for x in ("libMoltenVK.dylib", "libvulkan.1.dylib", "libvulkan.dylib")] if sdk else []) +
                           ["/opt/homebrew/lib/libvulkan.1.dylib", "/opt/homebrew/lib/libvulkan.dylib", "/opt/homebrew/lib/libMoltenVK.dylib",
                            "/usr/local/lib/libvulkan.1.dylib", "/usr/local/lib/libvulkan.dylib", "/usr/local/lib/libMoltenVK.dylib",
@@ -397,7 +446,8 @@ def load_preset_cover_rgba(preset: Dict[str, Any], tex_size: int = 1024) -> Tupl
 class AudioTelemetryBridge:
     __slots__ = (
         "config_dir", "state_file", "socket_path", "port_file", "_state_str", "_sock_str", "is_playing", "accum_time", "dynamic_time",
-        "bass_phase", "mid_phase", "high_phase", "beat_pulse", "_prev_bass", "_last_poll", "_last_state_mtime_ns",
+        "bass_phase", "mid_phase", "high_phase", "beat_pulse", "_prev_bass", "_last_poll",
+        "_last_state_mtime_ns", "_last_state_stamp",
         "_cached_status", "bands16", "sub_bass", "bass", "low_mid", "mid", "high_mid", "treble", "air", "rms_energy", "pitch_factor"
     )
 
@@ -408,6 +458,7 @@ class AudioTelemetryBridge:
         self.is_playing = False
         self.accum_time = self.dynamic_time = self.bass_phase = self.mid_phase = self.high_phase = self.beat_pulse = self._prev_bass = self._last_poll = 0.0
         self._last_state_mtime_ns = 0
+        self._last_state_stamp = None
         self._cached_status: Dict[str, Any] = {}
         self.bands16: List[float] = [0.0] * 16
         self.sub_bass = self.bass = self.low_mid = self.mid = self.high_mid = self.treble = self.air = self.rms_energy = 0.0
@@ -418,9 +469,17 @@ class AudioTelemetryBridge:
         changed, st_stat = False, None
         try:
             st_stat = os.stat(self._state_str)
-            if st_stat.st_mtime_ns != self._last_state_mtime_ns:
-                changed, self._last_state_mtime_ns = True, st_stat.st_mtime_ns
-        except OSError: pass
+            # st_mtime_ns alone is not a change token: on a filesystem with
+            # coarse timestamps two writes inside the same tick look identical,
+            # and the bridge then serves a stale state. The size and the mtime
+            # together catch the common case, and both are cheap.
+            stamp = (st_stat.st_mtime_ns, st_stat.st_size)
+            if stamp != getattr(self, "_last_state_stamp", None):
+                changed = True
+                self._last_state_stamp = stamp
+                self._last_state_mtime_ns = st_stat.st_mtime_ns
+        except OSError:
+            pass
 
         if not changed and (now - self._last_poll < 0.025) and self._cached_status:
             return self._cached_status
@@ -1011,7 +1070,7 @@ class LiquidVisualizerVulkanRenderer(MonitorSpanMixin, RandomPresetMixin, Player
         self._match_player_window(wait=True)
         self._silence_overlays()
         self._x11 = None
-        if not _IS_WIN and not _IS_MAC:
+        if not is_windows() and not is_macos():
             try:
                 self._x11 = ctypes.CDLL("libX11.so.6")
                 self._x11.XInitThreads.restype = c_int
@@ -1126,13 +1185,30 @@ class LiquidVisualizerVulkanRenderer(MonitorSpanMixin, RandomPresetMixin, Player
                     fn.restype, fn.argtypes = res, args
                 except Exception: pass
 
-    def win32_window(self): return self._glfw.glfwGetWin32Window(self._window) if _IS_WIN and hasattr(self._glfw, "glfwGetWin32Window") and self._window else 0
-    def cocoa_window(self): return self._glfw.glfwGetCocoaWindow(self._window) if _IS_MAC and hasattr(self._glfw, "glfwGetCocoaWindow") and self._window else 0
+    def win32_window(self):
+        # Probe the live platform: returning a host-platform snapshot means the
+        # Mac/Windows branches cannot be exercised (or cross-checked) anywhere
+        # else, and the guards below are the only thing keeping a GLFW call off
+        # a platform where it does not exist.
+        if not is_windows() or not getattr(self, "_window", 0):
+            return 0
+        glfw = getattr(self, "_glfw", None)
+        if glfw is None or not hasattr(glfw, "glfwGetWin32Window"):
+            return 0
+        return glfw.glfwGetWin32Window(self._window)
+
+    def cocoa_window(self):
+        if not is_macos() or not getattr(self, "_window", 0):
+            return 0
+        glfw = getattr(self, "_glfw", None)
+        if glfw is None or not hasattr(glfw, "glfwGetCocoaWindow"):
+            return 0
+        return glfw.glfwGetCocoaWindow(self._window)
     def x11_window(self):
         # A GLFW window's X11 id never changes while it is alive, so the first
         # lookup is cached. This is called several times per frame by the
         # corner mask and the player-bond logic.
-        if not _IS_WIN and not _IS_MAC and getattr(self, "_window", None):
+        if not is_windows() and not is_macos() and getattr(self, "_window", None):
             cached = getattr(self, "_x11_handle", None)
             if cached is not None:
                 return cached
@@ -1145,7 +1221,7 @@ class LiquidVisualizerVulkanRenderer(MonitorSpanMixin, RandomPresetMixin, Player
             self._x11_handle = 0
         return 0
     def x11_display(self):
-        if not _IS_WIN and not _IS_MAC and getattr(self, "_window", None):
+        if not is_windows() and not is_macos() and getattr(self, "_window", None):
             cached = getattr(self, "_x11_display_handle", None)
             if cached is not None:
                 return cached
@@ -1329,7 +1405,7 @@ class LiquidVisualizerVulkanRenderer(MonitorSpanMixin, RandomPresetMixin, Player
             print(f"[LiquidVisualizer] Random mode {'on' if forward else 'off'}",
                   file=sys.stderr)
         elif key == 75 and (_mods & 1):
-            if _IS_WIN:
+            if is_windows():
                 subprocess.run('taskkill /F /FI "WINDOWTITLE eq MP Audio Player*" >nul 2>&1', shell=True)
                 subprocess.run('powershell.exe -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like \'*MP_Audio_Player*\' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }" >nul 2>&1', shell=True)
             else:
@@ -1747,7 +1823,7 @@ class LiquidVisualizerVulkanRenderer(MonitorSpanMixin, RandomPresetMixin, Player
                 avail = {p.extensionName.split(b"\x00")[0] for p in ap}
 
         flags = 0
-        if b"VK_KHR_portability_enumeration" in avail or _IS_MAC:
+        if b"VK_KHR_portability_enumeration" in avail or is_macos():
             if b"VK_KHR_portability_enumeration" not in names: names.append(b"VK_KHR_portability_enumeration")
             flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR
         if b"VK_KHR_get_physical_device_properties2" in avail and b"VK_KHR_get_physical_device_properties2" not in names:

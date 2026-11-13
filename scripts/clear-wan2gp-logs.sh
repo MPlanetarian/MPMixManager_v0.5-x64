@@ -60,7 +60,7 @@ echo ""
 
 # Load config if present
 _SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-for _cfg in "$_SCRIPT_DIR/config.env" "$_SCRIPT_DIR/../config.env" "$PWD/config.env" "/x/MP_Mix_Manager_v0.3/config.env" "X:/MP_Mix_Manager_v0.3/config.env" "$HOME/MP_Mix_Manager_v0.3/config.env"; do
+for _cfg in "${MP_CONFIG:-}" "$HOME/.config/mix-manager/config.env" "$_SCRIPT_DIR/config.env" "$_SCRIPT_DIR/../config.env"; do
     if [ -f "$_cfg" ]; then
         # shellcheck disable=SC1090
         source "$_cfg" 2>/dev/null || true

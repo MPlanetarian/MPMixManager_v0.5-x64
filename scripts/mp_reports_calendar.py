@@ -11,10 +11,11 @@ import re
 import argparse
 import calendar
 from datetime import datetime, date, timedelta
+from pathlib import Path
 from typing import Dict, List, Any, Optional, Tuple
 
-TASKS_DIR = "/var/home/mplanetarian/MP_REPORTER/tasks"
-EMAIL_CONFIG = "/var/home/mplanetarian/MP_REPORTER/email_config.env"
+TASKS_DIR = str(Path(os.environ.get("MP_REPORTER_DIR", "") or (Path.home() / "MP_REPORTER")) / "tasks")
+EMAIL_CONFIG = str(Path(os.environ.get("MP_REPORTER_DIR", "") or (Path.home() / "MP_REPORTER")) / "email_config.env")
 
 # ANSI Colors
 CLR_RESET = "\033[0m"

@@ -45,6 +45,7 @@ final class MenuBarController: NSObject, NSApplicationDelegate {
             ("launch-gui", "Launch MP Gui"),
             ("launch-liquid", "Launch MP Liquid Player"),
             ("launch-manager", "Launch MP Mix Manager"),
+            ("web-audio", "Start / Stop MP Web Audio"),
         ]
         for (ident, title) in entries {
             let menuItem = NSMenuItem(title: title, action: #selector(performAction(_:)), keyEquivalent: "")
