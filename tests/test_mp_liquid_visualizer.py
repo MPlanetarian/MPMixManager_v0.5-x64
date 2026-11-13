@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import time
@@ -606,8 +607,17 @@ class TestMPLiquidVisualizer(unittest.TestCase):
             renderer.close()
 
     @unittest.skipUnless(DISPLAY_AVAILABLE, "needs a display server")
+    @unittest.skipUnless(
+        DISPLAY_AVAILABLE and os.environ.get("MP_RUN_GPU_WINDOW_TESTS") == "1",
+        "opens two real GPU windows; set MP_RUN_GPU_WINDOW_TESTS=1 to run",
+    )
     def test_two_visualizer_processes_can_run_simultaneously(self):
-        """Two separate visualizer processes can run simultaneously without conflicts."""
+        """Two separate visualizer processes can run simultaneously without conflicts.
+
+        This spawns the real visualizer twice. On a workstation it opens two
+        windows, takes the GPU, and (when the display is busy) outlives the
+        ten-second wait; in CI it has no display at all. It is opt-in.
+        """
         p1 = subprocess.Popen([sys.executable, str(ROOT / "MP_Liquid_Visualizer.py"), "--max-seconds", "1"])
         p2 = subprocess.Popen([sys.executable, str(ROOT / "MP_Liquid_Visualizer.py"), "--max-seconds", "1"])
         ret1 = p1.wait(timeout=10)
