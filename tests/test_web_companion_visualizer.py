@@ -258,5 +258,27 @@ class OverlayLayoutTest(unittest.TestCase):
         self.assertNotIn("overflow-y: auto", page[page.index(".overlay-card {"):][:600])
 
 
+class CsrfHeaderTest(unittest.TestCase):
+    """Every dashboard POST must carry the header the server demands.
+
+    The server refuses a mutating request without ``X-MP-Companion``. The page
+    used to make its POSTs bare, so every control tap was answered with
+    "missing_csrf_header" and nothing happened.
+    """
+
+    def test_page_wraps_fetch_and_sends_the_required_header(self):
+        import mix_web_companion as companion
+        page = companion.render_html_page(companion.THEMES["cosmic_supernova"])
+        self.assertIn("MP_CSRF_HEADER", page)
+        self.assertIn("X-MP-Companion", page)
+        self.assertIn("window.fetch = function", page)
+
+    def test_header_name_matches_the_server(self):
+        import mp_companion_security as sec
+        import mix_web_companion as companion
+        page = companion.render_html_page(companion.THEMES["cosmic_supernova"])
+        self.assertIn(f"const MP_CSRF_HEADER = '{sec.REQUIRED_HEADER}'", page)
+
+
 if __name__ == "__main__":
     unittest.main()

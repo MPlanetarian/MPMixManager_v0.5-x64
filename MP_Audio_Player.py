@@ -2091,6 +2091,13 @@ class AudioEngine:
 
     def load_track(self, index: int, start_playing: bool = True, start_position: float = 0.0) -> bool:
         if not self.playlist or not (0 <= index < len(self.playlist)): return False
+        # Refuse a track whose file is gone before touching any state. A
+        # Traktor playlist generated elsewhere names files that may not be
+        # mounted; without this the cursor moved to a dead entry and every
+        # control then failed against it.
+        target_path = str(self.playlist[index].get("path") or "")
+        if not target_path or not os.path.isfile(target_path):
+            return False
         self.current_index, self.current_track = index, self.playlist[index]
         self._stop_feeder()
         try:
@@ -5428,6 +5435,53 @@ def launch_liquid_visualizer(
                 pass
             return False
 
+def _ensure_playable_path(path: str) -> bool:
+    """True when `path` names a non-empty regular file that exists.
+
+    Used before an imported playlist entry is handed to the audio engine. A
+    zero-byte file is as unplayable as a missing one: opening it yields a
+    decoder error that the engine reports as "end of playlist".
+    """
+    try:
+        p = Path(str(path))
+        return p.is_file() and p.stat().st_size > 0
+    except (OSError, ValueError):
+        return False
+
+
+def _traktor_importer_module():
+    """The Traktor playlist importer, loaded lazily.
+
+    A module function rather than a direct import so the UI can be built (and
+    tested) without the importer's optional dependencies.
+    """
+    try:
+        import traktor_playlist_importer as importer
+        return importer
+    except ImportError:
+        from scripts import traktor_playlist_importer as importer  # type: ignore
+        return importer
+
+
+class _TraktorPlaylistScanner:
+    """Playlist source for the player after a Traktor playlist is imported.
+
+    Presents the same two methods the player's own scanner does (`get_mixes`
+    and `playlist_path`) so the rest of the UI needs no special case. Missing
+    files are filtered out at construction, because a playlist generated on
+    another machine routinely names tracks that are not mounted here.
+    """
+
+    def __init__(self, tracks: List[Dict[str, Any]], playlist_path: str = ""):
+        self.mixes = [t for t in tracks if t.get("path") and os.path.isfile(t["path"])]
+        self.playlist_path = playlist_path
+        base = os.path.dirname(playlist_path) if playlist_path else ""
+        self.base_dir = base or str(Path.home())
+
+    def get_mixes(self, _query: str = "") -> List[Dict[str, Any]]:
+        return list(self.mixes)
+
+
 class TerminalPlayerUI:
     def __init__(self, engine: Optional[AudioEngine], scanner: Union[MixArchiveScanner, MusicFolderPlaylistScanner], is_remote: bool = False, default_style: Optional[str] = None, default_theme: Optional[str] = None, mode: str = "MIX_ARCHIVE", folder_name: str = "ALL", ui_size_mode: str = "NORMAL", keep_library: bool = False):
         self.engine, self.scanner, self.is_remote = engine, scanner, is_remote
@@ -5450,6 +5504,11 @@ class TerminalPlayerUI:
         self.fav_export_mode = ""
         self.fav_export_dest = ""
         self.fav_export_name = ""
+        # Traktor playlist import picker (Shift+T).
+        self.traktor_picker_active = False
+        self.traktor_picker_rows: List[Dict[str, Any]] = []
+        self.traktor_picker_row = 0
+        self.traktor_picker_error = ""
         self.traktor_offer_paths: Optional[List[str]] = None
         self.traktor_offer_name = ""
         self.traktor_input_mode = ""
@@ -5970,6 +6029,132 @@ class TerminalPlayerUI:
             match = next((i for i, row in enumerate(mixes) if row.get("path") == current), None)
             self.engine.current_index = match if match is not None else 0
 
+    # ------------------------------------------------------------------
+    # TRAKTOR PLAYLIST IMPORT (Shift+T)
+    # ------------------------------------------------------------------
+    def _traktor_picker_open(self) -> None:
+        """Open the playlist picker, or explain why it cannot open.
+
+        Only playlists that were generated in advance are offered: the importer
+        writes them into PLAYLISTS_GENERATED with an .m3u8 beside each .json,
+        and anything without both files is not usable here.
+        """
+        if os.environ.get("MP_LIQUID_GLASS") == "1":
+            self._notify("Traktor playlist import is available in CLI mode only.", 3.5)
+            return
+        importer = _traktor_importer_module()
+        try:
+            ready, reason = importer.music_folders_ready()
+        except Exception as exc:
+            ready, reason = False, str(exc)
+        if not ready:
+            self.traktor_picker_active = True
+            self.traktor_picker_rows = []
+            self.traktor_picker_row = 0
+            self.traktor_picker_error = reason or "Music Folders are not configured."
+            return
+        try:
+            rows = importer.generated_playlists()
+        except Exception as exc:
+            rows = []
+            self.traktor_picker_error = str(exc)
+        else:
+            self.traktor_picker_error = "" if rows else (
+                "No generated Traktor playlists were found. "
+                "Use music_folders_manager.sh to generate them first."
+            )
+        self.traktor_picker_rows = list(rows)
+        self.traktor_picker_row = 0
+        self.traktor_picker_active = True
+
+    def _traktor_import_start(self) -> None:
+        """Hand off to the importer's interactive flow, after the preflight.
+
+        The importer needs the Music Folders configuration to resolve the
+        Traktor collection; running it without that produces a confusing
+        failure deep inside, so it is checked here and reported plainly.
+        """
+        importer = _traktor_importer_module()
+        try:
+            ready, reason = importer.music_folders_ready()
+        except Exception as exc:
+            ready, reason = False, str(exc)
+        if not ready:
+            self._notify(reason or "Music Folders are not configured.", 4.0)
+            return
+        try:
+            importer.interactive_main()
+        except Exception as exc:
+            self._notify(f"Traktor import failed: {exc}", 4.5)
+            return
+        self._notify("Traktor import finished.", 3.0)
+
+    def _traktor_picker_close(self) -> None:
+        self.traktor_picker_active = False
+
+    def _traktor_picker_move(self, delta: int) -> None:
+        if not self.traktor_picker_rows:
+            return
+        self.traktor_picker_row = max(
+            0, min(len(self.traktor_picker_rows) - 1, self.traktor_picker_row + delta)
+        )
+
+    def _traktor_picker_activate(self) -> None:
+        """Load the highlighted playlist, dropping tracks that are not on disk.
+
+        A generated playlist can name files on a drive that is not mounted any
+        more, so every path is checked before it reaches the engine. The count
+        of unavailable tracks is reported rather than silently swallowed.
+        """
+        self.traktor_picker_active = False
+        if not self.traktor_picker_rows:
+            return
+        row = self.traktor_picker_rows[
+            max(0, min(self.traktor_picker_row, len(self.traktor_picker_rows) - 1))
+        ]
+        json_path = str(row.get("json_path", ""))
+        tracks: List[Dict[str, Any]] = []
+        try:
+            data = json.loads(Path(json_path).read_text(encoding="utf-8"))
+            raw = data.get("tracks") if isinstance(data, dict) else data
+            if isinstance(raw, list):
+                tracks = [t for t in raw if isinstance(t, dict)]
+        except (OSError, ValueError):
+            tracks = []
+        available = [t for t in tracks if t.get("path") and os.path.isfile(str(t["path"]))]
+        missing = len(tracks) - len(available)
+        if not available:
+            self._notify("That playlist has no tracks available on this machine.", 4.0)
+            return
+        self.scanner = _TraktorPlaylistScanner(available, json_path)
+        self.selected_row, self.scroll_offset = 0, 0
+        name = str(row.get("name") or Path(json_path).stem)
+        message = f"Loaded Traktor playlist: {name} ({len(available)} tracks)"
+        if missing:
+            message += f" - {missing} unavailable"
+        self._notify(message, 4.5)
+
+    def _traktor_picker_box(self, width: int) -> List[str]:
+        """Draw the picker window over the playlist area."""
+        rows = self.traktor_picker_rows
+        lines = [
+            "  TRAKTOR PLAYLIST IMPORT  ",
+            f"  {len(rows)} generated playlist(s) available",
+            "",
+        ]
+        if self.traktor_picker_error:
+            lines.append(f"  {self.traktor_picker_error}")
+            lines.append("  [G] pre-generate the playlists   [Esc] Cancel")
+        else:
+            for index, row in enumerate(rows[:12]):
+                marker = "▶" if index == self.traktor_picker_row else " "
+                lines.append(
+                    f"  {marker} {index + 1:2d}) {row.get('name', 'playlist')}"
+                    f"  ({row.get('tracks', '?')} tracks)"
+                )
+            lines += ["", "  [Enter] Load   [Esc] Cancel"]
+        return lines
+
     def _toggle_hidden_mode(self):
         """Hide or restore every MP window (Hidden Mode).
 
@@ -6090,6 +6275,8 @@ class TerminalPlayerUI:
     def _favorites_decision_box(self, width: int) -> List[str]:
         """Draw the Favorites decision window over the playlist area."""
         self._ensure_favorites_decision_state()
+        if getattr(self, "traktor_picker_active", False):
+            return self._traktor_picker_box(width)
         if self.favorites_clear_confirm:
             count = len(self._favorites_store())
             title = "  CLEAR FAVORITES PLAYLIST?  "
@@ -7340,6 +7527,13 @@ class TerminalPlayerUI:
         elif data in (b"h", b"H"): self._toggle_hidden_mode()
         elif data == b"F": self._toggle_favorite()
         elif data in (b"o", b"O"): self._open_audio_file()
+        elif data == b"T" and os.environ.get("MP_LIQUID_GLASS") == "1":
+            self._notify("Traktor playlist import is available in CLI mode only.", 3.5)
+        elif data == b"T" and sys.stdin.isatty():
+            # Shift+T opens the Traktor playlist importer. Lowercase t stays on
+            # the tracklist viewer. The picker is terminal-only: the Liquid
+            # Glass hosts have no decision-window UI for it.
+            self._traktor_picker_open()
         elif data in (b"t", b"T"): self._view_selected_tracklist()
         elif data in (b"w", b"W"): self._export_playlist()
         elif data == b"/": self.search_mode, self.search_query = True, ""
