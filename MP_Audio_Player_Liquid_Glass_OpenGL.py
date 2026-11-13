@@ -827,6 +827,16 @@ class GlassHost:
             _kill_player_processes()
             return True
         # Z opens a new MP Liquid Visualizer window, matching the Vulkan host.
+        if kv in (Gdk.KEY_h, Gdk.KEY_H):
+            # Hidden Mode: hide or restore every MP window. Registered here so
+            # the player is one of the hosts that can start it; the restore half
+            # is handled by the KWin script on Wayland.
+            try:
+                import mp_hidden_mode as hidden
+                hidden.toggle()
+            except Exception:
+                pass
+            return True
         if kv in (Gdk.KEY_z, Gdk.KEY_Z):
             spawn_new_visualizer()
             return True

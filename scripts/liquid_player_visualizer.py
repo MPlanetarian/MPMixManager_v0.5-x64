@@ -1715,6 +1715,12 @@ class LiquidVisualizerOpenGLRenderer(MonitorSpanMixin, RandomPresetMixin, Player
             # player and never cycles to half size or fullscreen.
             if not self._bond_is_locked():
                 self.cycle_window_mode()
+        elif key == 72:  # H: hidden mode (hide or restore every MP window)
+            try:
+                import mp_hidden_mode as hidden
+                hidden.toggle()
+            except Exception:
+                pass
         elif key == 82:  # R: toggle random mode
             self.toggle_random_mode()
         elif 49 <= key <= 57:  # 1..9

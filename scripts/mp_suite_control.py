@@ -27,6 +27,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -426,6 +427,9 @@ def launch_app(role: str) -> dict:
 # that pid only, so a visualizer the user opened from the tray or a shortcut is
 # never toggled and never closed.
 # ------------------------------------------------------------------------------
+_visualizer_action_lock = threading.Lock()
+
+
 def _visualizer_state() -> Optional[dict]:
     if visualizer_control is None:
         return None
@@ -468,7 +472,14 @@ def web_visualizer_action() -> dict:
     if tty_mode_active():
         # TTY Audio Mode has no desktop to draw a window on.
         return {"success": False, "action": "tty_mode"}
+    # The server is threaded, so two taps can arrive together. Without the
+    # lock both would read "no window" and both would open one, which is the
+    # single outcome this button must never produce.
+    with _visualizer_action_lock:
+        return _web_visualizer_action_locked()
 
+
+def _web_visualizer_action_locked() -> dict:
     state = _visualizer_state()
     if state is None:
         base = base_dir()

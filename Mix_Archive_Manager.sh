@@ -1240,6 +1240,7 @@ TICK)
     fi ; local _idle_time=$(( _now_s - _LAST_NAV_TIME )); if [ "$_idle_time" -ge 10 ] && [ "${search_mode:-0}" -ne 1 ] && [ -z "${typed_buffer:-}" ]; then _IS_BREATHING=1; ((_BREATH_TICK_DIV++)); if [ "$_BREATH_TICK_DIV" -ge 2 ]; then _BREATH_TICK_DIV=0; _BREATH_STEP=$(( (_BREATH_STEP + 1) % 32 )); local cur_f="${_BREATH_FACTORS[_BREATH_STEP]}"; if [ "${_menu_item_row[$cur_idx]:-0}" -ge 1 ] && [ "${_menu_item_row[$cur_idx]}" -lt "$_TERM_LINES" ]; then local o_key="" o_label="" o_extra="" sel_breath=""; IFS='|' read -r o_key o_label o_extra <<< "${_opts_ref[$cur_idx]}"; highlight_menu_line "$o_key" "$o_label" "$o_extra" "${selectable_map[$cur_idx]:-0}" sel_breath "$box_w" "$cur_f"; printf '\033[?25l\033[%s;1H%b\r\033[?25l' "${_menu_item_row[$cur_idx]}" "$sel_breath"; fi; fi; elif [ "$_IS_BREATHING" -eq 1 ]; then _IS_BREATHING=0; _BREATH_STEP=0; _BREATH_TICK_DIV=0; if [ "${_menu_item_row[$cur_idx]:-0}" -ge 1 ] && [ "${_menu_item_row[$cur_idx]}" -lt "$_TERM_LINES" ]; then local o_key="" o_label="" o_extra="" sel_restored=""; IFS='|' read -r o_key o_label o_extra <<< "${_opts_ref[$cur_idx]}"; highlight_menu_line "$o_key" "$o_label" "$o_extra" "${selectable_map[$cur_idx]:-0}" sel_restored "$box_w" 100; printf '\033[?25l\033[%s;1H%b\r\033[?25l' "${_menu_item_row[$cur_idx]}" "$sel_restored"; fi; fi; continue ;; CHAR:/) if [ "$search_mode" -eq 1 ]; then search_query+="/"; _find_menu_search_match "$search_query" 0 1; else search_mode=1; search_query=""; typed_buffer=""; fi; _MENU_FRAME_FRESH=0; continue ;; SPACE) if [ "$search_mode" -eq 1 ]; then search_query+=" "; _find_menu_search_match "$search_query" 0 1; _MENU_FRAME_FRESH=0; continue; fi; toggle_mp_audio_player; _MENU_FRAME_FRESH=0; continue ;; CHAR:m|CHAR:M) if [ "$search_mode" -eq 1 ]; then search_query+="${key_action#CHAR:}"; _find_menu_search_match "$search_query" 0 1; _MENU_FRAME_FRESH=0; continue; fi; launch_mp_audio_player_window; _MENU_FRAME_FRESH=0; continue ;; CHAR:l|CHAR:L) if [ "$search_mode" -eq 1 ]; then search_query+="${key_action#CHAR:}"; _find_menu_search_match "$search_query" 0 1; _MENU_FRAME_FRESH=0; continue; fi; launch_mp_audio_player_liquid_glass >/dev/null 2>&1; _MENU_FRAME_FRESH=0; continue ;; CHAR:z|CHAR:Z) if [ "$search_mode" -eq 1 ]; then search_query+="${key_action#CHAR:}"; _find_menu_search_match "$search_query" 0 1; _MENU_FRAME_FRESH=0; continue; fi; launch_mp_liquid_visualizer >/dev/null 2>&1; _MENU_FRAME_FRESH=0; continue ;;
 CHAR:A) if [ "$search_mode" -eq 1 ]; then search_query+="A"; _find_menu_search_match "$search_query" 0 1; _MENU_FRAME_FRESH=0; continue; fi; if [ "${_NAV_WIN_CON:-0}" -eq 1 ] && _nav_just_arrowed; then continue; fi; cleanup_submenu_screen; launch_mp_harmony_from_menu; _MENU_CURSOR_LOCK=1; _start_win_cursor_hider; printf '\033[?25l\033[?12l\033[?7l'; clear; typed_buffer=""; _last_menu_frame=""; _MENU_FRAME_FRESH=0; last_term_lines=0; continue ;;
 CHAR:g|CHAR:G) if [ "$search_mode" -eq 1 ]; then search_query+="${key_action#CHAR:}"; _find_menu_search_match "$search_query" 0 1; _MENU_FRAME_FRESH=0; continue; fi; launch_mp_gui_from_menu; _last_menu_frame=""; _MENU_FRAME_FRESH=0; continue ;;
+CHAR:h|CHAR:H) if [ "$search_mode" -eq 1 ]; then search_query+="H"; _find_menu_search_match "$search_query" 0 1; _MENU_FRAME_FRESH=0; continue; fi; toggle_hidden_mode; typed_buffer=""; _last_menu_frame=""; _MENU_FRAME_FRESH=0; continue ;;
 CHAR:K) if [ "$search_mode" -eq 1 ]; then search_query+="K"; _find_menu_search_match "$search_query" 0 1; _MENU_FRAME_FRESH=0; continue; fi; mp_stop_audio_players; _CACHED_PLAYER_CHECK_TIME=0; _CACHED_PLAYER_ACTIVE_RES=1; MP_PLAYER_RUNNING=0; MP_PLAYER_STATE="stopped"; typed_buffer=""; _last_menu_frame=""; _MENU_FRAME_FRESH=0; continue ;;
 CHAR:n|CHAR:N|CHAR:\>|CHAR:\])
 if [ "$search_mode" -eq 1 ]; then search_query+="n"; _find_menu_search_match "$search_query" 0 1; _MENU_FRAME_FRESH=0; continue; fi; local mp_py="$SCRIPT_DIR/MP_Audio_Player.py"; [ ! -f "$mp_py" ] && mp_py="$SCRIPT_DIR/scripts/MP_Audio_Player.py"; [ -f "$mp_py" ] && python3 "$mp_py" --next &>/dev/null &
@@ -3502,6 +3503,21 @@ mp_confirm_destructive() {
 # was a bare `pkill -9 -f` on the player's name, which also matched a text
 # editor that merely had the file open, another user's player, and this manager
 # itself.
+# Hide or restore every MP window (Hidden Mode). The implementation lives in
+# scripts/mp_hidden_mode.py so the manager, the player and the visualizer all
+# share one toggle and one piece of state.
+toggle_hidden_mode() {
+    local py="${SCRIPT_DIR:-.}/scripts/mp_hidden_mode.py"
+    [ ! -f "$py" ] && py="${SCRIPT_DIR:-.}/mp_hidden_mode.py"
+    if [ ! -f "$py" ]; then
+        echo -e "\n${RED}Hidden Mode is not installed (scripts/mp_hidden_mode.py missing).${NC}"
+        return 1
+    fi
+    local py_bin
+    py_bin="$(mp_python_bin 2>/dev/null || command -v python3)"
+    "$py_bin" "$py" toggle 2>/dev/null || true
+}
+
 mp_stop_audio_players() {
     local pid
     for pid in $(pgrep -u "$(id -u)" -f "MP_Audio_Player" 2>/dev/null || true); do

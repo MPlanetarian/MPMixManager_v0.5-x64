@@ -124,8 +124,10 @@ def main(argv=None) -> int:
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
 
-    # Print the URL immediately so a caller can log it.
-    print(f"task server listening on http://{args.host}:{args.port} "
+    # Print the address immediately so a caller can log it. Use the bound port,
+    # which differs from --port when 0 was requested (ephemeral).
+    bound_host, bound_port = server.server_address[:2]
+    print(f"task server listening on http://{bound_host}:{bound_port} "
           f"({len(queue)} task(s))", flush=True)
 
     try:

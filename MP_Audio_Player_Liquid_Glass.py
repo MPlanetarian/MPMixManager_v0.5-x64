@@ -339,7 +339,13 @@ class GlassHost:
         kv, st = getattr(event, "keyval", 0), getattr(event, "state", 0)
         # M stays with the player. Search uses it as a letter. A real mode change is published back.
         if kv == Gdk.KEY_K or (kv in (Gdk.KEY_k, Gdk.KEY_K) and bool(st & Gdk.ModifierType.SHIFT_MASK)):
-            subprocess.run('pkill -9 -f "MP_Audio_Player"', shell=True)
+            # Stop only this user's players, matched on argv. A bare
+            # `pkill -9 -f` also killed editors that had the file open and
+            # other users' players.
+            _stop_other_players()
+            return True
+        if kv in (Gdk.KEY_h, Gdk.KEY_H):
+            _toggle_hidden_mode()
             return True
         if kv in (Gdk.KEY_z, Gdk.KEY_Z):
             spawn_new_visualizer()
@@ -933,6 +939,43 @@ def _visualizer_env(companion: bool = False) -> dict:
     else:
         env["MP_VISUALIZER_DETACHED"] = "1"
     return env
+
+
+def _stop_other_players() -> None:
+    """SIGKILL the other MP Audio Player processes owned by this user."""
+    import signal
+    me = os.getpid()
+    proc = Path("/proc")
+    targets = []
+    if proc.is_dir():
+        for entry in proc.iterdir():
+            if not entry.name.isdigit():
+                continue
+            pid = int(entry.name)
+            if pid == me:
+                continue
+            try:
+                argv = [a.decode("utf-8", "ignore")
+                        for a in (entry / "cmdline").read_bytes().split(b"\x00") if a]
+            except OSError:
+                continue
+            if argv and os.path.basename(argv[0]).startswith("python") and any(
+                    os.path.basename(a).startswith("MP_Audio_Player") for a in argv[1:]):
+                targets.append(pid)
+    for pid in targets:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except OSError:
+            continue
+
+
+def _toggle_hidden_mode() -> None:
+    """Hide or restore every MP window (Hidden Mode)."""
+    try:
+        import mp_hidden_mode as hidden
+        hidden.toggle()
+    except Exception:
+        pass
 
 
 def spawn_new_visualizer() -> bool:

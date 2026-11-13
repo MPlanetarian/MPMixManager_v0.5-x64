@@ -40,8 +40,10 @@ STATE_FILE_NAME = "mp_web_visualizer.json"
 # The visualizer publishes on open and on every mode change, not per frame.
 PUBLISH_MIN_INTERVAL = 0.0
 # A pending record (written while the launcher starts) is only trusted this
-# long. A visualizer that never opens must not leave the button stuck.
-PENDING_TIMEOUT_SECONDS = 25.0
+# long. A visualizer that never opens must not leave the button stuck. The
+# window's own publish replaces it long before this expires; the margin covers
+# a cold Vulkan/GLFW start and a player-size wait.
+PENDING_TIMEOUT_SECONDS = 45.0
 
 
 def config_dir() -> Path:
@@ -266,6 +268,7 @@ class WindowControl:
         self._published_fullscreen: Optional[bool] = None
         self._installed = False
         self._started = 0.0
+        self._opened = False
 
     # -- signals (handlers only set flags) --------------------------------
     def _on_toggle(self, _signum, _frame) -> None:
@@ -273,6 +276,11 @@ class WindowControl:
 
     def _on_close(self, _signum, _frame) -> None:
         self._close_pending = True
+        if not self._opened:
+            # Still creating the window: there is no render loop to honour the
+            # flag yet, so stop now rather than lingering with a half-built
+            # window the companion can no longer reach.
+            os._exit(0)
 
     def install(self) -> bool:
         """Replace the visualizer's default SIGTERM exit with a clean stop."""
@@ -311,6 +319,7 @@ class WindowControl:
         if not self.enabled:
             return
         self._started = time.time()
+        self._opened = True
         # The dashboard decides this window's mode (windowed first, then
         # fullscreen), so the 4K auto-fullscreen and the player-size follow
         # must not take that decision away on the very first frame.
@@ -340,6 +349,14 @@ class WindowControl:
                 renderer.toggle_fullscreen()
             except Exception:
                 pass
+            # The dashboard owns this window's mode. Mark the choice as the
+            # user's so neither the 4K auto-fullscreen rule nor the player-size
+            # follow pulls the window back out of the state just requested.
+            for flag in ("_user_toggled_windowed", "_user_selected_window_mode"):
+                try:
+                    setattr(renderer, flag, True)
+                except Exception:
+                    pass
         current = bool(getattr(renderer, "is_fullscreen", False))
         if current != self._published_fullscreen:
             self._publish(current, str(getattr(renderer, "title", "") or ""))

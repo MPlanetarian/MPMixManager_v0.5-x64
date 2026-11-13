@@ -634,6 +634,7 @@ GLFW_FOCUSED, GLFW_AUTO_ICONIFY, GLFW_FLOATING, GLFW_ICONIFIED = 0x00020001, 0x0
 GLFW_FOCUS_ON_SHOW, GLFW_PLATFORM, GLFW_PLATFORM_X11, GLFW_DONT_CARE = 0x0002000C, 0x00050003, 0x00060004, -1
 GLFW_KEY_ESCAPE, GLFW_KEY_Q, GLFW_KEY_Z, GLFW_KEY_SPACE = 256, 81, 90, 32
 # R toggles random mode: a new random preset every RANDOM_PRESET_INTERVAL secs.
+GLFW_KEY_H = 72
 GLFW_KEY_R = 82
 GLFW_KEY_1, GLFW_KEY_2, GLFW_KEY_3, GLFW_KEY_4, GLFW_KEY_5, GLFW_KEY_6, GLFW_KEY_7, GLFW_KEY_8, GLFW_KEY_9 = range(49, 58)
 # Preset cycle keys. GLFW reports the "=" key as 61 (shifted it produces "+"),
@@ -1401,6 +1402,13 @@ class LiquidVisualizerVulkanRenderer(MonitorSpanMixin, RandomPresetMixin, Player
         elif key == GLFW_KEY_Z:
             # Z cycles: fullscreen -> half size -> default size.
             self._cycle_window_mode_for_user()
+        elif key == GLFW_KEY_H:
+            # Hidden Mode: hide or restore every MP window.
+            try:
+                import mp_hidden_mode as hidden
+                hidden.toggle()
+            except Exception:
+                pass
         elif key == GLFW_KEY_R:
             # R toggles random mode: switch to a new random preset every
             # RANDOM_PRESET_INTERVAL seconds. Pressing it again stops the
@@ -3297,13 +3305,18 @@ def run_visualizer(preset_name: Optional[str] = None, max_seconds: Optional[floa
     renderer = _make_renderer(preset_name, fullscreen=fullscreen, target_4k=target_4k,
                               backend=backend, span_bounds=span_bounds, span_role=span_role)
     bridge = AudioTelemetryBridge()
-    renderer.open()
     # The Web Companion's Visualizer button owns exactly one window. When this
     # process was started for it, the instance token in the environment is
     # published with the pid so the companion can toggle and close this window
     # and no other visualizer that happens to be running.
+    #
+    # The handlers are installed *before* open(), because the signals have
+    # destructive defaults: an early SIGUSR1 would kill the process outright.
+    # A command that arrives while the window is still being created is held
+    # as a flag and applied by the first pump() after open().
     control = _window_control()
     control.install()
+    renderer.open()
     control.opened(renderer)
     monotonic = time.monotonic
     last_t = start_t = monotonic()

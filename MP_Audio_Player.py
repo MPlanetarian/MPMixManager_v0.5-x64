@@ -5970,11 +5970,33 @@ class TerminalPlayerUI:
             match = next((i for i, row in enumerate(mixes) if row.get("path") == current), None)
             self.engine.current_index = match if match is not None else 0
 
+    def _toggle_hidden_mode(self):
+        """Hide or restore every MP window (Hidden Mode).
+
+        The heavy lifting lives in scripts/mp_hidden_mode.py, which uses a KWin
+        script on Plasma Wayland (where the GTK hosts are native Wayland
+        clients that `wmctrl` never sees) and plain X11 calls elsewhere. A
+        failure is reported rather than swallowed: on a desktop this feature
+        cannot support, the user needs to know the key did nothing.
+        """
+        try:
+            script_dir = str(Path(__file__).resolve().parent / "scripts")
+            if script_dir not in sys.path:
+                sys.path.insert(0, script_dir)
+            import mp_hidden_mode as hidden
+            result = hidden.toggle()
+        except Exception as exc:
+            self._notify(f"Hidden Mode unavailable: {exc}", 4.0)
+            return
+        state = "Hidden" if result.get("hidden") else "Restored"
+        detail = result.get("message") or ""
+        self._notify(f"{state}. {detail}".strip(), 3.0)
+
     def _toggle_favorite(self):
         """Add or remove the selected mix or music track from the Favorites playlist."""
         track = self._favorite_target()
         if not track:
-            self._notify("Select a mix or track, then press [H] to mark it as a favorite.", 3.5)
+            self._notify("Select a mix or track, then press Shift+F to mark it as a favorite.", 3.5)
             return
         added = self._favorites_store().toggle(track)
         if self.mode == "FAVORITES":
@@ -7311,12 +7333,17 @@ class TerminalPlayerUI:
         elif data == b"1": self._switch_library_mode("MIX_ARCHIVE")
         elif data == b"2": self._switch_library_mode("MUSIC")
         elif data == b"3": self._load_favorites()
-        elif data in (b"h", b"H"): self._toggle_favorite()
+        # H is Hidden Mode (hide/restore every MP window). Favorites moved to
+        # Shift+F, and lowercase f still reveals the selected file. H used to
+        # toggle Favorites, which made the advertised Hidden Mode shortcut
+        # impossible to provide.
+        elif data in (b"h", b"H"): self._toggle_hidden_mode()
+        elif data == b"F": self._toggle_favorite()
         elif data in (b"o", b"O"): self._open_audio_file()
         elif data in (b"t", b"T"): self._view_selected_tracklist()
         elif data in (b"w", b"W"): self._export_playlist()
         elif data == b"/": self.search_mode, self.search_query = True, ""
-        elif data in (b"f", b"F"): self._open_selected_in_file_manager()
+        elif data == b"f": self._open_selected_in_file_manager()
         elif data in (b"g", b"G") and os.environ.get("MP_LIQUID_GLASS") == "1":
             ok = launch_mp_gui(base_dir=getattr(self.scanner, "base_dir", None))
             self._notify("✦ Opened MP Gui" if ok else "Failed to open MP Gui", 3.0)
