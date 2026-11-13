@@ -212,7 +212,12 @@ class TestLiquidGlassPlayerFeatures(unittest.TestCase):
         flag.unlink(missing_ok=True)
 
     def test_unselected_playlist_entries_stay_white_for_every_theme(self):
-        """Unselected playlist rows use that theme's text colour, not white."""
+        """Unselected playlist rows are plain white on every theme.
+
+        This assertion used to require the theme's own body ink, which made
+        five themes paint black text on the dark player pane. The Whitest White
+        is the documented exception and is covered separately.
+        """
         mock_scanner = MagicMock()
         mock_scanner.get_mixes.return_value = [
             {"name": "Mix 01 - Selected Track.flac", "path": "/path/mix1.flac", "ext": "FLAC", "size_mb": 650},
@@ -250,27 +255,88 @@ class TestLiquidGlassPlayerFeatures(unittest.TestCase):
             ui._get_status = MagicMock(return_value=st)
             ui._draw_frame()
 
+        white = "\033[38;2;255;255;255m"
         unselected = [l for l in captured if "Mix 02 - Unselected Track.flac" in l]
         self.assertTrue(unselected, "Unselected playlist entry was not rendered")
-        sensorium = MP_Audio_Player.theme_body_ansi("sensorium_interface")
-        cosmic = MP_Audio_Player.theme_body_ansi("cosmic_supernova")
-        self.assertIn(sensorium, unselected[0])
-        self.assertIn("\033[38;2;255;255;255m", unselected[0])
-        # Two themes have two different body inks; asserting they were equal
-        # would pin the bug this test exists to catch.
-        self.assertNotEqual(sensorium, cosmic)
-        ui.visualizer.theme = "cosmic_supernova"
-        captured.clear()
-        with patch.dict(os.environ, {"MP_LIQUID_GLASS": "1"}), \
-             patch("MP_Audio_Player._present_frame", side_effect=lambda lines, w, h: captured.extend(lines)), \
-             patch("MP_Audio_Player._win_visible_size", return_value=(120, 40)):
-            ui._draw_frame()
-        cosmic_rows = [l for l in captured if "Mix 02 - Unselected Track.flac" in l]
-        self.assertTrue(cosmic_rows, "Unselected playlist entry was not rendered for the second theme")
-        self.assertIn(cosmic, cosmic_rows[0])
-        # The row switched to the second theme's ink; the first theme's ink must
-        # no longer appear on it.
-        self.assertNotIn(sensorium, cosmic_rows[0])
+        self.assertIn(white, unselected[0])
+        # The dark-ink themes are the reason this changed, so assert the worst
+        # of them explicitly rather than only a mid-brightness theme.
+        self.assertNotIn(MP_Audio_Player.theme_body_ansi("sensorium_interface"), unselected[0])
+
+        for theme in ("cosmic_supernova", "orbital_void_reflux", "cyber_neon"):
+            ui.visualizer.theme = theme
+            captured.clear()
+            with patch.dict(os.environ, {"MP_LIQUID_GLASS": "1"}), \
+                 patch("MP_Audio_Player._present_frame", side_effect=lambda lines, w, h: captured.extend(lines)), \
+                 patch("MP_Audio_Player._win_visible_size", return_value=(120, 40)):
+                ui._draw_frame()
+            rows = [l for l in captured if "Mix 02 - Unselected Track.flac" in l]
+            self.assertTrue(rows, f"Unselected playlist entry was not rendered for {theme}")
+            self.assertIn(white, rows[0], f"{theme} did not render the row white")
+            self.assertNotIn(MP_Audio_Player.theme_body_ansi(theme), rows[0],
+                             f"{theme} leaked its body ink onto the row")
+
+    def test_every_theme_renders_playlist_rows_legibly(self):
+        """Every selectable theme paints a readable playlist row.
+
+        Two themes used to break this. Five had a body ink dark enough to be
+        black-on-dark (orbital_void_reflux, sensorium_interface,
+        dreamworlds_ultra, cyber_neon, dreamworlds_neon). The Whitest White was
+        missing from the text table, so theme_text_rgb fell through to the pink
+        default and drew pink rows on its white pane.
+
+        The Whitest White keeps black ink by design, so it is checked the other
+        way round rather than exempted.
+        """
+        white = "\033[38;2;255;255;255m"
+        black = "\033[38;2;0;0;0m"
+        pink_default = "\033[38;2;255;20;183m"
+        themes = [
+            "stream_of_frequency", "dreamworlds_ultra", "dynamic_rainbow_liquid_glass",
+            "cosmic_supernova", "dreamworlds_liquid", "dreamworlds_neon", "retro_studio",
+            "cyber_neon", "phosphor", "ice_cold", "retro_terminal",
+            "cosmic_dreamworlds_radioactive", "cosmic_dreamworlds", "orbital_void_reflux",
+            "sensorium_interface", "retro_linux_memories", "the_whitest_white",
+            "into_darkness_void_out",
+        ]
+        scanner = MagicMock()
+        scanner.get_mixes.return_value = [
+            {"name": "Mix 01 - Selected.flac", "path": "/p/1.flac", "ext": "FLAC", "size_mb": 650},
+            {"name": "Mix 02 - Plain Row.flac", "path": "/p/2.flac", "ext": "FLAC", "size_mb": 820},
+        ]
+        st = {
+            "title": "Mix 01 - Selected.flac", "path": "/p/1.flac", "state": "playing",
+            "index": 0, "position_fmt": "02:00", "duration_fmt": "60:00",
+            "progress_pct": 3.3, "volume": 85, "pitch_percent": 0,
+            "levels": [0.4] * 24, "peaks": [0.6] * 24,
+            "levels_left": [0.4] * 24, "levels_right": [0.4] * 24,
+            "peaks_left": [0.6] * 24, "peaks_right": [0.6] * 24,
+        }
+        for theme in themes:
+            ui = MP_Audio_Player.TerminalPlayerUI(
+                engine=None, scanner=scanner, ui_size_mode="NORMAL", is_remote=True,
+            )
+            ui.visualizer.theme = theme
+            ui.selected_row = 0
+            captured = []
+            with patch.dict(os.environ, {"MP_LIQUID_GLASS": "1"}), \
+                 patch("MP_Audio_Player._present_frame",
+                       side_effect=lambda lines, w, h: captured.extend(lines)), \
+                 patch("MP_Audio_Player._win_visible_size", return_value=(120, 40)):
+                ui._get_status = MagicMock(return_value=st)
+                ui._draw_frame()
+            rows = [line for line in captured if "Mix 02 - Plain Row.flac" in line]
+            self.assertTrue(rows, f"{theme} did not render the playlist row")
+            row = rows[0]
+            # The favourite star is deliberately neutral white on every theme,
+            # so only the ink of the row text itself is asserted.
+            if theme == "the_whitest_white":
+                self.assertIn(black, row, f"{theme} must use black ink on its white pane")
+                self.assertNotIn(pink_default, row,
+                                 f"{theme} fell through to the default pink ink")
+            else:
+                self.assertIn(white, row, f"{theme} did not render the playlist row white")
+                self.assertNotIn(black, row, f"{theme} rendered the row with dark ink")
 
     def test_volume_footer_sits_one_line_below_the_playlist(self):
         """MP Liquid places Vol one extra row below the playlist box."""

@@ -366,6 +366,10 @@ THEME_TEXT = {
     "tokyo": (255, 75, 20),
     "monokai": (56, 255, 20),
     "emerald": (20, 255, 93),
+    # The Whitest White paints a white console pane, so its body ink has to be
+    # black. It was missing from this table, which meant theme_text_rgb fell
+    # through to the pink default and drew pink rows on a white pane.
+    "the_whitest_white": (0, 0, 0),
 }
 
 

@@ -7630,10 +7630,20 @@ class TerminalPlayerUI:
         pal = self.visualizer.get_theme_palette()
         text_col = theme_body_ansi(self.visualizer.theme)
         is_lg = bool(os.environ.get("MP_LIQUID_GLASS"))
-        # Unselected playlist rows use the theme's body ink. A hard-coded WHITE
-        # made them unreadable on light themes and identical across every
-        # theme, which defeats the point of a palette.
-        playlist_text_col = text_col
+        # Unselected playlist rows read plain white on every theme, like the MP
+        # Gui menu. A per-theme body ink made five themes render black text on
+        # the dark player pane (orbital_void_reflux, sensorium_interface,
+        # dreamworlds_ultra, cyber_neon, dreamworlds_neon all sit below 25%
+        # luminance), which is unreadable.
+        #
+        # The Whitest White is the one exception: it paints a white console
+        # pane, so white ink there is the same unreadability in the other
+        # direction. It keeps black ink, which is what _THEME_PALETTES and
+        # _selection_bar_ansi already do for its borders and selection bar.
+        if self.visualizer.theme == "the_whitest_white":
+            playlist_text_col = theme_body_ansi(self.visualizer.theme)
+        else:
+            playlist_text_col = WHITE
         g_key = "MP Gui" if is_lg else "Spek"
         bold_s = "" if is_lg else BOLD
         hl_col, act_col = pal.get("highlight", COLOR_HOT_PURPLE), pal.get("active", COLOR_NEON_PINK)
