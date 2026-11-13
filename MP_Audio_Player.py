@@ -3236,6 +3236,9 @@ _THEME_PALETTES = {
     "sensorium_interface": {"highlight": "\033[38;2;0;245;255m", "active": "\033[38;2;240;168;216m", "border": "\033[38;2;0;245;255m", "accent": "\033[38;2;184;72;196m"},
     "retro_linux_memories": {"highlight": "\033[38;2;91;134;187m", "active": "\033[38;2;21;83;158m", "border": "\033[38;2;84;84;83m", "accent": "\033[38;2;240;173;78m"},
     "into_darkness_void_out": {"highlight": "\033[1;37m", "active": "\033[38;2;200;200;200m", "border": "\033[38;2;72;72;72m", "accent": "\033[1;37m"},
+    # Black ink on a white pane; the highlight is the same ink so a selected
+    # row is a white bar with black text rather than an invisible one.
+    "the_whitest_white": {"highlight": "\033[38;2;0;0;0m", "active": "\033[38;2;0;0;0m", "border": "\033[38;2;0;0;0m", "accent": "\033[38;2;0;0;0m"},
 }
 _DEFAULT_PALETTE = {"highlight": COLOR_HOT_PURPLE, "active": COLOR_NEON_PINK, "border": COLOR_HOT_PURPLE, "accent": COLOR_ELECTRIC_CYAN}
 
@@ -3358,6 +3361,7 @@ class EqualizerVisualizer:
         "orbital_void_reflux",
         "sensorium_interface",
         "retro_linux_memories",
+        "the_whitest_white",
         "into_darkness_void_out",
     ]
     THEME_NAMES = {
@@ -3377,6 +3381,7 @@ class EqualizerVisualizer:
         "orbital_void_reflux": "Orbital Void Reflux (Liquid Glass Skin)",
         "sensorium_interface": "Sensorium Interface (Liquid Glass Skin)",
         "retro_linux_memories": "Retro Linux Memories",
+        "the_whitest_white": "The Whitest White",
         "into_darkness_void_out": "Into Darkness (Void Out)",
     }
 

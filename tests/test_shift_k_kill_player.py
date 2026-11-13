@@ -40,7 +40,11 @@ class TestShiftKKillPlayer(unittest.TestCase):
 
             self.assertFalse(ui.running, "UI should stop running when Shift+K is pressed")
             mock_clean.assert_called_once()
-            mock_subproc.assert_called_once_with('pkill -9 -f "MP_Audio_Player"', shell=True)
+            # Shift+K still stops every other player, but through the argv-aware
+            # helper rather than `pkill -9 -f`, which also killed editors that
+            # merely had the file open and other users' players. The helper
+            # never shells out, so subprocess.run is not called at all.
+            mock_subproc.assert_not_called()
 
     def test_audio_player_lowercase_k_does_not_kill(self):
         """Verifies that lowercase 'k' (b'k') continues navigating the list and does NOT kill the player."""
@@ -84,32 +88,30 @@ class TestShiftKKillPlayer(unittest.TestCase):
             self.assertEqual(ui.search_query, "K", "Search query should receive 'K'")
             mock_subproc.assert_not_called()
 
-    def test_manager_press_enter_shift_k_runs_pkill(self):
-        """Verifies that pressing Shift+K in press_enter() executes pkill -9 -f 'MP_Audio_Player'."""
-        bash_test = f"""
-source "{MGR_SH}" 2>/dev/null || true
+    def _stop_helper(self) -> str:
+        text = MGR_SH.read_text(encoding="utf-8")
+        start = text.index("mp_stop_audio_players() {")
+        return text[start:text.index("\n}", start) + 2]
 
-# Mock pkill to record invocations
-pkill() {{
-    echo "MOCK_PKILL: $*" >> /tmp/test_pkill_shift_k.log
-}}
+    def test_manager_has_an_argv_aware_stop_helper(self):
+        """Shift+K must stop players without `pkill -f`, which is a substring match."""
+        helper = self._stop_helper()
+        # It restricts to this user and confirms the executable name.
+        self.assertIn('pgrep -u "$(id -u)"', helper)
+        self.assertIn("MP_Audio_Player*", helper)
+        # It must never fall back to a bare pattern kill.
+        self.assertNotIn('pkill -9 -f "MP_Audio_Player"', helper)
 
-rm -f /tmp/test_pkill_shift_k.log
-# Feed 'K' to press_enter
-printf 'K' | press_enter >/dev/null 2>&1 || true
-
-cat /tmp/test_pkill_shift_k.log 2>/dev/null || echo "NONE"
-rm -f /tmp/test_pkill_shift_k.log
-"""
-        res = subprocess.run(["bash", "-c", bash_test], capture_output=True, text=True)
-        self.assertEqual(res.returncode, 0)
-        self.assertIn("MOCK_PKILL: -9 -f MP_Audio_Player", res.stdout)
+    def test_manager_press_enter_shift_k_calls_the_helper(self):
+        content = MGR_SH.read_text(encoding="utf-8")
+        self.assertIn("mp_stop_audio_players", content)
+        self.assertNotIn('pkill -9 -f "MP_Audio_Player"', content)
 
     def test_manager_run_interactive_submenu_shift_k_present(self):
         """Verifies that CHAR:K is implemented in Mix_Archive_Manager.sh."""
         content = MGR_SH.read_text(encoding="utf-8")
         self.assertIn('CHAR:K) if [ "$search_mode" -eq 1 ]; then', content)
-        self.assertIn('pkill -9 -f "MP_Audio_Player"', content)
+        self.assertIn("mp_stop_audio_players", content)
 
     def test_liquid_glass_shift_k_handling(self):
         """Verifies that MP_Audio_Player_Liquid_Glass.py handles Shift+K in _on_key_press."""

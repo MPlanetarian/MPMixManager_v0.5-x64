@@ -162,8 +162,9 @@ class TestTraktorHistoryRangeExtraction(unittest.TestCase):
 
 class TestTracklistSuiteMenuIntegration(unittest.TestCase):
     def test_option13_menu_has_option8_and_mp_player_label(self):
-        """Verifies Option 13 presents Option 8 for Traktor history range and Option 2 labeled MP Audio Player."""
-        piped_input = "13\n0\n36\n"
+        """Verifies the Tracklist suite (option 14) presents option 8 for the Traktor
+        history range and option 2 labelled MP Audio Player."""
+        piped_input = "14\n0\n38\n"
         res = subprocess.run(
             ["bash", str(MANAGER_SCRIPT)],
             input=piped_input,

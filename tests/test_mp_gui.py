@@ -123,7 +123,10 @@ cycle_menu_theme
         self.assertEqual(
             result.stdout.splitlines(),
             [
-                "into_darkness_void_out",
+                # the_whitest_white sits directly after retro_linux_memories
+                # and before into_darkness_void_out in both the manager's and
+                # the player's cycle list.
+                "the_whitest_white",
                 "retro_studio",
                 "dynamic_rainbow_liquid_glass",
                 "cosmic_dreamworlds_radioactive",

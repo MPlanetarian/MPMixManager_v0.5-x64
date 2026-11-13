@@ -103,8 +103,13 @@ class TestTracklistSuiteNavigation(unittest.TestCase):
         self.assertLess(duration, 2.0, "detect_active_music_player took too long to execute!")
 
     def test_option13_option1_piped_execution(self):
-        """Verifies navigating Option 13 -> Option 1 -> Option 0 loads and exits cleanly."""
-        piped_input = "13\n1\n0\n0\n36\n"
+        """Verifies navigating Option 14 -> Option 1 -> Option 0 loads and exits cleanly.
+        
+        Option 14 is the Tracklist suite; 13 is Storage Management. 38 is Exit.
+        """
+        # 38 is Exit Manager. 36 used to be, until it became "MP Mix Manager
+        # GUI", so the old script left the manager sitting on the main menu.
+        piped_input = "14\n1\n0\n0\n38\n"
         start = time.time()
         res = subprocess.run(
             ["bash", str(MANAGER_SCRIPT)],
