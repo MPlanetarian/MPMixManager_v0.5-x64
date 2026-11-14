@@ -21,7 +21,7 @@ import unittest
 import urllib.error
 import urllib.request
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from scripts import mix_web_companion as companion
 
@@ -288,10 +288,38 @@ class TestAssistantEndpoints(AssistantTestBase):
         stream.assert_not_called()
 
     def test_a_normal_prompt_is_streamed(self):
-        status, body = self.server.post(
-            "/api/assistant/chat",
-            {"messages": [{"role": "user", "content": "hello"}]},
+        """The proxy relays the agent's SSE stream to the phone.
+
+        This used to call whatever agent happened to be listening on
+        127.0.0.1:11435. On a workstation running MP Harmony that means a real
+        model inference: the test then took as long as the model did and hung
+        outright when the agent was mid-request. It now talks to a local stub,
+        which is what actually pins the proxy's behaviour.
+        """
+        sse = (
+            b'data: {"choices":[{"delta":{"content":"hi"}}]}\n\n'
+            b"data: [DONE]\n\n"
         )
+        # The agent call happens inside the server's own handler, one thread
+        # away from the test client. Patching `urllib.request.urlopen` would
+        # also capture the client's own POST, so the patch is scoped with a
+        # predicate that only intercepts the agent's /v1/chat/completions.
+        response = MagicMock()
+        response.__iter__ = lambda _self: iter(sse.splitlines(keepends=True))
+        response.status = 200
+        real_urlopen = urllib.request.urlopen
+
+        def fake_urlopen(request, *args, **kwargs):
+            url = getattr(request, "full_url", str(request))
+            if "/v1/chat/completions" in url:
+                return response
+            return real_urlopen(request, *args, **kwargs)
+
+        with patch.object(companion.urllib.request, "urlopen", side_effect=fake_urlopen):
+            status, body = self.server.post(
+                "/api/assistant/chat",
+                {"messages": [{"role": "user", "content": "hello"}]},
+            )
         text = body.decode("utf-8", "replace")
         self.assertEqual(status, 200)
         self.assertIn("data: ", text)

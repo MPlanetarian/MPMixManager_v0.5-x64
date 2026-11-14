@@ -1,15 +1,22 @@
-"""Security tests for the Web Companion (0.5.1).
+"""Security tests for the Web Companion.
 
-These pin the four defects that made the companion a LAN-exposed control
-surface with no authentication:
+These pin the defects that made the companion a LAN-exposed control surface,
+and the access model it now follows instead:
 
 1. `/api/stream?file=` served any absolute path - `/etc/passwd`, `config.env`,
-   an SSH private key - to an unauthenticated caller. Containment is now
-   enforced by resolving the path and requiring it inside a library root.
-2. There was no authentication at all and the default bind was `0.0.0.0`.
+   an SSH private key - to any caller. Containment is now enforced by
+   resolving the path and requiring it inside a library root.
+2. The default bind was `0.0.0.0`. It is loopback unless the operator opts
+   into LAN exposure.
 3. State-changing GETs plus `Access-Control-Allow-Origin: *` allowed a
-   cross-origin form to drive playback and spawn processes.
+   cross-origin form to drive playback and spawn processes. Mutations now need
+   the `X-MP-Companion` header and a same-origin request.
 4. `bytes=100-50` produced a negative `Content-Length`.
+
+There is deliberately **no access token**: a phone should just open the printed
+URL. Access control is the opt-in `WEB_COMPANION_ALLOW_CIDR` list, so that list
+is tested hard here, along with the containment and CSRF checks that carry the
+real risk.
 
 Unlike the other companion tests these drive the real request handler over a
 loopback socket, because a header-level assertion cannot prove that a request
@@ -43,69 +50,37 @@ def _load_companion():
     return module
 
 
-class TokenStorageTest(unittest.TestCase):
-    def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        self.dir = Path(self.tmp.name)
-        self.addCleanup(self.tmp.cleanup)
+class AllowlistAccessModelTest(unittest.TestCase):
+    """The companion has no password; access is gated by an opt-in CIDR list.
 
-    def test_token_is_created_on_first_call(self):
-        token = sec.ensure_token(self.dir)
-        self.assertGreaterEqual(len(token), 32)
-        self.assertTrue(sec.token_path(self.dir).is_file())
+    That is a deliberate design choice (a phone should just open the printed
+    URL). It makes the LAN allowlist the only access control, so it has to be
+    exactly right: an empty list allows everyone, and a configured list must
+    reject every peer outside it.
+    """
 
-    def test_token_file_is_owner_only(self):
-        """A world-readable token file would defeat the whole point."""
-        sec.ensure_token(self.dir)
-        mode = sec.token_path(self.dir).stat().st_mode & 0o777
-        self.assertEqual(mode, 0o600)
+    @classmethod
+    def setUpClass(cls):
+        cls.mwc = _load_companion()
 
-    def test_token_is_stable_across_calls(self):
-        self.assertEqual(sec.ensure_token(self.dir), sec.ensure_token(self.dir))
+    def test_no_token_is_required(self):
+        # Guards the design: if someone reintroduces a mandatory token, this
+        # test should be updated deliberately rather than silently passing.
+        for name in ("COMPANION_TOKEN", "COMPANION_REQUIRE_AUTH"):
+            self.assertFalse(
+                hasattr(self.mwc, name),
+                f"{name} reappeared; the access model changed",
+            )
 
-    def test_rotation_changes_the_token(self):
-        first = sec.ensure_token(self.dir)
-        second = sec.ensure_token(self.dir, rotate=True)
-        self.assertNotEqual(first, second)
-        self.assertEqual(sec.load_token(self.dir), second)
+    def test_handler_exposes_the_single_gate(self):
+        self.assertTrue(hasattr(self.mwc.CompanionHandler, "_request_allowed"))
 
-    def test_environment_token_wins(self):
-        with mock.patch.dict("os.environ", {"MP_COMPANION_TOKEN": "from-env"}):
-            self.assertEqual(sec.ensure_token(self.dir), "from-env")
+    def test_an_empty_allowlist_allows_every_peer(self):
+        self.assertTrue(sec.is_allowed_client(("8.8.8.8", 1234), []))
 
-    def test_no_token_yet_returns_empty(self):
-        self.assertEqual(sec.load_token(self.dir), "")
-
-
-class AuthorizationTest(unittest.TestCase):
-    EXPECTED = "s3cret-token-value"
-
-    def test_missing_token_is_rejected(self):
-        self.assertFalse(sec.is_authorized({}, self.EXPECTED, "/"))
-
-    def test_bearer_header_is_accepted(self):
-        headers = {"Authorization": f"Bearer {self.EXPECTED}"}
-        self.assertTrue(sec.is_authorized(headers, self.EXPECTED, "/"))
-
-    def test_wrong_bearer_is_rejected(self):
-        headers = {"Authorization": "Bearer wrong"}
-        self.assertFalse(sec.is_authorized(headers, self.EXPECTED, "/"))
-
-    def test_query_token_is_accepted(self):
-        self.assertTrue(
-            sec.is_authorized({}, self.EXPECTED, "/", {"token": [self.EXPECTED]})
-        )
-
-    def test_cookie_token_is_accepted(self):
-        headers = {"Cookie": f"other=1; {sec.TOKEN_COOKIE}={self.EXPECTED}"}
-        self.assertTrue(sec.is_authorized(headers, self.EXPECTED, "/"))
-
-    def test_healthz_needs_no_token(self):
-        self.assertTrue(sec.is_authorized({}, self.EXPECTED, "/healthz"))
-
-    def test_empty_expected_disables_auth(self):
-        """A deliberate operator opt-out must not lock them out."""
-        self.assertTrue(sec.is_authorized({}, "", "/"))
+    def test_a_configured_allowlist_rejects_an_outside_peer(self):
+        networks = sec.parse_cidr_list("192.168.1.0/24")
+        self.assertFalse(sec.is_allowed_client(("10.0.0.5", 1), networks))
 
 
 class CsrfTest(unittest.TestCase):
@@ -249,7 +224,13 @@ class MessageSanitizerTest(unittest.TestCase):
 
 
 class LiveServerSecurityTest(unittest.TestCase):
-    """Drive the real handler, because only that proves a request is refused."""
+    """Drive the real handler, because only that proves a request is refused.
+
+    These are the tests for the original vulnerability: `/api/stream?file=`
+    served any absolute path - `/etc/passwd`, `config.env`, an SSH key - to
+    anyone who could reach the port. Containment has to hold even though the
+    dashboard itself is open on the LAN by design.
+    """
 
     @classmethod
     def setUpClass(cls):
@@ -261,11 +242,12 @@ class LiveServerSecurityTest(unittest.TestCase):
         cls.track.write_bytes(b"fLaC" + b"\0" * 8000)
         cls.root = root
         cls.config = Path(cls.tmp.name)
+        # A file outside the archive, standing in for config.env / an SSH key.
+        cls.secret = cls.config / "config.env"
+        cls.secret.write_text('SMTP_PASSWORD="hunter2"\n' * 10)
 
         cls.mwc.CONFIG_DIR = cls.config
         cls.mwc._archive_dirs = lambda: [root]
-        cls.mwc.COMPANION_TOKEN = sec.ensure_token(cls.config)
-        cls.mwc.COMPANION_REQUIRE_AUTH = True
         cls.mwc.COMPANION_CIDRS = []
 
         cls.server = cls.mwc.CompanionServer(
@@ -289,79 +271,167 @@ class LiveServerSecurityTest(unittest.TestCase):
         cls.server.server_close()
         cls.tmp.cleanup()
 
-    def _get(self, path, headers=None):
+    def _get(self, path, headers=None, limit=200):
         request = urllib.request.Request(
             f"http://127.0.0.1:{self.port}{path}", headers=headers or {}
         )
         try:
             response = urllib.request.urlopen(request, timeout=5)
-            return response.status, dict(response.headers), response.read(200)
+            return response.status, dict(response.headers), response.read(limit)
         except urllib.error.HTTPError as err:
-            return err.code, dict(err.headers), err.read(200)
-
-    def _auth(self, extra=None):
-        headers = {"Authorization": f"Bearer {self.mwc.COMPANION_TOKEN}"}
-        headers.update(extra or {})
-        return headers
+            return err.code, dict(err.headers), err.read(limit)
 
     def test_healthz_is_open(self):
         self.assertEqual(self._get("/healthz")[0], 200)
 
-    def test_dashboard_requires_a_token(self):
-        self.assertEqual(self._get("/")[0], 401)
+    def test_dashboard_opens_on_the_lan_without_a_password(self):
+        # The design decision: a device that can reach the port may use it.
+        status, headers, _ = self._get("/", limit=200)
+        self.assertEqual(status, 200)
+        self.assertIn("text/html", headers.get("Content-Type", ""))
 
-    def test_passwd_read_requires_a_token_first(self):
-        self.assertEqual(self._get("/api/stream?file=/etc/passwd")[0], 401)
-
-    def test_passwd_is_refused_even_with_a_valid_token(self):
+    def test_etc_passwd_is_refused(self):
         """The regression this file exists for."""
-        status, _, _ = self._get("/api/stream?file=/etc/passwd", self._auth())
+        status, _, body = self._get("/api/stream?file=/etc/passwd")
         self.assertEqual(status, 404)
+        self.assertNotIn(b"root:x:", body)
 
-    def test_config_env_is_refused_with_a_valid_token(self):
-        secret = Path(self.tmp.name) / "config.env"
-        secret.write_text('SMTP_PASSWORD="hunter2"\n' * 10)
-        status, _, body = self._get(
-            f"/api/stream?file={secret}", self._auth()
-        )
+    def test_config_env_is_refused(self):
+        status, _, body = self._get(f"/api/stream?file={self.secret}")
+        self.assertEqual(status, 404)
+        self.assertNotIn(b"hunter2", body)
+
+    def test_traversal_out_of_the_archive_is_refused(self):
+        escape = self.root / ".." / "config.env"
+        status, _, body = self._get(f"/api/stream?file={escape}")
         self.assertEqual(status, 404)
         self.assertNotIn(b"hunter2", body)
 
     def test_legitimate_track_streams(self):
-        status, _, body = self._get(
-            f"/api/stream?file={self.track}", self._auth()
-        )
+        status, _, body = self._get(f"/api/stream?file={self.track}")
         self.assertEqual(status, 200)
         self.assertTrue(body.startswith(b"fLaC"))
 
     def test_security_headers_are_present(self):
-        _, headers, _ = self._get("/", self._auth())
+        _, headers, _ = self._get("/", limit=200)
         self.assertIn("Content-Security-Policy", headers)
         self.assertEqual(headers.get("X-Frame-Options"), "DENY")
         self.assertEqual(headers.get("X-Content-Type-Options"), "nosniff")
 
     def test_wildcard_cors_is_gone(self):
-        _, headers, _ = self._get("/", self._auth())
+        _, headers, _ = self._get("/", limit=200)
         self.assertNotIn("Access-Control-Allow-Origin", headers)
 
     def test_mutation_without_csrf_header_is_refused(self):
         request = urllib.request.Request(
             f"http://127.0.0.1:{self.port}/api/control?action=pause",
             data=b"{}",
-            headers=self._auth(),
+            headers={},
             method="POST",
         )
         with self.assertRaises(urllib.error.HTTPError) as ctx:
             urllib.request.urlopen(request, timeout=5)
         self.assertEqual(ctx.exception.code, 403)
 
+    def test_mutation_with_the_header_is_allowed(self):
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{self.port}/api/control?action=pause",
+            data=b"{}",
+            headers={sec.REQUIRED_HEADER: "1"},
+            method="POST",
+        )
+        try:
+            response = urllib.request.urlopen(request, timeout=5)
+            code = response.status
+        except urllib.error.HTTPError as err:
+            code = err.code
+        # The action itself may fail with no session, but it must not be
+        # refused by the CSRF gate.
+        self.assertNotEqual(code, 403)
+
+    def test_a_peer_outside_the_allowlist_is_refused(self):
+        """The one access control: an explicit CIDR list."""
+        mwc = self.mwc
+        saved = mwc.COMPANION_CIDRS
+        mwc.COMPANION_CIDRS = sec.parse_cidr_list("10.99.0.0/24")
+        try:
+            status, _, _ = self._get("/healthz")
+        finally:
+            mwc.COMPANION_CIDRS = saved
+        # 127.0.0.1 is not inside 10.99.0.0/24.
+        self.assertEqual(status, 403)
+
     def test_reversed_range_is_unsatisfiable(self):
         status, headers, _ = self._get(
             f"/api/stream?file={self.track}",
-            self._auth({"Range": "bytes=100-50"}),
+            {"Range": "bytes=100-50"},
         )
         self.assertEqual(status, 416)
         self.assertNotIn("-49", headers.get("Content-Length", ""))
+
+
+class ResponseFramingTest(unittest.TestCase):
+    """Every response must be self-delimiting on an HTTP/1.1 connection.
+
+    `protocol_version = "HTTP/1.1"` turns on keep-alive, so a body without
+    `Content-Length` (or chunked encoding) leaves the client waiting for an
+    EOF that only arrives when the 30 s idle timeout fires. curl reported
+    "200 in 25.0s" and the dashboard's polls appeared to stall; the fix is a
+    `Content-Length` on every non-streaming response.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.mwc = _load_companion()
+
+    def setUp(self):
+        self.handler = self.mwc.CompanionHandler.__new__(self.mwc.CompanionHandler)
+        self.handler.headers = {}
+        self.handler.wfile = mock.MagicMock()
+        self.sent = []
+        self.handler.send_response = mock.MagicMock()
+        self.handler.send_header = mock.MagicMock(
+            side_effect=lambda name, value: self.sent.append((name, value))
+        )
+        self.handler.end_headers = mock.MagicMock()
+        self.handler.close_connection = False
+        self.handler.send_error = mock.MagicMock()
+
+    def _framing(self):
+        headers = {name: value for name, value in self.sent}
+        written = b"".join(
+            call.args[0] for call in self.handler.wfile.write.call_args_list
+        )
+        return headers, written
+
+    def test_send_json_declares_its_length(self):
+        self.handler._send_json(200, {"ok": True, "n": 1})
+        headers, written = self._framing()
+        self.assertEqual(headers["Content-Length"], str(len(written)))
+
+    def test_send_plain_declares_its_length(self):
+        self.handler._send_plain(403, "nope")
+        headers, written = self._framing()
+        self.assertEqual(headers["Content-Length"], str(len(written)))
+
+    def test_allowlist_refusal_declares_its_length(self):
+        """A 403 must be self-delimiting too, or the client waits for EOF."""
+        mwc = self.mwc
+        saved = mwc.COMPANION_CIDRS
+        mwc.COMPANION_CIDRS = sec.parse_cidr_list("10.99.0.0/24")
+        self.handler.client_address = ("192.168.1.50", 1234)
+        try:
+            self.assertFalse(self.handler._client_allowed())
+        finally:
+            mwc.COMPANION_CIDRS = saved
+        headers, written = self._framing()
+        self.assertEqual(headers["Content-Length"], str(len(written)))
+
+    def test_empty_wav_refusal_declares_its_length(self):
+        with mock.patch.object(self.mwc, "is_streamable_file", return_value=False):
+            self.handler._serve_audio_stream("/tmp/whatever.wav")
+        headers, written = self._framing()
+        self.assertEqual(headers["Content-Length"], str(len(written)))
 
 
 class DefaultBindTest(unittest.TestCase):

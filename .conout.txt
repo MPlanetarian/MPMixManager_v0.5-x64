@@ -1,2 +1,0 @@
-REPLY1=3
-REPLY2=2
