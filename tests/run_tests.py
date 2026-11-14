@@ -164,8 +164,15 @@ def main(argv=None) -> int:
             failed.append(f"{name} (timed out)")
             print(f"  TIMEOUT {name}", flush=True)
         else:
+            parsed = summary["failures"] or summary["errors"]
             failed.extend(summary["failures"])
             errored.extend(summary["errors"])
+            if not parsed:
+                # The child died without printing a FAIL/ERROR line (a signal,
+                # a segfault, or a crash during interpreter teardown). Flag the
+                # module itself, otherwise the run prints FAIL and then reports
+                # "0 failed" and exits OK, hiding the broken module.
+                failed.append(f"{name} (module exited rc={code} without a result)")
             print(f"  FAIL  {name}", flush=True)
 
     elapsed = time.time() - started
@@ -236,6 +243,15 @@ def _run_module(name: str, verbose: bool, failfast: bool):
         skipped = int(m.group(1))
     failures = re.findall(r"^(?:FAIL|ERROR): (\S+)", output, re.M)
     errors = re.findall(r"^ERROR: (\S+)", output, re.M)
+    # A module that dies without producing a result line (a signal, an
+    # interpreter crash inside an extension module) used to be reported as a
+    # bare "exited rc=N without a result", which tells whoever reads the log
+    # nothing. Surface the tail of its own output instead.
+    if not run and proc.returncode != 0:
+        tail = " | ".join(
+            line.strip() for line in output.strip().splitlines()[-6:] if line.strip()
+        )
+        errors.append(f"{name} (exited rc={proc.returncode}; {tail[:400]})")
     return proc.returncode, {
         "run": run, "skipped": skipped,
         "failures": [f"{name}.{f}" for f in failures if f not in errors],

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 from __future__ import annotations
-import os, re, sys, time, datetime, math, random, json, socket, select, shutil, argparse, threading, subprocess, unicodedata, queue, collections, signal, functools, colorsys, re
+import os, re, sys, time, datetime, math, random, json, socket, select, shutil, argparse, threading, subprocess, unicodedata, queue, collections, signal, functools, colorsys, errno, re
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple, Union, Sequence
 
@@ -87,6 +87,39 @@ BOLD, DIM, ITALIC, NC = "\033[1m", "\033[2m", "\033[3m", "\033[0m"
 COLOR_HOT_PURPLE, COLOR_INDIGO_BLUE, COLOR_LILAC = "\033[38;2;166;77;255m", "\033[38;2;102;102;255m", "\033[38;2;153;153;255m"
 COLOR_TRAFFIC_GREEN, COLOR_TRAFFIC_AMBER, COLOR_TRAFFIC_RED = "\033[38;2;0;255;0m", "\033[38;2;255;153;51m", "\033[38;2;255;0;0m"
 COLOR_MAIN_FG, COLOR_NEON_PINK, COLOR_ELECTRIC_CYAN, WHITE = "\033[38;2;209;209;224m", "\033[38;2;247;37;133m", "\033[38;2;0;229;255m", "\033[1;38;2;255;255;255m"
+# The "Color Theme: <name>" notice under the equaliser is black on every theme
+# whose glass pane is pale. Reached by [c]/[C] and when another window changes
+# the shared theme file. The pale pane is the same light surface on all of those
+# themes, so black is the one ink that stays readable there; the theme's own
+# accent washed out on the light palettes and clashed with the rest.
+COLOR_THEME_NOTICE = "\033[38;2;0;0;0m"
+
+# Two themes paint the opaque charcoal pane instead of the pale one, and black
+# on charcoal is invisible (1.7:1, and 1.0:1 on Into Darkness). Those keep the
+# light ink that every other body line already uses there.
+THEME_DARK_GLASS_INK = {
+    "retro_linux_memories": "\033[1;38;2;236;240;244m",
+    "into_darkness_void_out": "\033[1;38;2;236;240;244m",
+}
+# Kept as an alias: the "Color Theme" notice was the first user of this mapping.
+THEME_NOTICE_DARK_GLASS = THEME_DARK_GLASS_INK
+
+
+def dark_glass_ink(theme_name: str, pale_ink: str = COLOR_THEME_NOTICE) -> str:
+    """Ink that stays readable on this theme's glass pane.
+
+    ``pale_ink`` is used on the sixteen pale-pane themes; the two charcoal-pane
+    themes get the light ink instead. Shared by the "Color Theme" notice and
+    the PLAYING badge so the same rule cannot drift between them.
+    """
+    return THEME_DARK_GLASS_INK.get(theme_name, pale_ink)
+
+
+def theme_notice_ansi(theme_name: str) -> str:
+    """"Color Theme" ink: black on the pale pane, light ink on the dark pane."""
+    return dark_glass_ink(theme_name)
+
+
 RED, GREEN, YELLOW, MAGENTA, CYAN = COLOR_TRAFFIC_RED, COLOR_TRAFFIC_GREEN, COLOR_TRAFFIC_AMBER, COLOR_HOT_PURPLE, COLOR_LILAC
 
 CONFIG_DIR = Path.home() / ".config" / "mix-manager"
@@ -135,6 +168,70 @@ _PRISM_LEVELS_LIMITED = (" ", "▄", "▄", "▄", "▄", "█", "█", "█", "
 PLAYLIST_ACTIVE_MARK = "\u25ba"
 _MOUSE_SGR_RE = re.compile(b"\x1b\\[<(\\d+);(\\d+);(\\d+)([mM])")
 REC_MAX_FILE_BYTES = 3 * 1024 * 1024 * 1024
+
+
+def _take_escape(buf: bytes) -> tuple:
+    """Return (sequence, rest) for the escape at the front of ``buf``.
+
+    ``sequence`` is None when ``buf`` holds only the start of a sequence and
+    more bytes are needed to decide what the key was.
+    """
+    # Bare ESC is the Escape key once it stands alone.
+    if len(buf) == 1:
+        return buf, b""
+    lead = buf[1:2]
+    if lead == b"[":
+        index = 2
+        # Parameter (0x30-0x3F) and intermediate (0x20-0x2F) bytes precede the
+        # final byte (0x40-0x7E). ESC [ on its own is still incomplete.
+        while index < len(buf) and 0x20 <= buf[index] <= 0x3F:
+            index += 1
+        if index >= len(buf):
+            return None, buf  # parameters not finished
+        if 0x40 <= buf[index] <= 0x7E:
+            return buf[:index + 1], buf[index + 1:]
+        return None, buf  # not a valid CSI yet
+    if lead == b"O":
+        if len(buf) < 3:
+            return None, buf  # SS3 needs its final byte
+        return buf[:3], buf[3:]
+    if lead == b"]":
+        end = buf.find(b"\x07")
+        if end < 0:
+            return None, buf  # OSC is BEL-terminated
+        return buf[:end + 1], buf[end + 1:]
+    # ESC plus one printable byte is Alt+key.
+    return buf[:2], buf[2:]
+
+
+def split_key_burst(data: bytes) -> tuple:
+    """Split one read() burst into separate key presses.
+
+    A held arrow key arrives as several sequences in a single read, e.g.
+    ``\\x1b[B\\x1b[B\\x1b[B``. ``_process_key`` used to compare the whole
+    chunk against each binding, so the burst matched nothing and every press
+    in it was discarded: the playlist cursor never moved while an arrow was
+    held or tapped quickly. Complete sequences are returned in order, and a
+    trailing partial sequence is returned as the remainder to be completed by
+    the next read. Consecutive plain bytes stay together so a multi-byte
+    character or a pasted word is not chopped up.
+    """
+    keys, buf = [], (data or b"")
+    while buf:
+        if buf[0] != 0x1B:
+            nxt = buf.find(b"\x1b")
+            if nxt < 0:
+                keys.append(buf)
+                break
+            keys.append(buf[:nxt])
+            buf = buf[nxt:]
+            continue
+        seq, rest = _take_escape(buf)
+        if seq is None:
+            return keys, buf  # incomplete: wait for the next read
+        keys.append(seq)
+        buf = rest
+    return keys, b""
 
 _LIMITED_GLYPHS = os.name == "nt" or sys.platform in ("win32", "cygwin") or bool(os.environ.get("MSYSTEM"))
 def _use_limited_console_glyphs() -> bool: return _LIMITED_GLYPHS
@@ -314,6 +411,90 @@ def format_seconds(seconds: float) -> str:
     s = int(seconds)
     h, m, sec = s // 3600, (s % 3600) // 60, s % 60
     return f"{h:02d}:{m:02d}:{sec:02d}" if h > 0 else f"{m:02d}:{sec:02d}"
+
+# ------------------------------------------------------------------------------
+# Track Play Log — one line per track started, for statistics and the AI agent.
+#
+# Kept apart from MP_Error.log (errors) and logs/user_activity.jsonl (app
+# telemetry) so plays can be analysed on their own. The line layout is fixed:
+# tab separated, one header row when the file is first created, so pandas can
+# read it with read_csv(sep="\t", comment="#").
+# ------------------------------------------------------------------------------
+PLAY_LOG_NAME = "MP_Audio_Player_Log.log"
+PLAY_LOG_HEADER = (
+    "# MP Audio Player - Track Play Log (one row per track start, local time)\n"
+    "# timestamp\tevent\ttitle\tpath\tfolder\tformat\tsize_mb\tduration_sec"
+    "\tstart_position_sec\tplaylist_index\tplaylist\tmode\tplayer_version\n"
+)
+
+
+def get_play_log_path() -> Path:
+    """Writable play log: the app's logs/ folder, or ~/.config/mix-manager."""
+    for folder in (get_base_dir() / "logs", CONFIG_DIR):
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+            return folder / PLAY_LOG_NAME
+        except Exception:
+            continue
+    return CONFIG_DIR / PLAY_LOG_NAME
+
+
+def _write_play_log_row(row: str) -> bool:
+    """Append `row` to the first writable play log; False if none accepted it."""
+    primary = get_play_log_path()
+    candidates = [primary] + [f / PLAY_LOG_NAME for f in (get_base_dir() / "logs", CONFIG_DIR) if (f / PLAY_LOG_NAME) != primary]
+    for log_path in candidates:
+        try:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            new_file = not (log_path.is_file() and log_path.stat().st_size > 0)
+            with open(log_path, "a", encoding="utf-8") as fh:
+                if new_file:
+                    fh.write(PLAY_LOG_HEADER)
+                fh.write(row)
+            return True
+        except Exception:
+            continue
+    return False
+
+
+def _play_log_field(value: Any) -> str:
+    """Collapse a value to one tab-free cell so a row stays parseable."""
+    text = " ".join(str(value if value is not None else "").splitlines())
+    text = text.replace("\t", " ").strip()
+    return text or "-"
+
+
+def log_track_played(track: Optional[Dict[str, Any]], *, mode: str = "",
+                     playlist_index: int = -1, playlist: str = "",
+                     duration_sec: float = 0.0, start_position: float = 0.0,
+                     event: str = "PLAY") -> bool:
+    """Append one date/time stamped play record for `track`.
+
+    Never raises: a full disk or a read-only install must not stop playback.
+    """
+    if not isinstance(track, dict):
+        return False
+    try:
+        path = str(track.get("path") or "")
+        title = str(track.get("title") or track.get("name") or (os.path.basename(path) if path else "Unknown"))
+        row = "\t".join(_play_log_field(v) for v in (
+            datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            event,
+            title,
+            path,
+            track.get("folder", ""),
+            track.get("ext", ""),
+            f"{float(track.get('size_mb') or 0.0):.2f}",
+            f"{float(duration_sec or 0.0):.2f}",
+            f"{float(start_position or 0.0):.2f}",
+            playlist_index,
+            playlist,
+            mode,
+            VERSION,
+        ))
+        return _write_play_log_row(row + "\n")
+    except Exception:
+        return False
 
 def _run_bg(cmd: Union[List[str], str]) -> bool:
     try:
@@ -1138,6 +1319,9 @@ def load_engine_playlist(engine, playlist=None, mode: str = "MUSIC", playlist_pa
             mode = "MIX_ARCHIVE"
     engine.playlist = pl
     engine.mode = mode
+    # Remember where this playlist came from; the play log records it per row.
+    if playlist_path:
+        engine.playlist_path = str(playlist_path)
     current = ""
     track = getattr(engine, "current_track", None)
     if isinstance(track, dict):
@@ -1197,6 +1381,7 @@ class SoundFileAudioSource(AudioSource):
     def __init__(self, path: str, initial_sf: Optional[Any] = None):
         _ensure_audio_backends()
         self.path, self.sf, self._current_frame = str(path), initial_sf, 0
+        self._read_error_reported = False
         if self.sf is None: self._open_with_retry(4)
         self.samplerate, self.channels, self.frames = int(self.sf.samplerate), int(self.sf.channels), int(getattr(self.sf, "frames", 0))
 
@@ -1215,23 +1400,51 @@ class SoundFileAudioSource(AudioSource):
                 return
             except Exception as e:
                 last_exc = e
+                # A path that no longer exists will not appear by retrying, and
+                # the sleep below blocked the feeder thread for seconds per
+                # call. Bail out immediately; only a live file is worth retrying
+                # (a network mount can briefly refuse an open).
+                if not os.path.exists(self.path):
+                    break
                 if attempt < max_retries: time.sleep(0.25 * attempt)
         if last_exc: raise last_exc
 
     def read(self, frames: int) -> np.ndarray:
+        last_exc = None
         for attempt in range(1, 4):
             try:
                 if self.sf is None: self._open_with_retry(3, self._current_frame)
                 data = self.sf.read(frames, dtype='float32')
                 self._current_frame += len(data)
+                self._read_error_reported = False
                 return data
             except Exception as e:
-                try: mp_log_error("MP_Audio_Player", f"SoundFile read glitch: {self.path}", e)
-                except Exception: pass
+                # Log only the failure that survives every retry. Logging inside
+                # the loop turned one unreadable file into three entries per
+                # read() call, and the feeder retried it thousands of times.
+                last_exc = e
+                if not os.path.exists(self.path):
+                    break
                 try: self._open_with_retry(3, self._current_frame)
                 except Exception: pass
                 if attempt < 3: time.sleep(0.15 * attempt)
+        if last_exc is not None:
+            self._log_missing_once(last_exc)
         return np.zeros((0, self.channels), dtype=np.float32)
+
+    def _log_missing_once(self, exc: Exception) -> bool:
+        """Report a permanently unreadable file once, not once per read.
+
+        Returning True means "already reported". The flag is per-source-object,
+        so a track that recovers after a transient stall still logs if it later
+        fails for real, while a deleted file stops filling the log.
+        """
+        if getattr(self, "_read_error_reported", False):
+            return True
+        self._read_error_reported = True
+        try: mp_log_error("MP_Audio_Player", f"Audio file unreadable, giving up: {self.path}", exc)
+        except Exception: pass
+        return False
 
     def seek(self, frame: int):
         target = max(0, min(frame, max(0, self.frames - 1) if self.frames > 0 else frame))
@@ -1407,16 +1620,21 @@ class DSDiffAudioSource(AudioSource):
         self._feeder = None
 
 def open_audio_source(path: str) -> AudioSource:
+    # A .dff that fails DSDIFF parsing is expected input: the file may be a
+    # different container, or corrupt. Falling through to FFmpeg is the normal
+    # path, so it is not an error. The original cause is attached to the final
+    # exception only when every backend fails, which is worth a log entry.
+    dsdiff_exc: Optional[Exception] = None
     if dsdiff_reader is not None and dsdiff_reader.is_dsdiff(path):
         try: return DSDiffAudioSource(path)
-        except Exception as exc:
-            try: mp_log_error("MP_Audio_Player", f"DSDIFF reader failed, trying FFmpeg: {path}", exc)
-            except Exception: pass
+        except Exception as exc: dsdiff_exc = exc
     order = (FFmpegAudioSource, SoundFileAudioSource) if prefers_ffmpeg(path) else (SoundFileAudioSource, FFmpegAudioSource)
     last_exc: Exception = RuntimeError(f"No audio backend could open {path}")
     for cls in order:
         try: return cls(path)
         except Exception as e: last_exc = e
+    if dsdiff_exc is not None:
+        raise RuntimeError(f"No audio backend could open {path} (DSDIFF: {dsdiff_exc})") from dsdiff_exc
     raise last_exc
 
 class AudioPrefetchBuffer:
@@ -1500,30 +1718,37 @@ class AudioFeederThread(threading.Thread):
     def run(self):
         cs = self.chunk_frames
         while self._running:
+            # The engine drops its reference on stop/load, so a shutdown or a
+            # track change can leave this thread without a source. That is a
+            # normal race, not a playback error worth a traceback.
+            source = self.source
+            if source is None:
+                break
             with self._seek_lock:
                 st, self._seek_target = self._seek_target, None
             if st is not None:
-                try: self.source.seek(st); self.current_frame = st; self.audio_buffer.clear()
+                try: source.seek(st); self.current_frame = st; self.audio_buffer.clear()
                 except Exception as e:
+                    if not self._running: break
                     try: mp_log_error("MP_Audio_Player", f"Feeder seek error: {e}", e)
                     except Exception: pass
             if self.audio_buffer.available_frames >= self.audio_buffer.max_frames:
                 with self._wake_cond: self._wake_cond.wait(timeout=0.08)
                 continue
-            try: chunk = self.source.read(cs)
+            try: chunk = source.read(cs)
             except Exception: time.sleep(0.2); continue
             if len(chunk) > 0:
-                self.current_frame = self.source.tell()
+                self.current_frame = source.tell()
                 while self._running and self._seek_target is None and not self.audio_buffer.write(chunk, timeout=0.1): pass
             else:
-                cur_pos, tot = self.source.tell(), self.source.total_frames()
+                cur_pos, tot = source.tell(), source.total_frames()
                 if tot > 0 and cur_pos < (tot - cs * 2): time.sleep(0.15); continue
                 got = False
                 for _ in range(4):
                     time.sleep(0.1)
                     try:
-                        if len(vc := self.source.read(cs)) > 0:
-                            self.audio_buffer.write(vc); self.current_frame = self.source.tell(); got = True; break
+                        if len(vc := source.read(cs)) > 0:
+                            self.audio_buffer.write(vc); self.current_frame = source.tell(); got = True; break
                     except Exception: pass
                 if got: continue
                 if tot <= 0 or cur_pos >= (tot - cs * 2):
@@ -1773,11 +1998,268 @@ class EqualizerManager:
     def get_current_bands(self) -> List[float]:
         return list(self.current_bands)
 
+
+# ---------------------------------------------------------------------------
+# Crusher Bass Boost
+#
+# Skullcandy's Crusher line (Crusher ANC 2, Crusher Evo, Crusher 1080 ANC) does
+# not boost bass with a shelf or a plain low-pass. The left ear cup carries a
+# second "Crusher" driver fed by a dedicated bass amplifier, and the dial on
+# the cup (press to cycle the presets, scroll for fine steps) changes how hard
+# that driver is driven. SoundGuys' lab measurements of the Crusher ANC 2 show
+# the result: a boost centred at roughly 45 Hz that tapers off below about
+# 30 Hz (the sub-bass is deliberately rolled back), is about +20 dB at 50 Hz
+# with Crusher at 80 %, and is gone by roughly 400-500 Hz so voices and hi-hats
+# stay intact. The app can also switch Crusher mode off completely.
+#
+# We reproduce the measurable part of that behaviour - the response curve -
+# with a linear-phase FIR built from the same shape, scaled in three steps,
+# and with Extreme at 100 % of the headphone's full boost (about +25 dB).
+# The extra driver cannot be emulated through a stereo DAC, so the physical
+# head-rattle is the one part of the Crusher effect that stays on the
+# headphones; everything the audio itself contributes is here.
+# ---------------------------------------------------------------------------
+CRUSHER_BASS_PEAK_HZ = 45.0
+CRUSHER_BASS_FULL_GAIN_DB = 25.0
+BASS_BOOST_MODES: Tuple[str, ...] = ("Normal", "Medium", "High", "Extreme")
+BASS_BOOST_FRACTIONS: Dict[str, float] = {
+    "Normal": 0.0,
+    "Medium": 1.0 / 3.0,
+    "High": 2.0 / 3.0,
+    "Extreme": 1.0,
+}
+BASS_BOOST_FILE = CONFIG_DIR / "bass_boost"
+# Ink and chip colours per mode. Extreme is red because it is the full Crusher
+# setting; the others step from neutral cyan through green to amber.
+BASS_MODE_STYLE: Dict[str, Tuple[Tuple[int, int, int], Tuple[int, int, int]]] = {
+    "Normal": ((18, 30, 54), (245, 250, 255)),
+    "Medium": ((0, 46, 26), (150, 255, 170)),
+    "High": ((56, 34, 0), (255, 206, 120)),
+    "Extreme": ((72, 0, 0), (255, 70, 70)),
+}
+BASS_MODE_FG: Dict[str, str] = {
+    "Normal": COLOR_ELECTRIC_CYAN,
+    "Medium": COLOR_TRAFFIC_GREEN,
+    "High": COLOR_TRAFFIC_AMBER,
+    "Extreme": COLOR_TRAFFIC_RED,
+}
+
+
+def crusher_bass_response_db(freqs, peak_db: float):
+    """Crusher-mode magnitude response, in dB, at the given frequencies.
+
+    Measured shape (SoundGuys, Crusher ANC 2): a broad peak at 45 Hz, roughly
+    3 dB down by 30 Hz and by 80 Hz, tapering to nothing by ~400 Hz.
+    """
+    f = np.maximum(np.asarray(freqs, dtype=np.float64), 1e-6)
+    octaves = np.log2(f / CRUSHER_BASS_PEAK_HZ)
+    # Asymmetric in log-frequency: the sub-bass side falls faster, which is
+    # what "the Crusher mode's volume tapers off those sub-bass frequencies"
+    # describes in the measurements.
+    sigma = np.where(f <= CRUSHER_BASS_PEAK_HZ, 0.80, 1.15)
+    return float(peak_db) * np.exp(-(octaves / sigma) ** 2)
+
+
+def bass_mode_chip(mode: str, bold: bool = True) -> str:
+    """A filled chip for the active bass mode, so every mode keeps its colour."""
+    name = mode if mode in BASS_BOOST_MODES else "Normal"
+    (br, bg_, bb), (fr, fg_, fb) = BASS_MODE_STYLE[name]
+    weight = "1;" if bold else ""
+    return (
+        f"\033[{weight}48;2;{br};{bg_};{bb};38;2;{fr};{fg_};{fb}m"
+        f" BASS BOOST: {name.upper()} \033[0m"
+    )
+
+
+def bass_mode_badge(mode: str, bold: bool = True) -> str:
+    """Compact status text for the footer/now-playing lines."""
+    name = mode if mode in BASS_BOOST_MODES else "Normal"
+    (br, bg_, bb), (fr, fg_, fb) = BASS_MODE_STYLE[name]
+    weight = "1;" if bold else ""
+    return f"\033[{weight}48;2;{br};{bg_};{bb};38;2;{fr};{fg_};{fb}m BASS: {name.upper()} \033[0m"
+
+
+def _soft_limit(chunk: np.ndarray) -> np.ndarray:
+    """Transparent below 0.8, then a tanh knee up to 1.0.
+
+    A 25 dB boost at 45 Hz will push an already-loud mix past full scale. The
+    Crusher headphones limit in DSP rather than clip; this is the same idea
+    without pumping the whole block.
+    """
+    peak = float(np.max(np.abs(chunk))) if chunk.size else 0.0
+    if peak <= 0.8:
+        return chunk
+    out = np.array(chunk, copy=True)
+    hot = np.abs(out) > 0.8
+    mag = np.abs(out[hot])
+    out[hot] = np.sign(out[hot]) * (0.8 + 0.2 * np.tanh((mag - 0.8) / 0.2))
+    return out
+
+
+class BassBoostFilter:
+    """Minimum-phase FIR reproducing the Crusher-mode bass boost.
+
+    Skullcandy's Crusher driver is fed by an analogue bass amplifier, so the
+    effect has no look-ahead: it is a minimum-phase boost, not a linear-phase
+    one. A minimum-phase FIR keeps that property (no group delay, no lip-sync
+    offset against the visualiser) and still nails the measured curve.
+
+    Overlap-save: each block is preceded by the previous block's tail, so a
+    power-of-two FFT convolution is the linear convolution. The first
+    ``filter_len - 1`` outputs are the wrap-around region and are discarded.
+    """
+
+    def __init__(self, filter_len: int = 4096):
+        _ensure_numpy()
+        self.filter_len = int(filter_len)
+        self.overlap = np.zeros((self.filter_len - 1, 2), dtype=np.float64)
+        self.H = None
+        self.taps = None
+        self.mode = "Normal"
+        self.is_active = False
+        self.current_sr = 44100
+        self._design_key = None
+        self._fft_n = 0
+        self._lock = threading.Lock()
+
+    def _design(self, peak_db: float) -> np.ndarray:
+        """Minimum-phase impulse response for the given peak boost."""
+        taps = self.filter_len
+        design_n = max(16384, taps * 2)
+        freqs = np.fft.rfftfreq(design_n, 1.0 / self.current_sr)
+        mag = 10.0 ** (crusher_bass_response_db(freqs, peak_db) / 20.0)
+        cep = np.fft.irfft(np.log(np.maximum(mag, 1e-9)), n=design_n)
+        folded = np.zeros(design_n)
+        folded[0] = cep[0]
+        half = design_n // 2
+        folded[1:half] = 2.0 * cep[1:half]
+        folded[half] = cep[half]
+        min_phase = np.fft.irfft(np.exp(np.fft.rfft(folded)), n=design_n)
+        h = min_phase[:taps].copy()
+        fade = min(512, max(1, taps // 8))
+        if fade > 1:
+            h[-fade:] *= np.hanning(fade * 2)[fade:]
+        return h
+
+    def set_mode(self, mode: str, sr: int = 44100):
+        name = mode if mode in BASS_BOOST_MODES else "Normal"
+        sr = int(sr if sr and sr > 0 else 44100)
+        with self._lock:
+            peak_db = BASS_BOOST_FRACTIONS[name] * CRUSHER_BASS_FULL_GAIN_DB
+            self.mode = name
+            if peak_db <= 0.0:
+                self.is_active = False
+                self.H = None
+                self.taps = None
+                self._design_key = None
+                self.overlap = np.zeros((self.filter_len - 1, 2), dtype=np.float64)
+                return
+            if self._design_key == (name, sr) and self.H is not None:
+                self.is_active = True
+                return
+            self.current_sr = sr
+            self.taps = self._design(peak_db)
+            self._fft_n = 0
+            self.overlap = np.zeros((self.filter_len - 1, 2), dtype=np.float64)
+            self._design_key = (name, sr)
+            self.is_active = True
+
+    @staticmethod
+    def _window(n: int, taps: int) -> int:
+        return int(2 ** int(np.ceil(np.log2(max(n + taps, 2 * taps)))))
+
+    def process(self, chunk: np.ndarray) -> np.ndarray:
+        with self._lock:
+            if not self.is_active or self.taps is None:
+                return chunk
+            n = len(chunk)
+            if n == 0:
+                return chunk
+            fft_n = self._window(n, self.filter_len)
+            if fft_n != self._fft_n:
+                self.H = np.fft.rfft(self.taps, n=fft_n)[:, None]
+                self._fft_n = fft_n
+                self.overlap = np.zeros((self.filter_len - 1, 2), dtype=np.float64)
+            if len(self.overlap) != self.filter_len - 1:
+                self.overlap = np.zeros((self.filter_len - 1, 2), dtype=np.float64)
+            ext = np.vstack([self.overlap, np.asarray(chunk, dtype=np.float64)])
+            conv = np.fft.irfft(np.fft.rfft(ext, n=fft_n, axis=0) * self.H, n=fft_n, axis=0)
+            self.overlap = ext[-(self.filter_len - 1):].copy()
+            start = self.filter_len - 1
+            out = conv[start : start + n]
+            if len(out) < n:
+                out = np.vstack([out, np.zeros((n - len(out), out.shape[1]), dtype=out.dtype)])
+            return _soft_limit(out.astype(np.float32))
+
+
+class BassBoostManager:
+    """The four bass modes, persisted for the next player launch."""
+
+    def __init__(self):
+        self.mode = "Normal"
+        self._load()
+
+    def _load(self):
+        try:
+            saved = BASS_BOOST_FILE.read_text(encoding="utf-8").strip()
+        except OSError:
+            return
+        resolved = self.resolve(saved)
+        if resolved:
+            self.mode = resolved
+
+    @staticmethod
+    def resolve(name: str) -> Optional[str]:
+        if not name:
+            return None
+        key = str(name).strip().lower()
+        aliases = {
+            "off": "Normal", "none": "Normal", "flat": "Normal", "0": "Normal",
+            "med": "Medium", "medium": "Medium", "33": "Medium", "1": "Medium",
+            "high": "High", "66": "High", "2": "High",
+            "extreme": "Extreme", "max": "Extreme", "full": "Extreme",
+            "100": "Extreme", "3": "Extreme", "crusher": "Extreme",
+        }
+        if key in aliases:
+            return aliases[key]
+        for mode in BASS_BOOST_MODES:
+            if mode.lower() == key:
+                return mode
+        return None
+
+    def set_mode(self, mode: str, save: bool = True) -> bool:
+        resolved = self.resolve(mode)
+        if not resolved:
+            return False
+        self.mode = resolved
+        if save:
+            try:
+                BASS_BOOST_FILE.parent.mkdir(parents=True, exist_ok=True)
+                BASS_BOOST_FILE.write_text(resolved, encoding="utf-8")
+            except Exception:
+                pass
+        return True
+
+    def cycle(self, direction: int = 1) -> str:
+        index = BASS_BOOST_MODES.index(self.mode) if self.mode in BASS_BOOST_MODES else 0
+        step = 1 if direction >= 0 else -1
+        self.set_mode(BASS_BOOST_MODES[(index + step) % len(BASS_BOOST_MODES)])
+        return self.mode
+
+    def fraction(self) -> float:
+        return BASS_BOOST_FRACTIONS.get(self.mode, 0.0)
+
+    def peak_db(self) -> float:
+        return round(self.fraction() * CRUSHER_BASS_FULL_GAIN_DB, 2)
+
+
 class AudioEngine:
     def __init__(self, playlist: List[Dict[str, Any]], auto_bluetooth: bool = True, mode: str = "MIX_ARCHIVE"):
         _ensure_audio_backends()
         self.mode, self.playlist, self.play_queue, self._queue_lock = str(mode or "MIX_ARCHIVE").upper(), playlist, [], threading.Lock()
         self.current_index, self.current_track = 0, playlist[0] if playlist else None
+        # Name of the playlist the tracks came from, used by the play log.
+        self.playlist_path = ""
         self.state, self.volume, self.muted, self.shuffle, self.repeat_mode = "stopped", 1.0, False, False, "all"
         self.position_sec, self.duration_sec, self.sample_rate, self.channels = 0.0, 0.0, 44100, 2
         self.pitch_percent, self.pitch_factor, self.resampler = 0, 1.0, AudioResampler()
@@ -1806,6 +2288,9 @@ class AudioEngine:
         self.eq_manager = EqualizerManager()
         self.eq_filter = EqualizerFilter()
         self.eq_filter.set_gains(self.eq_manager.get_current_bands(), self.sample_rate)
+        self.bass_manager = BassBoostManager()
+        self.bass_filter = BassBoostFilter()
+        self.bass_filter.set_mode(self.bass_manager.mode, self.sample_rate)
         # Bluetooth routing runs a heartbeat thread that shells out to `wpctl`
         # every 1.2 s and a `pactl subscribe` child. It is only useful when
         # automatic Bluetooth switching was actually requested, and starting it
@@ -1858,6 +2343,13 @@ class AudioEngine:
         self.bt_router = None
 
     def _setup_fft_bins(self, sr: int):
+        # A source can probe as 0 Hz (a container with no sample-rate field, or
+        # a truncated header). Dividing by it raised ZeroDivisionError inside
+        # load_track, which aborted playback for an otherwise playable file.
+        # Fall back to the last known rate and keep the visualiser functional.
+        sr = int(sr or 0)
+        if sr <= 0:
+            sr = int(getattr(self, "sample_rate", 0) or 0) or 44100
         freqs = np.fft.rfftfreq(1024, 1.0 / sr)
         self.band_indices = []
         for i in range(self.num_bands):
@@ -2102,6 +2594,16 @@ class AudioEngine:
         self._stop_feeder()
         try:
             src = open_audio_source(self.current_track["path"])
+            # A source that probes as 0 Hz or 0 frames cannot be played and
+            # would divide by zero in the duration maths below. Reject it here
+            # with a clear message instead of a traceback.
+            if int(getattr(src, "samplerate", 0) or 0) <= 0:
+                try: src.close()
+                except Exception: pass
+                try: mp_log_error("MP_Audio_Player", f"Unplayable audio (no sample rate): {self.current_track.get('path', '')}")
+                except Exception: pass
+                self.state = "stopped"
+                return False
             self.audio_source, self.sample_rate, self.channels = src, src.samplerate, src.channels
             self.duration_sec = float(src.total_frames()) / float(self.sample_rate) if self.sample_rate > 0 else 0.0
             self.current_track.update(duration_sec=self.duration_sec, duration_fmt=format_seconds(self.duration_sec))
@@ -2109,6 +2611,7 @@ class AudioEngine:
             self.resampler.reset()
             self._setup_fft_bins(self.sample_rate)
             self.eq_filter.set_gains(self.eq_manager.get_current_bands(), self.sample_rate)
+            self.bass_filter.set_mode(self.bass_manager.mode, self.sample_rate)
             with self._sf_lock: old_sf, self.sf_file = self.sf_file, getattr(src, "sf", src)
             self._retire_sf(old_sf)
             self.audio_buffer = AudioPrefetchBuffer(self.sample_rate, 12.0)
@@ -2125,11 +2628,21 @@ class AudioEngine:
             if start_playing:
                 try: record_activity("Play Mix / Audio File", category="playback", details={"track_name": self.current_track.get("name"), "track_path": self.current_track.get("path"), "duration_sec": round(self.duration_sec, 2), "sample_rate": self.sample_rate}, status="success")
                 except Exception: pass
+                try: log_track_played(self.current_track, mode=self.mode, playlist_index=index, playlist=os.path.basename(str(getattr(self, "playlist_path", "") or "")), duration_sec=self.duration_sec, start_position=start_position)
+                except Exception: pass
             return True
         except Exception as exc:
             self.state = "stopped"
-            try: mp_log_error("MP_Audio_Player", f"Failed loading track: {self.current_track.get('path', '')}", exc)
-            except Exception: pass
+            # A mix on an unmounted drive or a half-copied file is a normal
+            # condition the UI recovers from. Log one line, not a traceback.
+            if isinstance(exc, (FileNotFoundError, NotADirectoryError, PermissionError)) or (
+                isinstance(exc, OSError) and getattr(exc, "errno", None) in (errno.ENOENT, errno.EIO, errno.ENODEV)
+            ):
+                try: mp_log_error("MP_Audio_Player", f"Cannot open track (file missing or unreadable): {self.current_track.get('path', '')}", details=f"{type(exc).__name__}: {exc}")
+                except Exception: pass
+            else:
+                try: mp_log_error("MP_Audio_Player", f"Failed loading track: {self.current_track.get('path', '')}", exc)
+                except Exception: pass
             return False
 
     def _sync_state_file(self):
@@ -2184,6 +2697,8 @@ class AudioEngine:
         sd_arr = (data if data.ndim > 1 and data.shape[1] >= 2 else np.column_stack((data, data) if data.ndim == 1 else (data[:, 0], data[:, 0])))[:, :2]
         if not self.eq_filter.is_flat:
             sd_arr = self.eq_filter.process(sd_arr)
+        if self.bass_filter.is_active:
+            sd_arr = self.bass_filter.process(sd_arr)
         mono = (sd_arr[:, 0] + sd_arr[:, 1]) * 0.5
         if eff_vol != 1.0: sd_arr = np.ascontiguousarray(sd_arr * np.float32(eff_vol))
         ncopy = min(rf, frames, len(sd_arr))
@@ -2463,7 +2978,24 @@ class AudioEngine:
             "eq_bands": [round(float(x), 1) for x in self.eq_manager.get_current_bands()],
             "eq_is_flat": bool(self.eq_manager.is_flat()),
             "eq_presets": self.eq_manager.get_all_preset_names(),
+            "bass_mode": str(self.bass_manager.mode),
+            "bass_modes": list(BASS_BOOST_MODES),
+            "bass_peak_db": self.bass_manager.peak_db(),
+            "bass_percent": int(round(self.bass_manager.fraction() * 100)),
         }
+
+    def set_bass_mode(self, mode: str) -> bool:
+        ok = self.bass_manager.set_mode(mode)
+        if ok:
+            self.bass_filter.set_mode(self.bass_manager.mode, self.sample_rate)
+        self._sync_state_file()
+        return ok
+
+    def cycle_bass_mode(self, direction: int = 1) -> str:
+        mode = self.bass_manager.cycle(direction)
+        self.bass_filter.set_mode(mode, self.sample_rate)
+        self._sync_state_file()
+        return mode
 
     def set_eq_preset(self, name: str) -> bool:
         ok = self.eq_manager.apply_preset(name)
@@ -2602,6 +3134,9 @@ class PlayerIPCServer:
             elif cmd == "clear_queue": res["cleared"] = e.clear_queue()
             elif cmd == "clear_playlist": res["cleared"] = e.clear_playlist()
             elif cmd == "get_playlist": res["playlist"] = [{"index": i, "name": t["name"], "path": t["path"], "ext": t["ext"]} for i, t in enumerate(e.playlist[:100])]
+            elif cmd in ("bass_mode", "cycle_bass_mode"):
+                mode = e.cycle_bass_mode(1)
+                res.update(success=True, bass_mode=mode, bass_peak_db=e.bass_manager.peak_db())
             elif cmd in ("open_file_manager", "reveal"):
                 t = choose_file_manager_target(req.get("file") or (e.current_track.get("path") if e.current_track else ""))
                 res["success"] = bool(t) and open_in_file_manager(t)
@@ -2638,6 +3173,19 @@ class PlayerIPCServer:
             elif cmd == "reset_eq":
                 e.set_eq_preset("Flat")
                 res.update(success=True, preset="Flat", bands=e.eq_manager.get_current_bands())
+            elif cmd in ("set_bass_mode", "set_bass"):
+                ok = e.set_bass_mode(str(req.get("mode", "Normal")))
+                res.update(success=ok, bass_mode=e.bass_manager.mode,
+                           bass_peak_db=e.bass_manager.peak_db(), bass_modes=list(BASS_BOOST_MODES))
+            elif cmd in ("cycle_bass", "bass_up"):
+                res.update(success=True, bass_mode=e.cycle_bass_mode(1),
+                           bass_peak_db=e.bass_manager.peak_db())
+            elif cmd == "bass_down":
+                res.update(success=True, bass_mode=e.cycle_bass_mode(-1),
+                           bass_peak_db=e.bass_manager.peak_db())
+            elif cmd == "get_bass":
+                res.update(bass_mode=e.bass_manager.mode, bass_modes=list(BASS_BOOST_MODES),
+                           bass_peak_db=e.bass_manager.peak_db())
             elif cmd == "load_playlist":
                 loaded = load_engine_playlist(
                     e,
@@ -3198,7 +3746,13 @@ def _guard_visualizer_text(line: str) -> str:
     def repl(match):
         if "48;" in (match.group(1) or ""):
             return match.group(0)
-        r, g, b = _lift_visualizer_rgb(int(match.group(2)), int(match.group(3)), int(match.group(4)))
+        r, g, b = int(match.group(2)), int(match.group(3)), int(match.group(4))
+        # Pure black is a deliberate choice, not a dim ink: the "Color Theme"
+        # notice and the PLAYING badge use it because they sit on the pale
+        # glass pane. Lifting it would turn them into ~#d1d1d1 grey.
+        if (r, g, b) == (0, 0, 0):
+            return match.group(0)
+        r, g, b = _lift_visualizer_rgb(r, g, b)
         return f"\033[{match.group(1) or ''}38;2;{r};{g};{b}{match.group(5) or ''}m"
 
     return _FG_TRUECOLOR_RE.sub(repl, line)
@@ -3209,6 +3763,19 @@ def _mp_visualizer_api():
         sys.path.insert(0, str(script_dir))
     import liquid_player_visualizer as api
     return api
+
+def _is_dead_output_error(exc: BaseException) -> bool:
+    """True when the terminal/pty this process draws to is gone.
+
+    EPIPE/EBADF/EIO on a stdout write cannot be fixed by redrawing, so callers
+    stop instead of logging the same frame error every 20 ms.
+    """
+    if isinstance(exc, (BrokenPipeError, ValueError)):
+        return True  # ValueError: "I/O operation on closed file"
+    if isinstance(exc, OSError):
+        return getattr(exc, "errno", None) in (errno.EPIPE, errno.EBADF, errno.EIO, errno.ENXIO, errno.ENODEV)
+    return False
+
 
 def _present_frame(lines: List[str], width: int, height: int):
     global _MP_VISUALIZER_TEXT, _LIQUID_FRAME_CACHE, _LIQUID_FRAME_SIZE
@@ -5303,6 +5870,18 @@ def launch_mp_gui(base_dir: Optional[Path] = None) -> bool:
     --keep-theme leaves the shared theme file alone so the open Liquid Player keeps its color.
     MP Gui opens up to four windows. A fifth launch focuses one instead.
     """
+    # Callers pass the scanner's base_dir, which is not always a real path: a
+    # test double or a partially built scanner yields a non-Path (even a mock).
+    # Resolving it used to raise inside Popen and log a FileNotFoundError with
+    # a "<MagicMock ...>" path, which was noise, not a launch failure.
+    base: Optional[Path] = None
+    if base_dir is not None:
+        try:
+            candidate = Path(os.fspath(base_dir))
+            if candidate.is_dir():
+                base = candidate
+        except (TypeError, ValueError, OSError):
+            base = None
     limiter = _mp_instance_module()
     if limiter is not None and limiter.at_limit("gui"):
         try:
@@ -5314,7 +5893,7 @@ def launch_mp_gui(base_dir: Optional[Path] = None) -> bool:
         if _windowed_mp_gui_host():
             _raise_windowed_mp_gui(base_dir or Path(__file__).resolve().parent)
         return True
-    base = base_dir or get_base_dir()
+    base = base or get_base_dir()
     launcher = base / "MP_Gui.sh"
     if not launcher.is_file():
         alt = Path(__file__).resolve().parent / "MP_Gui.sh"
@@ -5492,6 +6071,7 @@ class TerminalPlayerUI:
         self._user_library_mode = None
         self.visualizer = EqualizerVisualizer(default_style=default_style, default_theme=default_theme)
         self.eq_manager = getattr(engine, "eq_manager", None) or EqualizerManager()
+        self.bass_manager = getattr(engine, "bass_manager", None) or BassBoostManager()
         self.equalizer_hud_active = False
         self.eq_selected_band = 0
         self.eq_naming_mode = False
@@ -5527,6 +6107,9 @@ class TerminalPlayerUI:
         self._inbuf = b""
         self._reset_click_targets()
         self.selected_row, self.scroll_offset, self.notification_msg, self.notification_time = 0, 0, "", 0.0
+        # True while the visible notice is the "Color Theme: <name>" line, which
+        # is drawn in black whatever the active theme is.
+        self.notification_is_theme = False
         self._spek_job_running = False
         self._last_seen_bt_device = self._last_seen_bt_state = self._duration_queue = None
         self._duration_cache: Dict[str, str] = {}
@@ -5959,6 +6542,26 @@ class TerminalPlayerUI:
 
     def _notify(self, msg: str, dur: float = 3.0):
         self.notification_msg, self.notification_time = msg, time.time() + dur
+        self.notification_is_theme = False
+
+    def _notify_theme(self, dur: float = 2.5):
+        """The "Color Theme: <name>" notice. Always drawn in black.
+
+        It sits just below the equaliser, on the pale glass pane, and that pane
+        is the same light surface on every theme. Using the theme accent here
+        made it green (or whatever the theme's accent is) and unreadable on the
+        lighter palettes, so it is pinned to black instead of following the
+        theme. render is the only caller, so the flag is set here rather than
+        re-derived from the message text.
+        """
+        self._notify(f"Color Theme: {self.visualizer.get_theme_display_name()}", dur)
+        self.notification_is_theme = True
+
+    def _notification_ansi(self, bold_s: str) -> str:
+        """Colour prefix for the current notification line."""
+        if getattr(self, "notification_is_theme", False):
+            return f"{bold_s}{theme_notice_ansi(self.visualizer.theme)}"
+        return f"{bold_s}{COLOR_TRAFFIC_GREEN}"
 
     def _entry_noun(self) -> str:
         if self.mode == "MUSIC":
@@ -5981,6 +6584,8 @@ class TerminalPlayerUI:
         self._fav_export_button = (0, 0, 0)
         self._visualizer_button_row = 0
         self._visualizer_button_span = (0, 0)
+        self._bass_button_row = 0
+        self._bass_button_span = (0, 0)
         self._playlist_star_rows = {}
         self._playlist_star_col = 14
 
@@ -6581,6 +7186,7 @@ class TerminalPlayerUI:
         self._favorites_button_span = (3, 2 + _display_width(face))
         self._favorites_button_whole_row = bool(whole_row)
         lines.append(_fit_text_line([long, short], max_cols))
+        self._append_bass_button(lines, max_cols)
 
     def _mp_visualizer_preset(self) -> Dict[str, Any]:
         try:
@@ -6688,22 +7294,98 @@ class TerminalPlayerUI:
         self._notify(f"Visualizer theme {preset.get('id', 0)}: {preset.get('name', '')}", 2.5)
         return True
 
+    def _bass_mode(self) -> str:
+        """The bass mode the player is showing (engine, daemon status or local)."""
+        mgr = getattr(self, "bass_manager", None)
+        if self.engine is not None and not self.is_remote:
+            local = getattr(mgr, "mode", None)
+            if local in BASS_BOOST_MODES:
+                return str(local)
+        st = getattr(self, "cached_status", None) or {}
+        mode = st.get("bass_mode")
+        if mode in BASS_BOOST_MODES:
+            return str(mode)
+        local = getattr(mgr, "mode", None)
+        if local in BASS_BOOST_MODES:
+            return str(local)
+        return "Normal"
+
+    def _cycle_bass_mode(self, direction: int = 1):
+        """Step Normal -> Medium -> High -> Extreme, exactly like the Crusher dial."""
+        if self.is_remote:
+            res = send_ipc_command("cycle_bass" if direction >= 0 else "bass_down") or {}
+            mode = res.get("bass_mode")
+            if mode in BASS_BOOST_MODES:
+                self.cached_status["bass_mode"] = mode
+                if self.bass_manager is not None:
+                    self.bass_manager.mode = mode
+        elif self.engine:
+            mode = self.engine.cycle_bass_mode(direction)
+            if self.bass_manager is not None:
+                self.bass_manager.mode = mode
+            self.cached_status["bass_mode"] = mode
+        else:
+            mode = self.bass_manager.cycle(direction) if self.bass_manager is not None else "Normal"
+            self.cached_status["bass_mode"] = mode
+        pct = int(round(BASS_BOOST_FRACTIONS.get(mode, 0.0) * 100))
+        peak = BASS_BOOST_FRACTIONS.get(mode, 0.0) * CRUSHER_BASS_FULL_GAIN_DB
+        if mode == "Normal":
+            self._notify("Bass Boost: NORMAL — Crusher boost off", 2.5)
+        else:
+            self._notify(
+                f"Bass Boost: {mode.upper()} — {pct}% of Crusher ANC 2 ({peak:+.0f} dB at 45 Hz)",
+                3.0,
+            )
+        global _LIQUID_FRAME_CACHE
+        _LIQUID_FRAME_CACHE = None
+        return mode
+
+    def _bass_button_row_text(self, max_cols: int) -> str:
+        """CLI status/button row for the bass boost, clickable and colour-coded."""
+        mode = self._bass_mode()
+        face = f" BASS BOOST: {mode.upper()} "
+        chip = bass_mode_chip(mode)
+        pct = BASS_BOOST_FRACTIONS.get(mode, 0.0) * 100.0
+        hint = f"   click or press [b] to change   {pct:.0f}% of Crusher ANC 2"
+        hint_short = f"   [b] change   {pct:.0f}%"
+        head = f"  {chip}"
+        room = max_cols - _display_width(head)
+        if room >= _display_width(hint):
+            return head + hint
+        if room >= _display_width(hint_short):
+            return head + hint_short
+        return ""
+
+    def _append_bass_button(self, lines: List[str], max_cols: int) -> None:
+        """Append the clickable Bass Boost button row below the Favorites row."""
+        line = self._bass_button_row_text(max_cols)
+        if not line:
+            self._bass_button_row, self._bass_button_span = 0, (0, 0)
+            return
+        chip_w = _display_width(bass_mode_chip(self._bass_mode()))
+        self._bass_button_row = len(lines) + 1
+        self._bass_button_span = (3, 2 + chip_w)
+        lines.append(line)
+
     def _append_liquid_action_row(self, lines: List[str], max_cols: int):
-        """Favorites and Visualization buttons. Both are clickable in every player size."""
+        """Favorites, Visualization and Bass Boost buttons. All clickable in every player size."""
         preset = self._mp_visualizer_preset()
         on = bool(getattr(self, "mp_visualizer_on", False))
         fav_face = f"  {favorite_glyph(True)} FAVORITES  "
         vis_face = "  VISUALIZATION  "
+        bass_mode = self._bass_mode()
+        bass_face = f" BASS BOOST: {bass_mode.upper()} "
         # Gold text only. A filled 48;2 bar paints yellow blocks on the row above the playlist header.
         fav_btn = f"\033[1;38;2;255;196;0m{fav_face}\033[0m"
         if on:
             vis_btn = f"\033[48;2;0;48;72;38;2;220;250;255m{vis_face}\033[0m"
         else:
             vis_btn = f"\033[48;2;16;28;52;38;2;245;250;255m{vis_face}\033[0m"
+        bass_btn = bass_mode_chip(bass_mode)
         gap = "   "
-        head = f"  {fav_btn}{gap}{vis_btn}"
+        head = f"  {fav_btn}{gap}{vis_btn}{gap}{bass_btn}"
         ident = f"{int(preset.get('id', 0))} {preset.get('name', '')}"
-        tail = f"   ON  {ident}   [0-9] theme  [←/→] preset   [Shift+V] glass" if on else "   [Shift+V] MP Visualizer"
+        tail = f"   ON  {ident}   [0-9] theme  [←/→] preset   [Shift+V] glass  [b] bass" if on else "   [Shift+V] MP Visualizer  [b] bass"
         tail_short = f"   {ident}" if on else "   [Shift+V]"
         room = max_cols - _display_width(head)
         if room >= _display_width(tail):
@@ -6712,15 +7394,25 @@ class TerminalPlayerUI:
             line = head + tail_short
         else:
             line = head
+        # Spans are 1-based terminal columns, measured from the plain-text
+        # widths so a chip with different padding cannot drift from its span.
         fav_w = _display_width(fav_face)
         vis_w = _display_width(vis_face)
-        fav_end = 2 + fav_w
-        vis_start = fav_end + _display_width(gap) + 1
+        bass_w = _display_width(bass_face)
+        gap_w = _display_width(gap)
+        fav_start = 3
+        fav_end = fav_start + fav_w - 1
+        vis_start = fav_end + 1 + gap_w
+        vis_end = vis_start + vis_w - 1
+        bass_start = vis_end + 1 + gap_w
+        bass_end = bass_start + bass_w - 1
         self._favorites_button_row = len(lines) + 1
-        self._favorites_button_span = (3, fav_end)
+        self._favorites_button_span = (fav_start, fav_end)
         self._favorites_button_whole_row = False
         self._visualizer_button_row = self._favorites_button_row
-        self._visualizer_button_span = (vis_start, vis_start + vis_w - 1)
+        self._visualizer_button_span = (vis_start, vis_end)
+        self._bass_button_row = self._favorites_button_row
+        self._bass_button_span = (bass_start, bass_end)
         lines.append(line)
 
     def _append_player_buttons(self, lines: List[str], max_cols: int):
@@ -6736,6 +7428,11 @@ class TerminalPlayerUI:
         vis_row = getattr(self, "_visualizer_button_row", 0)
         if vis_row and row == vis_row and span[0] <= col <= span[1]:
             self._toggle_mp_visualizer()
+            return
+        bass_row = getattr(self, "_bass_button_row", 0)
+        bass_span = getattr(self, "_bass_button_span", (0, 0))
+        if bass_row and row == bass_row and bass_span[0] <= col <= bass_span[1]:
+            self._cycle_bass_mode(1)
             return
         self._on_favorites_click(col, row)
 
@@ -6801,7 +7498,14 @@ class TerminalPlayerUI:
             chunk = buf if split < 0 else buf[:split]
             buf = b"" if split < 0 else buf[split:]
             if chunk:
-                self._process_key(chunk)
+                keys, partial = split_key_burst(chunk)
+                for key in keys:
+                    self._process_key(key)
+                if partial:
+                    # Keep the unfinished sequence plus the untrimmed tail for
+                    # the next read, and stop: the tail is not a key press yet.
+                    buf = partial + buf
+                    break
         self._inbuf = buf
 
     def _generate_selected_spek(self):
@@ -7090,7 +7794,21 @@ class TerminalPlayerUI:
                 except (KeyboardInterrupt, SystemExit):
                     raise
                 except Exception as exc:
-                    mp_log_error("TerminalPlayerUI", f"Error drawing frame: {exc}", exc)
+                    # A closed terminal / dead pty raises EPIPE or EIO on every
+                    # write. Retrying the frame forever cannot succeed, and it
+                    # used to append one log entry per frame (~1692 of them).
+                    # Stop the player and log the cause once instead.
+                    if _is_dead_output_error(exc):
+                        if not getattr(self, "_output_dead_logged", False):
+                            self._output_dead_logged = True
+                            try: mp_log_error("TerminalPlayerUI", f"Terminal output closed, stopping player: {exc}", exc)
+                            except Exception: pass
+                        self.running = False
+                        break
+                    if not getattr(self, "_draw_error_logged", False):
+                        self._draw_error_logged = True
+                        try: mp_log_error("TerminalPlayerUI", f"Error drawing frame: {exc}", exc)
+                        except Exception: pass
                 time.sleep(0.02)
         except (KeyboardInterrupt, SystemExit): pass
         finally:
@@ -7299,6 +8017,10 @@ class TerminalPlayerUI:
             elif data in (b"\x1b[C", b"\x1bOC", b"l", b"L"):
                 self.eq_selected_band = min(9, self.eq_selected_band + 1)
                 return
+            elif data in (b"b", b"B"):
+                # The Crusher dial stays reachable while the EQ HUD is open.
+                self._cycle_bass_mode(1)
+                return
             elif data in (b"\x1b[A", b"\x1bOA", b"k", b"+", b"="):
                 new_gain = round(min(12.0, self.eq_manager.current_bands[self.eq_selected_band] + 0.5), 1)
                 self.eq_manager.set_band(self.eq_selected_band, new_gain)
@@ -7348,7 +8070,7 @@ class TerminalPlayerUI:
             elif data in (b" ",):
                 self._send_cmd("toggle")
                 return
-            elif data in (b"\x1b", b"E", b"\r", b"\n", b"q", b"Q", b"b", b"B"):
+            elif data in (b"\x1b", b"E", b"\r", b"\n", b"q", b"Q"):
                 self.equalizer_hud_active = False
                 return
         if self.inspector_hud_active:
@@ -7369,7 +8091,7 @@ class TerminalPlayerUI:
             if self.equalizer_hud_active: self.inspector_hud_active = False
             return
         if data in (b"\x1b[A", b"\x1bOA", b"k"): self._navigate_list(-1)
-        elif data == b"j": self._navigate_list(1)
+        elif data in (b"\x1b[B", b"\x1bOB", b"j"): self._navigate_list(1)
         elif data == b"J":
             # Shift+J exports the Favorites playlist; lowercase j still scrolls.
             if self.mode == "FAVORITES":
@@ -7489,8 +8211,13 @@ class TerminalPlayerUI:
             # Remember our own write so the poll loop does not repaint it as
             # an external change on the next tick.
             self._theme_seen = self.visualizer.theme
-            self._notify(f"Color Theme: {self.visualizer.get_theme_display_name()}", 2.5)
-        elif data in (b"b", b"B", b"\x1b", b"\x03"): self.running = False
+            self._notify_theme()
+        elif data in (b"b", b"B"):
+            # The Bass Boost dial: Normal -> Medium -> High -> Extreme, matching
+            # the Crusher ANC 2 dial (press to cycle presets).
+            self._cycle_bass_mode(1)
+        elif data in (b"\x1b", b"\x03"):
+            self.running = False
         elif data in (b"a", b"A"):
             if self.is_remote:
                 result = send_ipc_command("route_bluetooth")
@@ -7547,7 +8274,15 @@ class TerminalPlayerUI:
         elif data in (b"q", b"Q"): self._queue_selected()
         elif data in (b"d", b"D", b"\x1b[3~") and not self.equalizer_hud_active and not self.inspector_hud_active:
             self._arm_playlist_clear()
-        elif data in (b"x", b"X"): self._send_cmd("stop"); self.running = False
+        elif data in (b"x", b"X"):
+            # Stop, then leave. An exit key must always work: if the audio
+            # engine has already failed (or was shut down) the stop call can
+            # raise, and the user would be stuck in the player.
+            try:
+                self._send_cmd("stop")
+            except Exception:
+                pass
+            self.running = False
 
     def _navigate_list(self, delta: int):
         if m := self._get_active_tracks(): self.selected_row = max(0, min(len(m) - 1, self.selected_row + delta))
@@ -7608,7 +8343,7 @@ class TerminalPlayerUI:
         if self.visualizer.sync_theme_from_file():
             global _LIQUID_FRAME_CACHE
             _LIQUID_FRAME_CACHE = None
-            self._notify(f"Color Theme: {self.visualizer.get_theme_display_name()}", 2.5)
+            self._notify_theme()
 
     def _draw_frame(self):
         w, h = _win_visible_size((80, 24))
@@ -7681,7 +8416,11 @@ class TerminalPlayerUI:
         if len(tname) > maxlen: tname = tname[:maxlen - 3] + "..."
         parts = os.path.splitext(st.get("path", ""))
         ch_str, sr, ext = ("Stereo" if st.get("channels", 2) == 2 else "Mono"), st.get("sample_rate", 44100), parts[1][1:].upper() or "FLAC"
-        badge = f"{bold_s}{GREEN}▶ PLAYING{NC}" if st.get("state") == "playing" else (f"{bold_s}{YELLOW}⏸ PAUSED{NC}" if st.get("state") == "paused" else f"{bold_s}{RED}⏹ STOPPED{NC}")
+        # The PLAYING badge is black on the pale glass pane, like the "Color
+        # Theme" notice. PAUSED/STOPPED keep their amber/red so the three states
+        # stay distinguishable at a glance.
+        play_ink = dark_glass_ink(self.visualizer.theme)
+        badge = f"{bold_s}{play_ink}▶ PLAYING{NC}" if st.get("state") == "playing" else (f"{bold_s}{YELLOW}⏸ PAUSED{NC}" if st.get("state") == "paused" else f"{bold_s}{RED}⏹ STOPPED{NC}")
         if self.mode == "FAVORITES":
             mode_b = f" {bold_s}{COLOR_TRAFFIC_AMBER}[FAVORITES]{NC}"
         elif self.mode == "MUSIC":
@@ -7717,7 +8456,7 @@ class TerminalPlayerUI:
         elif self.export_mode: lines.append(f"  {bold_s}{COLOR_TRAFFIC_AMBER}Export Playlist (.m3u) Path: [{self.export_path}█]  (Enter: Save, Esc: Cancel){NC}")
         elif self.search_mode: lines.append(f"  {bold_s}{CYAN}Filter / Search: [{self.search_query}█]{NC}")
         elif self.search_query: lines.append(f"  {bold_s}Search Filter: '{self.search_query}' (Press '/' to search)")
-        elif time.time() < self.notification_time and self.notification_msg: lines.append(f"  {bold_s}{COLOR_TRAFFIC_GREEN}📂 {self.notification_msg}{NC}")
+        elif time.time() < self.notification_time and self.notification_msg: lines.append(f"  {self._notification_ansi(bold_s)}📂 {self.notification_msg}{NC}")
 
         self._reset_click_targets()
         self._append_player_buttons(lines, max(20, w - 1))
@@ -7780,10 +8519,21 @@ class TerminalPlayerUI:
                     if len(f_str) > 6:
                         ex_l = len(f_str) - 6
                         npad = npad[:-ex_l] if len(npad) >= ex_l else ""
-                    # The favourite star keeps a neutral white so it reads the
-                    # same on every theme; the row text carries the theme ink.
+                    # Row ink, resolved before the star is built so the star can
+                    # restore it. The star used to end with a plain NC reset,
+                    # which wipes every attribute: the mix name after it then
+                    # fell back to VTE's default foreground, near-black
+                    # (24,26,34) on the pale pane. That is why playlist rows
+                    # still read as black on every theme after the row ink
+                    # itself was made white -- only the star was white.
+                    sel_bg = sel_fg = ""
+                    if sel:
+                        sel_bg, sel_fg = _selection_bar_ansi(self.visualizer.theme)
+                    row_ink = sel_fg if sel else (act_col if act else playlist_text_col)
                     star = favorite_glyph(self._favorites_store().is_favorite(m.get("path")))
-                    star = f"{WHITE}{star}{NC}" if star.strip() else star
+                    if star.strip():
+                        # White star, then put the row's own fill and ink back.
+                        star = f"{WHITE}{star}{NC}{sel_bg}{bold_s}{row_ink}"
                     self._playlist_star_col = _display_width(f"  │ {pfx}[{i+1:4d}] ") + 1
                     self._playlist_star_rows[len(lines) + 1] = i
                     ip = f" {pfx}[{i+1:4d}] {star} {mn}{npad} {ext_s} {f_str} "
@@ -7792,7 +8542,6 @@ class TerminalPlayerUI:
                     if sel:
                         # The selection bar follows the active theme instead of a
                         # fixed grey (console) or reverse video (Liquid Glass).
-                        sel_bg, sel_fg = _selection_bar_ansi(self.visualizer.theme)
                         lines.append(f"  {b_col}│{NC}{sel_bg}{sel_fg}{ip}{NC}{b_col}│{NC}")
                     # The playing row is tinted with the theme's `active` hue so
                     # it is distinguishable from the cursor row (which carries the
@@ -7838,30 +8587,31 @@ class TerminalPlayerUI:
         th_n = self.visualizer.get_theme_display_name()
         eq_p = self.eq_manager.active_preset
         eq_p_col = COLOR_TRAFFIC_GREEN if eq_p != "Flat" else COLOR_ELECTRIC_CYAN
+        bass_badge = bass_mode_badge(self._bass_mode(), bool(bold_s))
         lines.append(_fit_text_line([
-            f"  🔊 Vol: {vol}  │  🎚 Pitch: {pbadge}  │  🎛 EQ: {bold_s}{eq_p_col}{eq_p}{NC}  │  📊 Vis: {bold_s}{COLOR_NEON_PINK}{eq_n}{NC}  │  🔀 Shuf: {shuf}  │  🔁 Rep: {rep}  │  🎨 {bold_s}{COLOR_HOT_PURPLE}{th_n}{NC}",
-            f"  Vol: {vol}  │  Pitch: {pbadge}  │  EQ: {bold_s}{eq_p_col}{eq_p}{NC}  │  Vis: {bold_s}{COLOR_NEON_PINK}{eq_n}{NC}  │  Shuf: {shuf}  │  Rep: {rep}",
-            f"  Vol {vol}  Pitch {pbadge}  EQ {eq_p}  Vis {eq_n}  Shuf {shuf}  Rep {rep}"
+            f"  🔊 Vol: {vol}  │  🎚 Pitch: {pbadge}  │  🎛 EQ: {bold_s}{eq_p_col}{eq_p}{NC}  │  {bass_badge}  │  📊 Vis: {bold_s}{COLOR_NEON_PINK}{eq_n}{NC}  │  🔀 Shuf: {shuf}  │  🔁 Rep: {rep}  │  🎨 {bold_s}{COLOR_HOT_PURPLE}{th_n}{NC}",
+            f"  Vol: {vol}  │  Pitch: {pbadge}  │  EQ: {bold_s}{eq_p_col}{eq_p}{NC}  │  {bass_badge}  │  Vis: {bold_s}{COLOR_NEON_PINK}{eq_n}{NC}  │  Shuf: {shuf}  │  Rep: {rep}",
+            f"  Vol {vol}  Pitch {pbadge}  EQ {eq_p}  BASS {self._bass_mode().upper()}  Vis {eq_n}  Shuf {shuf}  Rep {rep}"
         ], max(20, w - 1)))
         if self.mode == "MUSIC":
             g_bottom = f"[G] {g_key}  " if is_lg else ""
             lines.extend([
                 _fit_text_line([
-                    f"  {bold_s}{COLOR_TRAFFIC_GREEN}TRACK CONTROLS:{NC} {bold_s}{COLOR_ELECTRIC_CYAN}[3]{NC} {bold_s}Favorites{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[H]{NC} {bold_s}Mark Fav{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[1]{NC} {bold_s}Mix Archive{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[2]{NC} {bold_s}Music{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[D]{NC} {bold_s}Clear Playlist{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[Space]{NC} {bold_s}Play/Pause{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[R]{NC} {bold_s}Record WAV{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[M]{NC} {bold_s}Mini Mode{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[L]{NC} {bold_s}Liquid Glass{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[Z]{NC} {bold_s}MP Liquid Visualizer{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[Q]{NC} {bold_s}Queue{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[G]{NC} {bold_s}{g_key}{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[I]{NC} {bold_s}Track Inspector{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[E]{NC} {bold_s}Equalizer HUD{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[/]{NC} {bold_s}Search{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[n/p]{NC} {bold_s}Skip{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[+/-]{NC} {bold_s}Pitch{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[v/V]{NC} {bold_s}Vol{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[u]{NC} {bold_s}Mute{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[b/Esc]{NC} {bold_s}Exit{NC}",
-                    f"  {bold_s}{COLOR_TRAFFIC_GREEN}CONTROLS:{NC} {bold_s}[3] Favorites{NC}  {bold_s}[H] Mark{NC}  {bold_s}[1] Mix Archive{NC}  {bold_s}[2] Music{NC}  {bold_s}[D] Clear{NC}  {bold_s}[Space] Play{NC}  {bold_s}[R] Rec WAV{NC}  {bold_s}[M] Mini{NC}  {bold_s}[L] Liquid{NC}  {bold_s}[Q] Queue{NC}  {bold_s}[G] {g_key}{NC}  {bold_s}[E] Equalizer{NC}  {bold_s}[/] Search{NC}  {bold_s}[n/p] Skip{NC}  {bold_s}[u] Mute{NC}  {bold_s}[b/Esc] Exit{NC}",
-                    f"  {bold_s}[3] Fav  [H] Mark  [1] Mix  [2] Music  [D] Clear  Space Play  [Q] Queue  [G] {g_key}  [E] EQ  [/] Search  n/p Skip  b/Esc Exit{NC}"
+                    f"  {bold_s}{COLOR_TRAFFIC_GREEN}TRACK CONTROLS:{NC} {bold_s}{COLOR_ELECTRIC_CYAN}[3]{NC} {bold_s}Favorites{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[H]{NC} {bold_s}Mark Fav{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[1]{NC} {bold_s}Mix Archive{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[2]{NC} {bold_s}Music{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[D]{NC} {bold_s}Clear Playlist{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[Space]{NC} {bold_s}Play/Pause{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[R]{NC} {bold_s}Record WAV{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[M]{NC} {bold_s}Mini Mode{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[L]{NC} {bold_s}Liquid Glass{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[Z]{NC} {bold_s}MP Liquid Visualizer{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[Q]{NC} {bold_s}Queue{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[G]{NC} {bold_s}{g_key}{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[I]{NC} {bold_s}Track Inspector{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[E]{NC} {bold_s}Equalizer HUD{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[b]{NC} {bold_s}Bass Boost{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[/]{NC} {bold_s}Search{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[n/p]{NC} {bold_s}Skip{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[+/-]{NC} {bold_s}Pitch{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[v/V]{NC} {bold_s}Vol{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[u]{NC} {bold_s}Mute{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[Esc]{NC} {bold_s}Exit{NC}",
+                    f"  {bold_s}{COLOR_TRAFFIC_GREEN}CONTROLS:{NC} {bold_s}[3] Favorites{NC}  {bold_s}[H] Mark{NC}  {bold_s}[1] Mix Archive{NC}  {bold_s}[2] Music{NC}  {bold_s}[D] Clear{NC}  {bold_s}[Space] Play{NC}  {bold_s}[R] Rec WAV{NC}  {bold_s}[M] Mini{NC}  {bold_s}[L] Liquid{NC}  {bold_s}[Q] Queue{NC}  {bold_s}[G] {g_key}{NC}  {bold_s}[E] Equalizer{NC}  {bold_s}[b] Bass{NC}  {bold_s}[/] Search{NC}  {bold_s}[n/p] Skip{NC}  {bold_s}[u] Mute{NC}  {bold_s}[Esc] Exit{NC}",
+                    f"  {bold_s}[3] Fav  [H] Mark  [1] Mix  [2] Music  [D] Clear  Space Play  [Q] Queue  [G] {g_key}  [E] EQ  [b] Bass  [/] Search  n/p Skip  Esc Exit{NC}"
                 ], max(20, w - 1)),
                 _fit_text_line([
-                    f"  {hint_col}{g_bottom}[0] Pitch Reset  [u] Mute  [s] Shuffle  [y] Repeat  [L] Liquid Glass  [Z] MP Liquid Visualizer  [E] Equalizer HUD  [e] Vis Style  [c] Color Theme  [a] Audio/BT  [O] Open  [F] Files{NC}",
-                    f"  {hint_col}{g_bottom}0 Reset  u Mute  s Shuf  y Rep  L Glass  Z Liquid Vis  E Equalizer  e Vis  c Theme  a BT  O Open  F Files{NC}",
-                    f"  {hint_col}{g_bottom}0 Reset  u Mute  s Shuf  y Rep  L Glass  Z Liquid Vis  E Equalizer  e Vis  c Theme  b/Esc Exit{NC}"
+                    f"  {hint_col}{g_bottom}[0] Pitch Reset  [u] Mute  [s] Shuffle  [y] Repeat  [b] Bass Boost  [L] Liquid Glass  [Z] MP Liquid Visualizer  [E] Equalizer HUD  [e] Vis Style  [c] Color Theme  [a] Audio/BT  [O] Open  [F] Files{NC}",
+                    f"  {hint_col}{g_bottom}0 Reset  u Mute  s Shuf  y Rep  b Bass  L Glass  Z Liquid Vis  E Equalizer  e Vis  c Theme  a BT  O Open  F Files{NC}",
+                    f"  {hint_col}{g_bottom}0 Reset  u Mute  s Shuf  y Rep  b Bass  L Glass  Z Liquid Vis  E Equalizer  e Vis  c Theme  Esc Exit{NC}"
                 ], max(20, w - 1))
             ])
         else:
             lines.append(_fit_text_line([
-                f"  {hint_col}[3] Favorites  [H] Mark Fav  [1] Mix Archive  [2] Music  [D] Clear Playlist  [J] Export DJ Set  [Space] Play/Pause  [R] Record WAV  [M] Mini Mode  [L] Liquid Glass  [Z] MP Liquid Visualizer  [Q] Queue  [G] {g_key}  [+/-] Pitch ±1% (±20% max)  [0] Pitch Reset  [v/V] Vol  [u] Mute  [s] Shuffle  [y] Repeat  [n/p] Next/Prev  [a] Audio/BT  [O] Open  [T] Tracklist  [w] Export  [F] Files  [E] Equalizer HUD  [e] Vis  [b/Esc] Exit{NC}",
-                f"  {hint_col}[3] Favorites  [H] Mark  [1] Mix Archive  [2] Music  [D] Clear  [J] Export DJ Set  Space Play  R Rec  M Mini  L Glass  Q Queue  G {g_key}  +/- Pitch  0 Reset  v/V Vol  u Mute  s Shuf  y Rep  n/p Skip  O Open  T List  E EQ  b/Esc Exit{NC}",
-                f"  {hint_col}[3] Fav  [H] Mark  [1] Mix  [2] Music  [D] Clear  [J] Export DJ Set  Space Play  R Rec  M Mini  Q Queue  G {g_key}  v/V Vol  u Mute  s Shuf  y Rep  n/p Skip  E EQ  b/Esc Exit{NC}"
+                f"  {hint_col}[3] Favorites  [H] Mark Fav  [1] Mix Archive  [2] Music  [D] Clear Playlist  [J] Export DJ Set  [Space] Play/Pause  [R] Record WAV  [M] Mini Mode  [L] Liquid Glass  [Z] MP Liquid Visualizer  [Q] Queue  [G] {g_key}  [+/-] Pitch ±1% (±20% max)  [0] Pitch Reset  [v/V] Vol  [u] Mute  [s] Shuffle  [y] Repeat  [n/p] Next/Prev  [a] Audio/BT  [O] Open  [T] Tracklist  [w] Export  [F] Files  [E] Equalizer HUD  [b] Bass Boost  [e] Vis  [Esc] Exit{NC}",
+                f"  {hint_col}[3] Favorites  [H] Mark  [1] Mix Archive  [2] Music  [D] Clear  [J] Export DJ Set  Space Play  R Rec  M Mini  L Glass  Q Queue  G {g_key}  +/- Pitch  0 Reset  v/V Vol  u Mute  s Shuf  y Rep  n/p Skip  O Open  T List  E EQ  b Bass  Esc Exit{NC}",
+                f"  {hint_col}[3] Fav  [H] Mark  [1] Mix  [2] Music  [D] Clear  [J] Export DJ Set  Space Play  R Rec  M Mini  Q Queue  G {g_key}  v/V Vol  u Mute  s Shuf  y Rep  n/p Skip  E EQ  b Bass  Esc Exit{NC}"
             ], max(20, w - 1)))
         if is_lg:
             lines = [_strip_bold_ansi(l) for l in lines]
@@ -7891,7 +8641,7 @@ class TerminalPlayerUI:
         tname, av = st.get("title", "Unknown Track"), max(18, iw - 18)
         if _display_width(tname) > av: tname = _clip_display(tname, av - 3) + "..."
         state = st.get("state", "stopped")
-        badge = f"{bold_s}\033[38;2;0;255;127m▶ PLAY{NC}" if state == "playing" else (f"{bold_s}\033[38;2;255;191;0m⏸ PAUSE{NC}" if state == "paused" else f"{bold_s}\033[38;2;255;64;64m⏹ STOP{NC}")
+        badge = f"{bold_s}{dark_glass_ink(self.visualizer.theme)}▶ PLAY{NC}" if state == "playing" else (f"{bold_s}\033[38;2;255;191;0m⏸ PAUSE{NC}" if state == "paused" else f"{bold_s}\033[38;2;255;64;64m⏹ STOP{NC}")
         is_rec, flash = bool(st.get("recording", False)), (int(t_now * 1.5) % 2 == 0)
         rec_b = f" {bold_s}\033[38;2;255;64;64m● REC{NC}" if (is_rec and flash) else (f" \033[38;2;255;100;100m○ REC{NC}" if is_rec else "")
         mode_str = 'MUSIC' if self.mode == 'MUSIC' else 'MIX'
@@ -7907,17 +8657,17 @@ class TerminalPlayerUI:
         lines.append(f"  \033[38;2;0;229;255m{st.get('position_fmt', '00:00')}{NC} {bar_fill}{bar_empty} \033[38;2;0;229;255m{st.get('duration_fmt', '00:00')}{NC} \033[38;2;255;215;0m({pct:.1f}%){NC}")
         vol, pval = (f"{st.get('volume', 85)}%" if not st.get("muted") else "\033[38;2;255;64;64mMUTED\033[0m"), int(st.get("pitch_percent", 0))
         p_str = "\033[38;2;0;255;127m0%\033[0m" if pval == 0 else f"\033[38;2;255;191;0m{pval:+d}%\033[0m"
-        lines.append(f"  🔊 \033[38;2;0;229;255m{vol}{NC} │ 🎚 {p_str} │ 🎛 {bold_s}{c2}{self.visualizer.get_style_display_name()[:16]}{NC} │ 🎨 {c1}{self.visualizer.get_theme_display_name()[:14]}{NC}")
+        lines.append(f"  🔊 \033[38;2;0;229;255m{vol}{NC} │ 🎚 {p_str} │ {bass_mode_badge(self._bass_mode(), bool(bold_s))} │ 🎛 {bold_s}{c2}{self.visualizer.get_style_display_name()[:12]}{NC} │ 🎨 {c1}{self.visualizer.get_theme_display_name()[:12]}{NC}")
         lines.extend(self.visualizer.render(st, width=iw + 4, height=(3 if h >= 14 else 2)))
         self._append_player_buttons(lines, max(20, w - 1))
         prompt_line = self._favorites_prompt_line()
         if prompt_line:
             lines.append(_fit_text_line([prompt_line], max(20, w - 1)))
         elif t_now < self.notification_time and self.notification_msg:
-            lines.append(f"  {bold_s}\033[38;2;0;255;127m📂 {self.notification_msg}{NC}")
+            lines.append(f"  {self._notification_ansi(bold_s)}📂 {self.notification_msg}{NC}")
         else:
             g_early = f"\033[38;2;0;229;255m[G]{NC} {text_col}{g_key}{NC}  " if is_lg else ""
-            lines.append(f"  \033[38;2;0;229;255m[3]{NC} \033[38;2;255;196;0mFavorites{NC}  \033[38;2;0;229;255m[H]{NC} {text_col}Mark{NC}  \033[38;2;0;229;255m[1]{NC} {text_col}Mix{NC}  \033[38;2;0;229;255m[2]{NC} {text_col}Music{NC}  \033[38;2;0;229;255m[D]{NC} {text_col}Clear{NC}  {g_early}\033[38;2;0;229;255m[Space]{NC} {text_col}Play{NC}  \033[38;2;0;229;255m[Q]{NC} {text_col}Queue{NC}  \033[38;2;0;229;255m[R]{NC} {text_col}Rec{NC}  \033[38;2;0;229;255m[G]{NC} {text_col}{g_key}{NC}  \033[38;2;0;229;255m[n/p]{NC} {text_col}Skip{NC}  \033[38;2;255;215;0m[M]{NC} {text_col}Micro{NC}  \033[38;2;255;64;64m[b]{NC} {text_col}Close{NC}")
+            lines.append(f"  \033[38;2;0;229;255m[3]{NC} \033[38;2;255;196;0mFavorites{NC}  \033[38;2;0;229;255m[H]{NC} {text_col}Mark{NC}  \033[38;2;0;229;255m[1]{NC} {text_col}Mix{NC}  \033[38;2;0;229;255m[2]{NC} {text_col}Music{NC}  \033[38;2;0;229;255m[D]{NC} {text_col}Clear{NC}  {g_early}\033[38;2;0;229;255m[Space]{NC} {text_col}Play{NC}  \033[38;2;0;229;255m[Q]{NC} {text_col}Queue{NC}  \033[38;2;0;229;255m[R]{NC} {text_col}Rec{NC}  \033[38;2;0;229;255m[b]{NC} {text_col}Bass{NC}  \033[38;2;0;229;255m[n/p]{NC} {text_col}Skip{NC}  \033[38;2;255;215;0m[M]{NC} {text_col}Micro{NC}  \033[38;2;255;64;64mEsc{NC} {text_col}Close{NC}")
         if is_lg:
             lines = [_strip_bold_ansi(l) for l in lines]
         _present_frame(lines, w, h)
@@ -7941,7 +8691,7 @@ class TerminalPlayerUI:
         bold_s = "" if is_lg else BOLD
         text_col = theme_body_ansi(self.visualizer.theme)
         state = st.get("state", "stopped")
-        badge = f"{bold_s}\033[38;2;0;255;127m▶{NC}" if state == "playing" else (f"{bold_s}\033[38;2;255;191;0m⏸{NC}" if state == "paused" else f"{bold_s}\033[38;2;255;64;64m⏹{NC}")
+        badge = f"{bold_s}{dark_glass_ink(self.visualizer.theme)}▶{NC}" if state == "playing" else (f"{bold_s}\033[38;2;255;191;0m⏸{NC}" if state == "paused" else f"{bold_s}\033[38;2;255;64;64m⏹{NC}")
         cs, lv = self.visualizer.style, np.array(st.get("levels", [0.0] * 24))
         if cs in ("rainbow_mandala_eq", "rainbow_wormhole_eq", "rainbow_aurora_eq"):
             m_str = self.visualizer._fx_micro_meter(cs, t_now, lv)
@@ -7977,7 +8727,7 @@ class TerminalPlayerUI:
         vol_str = f"{st.get('volume', 85)}%" if not st.get("muted") else "\033[38;2;255;64;64mMUTED\033[0m"
         r1 = f" {badge}{rec_d} {text_col}{tname}{NC} │ \033[38;2;0;229;255m{st.get('position_fmt', '00:00')}/{st.get('duration_fmt', '00:00')}{NC} │ Vol: \033[38;2;0;229;255m{vol_str}{NC} │ \033[38;2;255;215;0mPitch: {p_txt}{NC} "
         next_mode_lbl = "Full" if is_lg else "Mini"
-        r2 = f" 🎛 [{m_str}] │ EQ: {bold_s}{c2}{self.visualizer.get_style_display_name()[:14]}{NC} │ 🎨 {c1}{self.visualizer.get_theme_display_name()[:10]}{NC} │ \033[38;2;255;215;0m[M] {next_mode_lbl}{NC} "
+        r2 = f" 🎛 [{m_str}] │ {bass_mode_badge(self._bass_mode(), bool(bold_s))} │ 🎨 {c1}{self.visualizer.get_theme_display_name()[:10]}{NC} │ \033[38;2;255;215;0m[M] {next_mode_lbl}{NC} "
         if is_lg and self.mp_visualizer_on:
             micro_hdr = "✦ MP LIQUID GLASS VISUALIZER ✦"
         else:
@@ -7997,15 +8747,15 @@ class TerminalPlayerUI:
                 f"  {BOLD}{c1}╰{'─' * iw}╯{NC}"
             ]
         if h >= 9: lines.extend(self.visualizer.render(st, width=iw + 4, height=(2 if h >= 12 else 1)))
-        if t_now < self.notification_time and self.notification_msg: lines.append(f"  {bold_s}\033[38;2;0;255;127m📂 {self.notification_msg}{NC}")
+        if t_now < self.notification_time and self.notification_msg: lines.append(f"  {self._notification_ansi(bold_s)}📂 {self.notification_msg}{NC}")
         else:
             m_hint = "[M] Full" if is_lg else "[M] Mini"
             m_hint_short = "M Full" if is_lg else "M Mini"
             g_micro = f"\033[1;38;2;0;229;255m[G]{NC} {text_col}{g_key}{NC}  " if is_lg else ""
             lines.append(_fit_text_line([
-                f"  \033[1;38;2;0;229;255m[D]{NC} {text_col}Clear{NC}  \033[1;38;2;0;229;255m[Space]{NC} {text_col}Play{NC}  \033[1;38;2;0;229;255m[Q]{NC} {text_col}Que{NC}  \033[1;38;2;0;229;255m[R]{NC} {text_col}Rec{NC}  \033[1;38;2;0;229;255m[G]{NC} {text_col}{g_key}{NC}  \033[1;38;2;0;229;255m[n/p]{NC} {text_col}Skip{NC}  \033[1;38;2;0;229;255m[v/V]{NC} {text_col}Vol{NC}  \033[1;38;2;0;229;255m[s]{NC} {text_col}Shuf{NC}  \033[1;38;2;0;229;255m[e]{NC} {text_col}EQ{NC}  \033[1;38;2;0;229;255m[c]{NC} {text_col}Theme{NC}  \033[1;38;2;255;215;0m{m_hint}{NC}  \033[1;38;2;255;64;64m[b]{NC} {text_col}Close{NC}",
-                f"  \033[1;38;2;0;229;255m[D]{NC} {text_col}Clear{NC}  \033[1;38;2;0;229;255m[Space]{NC} {text_col}Play{NC}  \033[1;38;2;0;229;255m[Q]{NC} {text_col}Que{NC}  \033[1;38;2;0;229;255m[R]{NC} {text_col}Rec{NC}  \033[1;38;2;0;229;255m[n/p]{NC} {text_col}Skip{NC}  \033[1;38;2;0;229;255m[v/V]{NC} {text_col}Vol{NC}  \033[1;38;2;0;229;255m[s]{NC} {text_col}Shuf{NC}  \033[1;38;2;0;229;255m[e]{NC} {text_col}EQ{NC}  \033[1;38;2;0;229;255m[c]{NC} {text_col}Theme{NC}  \033[1;38;2;255;215;0m{m_hint}{NC}  \033[1;38;2;255;64;64m[b]{NC} {text_col}Close{NC}",
-                f"  \033[1;38;2;0;229;255mD{NC} {text_col}Clear{NC}  \033[1;38;2;0;229;255mSpace{NC} {text_col}Play{NC}  \033[1;38;2;0;229;255mQ{NC} {text_col}Que{NC}  \033[1;38;2;0;229;255mR{NC} {text_col}Rec{NC}  {g_micro}\033[1;38;2;0;229;255mn/p{NC} {text_col}Skip{NC}  \033[1;38;2;0;229;255mv/V{NC} {text_col}Vol{NC}  \033[1;38;2;0;229;255ms{NC} {text_col}Shuf{NC}  \033[1;38;2;0;229;255me{NC} {text_col}EQ{NC}  \033[1;38;2;0;229;255mc{NC} {text_col}Theme{NC}  \033[1;38;2;255;215;0m{m_hint_short}{NC}  \033[1;38;2;255;64;64mb{NC} {text_col}Close{NC}"
+                f"  \033[1;38;2;0;229;255m[D]{NC} {text_col}Clear{NC}  \033[1;38;2;0;229;255m[Space]{NC} {text_col}Play{NC}  \033[1;38;2;0;229;255m[Q]{NC} {text_col}Que{NC}  \033[1;38;2;0;229;255m[R]{NC} {text_col}Rec{NC}  \033[1;38;2;0;229;255m[G]{NC} {text_col}{g_key}{NC}  \033[1;38;2;0;229;255m[n/p]{NC} {text_col}Skip{NC}  \033[1;38;2;0;229;255m[v/V]{NC} {text_col}Vol{NC}  \033[1;38;2;0;229;255m[s]{NC} {text_col}Shuf{NC}  \033[1;38;2;0;229;255m[e]{NC} {text_col}EQ{NC}  \033[1;38;2;0;229;255m[b]{NC} {text_col}Bass{NC}  \033[1;38;2;0;229;255m[c]{NC} {text_col}Theme{NC}  \033[1;38;2;255;215;0m{m_hint}{NC}  \033[1;38;2;255;64;64mEsc{NC} {text_col}Close{NC}",
+                f"  \033[1;38;2;0;229;255m[D]{NC} {text_col}Clear{NC}  \033[1;38;2;0;229;255m[Space]{NC} {text_col}Play{NC}  \033[1;38;2;0;229;255m[Q]{NC} {text_col}Que{NC}  \033[1;38;2;0;229;255m[R]{NC} {text_col}Rec{NC}  \033[1;38;2;0;229;255m[n/p]{NC} {text_col}Skip{NC}  \033[1;38;2;0;229;255m[v/V]{NC} {text_col}Vol{NC}  \033[1;38;2;0;229;255m[s]{NC} {text_col}Shuf{NC}  \033[1;38;2;0;229;255m[e]{NC} {text_col}EQ{NC}  \033[1;38;2;0;229;255m[b]{NC} {text_col}Bass{NC}  \033[1;38;2;0;229;255m[c]{NC} {text_col}Theme{NC}  \033[1;38;2;255;215;0m{m_hint}{NC}  \033[1;38;2;255;64;64mEsc{NC} {text_col}Close{NC}",
+                f"  \033[1;38;2;0;229;255mD{NC} {text_col}Clear{NC}  \033[1;38;2;0;229;255mSpace{NC} {text_col}Play{NC}  \033[1;38;2;0;229;255mQ{NC} {text_col}Que{NC}  \033[1;38;2;0;229;255mR{NC} {text_col}Rec{NC}  {g_micro}\033[1;38;2;0;229;255mn/p{NC} {text_col}Skip{NC}  \033[1;38;2;0;229;255mv/V{NC} {text_col}Vol{NC}  \033[1;38;2;0;229;255ms{NC} {text_col}Shuf{NC}  \033[1;38;2;0;229;255me{NC} {text_col}EQ{NC}  \033[1;38;2;0;229;255mb{NC} {text_col}Bass{NC}  \033[1;38;2;0;229;255mc{NC} {text_col}Theme{NC}  \033[1;38;2;255;215;0m{m_hint_short}{NC}  \033[1;38;2;255;64;64mEsc{NC} {text_col}Close{NC}"
             ], max(20, w - 1)))
         self._append_player_buttons(lines, max(20, w - 1))
         if is_lg:
@@ -8118,7 +8868,10 @@ def main():
         (("--eq-preset",), dict(type=str, help="Set active equalizer preset (Flat, Ambient, Trance, Techno, House, Progressive, Vapourwave, or custom)")),
         (("--list-eq-presets",), dict(action="store_true", help="List all available equalizer presets and their dB curves")),
         (("--eq-bands",), dict(type=str, help="Set 10-band equalizer gains in dB (e.g. '3.0,2.5,1.5,0,-1,-1.5,-0.5,1,2,2.5')")),
-        (("--reset-eq",), dict(action="store_true", help="Reset equalizer to Flat preset (0 dB on all bands)"))
+        (("--reset-eq",), dict(action="store_true", help="Reset equalizer to Flat preset (0 dB on all bands)")),
+        (("--bass-mode", "--bass"), dict(type=str, help="Set Crusher Bass Boost mode (Normal, Medium, High, Extreme)")),
+        (("--cycle-bass",), dict(action="store_true", help="Step the Crusher Bass Boost dial up one mode")),
+        (("--list-bass-modes",), dict(action="store_true", help="List the Crusher Bass Boost modes and their boost levels"))
     ]: p.add_argument(*flags, **kw)
 
     args, _ = p.parse_known_args()
@@ -8399,7 +9152,8 @@ def main():
             pval = data.get("pitch_percent", 0)
             p_str = f"Pitch: {pval:+d}%" if pval != 0 else "Pitch: 0%"
             eq_s = f"EQ: {data.get('eq_preset', 'Flat')}"
-            print(f"{'▶' if data['state'] == 'playing' else '⏸'} {data['title']} [{data['position_fmt']}/{data['duration_fmt']}] ({data['mini_eq']}) {p_str} {eq_s} Vol: {data['volume']}%")
+            bass_s = f"Bass: {data.get('bass_mode', 'Normal')}"
+            print(f"{'▶' if data['state'] == 'playing' else '⏸'} {data['title']} [{data['position_fmt']}/{data['duration_fmt']}] ({data['mini_eq']}) {p_str} {eq_s} {bass_s} Vol: {data['volume']}%")
         else: print("○ MP Audio Player: Stopped")
         sys.exit(0)
 
@@ -8467,6 +9221,40 @@ def main():
         except Exception as exc:
             print(f"✖ Invalid band values: {exc}", file=sys.stderr)
             sys.exit(1)
+
+    if args.list_bass_modes:
+        print("MP Audio Player — Crusher Bass Boost modes (Skullcandy Crusher ANC 2 dial):")
+        for mode in BASS_BOOST_MODES:
+            pct = BASS_BOOST_FRACTIONS[mode] * 100.0
+            peak = BASS_BOOST_FRACTIONS[mode] * CRUSHER_BASS_FULL_GAIN_DB
+            note = "  (Crusher off)" if mode == "Normal" else f"  {peak:+.1f} dB at {CRUSHER_BASS_PEAK_HZ:.0f} Hz"
+            print(f"  • {mode:<8s} {pct:5.1f}% of the headphones{note}")
+        sys.exit(0)
+
+    if args.bass_mode:
+        target_mode = BassBoostManager.resolve(args.bass_mode)
+        if not target_mode:
+            print(f"✖ Unknown bass mode: {args.bass_mode} (Normal, Medium, High, Extreme)", file=sys.stderr)
+            sys.exit(1)
+        if daemon_running:
+            res = send_ipc_command("set_bass_mode", mode=target_mode) or {}
+            if res.get("success"):
+                print(f"✔ Bass Boost: {res.get('bass_mode', target_mode)}")
+                sys.exit(0)
+            print(f"✖ Failed to set Bass Boost: {target_mode}", file=sys.stderr)
+            sys.exit(1)
+        BassBoostManager().set_mode(target_mode)
+        print(f"✔ Bass Boost saved as default: {target_mode}")
+        sys.exit(0)
+
+    if args.cycle_bass:
+        if daemon_running:
+            res = send_ipc_command("cycle_bass") or {}
+            print(f"✔ Bass Boost: {res.get('bass_mode', 'Normal')}")
+            sys.exit(0)
+        mgr = BassBoostManager()
+        print(f"✔ Bass Boost: {mgr.cycle(1)}")
+        sys.exit(0)
 
     if args.interactive or args.mini or args.micro or (not args.daemon and sys.stdin.isatty()):
         _tty_rt = _load_tty_runtime()
@@ -8619,6 +9407,7 @@ def main():
 
     init_pos = float(args.seek_to) if args.seek_to is not None else 0.0
     engine = AudioEngine(mixes, auto_bluetooth=auto_bt, mode=current_mode)
+    engine.playlist_path = str(args.playlist or (getattr(scanner, "playlist_path", "") or ""))
     PlayerIPCServer(engine).start()
     if mixes and not explicit_missing: engine.load_track(init_idx, True, start_position=init_pos)
 
