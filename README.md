@@ -9,7 +9,7 @@
 [![BigScreen VR](https://img.shields.io/badge/VR%20Mode-Bigscreen%20%2B%20MP%20Liquid%20Player-9146ff.svg)](scripts/bigscreen_vr.py)
 [![MIDI Controller](https://img.shields.io/badge/Hardware%20MIDI-Traktor%20Kontrol%20S4%20hw%3A0%2C0-00ffcc.svg)](docs/TRAKTOR_KONTROL_S4_USER_GUIDE.md)
 [![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS%20%7C%20Windows%20%7C%20FreeBSD-00e5ff.svg)](README.md)
-[![macOS](https://img.shields.io/badge/macOS-Sonoma%20%7C%20Sequoia%20%7C%20Apple%20Silicon%20M1--M4%20%26%20Intel-silver.svg)]()
+[![macOS](https://img.shields.io/badge/macOS-Latest%20Golden%20Gate%20Release%20%7C%20Apple%20Silicon%20M1--M4%20%26%20Intel-silver.svg)]()
 [![Windows](https://img.shields.io/badge/Windows-10%20%7C%2011%20%7C%20Git%20Bash%20%7C%20WSL2-0078D6.svg)]()
 [![FreeBSD](https://img.shields.io/badge/FreeBSD-14.x%20%7C%2015--CURRENT%20%7C%20Ports%20%26%20Pkg-red.svg)]()
 [![Shell](https://img.shields.io/badge/Language-Bash%205.x%20%7C%20Python%203.10%2B%20%7C%20PowerShell-ff8c00.svg)]()
@@ -24,7 +24,7 @@
 
 ![MP Mix Manager 0.5.0 Screenshot (MP Liquid Player) ](004.png)
 
-An enterprise-grade workstation orchestration console and media management suite designed for high-resolution audio production, multi-hour DJ mix archiving, automated 32-bit FLAC mastering, 31,000+ track SMB network streaming, Traktor Pro playlist extraction, live tracklist tracking, YouTube & AI Talking-Head video synthesis, automated multi-period intelligence reporting, system maintenance, and AI workflow control across **Linux (Bazzite / SteamOS / Fedora / Ubuntu)**, **macOS (Latest Sequoia / Sonoma, Apple Silicon M1–M4 & Intel)**, **Microsoft Windows 10 & 11**, and **FreeBSD (14.x / 15-CURRENT)**.
+An enterprise-grade workstation orchestration console and media management suite designed for high-resolution audio production, multi-hour DJ mix archiving, automated 32-bit FLAC mastering, 31,000+ track SMB network streaming, Traktor Pro playlist extraction, live tracklist tracking, YouTube & AI Talking-Head video synthesis, automated multi-period intelligence reporting, system maintenance, and AI workflow control across **Linux (Bazzite / SteamOS / Fedora / Ubuntu)**, **macOS (Latest Golden Gate Release, Apple Silicon M1–M4 & Intel)**, **Microsoft Windows 10 & 11**, and **FreeBSD (14.x / 15-CURRENT)**.
 
 ![MP Mix Manager 0.5.0 Screenshot (MP Liquid Player) ](002.png)
 
@@ -32,7 +32,7 @@ An enterprise-grade workstation orchestration console and media management suite
 > ### 🌟 Welcome to MP Mix Manager v0.5.0 Stable (Sensorium)
 > **November 12, 2026. Welcome from MPlanetarian.** This is the stable Sensorium release, and the direct successor to **0.4.3 Stable (Liquid)**. Thank you for running MP Mix Manager, MP Gui, and the Liquid Transparent Audio Player. The manager, the Liquid Player, and the music library share one glass desktop, and the macOS build in this release is the one on this page.
 >
-> Sensorium is named for the thing it adds: every surface now responds to *how* you use it, not just to what you play.
+> Sensorium 0.5.0 Release - Enjoy a Majical Journey through Music & Sound with the MP Visualizer (Included with MP Liquid Player) & the new MP Gui or you can use the MP Mix Manager CLI
 >
 > New in this release:
 > - 🧭 **Shortcuts that survive a move:** launchers and desktop entries resolve the install tree from a marker file instead of a hard-coded `MP_Mix_Manager_v0.x` path, so renaming or relocating the folder no longer breaks every icon.
@@ -428,7 +428,7 @@ Two releases back, October 24, 2026. Current release notes are [What's New in v0
 - 🖥️ **Tri-Engine Rendering Architecture**:
   - **High-Compatibility OpenGL Core 3.3+ (`MP_Audio_Player_Liquid_Glass_OpenGL.py`)**: The primary default backend. Runs smoothly across AMD Radeon, Intel Iris/Arc, NVIDIA GeForce, and legacy OpenGL-capable GPUs without requiring Vulkan drivers.
   - **Native Vulkan 1.x (`MP_Audio_Player_Liquid_Glass.py`)**: High-performance SPIR-V fragment shader pipeline (`shaders/liquid_glass.frag`) rendering refractive caustics, specular highlights, and shaded well geometry.
-  - **Apple Silicon Metal (`MP_Audio_Player_Liquid_Glass_macOS.py`)**: Built natively for macOS Sequoia and Sonoma using `CAMetalLayer`, unified memory command buffers, and Metal Shading Language (`shaders/liquid_glass_metal.metal`). Delivers sub-millisecond frame rendering and zero battery drain on Apple Silicon M1/M2/M3/M4 Macs.
+  - **Apple Silicon Metal (`MP_Audio_Player_Liquid_Glass_macOS.py`)**: Built natively for macOS Golden Gate, Sequoia and Sonoma using `CAMetalLayer`, unified memory command buffers, and Metal Shading Language (`shaders/liquid_glass_metal.metal`). Delivers sub-millisecond frame rendering and zero battery drain on Apple Silicon M1/M2/M3/M4 Macs.
 - 🪟 **Native Windows 10 & 11 Support**:
   - Leverages Desktop Window Manager (DWM) frame extension (`DwmExtendFrameIntoClientArea` with `-1` margins) and DWM Acrylic blur for a true transparent glass window on Windows 10 and 11.
   - Win32 console docking (`SetParent`, `SetWindowPos`) hosts the terminal player directly inside the glass well without external dependencies.
@@ -908,7 +908,7 @@ scratch. Converted audio is never deleted, so you remove those files yourself.
 ```
 ---
 
-### 2. Apple macOS (Sequoia, Sonoma, Apple Silicon M1–M4 & Intel)
+### 2. Apple macOS (Latest Golden Gate Release, Apple Silicon M1–M4 & Intel)
 
 #### Prerequisites
 Install [Homebrew](https://brew.sh) (if not already installed):
