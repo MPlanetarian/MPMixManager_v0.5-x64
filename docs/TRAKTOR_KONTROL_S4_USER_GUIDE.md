@@ -1,5 +1,5 @@
 # Traktor Kontrol S4 Hardware MIDI Control — User Guide
-**MP Mix Archive Manager & MP Audio Player — Version 0.5.0 Stable (Sensorium)**
+**MP Mix Archive Manager & MP Audio Player — Version 0.5.3 Stable (Sensorium)**
 
 ---
 
