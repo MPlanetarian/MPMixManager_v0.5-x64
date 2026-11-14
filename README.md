@@ -32,7 +32,7 @@ An enterprise-grade workstation orchestration console and media management suite
 > ### 🌟 Welcome to MP Mix Manager v0.5.0 Stable (Sensorium)
 > **November 12, 2026. Welcome from MPlanetarian.** This is the stable Sensorium release, and the direct successor to **0.4.3 Stable (Liquid)**. Thank you for running MP Mix Manager, MP Gui, and the Liquid Transparent Audio Player. The manager, the Liquid Player, and the music library share one glass desktop, and the macOS build in this release is the one on this page.
 >
-> Sensorium 0.5.0 Release - Enjoy a Majical Journey through Music & Sound with the MP Visualizer (Included with MP Liquid Player) & the new MP Gui or you can use the MP Mix Manager CLI
+> Sensorium 0.5.3 Release - Enjoy a Majical Journey through Music & Sound with the MP Visualizer (Included with MP Liquid Player) & the new MP Gui or you can use the MP Mix Manager CLI
 >
 > New in this release:
 > - 🧭 **Shortcuts that survive a move:** launchers and desktop entries resolve the install tree from a marker file instead of a hard-coded `MP_Mix_Manager_v0.x` path, so renaming or relocating the folder no longer breaks every icon.
