@@ -29,19 +29,18 @@ An enterprise-grade workstation orchestration console and media management suite
 ![MP Mix Manager 0.5.0 Screenshot (MP Liquid Player) ](002.png)
 
 > [!TIP]
-> ### 🌟 Welcome to MP Mix Manager v0.5.0 Stable (Sensorium)
+> ### 🌟 Welcome to MP Mix Manager v0.5.3 Stable (Sensorium)
 > **November 12, 2026. Welcome from MPlanetarian.** This is the stable Sensorium release, and the direct successor to **0.4.3 Stable (Liquid)**. Thank you for running MP Mix Manager, MP Gui, and the Liquid Transparent Audio Player. The manager, the Liquid Player, and the music library share one glass desktop, and the macOS build in this release is the one on this page.
 >
 > Sensorium 0.5.3 Release - Enjoy a Majical Journey through Music & Sound with the MP Visualizer (Included with MP Liquid Player) & the new MP Gui or you can use the MP Mix Manager CLI
 >
 > New in this release:
-> - 🧭 **Shortcuts that survive a move:** launchers and desktop entries resolve the install tree from a marker file instead of a hard-coded `MP_Mix_Manager_v0.x` path, so renaming or relocating the folder no longer breaks every icon.
+> - 🧭 **Shortcuts:** launchers and desktop entries resolve the install tree from a marker file instead of a hard-coded `MP_Mix_Manager_v0.x` path, so renaming or relocating the folder no longer breaks every icon.
 > - 🧠 **MP Assistant tab in the Web Companion:** the dashboard header gains a second tab that opens the **MP Harmony Agent** right on your phone. Replies stream in token by token and are **spoken in Stephen Hawking's voice** by default, while the mix keeps playing underneath.
 > - 🎨 **Web Companion theme switching and a mini playlist:** pick any palette from a theme dropdown, and see the current mix plus the upcoming ones in a scrollable window you can tap.
 > - 🎧 **The Web Companion is now a pure HTTP streamer:** it no longer opens a sound device on the host, so a service restart can no longer start audio playing in the studio.
-> - 🩹 **Everything 0.4.3 shipped is still here** — see [Previous Release: v0.4.3](#-previous-release-v043-stable-liquid--november-12-2026).
 >
-> **👉 [What's New in v0.5.0](#-whats-new-in-v050-stable-sensorium) • [Post-release fixes](#-post-release-fixes--november-13-2026) • [Quick Start by OS](#-quick-start-by-operating-system) • [Read the Full Changelog](CHANGELOG.md) • [Previous release: v0.4.3](#-previous-release-v043-stable-liquid--november-12-2026)**
+> **👉 [What's New in v0.5.3](#-whats-new-in-v053-stable-sensorium) • [Post-release fixes](#-post-release-fixes--november-13-2026) • [Quick Start by OS](#-quick-start-by-operating-system) • [Read the Full Changelog](CHANGELOG.md) • [Previous release: v0.4.3](#-previous-release-v043-stable-liquid--november-12-2026)**
 
 ---
 
@@ -49,16 +48,15 @@ An enterprise-grade workstation orchestration console and media management suite
 
 ![MP Mix Manager 0.5.0 Screenshot (MP Audio CLI Player) ](003.png)
 
-- [🚀 What's New in v0.5.0 Stable (Sensorium)](#-whats-new-in-v050-stable-sensorium)
-- [🧩 In the tree but not yet on a menu](#-in-the-tree-but-not-yet-on-a-menu)
+- [🚀 What's New in v0.5.3 Stable (Sensorium)](#-whats-new-in-v053-stable-sensorium)
 - [🩹 Post-release fixes — November 13, 2026](#-post-release-fixes--november-13-2026)
 - [📅 Updates in the 0.4.2 release window](#-updates-in-the-042-release-window)
 - [🍏 What's New in v0.4.2 Stable (Liquid)](#-whats-new-in-v042-stable-liquid)
 - [🍏 macOS fixes in v0.4.2 Stable (Liquid)](#-macos-fixes-in-v042-stable-liquid)
-- [🎉 Download & Experience v0.5.0 Stable (Sensorium)](#-download--experience-v050-stable-sensorium)
+- [🎉 Download & Experience v0.5.3 Stable (Sensorium)](#-download--experience-v053-stable-sensorium)
 - [📜 Previous Release: v0.4.3 Stable (Liquid)](#-previous-release-v043-stable-liquid--november-12-2026)
 - [🚀 What's New in v0.4.0 Stable](#-whats-new-in-v040-stable)
-- [🔥 Core v0.4 Architecture Highlights](#-core-v04-architecture-highlights)
+- [🔥 Core v0.5.3 Architecture Highlights](#-core-v053-architecture-highlights)
 - [🪟 Spotlight: MP Liquid Glass Audio Player (OpenGL • Vulkan • Apple Silicon Metal)](#-spotlight-mp-liquid-glass-audio-player-opengl--vulkan--apple-silicon-metal)
 - [🔮 Spotlight: MP Liquid Visualizer (Native Vulkan 3D Audio-Reactive Raymarching)](#-spotlight-mp-liquid-visualizer-native-vulkan-3d-audio-reactive-raymarching)
 - [🌌 MPlanetarian Dreamworlds & TUI Navigation](#-spotlight-mplanetarian-dreamworlds--tui-navigation)
@@ -87,10 +85,10 @@ An enterprise-grade workstation orchestration console and media management suite
 
 ---
 
-## 🚀 What's New in v0.5.0 Stable (Sensorium)
+## 🚀 What's New in v0.5.3 Stable (Sensorium)
 
 > [!IMPORTANT]
-> **MP Mix Manager v0.5.0 Stable (Sensorium) — released November 12, 2026.** Sensorium carries every 0.4.3 feature forward and adds the **install-tree resolver** (shortcuts and launchers survive a moved or renamed folder), the **MP Assistant tab**, per-device **theme switching** and a **mini playlist** in the Web Companion, and a **pure HTTP stream** that never touches the host's audio device. This page lists what is wired to a menu, a key or a launcher; see [In the tree but not yet on a menu](#-in-the-tree-but-not-yet-on-a-menu) for the parts that ship as files only.
+> **MP Mix Manager v0.5.3 Stable (Sensorium) — released November 12, 2026.** Sensorium carries every 0.4.3 feature forward and adds the **install-tree resolver** (shortcuts and launchers survive a moved or renamed folder), the **MP Assistant tab**, per-device **theme switching** and a **mini playlist** in the Web Companion, and a **pure HTTP stream** that never touches the host's audio device. This page lists what is wired to a menu, a key or a launcher.
 
 ### 🧭 Install-Tree Resolver — Shortcuts That Survive a Move
 
@@ -115,7 +113,7 @@ An enterprise-grade workstation orchestration console and media management suite
 | **Resume point is separate from the clock** | `/api/status` → `resume_sec` | The host's progress clock advances even with no listener attached, so after a few idle hours it reported the *end* of the mix and the phone seeked to the final frame — the tap appeared to do nothing. `resume_sec` is now `0` whenever the recorded position is not safely inside the file (an overrun, or inside the last 2 s / 2 %), so engaging audio always starts audible playback. The phone reports its real position every ~5 s, so the host resumes where the listener actually stopped. |
 | **Stream queue is cached** | `QUEUE_CACHE_TTL = 10.0` | The dashboard polls several endpoints per second, so the stream queue is scanned at most once every ten seconds instead of on every request. |
 
-### 🩹 Fixes in v0.5.0
+### 🩹 Fixes in v0.5.3
 
 | Bug | What changed |
 | :--- | :--- |
@@ -126,26 +124,10 @@ An enterprise-grade workstation orchestration console and media management suite
 
 ---
 
-## 🧩 In the tree but not yet on a menu
-
-> [!WARNING]
-> **These ship as files and are described in `CHANGELOG.md` under `[0.5.0]`, but nothing in the manager, the player or a shortcut calls them yet.** They are listed here so the page matches the tree instead of promising a menu entry that does not exist. Each is usable on its own from the command line shown.
-
-| Component | File | Actual status on 2026-11-13 |
-| :--- | :--- | :--- |
-| **Hidden Mode (`H`)** | `scripts/mp_hidden_mode.py` | Complete module — window-title list, KWin script loader, state file and tray notice — but **no host imports it**, so no shortcut, player or menu binds `H`. Its three wiring tests fail. |
-| **The Whitest White theme** | `themes/The_Whitest_White_MP_Mix_Manager.theme` | The palette and btop theme exist, but the theme is **not in the theme picker and not in the `C` cycle list**, so it cannot be selected from inside the app yet. Its six wiring tests fail. |
-| **21 audio output formats** | `scripts/audio_conversion_suite.py`, `scripts/audio_formats.py` | The registry really does define 21 formats (`flac, wav, w64, aiff, caf, au, mp3, ogg, opus, m4a, alac, wma, wv, tta, mka, ac3, eac3, dts, mp2, voc, amr`) and runs standalone: `python3 scripts/audio_conversion_suite.py show-formats`. **Menu option 4 still converts to five** (`flac`, `mp3`, `wav`, `mp4`, `ogg`) because `Make_SOF_FLAC_CONVERSION.sh` is not wired to the suite. |
-| **Traktor playlist import** | `scripts/traktor_playlist_importer.py`, `.sh` | The importer runs standalone and generated `.m3u8` output works. It is **not on menu 17**, not on Music Folders menu 9, and the player has **no `Shift+T`** handler. |
-
-If you are packaging a release, these four are the gap to close — the implementation and its tests are already written, and the failures are wiring assertions, not logic errors.
-
----
-
 ## 🩹 Post-Release Fixes — November 13, 2026
 
 > [!IMPORTANT]
-> **These arrived after the November 12 release notes were published.** The version is still `0.5.0 Stable (Sensorium)`. All of them are wired into the hosts that use them.
+> **These arrived after the November 12 release notes were published.** The version is still `0.5.3 Stable (Sensorium)`. All of them are wired into the hosts that use them.
 
 ### Player and desktop
 
@@ -189,7 +171,7 @@ Your 0.4 folder is **never modified or deleted**. Converted audio is not moved. 
 ## 📅 Updates in the 0.4.2 release window
 
 > [!IMPORTANT]
-> **These notes were published during the 0.4.2 window and are kept here as release history.** They cover the features and fixes added after the original November 8, 2026 notes, and are superseded by [What's New in v0.4.3 Stable (Liquid)](#-previous-release-v043-stable-liquid--november-12-2026) and [What's New in v0.5.0 Stable (Sensorium)](#-whats-new-in-v050-stable-sensorium).
+> **These notes were published during the 0.4.2 window and are kept here as release history.** They cover the features and fixes added after the original November 8, 2026 notes, and are superseded by [What's New in v0.4.3 Stable (Liquid)](#-previous-release-v043-stable-liquid--november-12-2026) and [What's New in v0.5.3 Stable (Sensorium)](#-whats-new-in-v053-stable-sensorium).
 
 ### Added
 
@@ -298,11 +280,11 @@ The [v0.4.0 Stable notes](#-whats-new-in-v040-stable) below still describe the L
 
 ---
 
-## 🎉 Download & Experience v0.5.0 Stable (Sensorium)
+## 🎉 Download & Experience v0.5.3 Stable (Sensorium)
 
 > [!TIP]
 > ### 🚀 Ready to Experience the Future of High-Resolution Desktop Audio?
-> **MP Mix Manager v0.5.0 Stable (Sensorium)** is the current release. It keeps the 32-bit FLAC archive, the SMB music library, and the Liquid Glass desktop, and adds the Manager GUI, Retro Linux Memories, Favorites, and the playlist fixes above.
+> **MP Mix Manager v0.5.3 Stable (Sensorium)** is the current release. It keeps the 32-bit FLAC archive, the SMB music library, and the Liquid Glass desktop, and adds the Manager GUI, Retro Linux Memories, Favorites, and the playlist fixes above.
 >
 > 💎 **Top 5 Reasons to Download & Run v0.5.0 Today:**
 > 1. 🪟 **MP Mix Manager GUI:** Run the whole manager in the Liquid Glass window, with Retro Linux Memories as the starting theme, beside the Liquid Player.
@@ -310,7 +292,7 @@ The [v0.4.0 Stable notes](#-whats-new-in-v040-stable) below still describe the L
 > 3. 🎧 **SMB playlists that complete:** Generate a playlist per share plus one combined list. A share that does not answer no longer hangs the refresh or wipes a playlist you already have.
 > 4. 🔮 **MP Liquid Player and Visualizer:** Still-water glass on OpenGL, Vulkan, and Apple Silicon Metal, with the windowed visualizer fitted to the main desktop and closed when you leave the player.
 > 5. 💻 **The same launchers:** `./manager.sh` on Linux, `manager_macos.command` on macOS, and `MP Mix Manager.exe` or `manager.bat` on Windows.
-> 6. 🧭 **Shortcuts that survive a move:** launchers and desktop entries resolve the install tree from a marker file, so renaming or relocating the folder no longer breaks every icon.
+> 6. 🧭 **Shortcuts:** launchers and desktop entries resolve the install tree from a marker file, so renaming or relocating the folder no longer breaks every icon.
 
 ## 📜 Previous Release: v0.4.3 Stable (Liquid) — November 12, 2026
 
@@ -355,7 +337,7 @@ The [v0.4.0 Stable notes](#-whats-new-in-v040-stable) below still describe the L
 
 ## 🚀 What's New in v0.4.0 Stable
 
-Two releases back, October 24, 2026. Current release notes are [What's New in v0.5.0 Stable (Sensorium)](#-whats-new-in-v050-stable-sensorium), with 0.4.3 under [Previous Release](#-previous-release-v043-stable-liquid--november-12-2026). The visualizer window size in that release was a 1400 pixel square. The size in the tree today is under [Updates in the 0.4.2 release window](#-updates-in-the-042-release-window).
+Two releases back, October 24, 2026. Current release notes are [What's New in v0.5.3 Stable (Sensorium)](#-whats-new-in-v053-stable-sensorium), with 0.4.3 under [Previous Release](#-previous-release-v043-stable-liquid--november-12-2026). The visualizer window size in that release was a 1400 pixel square. The size in the tree today is under [Updates in the 0.4.2 release window](#-updates-in-the-042-release-window).
 
 > [!IMPORTANT]
 > **MP Mix Manager v0.4.0 Release (October 24, 2026):** Introduces the groundbreaking **MP Liquid Glass Audio Player** (OpenGL / Vulkan / Apple Silicon Metal) with 86% slimmer bezels and Windows DWM acrylic blur, the native Vulkan **MP Liquid Visualizer** with real-time 3D audio-reactive raymarching across 5 Bandcamp presets (including the new **Stream of Frequency** and **Sensorium Interface**), the global **Stream of Frequency Theme** and animated spectrogram equalizer (`stream_of_frequency_eq`), free celebratory release track & art piece in **`MP_SAMPLES/`** pre-loaded on first run, updated **`MP_loader.mp4`** startup soundtrack, native **Traktor Kontrol S4 Hardware MIDI Controller Support** (`hw:0,0` / `/dev/snd/midiC0D0`), real-time **10-Band Graphic Equalizer**, native **64-bit Windows `.EXE` console launcher** (`MP_Mix_Manager.exe` / `manager.exe`), **Live Lossless WAV Recording** with 3GB auto-rollover (`R` key), **Mix Playback Queue** (`Q` key), **Dynamic Tracklist Theme Synchronization** (`T` key), native file manager audio reveal (`F` key), and responsive auto-rescaling UI.
@@ -395,7 +377,7 @@ Two releases back, October 24, 2026. Current release notes are [What's New in v0
 
 ---
 
-## 🔥 Core v0.4 Architecture Highlights
+## 🔥 Core v0.5.3 Architecture Highlights
 
 | Feature Area | Component | Highlights & Capability Summary |
 | :--- | :--- | :--- |
