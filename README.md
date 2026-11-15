@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="MP_SAMPLES/The_Orbits_of_Planets_Dreamworlds_Cover.png" width="600" alt="The Orbits of Planets (Cosmic Dreamworlds Remake) — release theme track cover for MP Mix Manager 0.5 (Sensorium)">
+</p>
+
 > [!IMPORTANT]
 > ## 🎉 MP Mix Manager 0.5.3 Sensorium Update — Out Today
 >
@@ -1698,3 +1702,9 @@ MP Mix Archive Manager is licensed under the **[MIT License](LICENSE)**.
 
 ---
 *Created with ❤️ by **MPlanetarian** for audio producers, DJs, and media creators worldwide.*
+
+---
+
+<p align="center">
+  <img src="MP_SAMPLES/The_Orbits_of_Planets_Dreamworlds_Cover.png" width="600" alt="The Orbits of Planets (Cosmic Dreamworlds Remake) — release theme track cover for MP Mix Manager 0.5 (Sensorium)">
+</p>
