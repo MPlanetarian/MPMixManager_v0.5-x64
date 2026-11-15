@@ -139,12 +139,15 @@ class PlaylistScannerCacheTests(unittest.TestCase):
         ]
         table = player._search_clean_table()
         for text in samples:
+            # The table is populated lazily for non-ASCII characters, so the
+            # whole-string helper is the public contract; a bare translate()
+            # only covers the 82 pre-seeded ASCII entries.
             self.assertEqual(
-                old.sub(" ", text.lower()).translate(table),
-                text.lower().translate(table),
+                old.sub(" ", text.lower()),
+                player._search_clean(text),
                 f"cleanup drifted for {text!r}",
             )
-            self.assertEqual(text.lower().translate(table), old.sub(" ", text.lower()))
+            self.assertEqual(player._search_clean(text), old.sub(" ", text.lower()))
 
     def test_repeat_searches_reuse_the_index(self):
         with patch.object(player, "get_base_dir", return_value=self.dir):

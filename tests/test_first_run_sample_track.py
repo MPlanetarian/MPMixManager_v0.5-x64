@@ -18,6 +18,8 @@ from scripts.liquid_glass_reward import (
     SAMPLE_DIR,
     SAMPLE_TRACK_NAME,
     SAMPLE_TRACK_FILE,
+    SAMPLE_TRACK_DURATION_SEC,
+    SAMPLE_TRACK_DURATION_FMT,
     SAMPLE_COVER_FILE,
     setup_first_run_sample_track,
 )
@@ -31,7 +33,7 @@ class TestFirstRunSampleTrack(unittest.TestCase):
         track_size = SAMPLE_TRACK_FILE.stat().st_size
         cover_size = SAMPLE_COVER_FILE.stat().st_size
 
-        self.assertGreater(track_size, 50 * 1024 * 1024, "FLAC audio file should be high-res / substantial (>50MB)")
+        self.assertGreater(track_size, 50 * 1024 * 1024, "WAV audio file should be high-res / substantial (>50MB)")
         self.assertGreater(cover_size, 100 * 1024, "PNG cover file should be high resolution (>100KB)")
 
     def test_first_run_preload_lifecycle(self):
@@ -61,14 +63,17 @@ class TestFirstRunSampleTrack(unittest.TestCase):
                 res_data = json.loads(resume_file.read_text(encoding="utf-8"))
                 self.assertEqual(res_data["position_sec"], 0.0)
                 self.assertEqual(res_data["title"], SAMPLE_TRACK_NAME)
-                self.assertIn("MPlanetarian - Ecology of the Earth", res_data["path"])
+                self.assertIn("MPlanetarian - The Orbits of Planets", res_data["path"])
 
                 # Verify state content
                 st_data = json.loads(state_file.read_text(encoding="utf-8"))
                 self.assertEqual(st_data["state"], "stopped")
                 self.assertEqual(st_data["position_sec"], 0.0)
                 self.assertEqual(st_data["position_fmt"], "00:00")
-                self.assertEqual(st_data["duration_fmt"], "16:54")
+                self.assertEqual(st_data["duration_fmt"], SAMPLE_TRACK_DURATION_FMT)
+                self.assertEqual(st_data["duration_fmt"], "27:27")
+                self.assertAlmostEqual(st_data["duration_sec"], SAMPLE_TRACK_DURATION_SEC)
+                self.assertAlmostEqual(res_data["duration_sec"], SAMPLE_TRACK_DURATION_SEC)
 
                 # 2. Simulate user switching to another mix
                 custom_resume = {

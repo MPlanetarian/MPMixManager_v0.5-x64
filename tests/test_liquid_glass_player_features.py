@@ -8,6 +8,7 @@ Unit tests for Liquid Glass Player Features:
 """
 
 import os
+import re
 import sys
 import unittest
 from pathlib import Path
@@ -19,6 +20,31 @@ sys.path.insert(0, str(BASE_DIR))
 import MP_Audio_Player
 import MP_Audio_Player_Liquid_Glass as lg_vulkan
 import MP_Audio_Player_Liquid_Glass_OpenGL as lg_opengl
+from liquid_glass_slider import player_slider_strip
+
+# VTE's default foreground, set by _apply_glass_foreground for the pale pane.
+# Anything that falls back to it reads as near-black.
+DEFAULT_INK = (24, 26, 34)
+_SGR = re.compile(r"\x1b\[([0-9;]*)m")
+
+
+def _foreground_at(text: str, index: int, default=DEFAULT_INK):
+    """The foreground colour in effect at ``index``, following SGR resets.
+
+    Checking that a row merely *contains* a white escape is not enough: an
+    ``\\033[0m`` after it clears the colour again, and the text that follows
+    falls back to the terminal default. This replays the escape stream so the
+    answer is the colour the user actually sees on that character.
+    """
+    fg = default
+    for match in _SGR.finditer(text, 0, index):
+        codes = [c for c in match.group(1).split(";") if c]
+        if match.group(1) == "" or "0" in codes:
+            fg = default
+        for i, code in enumerate(codes):
+            if code == "38" and codes[i + 1:i + 2] == ["2"]:
+                fg = tuple(int(v) for v in codes[i + 2:i + 5])
+    return fg
 
 
 class TestLiquidGlassPlayerFeatures(unittest.TestCase):
@@ -229,7 +255,7 @@ class TestLiquidGlassPlayerFeatures(unittest.TestCase):
             ui_size_mode="NORMAL",
             is_remote=True,
         )
-        ui.visualizer.theme = "sensorium_interface"
+        ui.visualizer.theme = "sensorium"
         ui.selected_row = 0
         st = {
             "title": "Mix 01 - Selected Track.flac",
@@ -261,9 +287,9 @@ class TestLiquidGlassPlayerFeatures(unittest.TestCase):
         self.assertIn(white, unselected[0])
         # The dark-ink themes are the reason this changed, so assert the worst
         # of them explicitly rather than only a mid-brightness theme.
-        self.assertNotIn(MP_Audio_Player.theme_body_ansi("sensorium_interface"), unselected[0])
+        self.assertNotIn(MP_Audio_Player.theme_body_ansi("sensorium"), unselected[0])
 
-        for theme in ("cosmic_supernova", "orbital_void_reflux", "cyber_neon"):
+        for theme in ("cosmic_supernova", "sensorium", "cyber_neon"):
             ui.visualizer.theme = theme
             captured.clear()
             with patch.dict(os.environ, {"MP_LIQUID_GLASS": "1"}), \
@@ -279,9 +305,9 @@ class TestLiquidGlassPlayerFeatures(unittest.TestCase):
     def test_every_theme_renders_playlist_rows_legibly(self):
         """Every selectable theme paints a readable playlist row.
 
-        Two themes used to break this. Five had a body ink dark enough to be
-        black-on-dark (orbital_void_reflux, sensorium_interface,
-        dreamworlds_ultra, cyber_neon, dreamworlds_neon). The Whitest White was
+        Two themes used to break this. Several had a body ink dark enough to be
+        black-on-dark (the retired Liquid Glass skins, dreamworlds_ultra,
+        cyber_neon, dreamworlds_neon). The Whitest White was
         missing from the text table, so theme_text_rgb fell through to the pink
         default and drew pink rows on its white pane.
 
@@ -295,8 +321,7 @@ class TestLiquidGlassPlayerFeatures(unittest.TestCase):
             "stream_of_frequency", "dreamworlds_ultra", "dynamic_rainbow_liquid_glass",
             "cosmic_supernova", "dreamworlds_liquid", "dreamworlds_neon", "retro_studio",
             "cyber_neon", "phosphor", "ice_cold", "retro_terminal",
-            "cosmic_dreamworlds_radioactive", "cosmic_dreamworlds", "orbital_void_reflux",
-            "sensorium_interface", "retro_linux_memories", "the_whitest_white",
+            "sensorium", "retro_linux_memories", "the_whitest_white",
             "into_darkness_void_out",
         ]
         scanner = MagicMock()
@@ -337,6 +362,77 @@ class TestLiquidGlassPlayerFeatures(unittest.TestCase):
             else:
                 self.assertIn(white, row, f"{theme} did not render the playlist row white")
                 self.assertNotIn(black, row, f"{theme} rendered the row with dark ink")
+
+    def test_playlist_row_ink_survives_the_favourite_star(self):
+        """The mix name itself must be white, not just some escape in the row.
+
+        The row used to emit ``WHITE`` then the favourite star with a plain
+        ``NC`` reset. ``NC`` is ``\\033[0m``: it clears every attribute, so the
+        name that followed fell back to VTE's default foreground -- near-black
+        (24,26,34) on the pale glass pane. Asserting "the row contains white"
+        passed anyway, because the star was white. This walks the escape
+        stream and reads the foreground actually in effect at the first
+        character of the mix name, which is what the user sees.
+        """
+        row = self._render_rows("sensorium", count=2)[1]
+        ink = _foreground_at(row, row.find("Mix 02"))
+        self.assertEqual(
+            ink, (255, 255, 255),
+            f"the mix name is rendered in {ink}, not white; a reset before it "
+            "dropped the row colour",
+        )
+
+    def test_every_theme_keeps_the_mix_name_white(self):
+        """The same ink check across the whole theme list."""
+        themes = [
+            "stream_of_frequency", "dreamworlds_ultra", "dynamic_rainbow_liquid_glass",
+            "cosmic_supernova", "dreamworlds_liquid", "dreamworlds_neon", "retro_studio",
+            "cyber_neon", "phosphor", "ice_cold", "retro_terminal",
+            "sensorium", "retro_linux_memories", "into_darkness_void_out",
+        ]
+        for theme in themes:
+            with self.subTest(theme=theme):
+                row = self._render_rows(theme, count=2)[1]
+                ink = _foreground_at(row, row.find("Mix 02"))
+                self.assertEqual(
+                    ink, (255, 255, 255),
+                    f"{theme}: the mix name is rendered in {ink}, not white",
+                )
+
+    def _render_rows(self, theme, count=2):
+        """Draw one frame and return the playlist rows for that theme."""
+        names = ["Mix 01 - Selected.flac", "Mix 02 - Plain Row.flac", "Mix 03 - Third.flac"]
+        scanner = MagicMock()
+        scanner.get_mixes.return_value = [
+            {"name": n, "path": f"/p/{i}.flac", "ext": "FLAC", "size_mb": 650 + i}
+            for i, n in enumerate(names[:count])
+        ]
+        st = {
+            "title": names[0], "path": "/p/0.flac", "state": "playing", "index": 0,
+            "position_fmt": "02:00", "duration_fmt": "60:00", "progress_pct": 3.3,
+            "volume": 85, "pitch_percent": 0,
+            "levels": [0.4] * 24, "peaks": [0.6] * 24,
+            "levels_left": [0.4] * 24, "levels_right": [0.4] * 24,
+            "peaks_left": [0.6] * 24, "peaks_right": [0.6] * 24,
+        }
+        ui = MP_Audio_Player.TerminalPlayerUI(
+            engine=None, scanner=scanner, ui_size_mode="NORMAL", is_remote=True,
+        )
+        ui.visualizer.theme = theme
+        ui.selected_row = 0
+        captured = []
+        with patch.dict(os.environ, {"MP_LIQUID_GLASS": "1"}), \
+             patch("MP_Audio_Player._present_frame",
+                   side_effect=lambda lines, w, h: captured.extend(lines)), \
+             patch("MP_Audio_Player._win_visible_size", return_value=(120, 40)):
+            ui._get_status = MagicMock(return_value=st)
+            ui._draw_frame()
+        # Only the boxed playlist rows: they are the ones that start with the
+        # panel bar. The "NOW PLAYING" header also carries the title.
+        return [
+            line for line in captured
+            if any(n in line for n in names[:count]) and "│" in line
+        ]
 
     def test_volume_footer_sits_one_line_below_the_playlist(self):
         """MP Liquid places Vol one extra row below the playlist box."""
@@ -382,6 +478,131 @@ class TestLiquidGlassPlayerFeatures(unittest.TestCase):
         self.assertIn("┘", plain[vol_idx - 3])
         self.assertLessEqual(len(captured), 40)
 
+    def test_playlist_footer_sits_one_row_lower_than_it_used_to(self):
+        """The `↑/↓: Scroll` footer rule moved down a row in MP Liquid.
+
+        It used to stop a whole row higher than the CLI frame: MP Liquid asked
+        for a second breathing row above the Vol status line *and* kept a row
+        back from the playlist body. The list now claims that row, so the same
+        24-row glass window shows one more track and the footer rule sits on
+        the row directly above the single blank row before Vol.
+        """
+        names = [f"Mix {i:02d} - Track.flac" for i in range(40)]
+        mock_scanner = MagicMock()
+        mock_scanner.get_mixes.return_value = [
+            {"name": n, "path": f"/path/{n}", "ext": "FLAC", "size_mb": 650}
+            for n in names
+        ]
+        ui = MP_Audio_Player.TerminalPlayerUI(
+            engine=None, scanner=mock_scanner, ui_size_mode="NORMAL", is_remote=True,
+        )
+        st = {
+            "title": names[0], "path": f"/path/{names[0]}", "state": "playing",
+            "position_fmt": "02:00", "duration_fmt": "60:00", "progress_pct": 3.3,
+            "volume": 85, "pitch_percent": 0,
+            "levels": [0.4] * 24, "peaks": [0.6] * 24,
+            "levels_left": [0.4] * 24, "levels_right": [0.4] * 24,
+            "peaks_left": [0.6] * 24, "peaks_right": [0.6] * 24,
+        }
+        frames = {}
+        for label, env in (("liquid", {"MP_LIQUID_GLASS": "1"}), ("cli", {})):
+            captured = []
+            with patch.dict(os.environ, env, clear=False), \
+                 patch("MP_Audio_Player._present_frame",
+                       side_effect=lambda lines, w, h: captured.extend(lines)), \
+                 patch("MP_Audio_Player._win_visible_size", return_value=(90, 24)):
+                ui._get_status = MagicMock(return_value=st)
+                ui._draw_frame()
+            frames[label] = [MP_Audio_Player._ANSI_RE.sub("", line) for line in captured]
+
+        def footer_and_vol(rows):
+            footer = next(i for i, r in enumerate(rows) if "↑/↓: Scroll" in r)
+            vol = next(i for i, r in enumerate(rows) if r.lstrip().startswith(("Vol", "🔊 Vol")))
+            # Distance from the bottom of the frame, so the two libraries and
+            # the two frame heights stay comparable.
+            return len(rows) - footer, len(rows) - vol
+
+        lg_footer, lg_vol = footer_and_vol(frames["liquid"])
+        cli_footer, cli_vol = footer_and_vol(frames["cli"])
+        # Both frames end on the same control rows, so the footer sits the same
+        # distance from the bottom in each: MP Liquid no longer stops a row
+        # higher than the CLI.
+        self.assertEqual(lg_footer, cli_footer)
+        self.assertEqual(lg_vol, cli_vol)
+        # And the footer is on the row directly above the breathing blank row.
+        rows = frames["liquid"]
+        vol = next(i for i, r in enumerate(rows) if r.lstrip().startswith(("Vol", "🔊 Vol")))
+        self.assertEqual(rows[vol - 1].strip(), "")
+        self.assertIn("┘", rows[vol - 2])
+        self.assertLessEqual(len(rows), 24)
+
+    def test_player_hands_one_text_row_of_the_slider_strip_to_the_terminal(self):
+        """The player's last two text rows sit one line closer to the bar.
+
+        The reported gap: the status row and the key hints filled the terminal
+        but still stopped a whole text row above the glass edge, so a blank row
+        of glass showed between them and the transparency bar. The player takes
+        that row out of the strip the bar lives in; MP Gui and the tracklist
+        viewer, which have no player footer, keep the classic 44 px.
+        """
+        self.assertEqual(player_slider_strip(0), 44, "an unknown cell keeps the classic strip")
+        self.assertEqual(player_slider_strip(18), 26)
+        self.assertEqual(player_slider_strip(24), 20)
+        self.assertEqual(player_slider_strip(44), 14, "clamped to the smallest usable strip")
+        self.assertEqual(player_slider_strip(200), 14)
+
+        for mod in (lg_vulkan, lg_opengl):
+            for mode in ("NORMAL", "MINI", "MICRO"):
+                host = mod.GlassHost(["test"], mode=mode)
+                host.renderer = MagicMock()
+                host.renderer.bezel_px = 7
+                host.renderer.window_pos.return_value = (10, 20)
+                host.renderer.window_size.return_value = (1094, 778)
+                self.assertEqual(
+                    host._slider_strip(), 26,
+                    f"{mod.__name__} {mode}: the player must give one 18 px row back",
+                )
+                _, well_y, _, inner_h = host._well_rect()
+                self.assertEqual(inner_h, 778 - 14 - 26)
+
+            # The two windows that share this host keep the full strip.
+            for mode in ("MANAGER", "TRACKLIST"):
+                host = mod.GlassHost(["test"], mode=mode)
+                host.renderer = MagicMock()
+                host.renderer.bezel_px = 7
+                host.renderer.window_pos.return_value = (10, 20)
+                host.renderer.window_size.return_value = (1094, 778)
+                self.assertEqual(host._slider_strip(), 44, f"{mod.__name__} {mode}")
+                _, _, _, inner_h = host._well_rect()
+                self.assertEqual(inner_h, 778 - 14 - 44)
+
+    def test_slider_bar_follows_the_shorter_strip(self):
+        """The overlay must be placed on the strip the host actually reserved."""
+        from liquid_glass_slider import GlassSlider, MIN_SLIDER_STRIP
+
+        slider = GlassSlider()
+        slider._win = MagicMock()
+        slider._area = MagicMock()
+        slider.place(100, 200, 1000, 700, strip=26)
+        move = slider._win.move.call_args[0]
+        self.assertEqual(move[0], 100)
+        self.assertEqual(move[1], 200 + 700 - 26)
+        self.assertEqual(slider._win.resize.call_args[0], (1000, 26))
+
+        # Omitting the strip keeps the classic height for the other windows.
+        slider2 = GlassSlider()
+        slider2._win = MagicMock()
+        slider2._area = MagicMock()
+        slider2.place(0, 0, 500, 400)
+        self.assertEqual(slider2._win.resize.call_args[0], (500, 44))
+
+        # And a nonsensically small strip still leaves room for the thumb.
+        slider3 = GlassSlider()
+        slider3._win = MagicMock()
+        slider3._area = MagicMock()
+        slider3.place(0, 0, 500, 400, strip=1)
+        self.assertEqual(slider3._win.resize.call_args[0], (500, MIN_SLIDER_STRIP))
+
     def test_player_argv_forwards_extra_args(self):
         """Verifies player_argv forwards mode/playlist/theme flags to MP_Audio_Player.py."""
         for mod in (lg_vulkan, lg_opengl):
@@ -424,10 +645,17 @@ class TestLiquidGlassPlayerFeatures(unittest.TestCase):
                 self.assertEqual(well_y, 20 + 7)
                 self.assertEqual(inner_w, win_w - 14)
                 # The well is shorter than the window by the two bezel margins
-                # plus the 44 px chrome strip that carries the opacity slider.
+                # plus the chrome strip that carries the opacity slider.
                 # Asserting a plain 14 px inset ignored that strip and failed on
-                # every correctly laid out window.
-                self.assertEqual(inner_h, win_h - 14 - 44)
+                # every correctly laid out window. The player hands one text row
+                # of that strip back to the terminal, so its last two text rows
+                # sit directly above the bar; MP Gui and the tracklist viewer
+                # keep the classic 44 px because they have no player footer.
+                expected_strip = (
+                    44 if mode in ("MANAGER", "TRACKLIST")
+                    else player_slider_strip(char_h)
+                )
+                self.assertEqual(inner_h, win_h - 14 - expected_strip)
 
                 # Bezel edge detection should trigger within 7px border
                 self.assertTrue(host._on_bezel(3, win_h // 2, win_w, win_h))
@@ -545,7 +773,7 @@ class TestLiquidGlassPlayerFeatures(unittest.TestCase):
                     code = mod.main([
                         "--tracklist", str(tl_file),
                         "--audio", str(audio_file),
-                        "--theme", "orbital_void_reflux",
+                        "--theme", "sensorium",
                     ])
                     self.assertEqual(code, 0)
                     mock_run.assert_called_once()
@@ -588,6 +816,51 @@ class TestLiquidGlassPlayerFeatures(unittest.TestCase):
         self.assertIn("DEFAULT_WINDOW_OPACITY = 0.80", macos)
         self.assertIn("self.clear_opacity = DEFAULT_WINDOW_OPACITY", macos)
         self.assertIn("self.slider_val = DEFAULT_WINDOW_OPACITY", macos)
+
+    def test_action_row_buttons_follow_the_theme_colour(self):
+        """The chips must not be the old fixed near-blacks on any theme.
+
+        VISUALIZATION, EXPORT TRACKS and BASS BOOST were filled with hardcoded
+        dark blues and browns, so every theme showed three black buttons. Each
+        chip now derives its fill from the selected palette and stays visible
+        even on a theme whose colours are black (Into Darkness).
+        """
+        import MP_Audio_Player as player
+
+        themes = [
+            "dreamworlds_ultra", "stream_of_frequency", "dreamworlds_liquid",
+            "cosmic_supernova", "phosphor", "ice_cold", "retro_terminal",
+            "sensorium", "matrix", "the_whitest_white",
+            "into_darkness_void_out", "retro_linux_memories",
+        ]
+        stale = {
+            (16, 28, 52),   # VISUALIZATION off
+            (0, 48, 72),    # VISUALIZATION on
+            (28, 18, 8),    # EXPORT TRACKS
+            (18, 30, 54),   # BASS BOOST: Normal
+            (0, 46, 26),    # BASS BOOST: Medium
+            (56, 34, 0),    # BASS BOOST: High
+        }
+        for theme in themes:
+            fills = []
+            for lift in (0.0, 0.9):
+                fill, ink = player.theme_chip_style(theme, lift=lift)
+                self.assertNotIn(fill, stale, f"{theme} chip kept the old black fill")
+                self.assertNotIn(ink, stale, f"{theme} chip kept the old ink")
+                # The chip has to be far enough from its ink to read.
+                gap = sum(abs(a - b) for a, b in zip(fill, ink))
+                self.assertGreater(gap, 120, f"{theme} chip is unreadable")
+                fills.append(fill)
+            # An "on" chip is brighter than the same chip "off".
+            self.assertGreater(sum(fills[1]), sum(fills[0]), theme)
+
+    def test_action_row_chips_differ_between_themes(self):
+        """Two themes with different palettes must not draw the same chip."""
+        import MP_Audio_Player as player
+
+        ultra = player.theme_chip_style("dreamworlds_ultra")[0]
+        phosphor = player.theme_chip_style("phosphor")[0]
+        self.assertNotEqual(ultra, phosphor)
 
 
 if __name__ == "__main__":

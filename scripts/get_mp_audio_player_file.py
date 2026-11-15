@@ -7,6 +7,8 @@ and reports the filepath of the track currently being played (or last played).
 Part of MP_Mix_Manager_v0.3 (Dreamworlds Productions)
 """
 
+from __future__ import annotations
+
 import sys
 import os
 import json

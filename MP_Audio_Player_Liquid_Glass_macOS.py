@@ -23,10 +23,34 @@ if str(ROOT / "scripts") not in sys.path:
 
 from liquid_visualizer_session import stop_companion_playback, stop_companion_visualizer  # noqa: E402
 try:  # The four-window cap ships beside the host; a lone copy still runs.
-    from mp_instance_limit import host_allowed  # noqa: E402
+    from mp_instance_limit import host_allowed, notify_limit  # noqa: E402
 except ImportError:
     def host_allowed(role):  # type: ignore[misc]
         return True
+
+    def notify_limit(role, message=None):  # type: ignore[misc]
+        print(message or f"{role} is already open 4 times.", file=sys.stderr)
+try:  # The exit movie ships beside the host too.
+    from exit_video import ExitVideo, play_player_intro  # noqa: E402
+except ImportError:
+    class ExitVideo:  # type: ignore[no-redef]
+        """Stub used when the tree was copied without scripts/exit_video.py."""
+
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def start(self):
+            return False
+
+        def wait(self, *_args, **_kwargs):
+            return None
+
+        def finish(self):
+            pass
+
+    def play_player_intro(*_args, **_kwargs):  # type: ignore[misc]
+        """Stub: no intro movie when scripts/exit_video.py is missing."""
+        return False
 from liquid_glass_metal import (  # noqa: E402
     LiquidGlassRendererMetal,
     check_apple_silicon_support,
@@ -334,9 +358,37 @@ class MetalGlassHost:
                     except OSError:
                         break
         finally:
-            self.close(master_fd)
+            self._exit_video_then_close(master_fd)
 
         return True
+
+    def _exit_video_then_close(self, master_fd=None):
+        """Play the exit movie on the last MP window, then tear the host down.
+
+        The movie plays while this window is still on screen, and the pump
+        keeps drawing frames so the glass does not freeze for its whole
+        length. Only the last MP Gui or MP Liquid Player window shows it.
+        """
+        if not self.embed_check and self.mode in ("NORMAL", "MANAGER", "MINI", "MICRO"):
+            video = ExitVideo(self.mode)
+            try:
+                if video.start():
+                    video.wait(self._pump_exit_frame)
+            except Exception:
+                pass
+            finally:
+                video.finish()
+        self.close(master_fd)
+
+    def _pump_exit_frame(self):
+        """One frame of the closing window while the exit movie plays."""
+        if self.renderer is None:
+            return
+        try:
+            self.renderer.poll()
+            self.renderer.draw(read_player_theme())
+        except Exception:
+            pass
 
     def close(self, master_fd=None):
         if master_fd is not None:
@@ -358,14 +410,35 @@ class MetalGlassHost:
             self.renderer = None
 
 
+def _companion_already_running() -> bool:
+    """True when the companion this host owns is already on screen.
+
+    Scoped to the companion rather than "any visualizer": a Liquid Player and
+    MP Gui each own a separate window, and a free window opened with Z is not a
+    companion at all.
+    """
+    try:
+        from liquid_player_visualizer import companion_visualizer_running
+    except ImportError:
+        from scripts.liquid_player_visualizer import companion_visualizer_running
+    try:
+        return bool(companion_visualizer_running(
+            os.environ.get("MP_GUI_SESSION") == "1"))
+    except Exception:
+        return False
+
+
 def ensure_random_visualizer_started() -> bool:
     """Automatically start MP Liquid Visualizer with a random preset if not already running."""
     try:
         import shutil, subprocess
-        if shutil.which("pgrep"):
+        if not _companion_already_running() and shutil.which("pgrep") and sys.platform != "linux":
+            # macOS and Windows have no /proc, so fall back to the process list.
             res = subprocess.run(["pgrep", "-f", "MP_Liquid_Visualizer|mp_liquid_visualizer_vulkan"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             if res.returncode == 0:
                 return False
+        elif _companion_already_running():
+            return False
 
         root = Path(__file__).resolve().parent
         vis_candidates = [
@@ -509,19 +582,27 @@ def main(argv):
     if player_gui:
         counted_role = "gui" if manager else "player"
         if not host_allowed(counted_role):
-            print(
-                f"{'MP Gui' if manager else 'MP Liquid Player'} is already open 4 times. "
-                "Close a window first (4 is the maximum).",
-                file=sys.stderr,
-            )
+            # A shortcut launch discards stderr, so the refusal used to look
+            # like nothing happened at all. Say it on the desktop as well.
+            notify_limit(counted_role)
             return 1
-    if player_gui and "--no-visualizer" not in argv:
-        ensure_random_visualizer_started()
-
+    mode = "MINI" if "--mini" in argv else ("MICRO" if "--micro" in argv else "NORMAL")
+    # Mark the MP Gui session before the companion is spawned so that child
+    # bonds behind MP Gui. The intro runs before the visualizer too.
     if manager and not embed and not tracklist_path:
         mode = "MANAGER"
         os.environ["MP_GUI_SESSION"] = "1"
         os.environ["MP_LIQUID_GLASS"] = "1"
+    # The first MP Gui and the first MP Liquid Player each play
+    # Exit_MP_Video.mp4 once, before the glass and its companion visualizer.
+    # The movie window closes when the clip ends. A second window of that
+    # same kind never shows it.
+    if player_gui:
+        play_player_intro(mode)
+    if player_gui and "--no-visualizer" not in argv:
+        ensure_random_visualizer_started()
+
+    if manager and not embed and not tracklist_path:
         command = manager_argv()
         if not Path(command[1]).is_file():
             raise RuntimeError(f"MP Mix Manager was not found at {command[1]}")
@@ -531,10 +612,8 @@ def main(argv):
         if not Path(command[1]).is_file():
             raise RuntimeError(f"Tracklist viewer script was not found at {command[1]}")
     elif embed:
-        mode = "MINI" if "--mini" in argv else ("MICRO" if "--micro" in argv else "NORMAL")
         command = embed_check_argv()
     else:
-        mode = "MINI" if "--mini" in argv else ("MICRO" if "--micro" in argv else "NORMAL")
         extra = [a for a in cleaned_argv if a not in ("--self-test", "--embed-check", "--mini", "--micro")]
         if theme_arg and not any(a == "--theme" or a.startswith("--theme=") for a in extra):
             extra.extend(["--theme", theme_arg])
@@ -551,7 +630,7 @@ def main(argv):
     finally:
         if manager:
             stop_companion_playback()
-            stop_companion_visualizer(force=True)
+            stop_companion_visualizer(force=True, for_gui=True)
         elif player_gui:
             stop_companion_visualizer()
 

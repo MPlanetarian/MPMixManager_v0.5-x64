@@ -12,12 +12,41 @@ from desktop_launch_screen import window_launch_origin  # noqa: E402
 from liquid_glass_font import default_liquid_glass_font  # noqa: E402
 from liquid_glass_opengl import glass_foreground_rgb  # noqa: E402
 from liquid_glass_vulkan import LiquidGlassRenderer, NVIDIA_VENDOR_ID, read_player_theme  # noqa: E402
+try:  # The player keeps a slightly shorter bottom strip so its hints sit lower.
+    from liquid_glass_slider import player_slider_strip  # noqa: E402
+except ImportError:
+    def player_slider_strip(_cell_height=0.0):  # type: ignore[misc]
+        return 44
 from liquid_visualizer_session import stop_companion_playback, stop_companion_visualizer  # noqa: E402
 try:  # The four-window cap ships beside the host; a lone copy still runs.
-    from mp_instance_limit import host_allowed  # noqa: E402
+    from mp_instance_limit import host_allowed, notify_limit  # noqa: E402
 except ImportError:
     def host_allowed(role):  # type: ignore[misc]
         return True
+
+    def notify_limit(role, message=None):  # type: ignore[misc]
+        print(message or f"{role} is already open 4 times.", file=sys.stderr)
+try:  # The exit movie ships beside the host too.
+    from exit_video import ExitVideo, play_player_intro  # noqa: E402
+except ImportError:
+    class ExitVideo:  # type: ignore[no-redef]
+        """Stub used when the tree was copied without scripts/exit_video.py."""
+
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def start(self):
+            return False
+
+        def wait(self, *_args, **_kwargs):
+            return None
+
+        def finish(self):
+            pass
+
+    def play_player_intro(*_args, **_kwargs):  # type: ignore[misc]
+        """Stub: no intro movie when scripts/exit_video.py is missing."""
+        return False
 
 COLS, ROWS = 120, 40
 # Used when Hack is not installed. Linux uses Hack 11 when that family is present.
@@ -171,8 +200,12 @@ class GlassHost:
 
     def _char_dims(self):
         if self.terminal is not None:
+            cached = getattr(self, "_cached_dims", None)
+            if cached is not None:
+                return cached
             cw, ch = int(self.terminal.get_char_width() or 0), int(self.terminal.get_char_height() or 0)
             if cw >= 4 and ch >= 8:
+                self._cached_dims = (cw, ch)
                 return cw, ch
         return 9, 18
 
@@ -188,6 +221,21 @@ class GlassHost:
         r = max(m * 0.30, 4.0)
         return (x - (w - m * 0.72)) ** 2 + (y - m * 0.62) ** 2 <= r * r
 
+    def _slider_strip(self):
+        """Bottom strip kept free for the transparency bar.
+
+        The player takes one text row less than MP Gui and the tracklist
+        viewer, and gives it to the terminal. That drops its last two text
+        rows (the status line and the key hints) one line lower, right above
+        the bar, instead of leaving a blank row of glass between them. The
+        window size is unchanged: the row comes out of the strip, not the
+        frame.
+        """
+        if getattr(self, "mode", "NORMAL") in ("MANAGER", "TRACKLIST"):
+            return 44
+        _cw, ch = self._char_dims()
+        return player_slider_strip(ch)
+
     def _well_rect(self):
         gx, gy = self.renderer.window_pos()
         w, h = self.renderer.window_size()
@@ -195,7 +243,7 @@ class GlassHost:
         # Keep the bottom strip free for the transparency slider, exactly as
         # the OpenGL host does. Without it the terminal covers the slider and
         # the bar appears to have been removed.
-        return gx + m, gy + m, max(32, w - 2 * m), max(32, h - 2 * m - 44)
+        return gx + m, gy + m, max(32, w - 2 * m), max(32, h - 2 * m - self._slider_strip())
 
     def _place_terminal(self):
         x, y, iw, ih = self._well_rect()
@@ -217,24 +265,46 @@ class GlassHost:
         try:
             gx, gy = self.renderer.window_pos()
             w, h = self.renderer.window_size()
-            slider.place(int(gx), int(gy), int(w), int(h))
+            slider.place(int(gx), int(gy), int(w), int(h), strip=self._slider_strip())
         except Exception:
             pass
 
     def _on_slider_change(self, opacity):
-        """Apply a drag on the transparency bar to the glass window."""
+        """Apply a drag on the transparency bar to the glass window.
+
+        The opacity has to be written to the *renderer* as well as to this
+        host. `draw()` recomputes the X11 property from `renderer.clear_opacity`
+        on every frame for the dynamic themes, and the renderer keeps its own
+        copy of the value, so updating only `self.clear_opacity` here was
+        overwritten within one frame - which is why moving the slider left to
+        right left the window at exactly the same transparency.
+        """
         try:
             self.clear_opacity = float(opacity)
+        except Exception:
+            return
+        renderer = self.renderer
+        if renderer is None:
+            return
+        try:
+            renderer.clear_opacity = float(opacity)
+        except Exception:
+            pass
+        # The dynamic themes scale the property by an oscillation factor, and
+        # `draw()` only writes it when that factor changes. Reset the memo so
+        # the very next frame republishes the new base value immediately.
+        try:
+            renderer._last_dyn_opacity = None
         except Exception:
             pass
         win = 0
         try:
-            win = int(self.renderer.x11_window() or 0) if self.renderer is not None else 0
+            win = int(renderer.x11_window() or 0)
         except Exception:
             win = 0
         if win:
             try:
-                self.renderer._set_opacity(win, float(opacity))
+                renderer._set_opacity(win, float(opacity))
             except Exception:
                 pass
 
@@ -323,9 +393,122 @@ class GlassHost:
             self.terminal.set_size(cols, rows)
         self._place_terminal()
 
+    def _gui_height_extra(self) -> int:
+        """The Vulkan host folds the bar into the bezel, so the text grid uses the whole height."""
+        return 0
+
+    def _remember_gui_normal_metrics(self) -> None:
+        if getattr(self, "_gui_normal_px", None) or self.renderer is None:
+            return
+        cw, ch = self._char_dims()
+        self._gui_normal_cell = (int(cw), int(ch))
+        margin = int(self.renderer.bezel_px)
+        extra = int(self._gui_height_extra())
+        self._gui_normal_px = (
+            COLS * int(cw) + 2 * margin,
+            ROWS * int(ch) + 2 * margin + extra,
+        )
+
+    def _set_terminal_font_scale(self, scale: float) -> None:
+        """Point size times ``scale``. 1 keeps the named face. 0.8 is the portrait mode."""
+        self._font_scale = float(scale)
+        self._cached_dims = None
+        term = getattr(self, "terminal", None)
+        if term is None:
+            return
+        try:
+            import gi
+            gi.require_version("Pango", "1.0")
+            from gi.repository import Pango
+            from mp_gui_window_shape import font_point_size
+            desc = Pango.FontDescription.from_string(self.font_name or DEFAULT_FONT)
+            desc.set_weight(Pango.Weight.NORMAL)
+            if abs(float(scale) - 1.0) > 0.001:
+                desc.set_size(int(round(font_point_size(self.font_name or DEFAULT_FONT, scale) * Pango.SCALE)))
+            term.set_font(desc)
+        except Exception:
+            return
+        glib = getattr(self, "glib", None)
+        if glib is not None:
+            try:
+                self._pump_gtk(glib)
+            except Exception:
+                pass
+
+    def _remeasure_cells(self, scale: float) -> tuple:
+        from mp_gui_window_shape import scaled_cell
+        self._cached_dims = None
+        normal = getattr(self, "_gui_normal_cell", (9, 18))
+        term = getattr(self, "terminal", None)
+        cw = ch = 0
+        if term is not None:
+            try:
+                cw = int(term.get_char_width() or 0)
+                ch = int(term.get_char_height() or 0)
+            except Exception:
+                cw = ch = 0
+        shrunk = float(scale) < 0.99 and cw < int(normal[0]) and ch < int(normal[1])
+        if cw >= 4 and ch >= 8 and (float(scale) >= 0.99 or shrunk):
+            self._cached_dims = (cw, ch)
+            return cw, ch
+        cell = scaled_cell(normal, scale)
+        self._cached_dims = cell
+        return cell
+
+    def _apply_gui_grid(self, cols: int, rows: int, size=None) -> None:
+        cw, ch = self._char_dims()
+        margin = self.renderer.bezel_px
+        self._target_cols, self._target_rows = cols, rows
+        width, height = size or (cols * cw + 2 * margin, rows * ch + 2 * margin)
+        self._note_player_window(width, height)
+        self.renderer.set_window_size(width, height)
+        self.renderer.poll()
+        if self.terminal is not None:
+            self.terminal.set_size(cols, rows)
+        self._place_terminal()
+        self._recenter_window(width, height)
+
+    def _apply_gui_window_shape(self, shape: str) -> None:
+        """HORIZONTAL is the normal landscape window. VERTICAL swaps it and shrinks the text."""
+        from mp_gui_window_shape import VERTICAL, VERTICAL_FONT_SCALE, portrait_window, terminal_grid
+        if self.renderer is None:
+            return
+        self._remember_gui_normal_metrics()
+        scale = VERTICAL_FONT_SCALE if shape == VERTICAL else 1.0
+        self._set_terminal_font_scale(scale)
+        cw, ch = self._remeasure_cells(scale)
+        margin = int(self.renderer.bezel_px)
+        extra = int(self._gui_height_extra())
+        if shape == VERTICAL:
+            width, height = portrait_window(*self._gui_normal_px)
+            cols, rows = terminal_grid(width, height, cw, ch, margin, extra)
+            self._apply_gui_grid(cols, rows, (width, height))
+        else:
+            self._apply_gui_grid(COLS, ROWS)
+        self._gui_shape = shape
+        self.is_maximized = False
+
+    def _follow_gui_window_shape(self) -> None:
+        """Apply the shape the manager published. M typed into search does not publish one."""
+        if self.mode != "MANAGER":
+            return
+        try:
+            from mp_gui_window_shape import HORIZONTAL, read_gui_window_shape
+        except ImportError:
+            return
+        shape = read_gui_window_shape(CONFIG_DIR, int(getattr(self, "child_pid", 0) or 0)) or HORIZONTAL
+        if shape == getattr(self, "_gui_shape", HORIZONTAL):
+            return
+        if self.renderer is None:
+            return
+        self._apply_gui_window_shape(shape)
+
     def _follow_child_ui_size(self):
         """Apply the size the player published. M typed into search does not publish a new size."""
-        if self.mode in ("MANAGER", "TRACKLIST"):
+        if self.mode == "MANAGER":
+            self._follow_gui_window_shape()
+            return
+        if self.mode == "TRACKLIST":
             return
         from liquid_ui_size import read_ui_size
         mode = read_ui_size(CONFIG_DIR, int(getattr(self, "child_pid", 0) or 0))
@@ -337,6 +520,15 @@ class GlassHost:
         gi.require_version("Gdk", "3.0")
         from gi.repository import Gdk
         kv, st = getattr(event, "keyval", 0), getattr(event, "state", 0)
+        # Headset play/pause. Consumed here so a focused window cannot hand
+        # the key to a video player. The daemon's MPRIS object is the path
+        # the desktop uses; this covers a key that arrives at the window.
+        try:
+            from mp_mpris import dispatch_headset_key
+            if dispatch_headset_key(kv):
+                return True
+        except Exception:
+            pass
         # M stays with the player. Search uses it as a letter. A real mode change is published back.
         if kv == Gdk.KEY_K or (kv in (Gdk.KEY_k, Gdk.KEY_K) and bool(st & Gdk.ModifierType.SHIFT_MASK)):
             # Stop only this user's players, matched on argv. A bare
@@ -469,6 +661,21 @@ class GlassHost:
         from liquid_player_visualizer import publish_liquid_player_window_size
         publish_liquid_player_window_size(width_i, height_i)
 
+    def _host_window_id(self):
+        """This host's own X11 window id, or 0 when it cannot be read.
+
+        Published with the bond geometry so the companion stacks against this
+        exact window. Without it the visualizer picks the first window whose
+        title matches, which is wrong as soon as a Liquid Player and MP Gui are
+        both open.
+        """
+        if not sys.platform.startswith("linux") or self.renderer is None:
+            return 0
+        try:
+            return int(self.renderer.x11_window() or 0)
+        except Exception:
+            return 0
+
     def _publish_player_window_geometry(self):
         """Publish the player's position and size for the bonded visualizer.
 
@@ -480,7 +687,7 @@ class GlassHost:
         published instead of the half-applied one, so the visualizer moves
         straight to the new mode instead of stepping through it.
         """
-        if self.mode in ("MANAGER", "TRACKLIST") or not sys.platform.startswith("linux") or self.renderer is None:
+        if self.mode == "TRACKLIST" or not sys.platform.startswith("linux") or self.renderer is None:
             return
         try:
             x, y = self.renderer.window_pos()
@@ -488,8 +695,20 @@ class GlassHost:
             target = getattr(self, "_window_target", None)
             if target and time.monotonic() < getattr(self, "_window_target_until", 0.0):
                 width, height = target
+            wid = self._host_window_id()
+            if self.mode == "MANAGER":
+                # MP Gui's companion sits behind MP Gui, so the GUI record needs
+                # the position too, not just the size _note_player_window
+                # publishes.
+                from liquid_player_visualizer import publish_liquid_gui_window_geometry
+                publish_liquid_gui_window_geometry(x, y, width, height, wid=wid)
+                return
+            geom = (int(x), int(y), int(width), int(height), int(wid))
+            if getattr(self, "_last_published_geom", None) == geom:
+                return
+            self._last_published_geom = geom
             from liquid_player_visualizer import publish_liquid_player_window_geometry
-            publish_liquid_player_window_geometry(x, y, width, height)
+            publish_liquid_player_window_geometry(x, y, width, height, wid=wid)
         except Exception:
             pass
 
@@ -550,7 +769,7 @@ class GlassHost:
             try:
                 return self._run_windows()
             finally:
-                self.close()
+                self._exit_video_then_close()
         glib, gtk, vte = _import_gtk()
         self.glib = glib
         gtk.init([])
@@ -559,7 +778,39 @@ class GlassHost:
         try:
             return self._run_window(vte, glib)
         finally:
-            self.close()
+            self._exit_video_then_close()
+
+    def _exit_video_then_close(self):
+        """Play the exit movie on the last MP window, then tear the host down.
+
+        The movie runs while this window is still on screen, and the draw loop
+        keeps running underneath it, so the glass does not freeze for the
+        whole movie. Every other MP Gui and MP Liquid Player window is counted
+        first: one of several open windows closes silently and the movie waits
+        for the last one.
+        """
+        if not self.embed_check and self.mode in ("NORMAL", "MANAGER", "MINI", "MICRO"):
+            video = ExitVideo(self.mode)
+            try:
+                if video.start():
+                    video.wait(lambda: self._pump_exit_frame())
+            except Exception:
+                pass
+            finally:
+                video.finish()
+        self.close()
+
+    def _pump_exit_frame(self):
+        """One frame of the closing window while the exit movie plays."""
+        if self.renderer is None:
+            return
+        try:
+            self.renderer.poll()
+            self.renderer.draw(read_player_theme())
+        except Exception:
+            pass
+        if self.glib is not None:
+            self._pump_gtk(self.glib)
 
     def _run_windows(self):
         r = self.renderer
@@ -637,7 +888,8 @@ class GlassHost:
                     proc.terminate()
             except Exception:
                 pass
-            self.close()
+            # The window stays up until _exit_video_then_close() has played the
+            # exit movie; closing here would hide it too early on Windows.
         return True
 
     def _take_launch_mouse_focus(self, warp: bool = True) -> bool:
@@ -810,15 +1062,7 @@ class GlassHost:
             term.set_bold_is_bright(False)
         if hasattr(term, "set_allow_bold"):
             term.set_allow_bold(False)
-        try:
-            import gi
-            gi.require_version("Pango", "1.0")
-            from gi.repository import Pango
-            fd = Pango.FontDescription.from_string(self.font_name)
-            fd.set_weight(Pango.Weight.NORMAL)
-            term.set_font(fd)
-        except Exception:
-            pass
+        self._set_terminal_font_scale(getattr(self, "_font_scale", 1.0))
         try:
             import cairo, gi
             gi.require_version("PangoCairo", "1.0")
@@ -883,6 +1127,19 @@ class GlassHost:
             ren.close()
 
 
+def _companion_already_running() -> bool:
+    """True when the companion this host owns is already on screen."""
+    try:
+        from liquid_player_visualizer import companion_visualizer_running
+    except ImportError:
+        from scripts.liquid_player_visualizer import companion_visualizer_running
+    try:
+        return bool(companion_visualizer_running(
+            os.environ.get("MP_GUI_SESSION") == "1"))
+    except Exception:
+        return False
+
+
 def ensure_random_visualizer_started() -> bool:
     try:
         if IS_WIN:
@@ -893,7 +1150,11 @@ def ensure_random_visualizer_started() -> bool:
                     return False
             except Exception:
                 pass
-        elif shutil.which("pgrep") and subprocess.run(["pgrep", "-f", "MP_Liquid_Visualizer|mp_liquid_visualizer_vulkan"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:
+        elif _companion_already_running():
+            # Only *this* host's companion counts. A bare pgrep for any
+            # visualizer made MP Gui skip its own spawn whenever a Liquid
+            # Player was already up, which is why its background window went
+            # missing.
             return False
 
         vis_script = next((p for p in (ROOT / "MP_Liquid_Visualizer.py", ROOT / "scripts" / "mp_liquid_visualizer_vulkan.py") if p.is_file()), None)
@@ -933,9 +1194,15 @@ def _visualizer_env(companion: bool = False) -> dict:
     env = {k: v for k, v in os.environ.items()
            if k not in ("GDK_BACKEND", "PYOPENGL_PLATFORM",
                         "MP_LIQUID_GLASS", "MP_LIQUID_GLASS_BACKEND",
-                        "MP_VISUALIZER_COMPANION", "MP_VISUALIZER_DETACHED")}
+                        "MP_VISUALIZER_COMPANION", "MP_VISUALIZER_DETACHED",
+                        "MP_VISUALIZER_MATCH_GUI")}
     if companion:
         env["MP_VISUALIZER_COMPANION"] = "1"
+        # An MP Gui companion belongs behind MP Gui, not behind whichever
+        # Liquid Player is open. The flag selects the GUI record and the GUI
+        # window for geometry and stacking.
+        if os.environ.get("MP_GUI_SESSION") == "1" or os.environ.get("MP_LIQUID_GLASS_MANAGER") == "1":
+            env["MP_VISUALIZER_MATCH_GUI"] = "1"
     else:
         env["MP_VISUALIZER_DETACHED"] = "1"
     return env
@@ -1049,21 +1316,28 @@ def main(argv):
     if player_gui:
         counted_role = "gui" if opts.get("manager") else "player"
         if not host_allowed(counted_role):
-            print(
-                f"{'MP Gui' if opts.get('manager') else 'MP Liquid Player'} is already open 4 times. "
-                "Close a window first (4 is the maximum).",
-                file=sys.stderr,
-            )
+            # A shortcut launch discards stderr, so the refusal used to look
+            # like nothing happened at all. Say it on the desktop as well.
+            notify_limit(counted_role)
             return 1
-    if player_gui and "--no-visualizer" not in argv:
-        ensure_random_visualizer_started()
-
     mode = "MINI" if "--mini" in argv else ("MICRO" if "--micro" in argv else "NORMAL")
     manager = bool(opts.get("manager"))
+    # Mark the MP Gui session before the companion is spawned: _visualizer_env
+    # reads MP_GUI_SESSION to give that child MP_VISUALIZER_MATCH_GUI=1, which
+    # is what makes it bond behind MP Gui instead of behind a Liquid Player.
     if manager and not embed and not opts["tracklist"]:
         mode = "MANAGER"
         os.environ["MP_GUI_SESSION"] = "1"
         os.environ["MP_LIQUID_GLASS"] = "1"
+    # The first MP Gui and the first MP Liquid Player each play
+    # Exit_MP_Video.mp4 once, before the glass and its companion visualizer.
+    # The movie window closes when the clip ends. A second window of that
+    # same kind never shows it.
+    if player_gui:
+        play_player_intro(mode)
+    if player_gui and "--no-visualizer" not in argv:
+        ensure_random_visualizer_started()
+    if manager and not embed and not opts["tracklist"]:
         command = manager_argv()
         if not Path(command[1]).is_file():
             raise RuntimeError(f"MP Mix Manager was not found at {command[1]}")
@@ -1092,7 +1366,7 @@ def main(argv):
     finally:
         if manager:
             stop_companion_playback()
-            stop_companion_visualizer(force=True)
+            stop_companion_visualizer(force=True, for_gui=True)
         elif player_gui:
             stop_companion_visualizer()
 

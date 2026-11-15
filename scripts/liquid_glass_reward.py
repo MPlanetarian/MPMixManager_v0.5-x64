@@ -24,9 +24,15 @@ CONFIG_DIR = Path.home() / ".config" / "mix-manager"
 FLAG_FILE = CONFIG_DIR / ".liquid_glass_welcomed"
 
 SAMPLE_DIR = ROOT / "MP_SAMPLES"
-SAMPLE_TRACK_NAME = "MPlanetarian - Ecology of the Earth (Cosmic Dreamworlds Remake)"
+SAMPLE_TRACK_NAME = "MPlanetarian - The Orbits of Planets (Cosmic Dreamworlds Remake)"
+# 16-bit FLAC, not the 24-bit WAV: GitHub rejects any file over 100 MB,
+# and the 24-bit master is 242 MB. The shipped track has always been
+# 16-bit, so this keeps the download size and the repo healthy.
 SAMPLE_TRACK_FILE = SAMPLE_DIR / f"{SAMPLE_TRACK_NAME}.flac"
-SAMPLE_COVER_FILE = SAMPLE_DIR / "Cosmic_Dreamworlds_Cover.png"
+SAMPLE_COVER_FILE = SAMPLE_DIR / "The_Orbits_of_Planets_Dreamworlds_Cover.png"
+# 79,076,571 samples at 48 kHz. The player clock prints this as 27:27.
+SAMPLE_TRACK_DURATION_SEC = 79076571 / 48000
+SAMPLE_TRACK_DURATION_FMT = "27:27"
 SAMPLE_FLAG_FILE = CONFIG_DIR / ".first_run_sample_loaded"
 PREVENT_AUTOPLAY_FILE = CONFIG_DIR / ".first_run_sample_prevent_autoplay"
 EQ_FLAG_FILE = CONFIG_DIR / ".first_run_eq_initialized"
@@ -190,7 +196,7 @@ def setup_first_run_sample_track(force: bool = False) -> bool:
         resume_data = {
             "path": res_path,
             "position_sec": 0.0,
-            "duration_sec": 1014.42,
+            "duration_sec": SAMPLE_TRACK_DURATION_SEC,
             "title": SAMPLE_TRACK_NAME,
             "mode": "MIX_ARCHIVE",
             "player": "mp_audio_player",
@@ -213,8 +219,8 @@ def setup_first_run_sample_track(force: bool = False) -> bool:
             "title": SAMPLE_TRACK_NAME,
             "position_sec": 0.0,
             "position_fmt": "00:00",
-            "duration_sec": 1014.42,
-            "duration_fmt": "16:54",
+            "duration_sec": SAMPLE_TRACK_DURATION_SEC,
+            "duration_fmt": SAMPLE_TRACK_DURATION_FMT,
             "progress_pct": 0.0,
             "mode": "MIX_ARCHIVE",
             "volume": 85,
@@ -357,7 +363,7 @@ def show_welcome_message(wait_for_input=True):
         f"  {WHITE}Version {BOLD}{GOLD}{version}{NC}",
         "",
         f"  {WHITE}A gift is ready in the Liquid Transparent Audio Player:{NC}",
-        f"  {BOLD}{GOLD}MPlanetarian - Ecology of the Earth (Cosmic Dreamworlds Remake){NC}",
+        f"  {BOLD}{GOLD}{SAMPLE_TRACK_NAME}{NC}",
         f"  {WHITE}The track and its art are in MP_SAMPLES. Press play when you are ready.{NC}",
         "",
         f"  {BOLD}{MINT}What's new since 0.4.2{NC}",

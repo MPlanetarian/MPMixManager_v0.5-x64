@@ -116,7 +116,8 @@ def _py315_safe_cfunctype(restype, *argtypes, **kwargs):
 
 ctypes.CFUNCTYPE = _py315_safe_cfunctype
 
-os.environ["PYOPENGL_PLATFORM"] = "darwin"
+if sys.platform == "darwin":
+    os.environ["PYOPENGL_PLATFORM"] = "darwin"
 # PyOpenGL's default error check calls glGetError after every command.
 # On Apple's OpenGL driver that waits for the GPU, so the visualizer
 # cannot queue a frame ahead of the one on screen. Set this before the
@@ -221,8 +222,9 @@ def _mock_cdll(name, *args, **kwargs):
     )
 
 
-ctypes.CDLL = _mock_cdll
-ctypes.cdll = ctypes.LibraryLoader(_mock_cdll)
+if sys.platform == "darwin":
+    ctypes.CDLL = _mock_cdll
+    ctypes.cdll = ctypes.LibraryLoader(_mock_cdll)
 
 ROOT = Path(__file__).resolve().parent
 if str(ROOT / "scripts") not in sys.path:
@@ -246,12 +248,37 @@ from liquid_player_visualizer import (
 )
 from liquid_visualizer_session import stop_companion_playback, stop_companion_visualizer
 try:  # The four-window cap ships beside the host; a lone copy still runs.
-    from mp_instance_limit import host_allowed
+    from mp_instance_limit import host_allowed, notify_limit
 except ImportError:
     def host_allowed(role):
         return True
 
-os.environ["PYOPENGL_PLATFORM"] = "darwin"
+    def notify_limit(role, message=None):
+        print(message or f"{role} is already open 4 times.", file=sys.stderr)
+try:  # The exit movie ships beside the host too.
+    from exit_video import ExitVideo, play_player_intro
+except ImportError:
+    class ExitVideo:  # type: ignore[no-redef]
+        """Stub used when the tree was copied without scripts/exit_video.py."""
+
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def start(self):
+            return False
+
+        def wait(self, *_args, **_kwargs):
+            return None
+
+        def finish(self):
+            pass
+
+    def play_player_intro(*_args, **_kwargs):  # type: ignore[misc]
+        """Stub: no intro movie when scripts/exit_video.py is missing."""
+        return False
+
+if sys.platform == "darwin":
+    os.environ["PYOPENGL_PLATFORM"] = "darwin"
 
 COLS = 120
 ROWS = 40
@@ -1109,12 +1136,7 @@ class CustomGlassRenderer(LiquidGlassRendererOpenGL):
         GL.glUseProgram(self._prog)
 
         colors, effective_opacity, factor = get_dynamic_theme_state(theme_name, opacity)
-        win = self.x11_window() if hasattr(self, "x11_window") else None
-        if factor != 1.0 and win:
-            target_op = int(self.clear_opacity * factor * 1000)
-            if getattr(self, "_last_dyn_opacity", None) != target_op:
-                self._last_dyn_opacity = target_op
-                self._set_opacity(win, self.clear_opacity * factor)
+        self.apply_clear_opacity(factor)
 
         a = _rgb01(colors[0])
         b = _rgb01(colors[1])
@@ -1420,6 +1442,7 @@ class OpenGLGlassHost:
                 if pid_res == self.child_pid:
                     break
         finally:
+            self._exit_video_then_close()
             if self.master_fd is not None:
                 try:
                     os.close(self.master_fd)
@@ -1437,6 +1460,35 @@ class OpenGLGlassHost:
                 self.renderer = None
 
         return True
+
+    def _exit_video_then_close(self):
+        """Play the exit movie on the last MP window, then tear the host down.
+
+        The movie plays while this window is still on screen, and the pump
+        keeps drawing frames so the glass does not freeze for its whole
+        length. Only the last MP Gui or MP Liquid Player window shows it.
+        """
+        if self.mode in ("NORMAL", "MANAGER"):
+            video = ExitVideo(self.mode)
+            try:
+                if video.start():
+                    video.wait(self._pump_exit_frame)
+            except Exception:
+                pass
+            finally:
+                video.finish()
+
+    def _pump_exit_frame(self):
+        """One frame of the closing window while the exit movie plays."""
+        if self.renderer is None:
+            return
+        try:
+            self.renderer.poll()
+            theme = read_player_theme()
+            self.overlay.set_theme_text(theme)
+            self.renderer.draw(theme)
+        except Exception:
+            pass
 
 
 def main():
@@ -1464,19 +1516,22 @@ def main():
     # MP Gui and MP Liquid Player stop at four windows. Helper flags are not
     # counted; the --manager window is MP Gui.
     if not host_allowed("gui" if manager else "player"):
-        print(
-            f"{'MP Gui' if manager else 'MP Liquid Player'} is already open 4 times. "
-            "Close a window first (4 is the maximum).",
-            file=sys.stderr,
-        )
+        # A shortcut launch discards stderr, so the refusal used to look like
+        # nothing happened at all. Say it on the desktop as well.
+        notify_limit("gui" if manager else "player")
         return 1
     host = OpenGLGlassHost(mode=mode, cli_theme=theme_arg, manager=manager)
     try:
+        # The first MP Gui and the first MP Liquid Player each play
+        # Exit_MP_Video.mp4 once, before the glass appears. The movie window
+        # closes when the clip ends. A second window of that same kind never
+        # shows it.
+        play_player_intro(mode)
         host.run()
     finally:
         if manager:
             stop_companion_playback()
-            stop_companion_visualizer(force=True)
+            stop_companion_visualizer(force=True, for_gui=True)
         else:
             stop_companion_visualizer()
 

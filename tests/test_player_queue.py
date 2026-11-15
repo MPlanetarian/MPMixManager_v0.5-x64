@@ -135,7 +135,13 @@ class TestPlayerQueue(unittest.TestCase):
         self.assertTrue(ui.running)
 
     def test_ui_exit_keys_still_exit(self):
-        """Verifies that Escape, Ctrl+C, and 'b' still set running to False."""
+        """Escape, Ctrl+C and 'x' still exit; 'b' is the Bass Boost dial now.
+
+        `b` used to be a second Exit key. It is the Bass Boost dial since 0.5,
+        matching the Crusher ANC 2's dial, so only Escape / Ctrl+C / x leave
+        the player. Every other B entry point is asserted below so the change
+        cannot silently strand the user with no way out.
+        """
         mock_scanner = MagicMock()
         mock_scanner.get_mixes.return_value = self.playlist
         ui = MP_Audio_Player.TerminalPlayerUI(self.engine, mock_scanner, is_remote=False)
@@ -145,16 +151,33 @@ class TestPlayerQueue(unittest.TestCase):
         self.assertFalse(ui.running)
 
         ui.running = True
-        ui._process_key(b"b")     # Back / Exit
-        self.assertFalse(ui.running)
-
-        ui.running = True
-        ui._process_key(b"B")
-        self.assertFalse(ui.running)
-
-        ui.running = True
         ui._process_key(b"\x03")  # Ctrl+C
         self.assertFalse(ui.running)
+
+        ui.running = True
+        ui._process_key(b"x")     # Stop & exit
+        self.assertFalse(ui.running)
+
+    def test_ui_key_b_cycles_bass_mode_without_exiting(self):
+        """Verifies 'b' / 'B' step the Crusher Bass Boost dial and keep the UI alive."""
+        mock_scanner = MagicMock()
+        mock_scanner.get_mixes.return_value = self.playlist
+        with tempfile.TemporaryDirectory() as cfg, \
+             patch.object(MP_Audio_Player, "BASS_BOOST_FILE", Path(cfg) / "bass_boost"):
+            ui = MP_Audio_Player.TerminalPlayerUI(self.engine, mock_scanner, is_remote=False)
+            ui.running = True
+            ui.bass_manager.set_mode("Normal")
+            self.assertEqual(ui.bass_manager.mode, "Normal")
+
+            for expected in ("Medium", "High", "Normal"):
+                ui._process_key(b"b")
+                self.assertEqual(ui.bass_manager.mode, expected)
+                self.assertTrue(ui.running, "'b' must never close the player")
+                self.assertEqual(self.engine.bass_manager.mode, expected)
+
+            ui._process_key(b"B")
+            self.assertEqual(ui.bass_manager.mode, "Medium")
+            self.assertTrue(ui.running)
 
     def test_cli_flags_recognized(self):
         """Verifies that --queue, -q, and --clear-queue are supported in CLI args."""
