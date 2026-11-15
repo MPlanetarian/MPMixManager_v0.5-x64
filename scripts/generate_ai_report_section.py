@@ -447,52 +447,76 @@ def harvest_grok_brain(since_timestamp: Optional[float] = None,
 
 def harvest_harmony_agent(since_timestamp: Optional[float] = None,
                           processed_map: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
-    """Harvest MP Harmony Autonomous Agent voice responses and logs."""
+    """Harvest MP Harmony Autonomous Agent voice responses and logs.
+
+    The live agent writes to its own audio_responses/ folder; MP Reporter keeps a
+    browsable copy under TTS_AUDIO/HARMONY (see scripts/mp_harmony_archive.py).
+    Both locations are read so a report is complete even before the next archive
+    sync, and duplicate stems are collapsed so a pair is never counted twice.
+    """
     if processed_map is None:
         processed_map = {}
-    responses = []
-    audio_dir = Path(os.environ.get("HARMONY_AUDIO_DIR", "") or (_HOME / "OpenAI/MP_Harmony_Agent/audio_responses"))
-    if not audio_dir.exists():
-        return responses
+    responses: List[Dict[str, Any]] = []
+    seen: set = set()
 
-    for txt_file in audio_dir.glob("*.txt"):
-        try:
-            st = txt_file.stat()
-            mtime = st.st_mtime
-        except Exception:
+    primary = Path(os.environ.get("HARMONY_AUDIO_DIR", "") or (_HOME / "OpenAI/MP_Harmony_Agent/audio_responses"))
+    archived = Path(os.environ.get("MP_REPORTER_DIR", "") or (_HOME / "MP_REPORTER")) / "TTS_AUDIO" / "HARMONY"
+    # The archive is read first so a stem that exists in both places is marked
+    # archived: that is the copy the reporting suite browses.
+    sources = [archived, primary]
+
+    for audio_dir in sources:
+        if not audio_dir.exists():
             continue
+        for txt_file in audio_dir.glob("*.txt"):
+            try:
+                st = txt_file.stat()
+                mtime = st.st_mtime
+            except Exception:
+                continue
 
-        fname = txt_file.name
-        if fname in processed_map:
-            continue
-        if since_timestamp and mtime < since_timestamp:
-            continue
+            stem = txt_file.stem
+            if stem in seen:
+                continue
+            # A pair without audio is a half-written file: skip it.
+            if not (audio_dir / f"{stem}.wav").is_file():
+                continue
 
-        # Pattern: ollama_speech_YYYYMMDD_HHMMSS_<persona>_<context>_<model>_<voice>_<hash>.txt
-        parts = fname.replace(".txt", "").split("_")
-        persona = "Harmony Agent"
-        model = "Llama-3-8B / Command-R"
-        speech_snippet = ""
-        try:
-            with open(txt_file, "r", encoding="utf-8", errors="replace") as f:
-                speech_snippet = f.read().strip()[:180].replace("\n", " ")
-        except Exception:
-            pass
+            if stem in processed_map:
+                continue
+            if since_timestamp and mtime < since_timestamp:
+                continue
 
-        if len(parts) >= 6:
-            persona = f"{parts[4].capitalize()} ({parts[3].capitalize()})"
-            model = parts[5].replace("-", " ")
+            fname = txt_file.name
+            persona = "Harmony Agent"
+            model = "Harmony"
+            speech_snippet = ""
+            try:
+                with open(txt_file, "r", encoding="utf-8", errors="replace") as f:
+                    speech_snippet = f.read().strip()[:180].replace("\n", " ")
+            except Exception:
+                pass
 
-        responses.append({
-            "id": fname,
-            "engine": "MP Harmony Agent",
-            "model": model,
-            "persona": persona,
-            "mtime": mtime,
-            "created_at": datetime.fromtimestamp(mtime).isoformat(),
-            "snippet": speech_snippet,
-            "status": "Voiced"
-        })
+            # Naming differs by producer:
+            #   agent_speech_YYYYMMDD_HHMMSS_<hash>.txt   (interactive turn)
+            #   ollama_speech_..._<persona>_<model>_<voice>_<hash>.txt
+            parts = stem.split("_")
+            if stem.startswith("ollama_speech") and len(parts) >= 6:
+                persona = f"{parts[4].capitalize()} ({parts[3].capitalize()})"
+                model = parts[5].replace("-", " ")
+
+            seen.add(stem)
+            responses.append({
+                "id": stem,
+                "engine": "MP Harmony Agent",
+                "model": model,
+                "persona": persona,
+                "mtime": mtime,
+                "created_at": datetime.fromtimestamp(mtime).isoformat(),
+                "snippet": speech_snippet,
+                "archived": audio_dir == archived,
+                "status": "Voiced",
+            })
 
     responses.sort(key=lambda r: r["mtime"])
     return responses
@@ -937,8 +961,11 @@ def format_plain_text(report_data: Dict[str, Any]) -> str:
     lines.append("")
 
     if report_data.get("harmony_items"):
-        lines.append(f"=== MP Harmony Agent Audio Responses ({len(report_data['harmony_items'])} Responses) ===")
-        for h in report_data['harmony_items'][-3:]:
+        h_items = report_data['harmony_items']
+        archived = sum(1 for h in h_items if h.get("archived"))
+        lines.append(f"=== MP Harmony Agent Audio Responses ({len(h_items)} Responses) ===")
+        lines.append(f"• Reporter archive (TTS_AUDIO/HARMONY): {archived} of {len(h_items)} pairs present")
+        for h in h_items[-3:]:
             lines.append(f"• [{h['created_at'][11:19]}] {h['persona']}: {h['snippet'][:120]}...")
         lines.append("")
 

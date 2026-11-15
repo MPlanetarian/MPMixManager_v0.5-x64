@@ -54,7 +54,7 @@ def read_version() -> str:
     try:
         return VERSION_FILE.read_text(encoding="utf-8").strip() or "0.5.3"
     except OSError:
-        return "0.5"
+        return "0.5.3"
 
 
 def load_results(path: Path) -> Dict[str, Any]:
@@ -198,7 +198,9 @@ def build_text(data: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
         if shots:
             lines.append(f"  Screenshots  : {len(shots)} captured")
             for shot in shots:
-                lines.append(f"                 {Path(shot.get('file', '')).name}")
+                method = shot.get("method") or "window"
+                lines.append(f"                 {Path(shot.get('file', '')).name} "
+                             f"({method} capture)")
         else:
             lines.append("  Screenshots  : none captured")
         if missing:
@@ -270,7 +272,10 @@ def _thumbnails(shots: List[Dict[str, Any]], temp_dir: Path) -> List[tuple]:
             continue
         label = shot.get("app") or src.stem
         host = shot.get("hostname") or ""
+        method = shot.get("method") or ""
         caption = f"{label} - {host}" if host else label
+        if method and method != "window":
+            caption += f" ({method} capture)"
         if Image is None:
             made.append((caption, str(src), None, None))
             continue
@@ -432,7 +437,9 @@ def build_pdf(data: Dict[str, Any], rows: List[Dict[str, Any]], out_pdf: Path) -
         "Each image was captured after the shortcut had been open for at least "
         f"{data.get('wait_seconds', 20)} seconds. Captures are grouped by system "
         "in the required order: MP Liquid Visualiser, MP Gui, MP Liquid Player, "
-        "MP Mix Manager.", body))
+        "MP Mix Manager. Where a window could not be grabbed directly - the glass "
+        "windows render on the GPU - the application is photographed on its "
+        "monitor instead, and the caption names the method used.", body))
 
     all_shots: List[Dict[str, Any]] = []
     for row in rows:

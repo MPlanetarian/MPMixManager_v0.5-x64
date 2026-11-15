@@ -60,11 +60,13 @@ try:
     from mp_tracklist_analyzer import MasterTracklistAnalyzer
     from mp_analytics_engine import perform_full_prediction_analytics
     from mp_logging import log_error as mp_log_error, get_recent_errors
+    from mp_harmony_archive import sync_archive as sync_harmony_archive
 except ImportError:
     from scripts.mp_activity_tracker import get_activity_summary, record_activity
     from scripts.mp_tracklist_analyzer import MasterTracklistAnalyzer
     from scripts.mp_analytics_engine import perform_full_prediction_analytics
     from scripts.mp_logging import log_error as mp_log_error, get_recent_errors
+    from scripts.mp_harmony_archive import sync_archive as sync_harmony_archive
 
 # Define destination directories
 REPORTS_BASE = SCRIPT_DIR / "REPORTS"
@@ -583,6 +585,14 @@ def run_report_generator(kind: str = "daily") -> Tuple[Path, Path]:
     
     out_pdf = target_dir / pdf_filename
     out_txt = target_dir / txt_filename
+
+    # 0. Keep the MP Reporter audio archive current before anything reads it.
+    # A failure here must never break report generation: the archive is a
+    # convenience copy, and the live agent folder remains the source of truth.
+    try:
+        sync_harmony_archive()
+    except Exception:
+        pass
 
     # 1. Fetch telemetry
     activity = get_activity_summary(kind)
