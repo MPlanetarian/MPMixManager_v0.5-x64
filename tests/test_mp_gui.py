@@ -22,9 +22,7 @@ CHARCOAL = ((45, 45, 45), (21, 83, 158), (26, 30, 33))
 MANAGER_THEMES = (
     "stream_of_frequency",
     "dreamworlds",
-    "cosmic_dreamworlds",
-    "cosmic_dreamworlds_radioactive",
-    "orbital_void_reflux",
+    "sensorium",
     "dynamic_rainbow_liquid_glass",
     "dreamworlds_liquid",
     "dreamworlds_ultra",
@@ -129,7 +127,7 @@ cycle_menu_theme
                 "the_whitest_white",
                 "retro_studio",
                 "dynamic_rainbow_liquid_glass",
-                "cosmic_dreamworlds_radioactive",
+                "sensorium",
             ],
         )
 
@@ -177,7 +175,7 @@ class TestGuiLauncher(unittest.TestCase):
         self.assertIn("windows_find_python.cmd", text)
         self.assertIn('exec "$MP_PY"', text)
         self.assertNotIn("exec python3 ", text)
-        self.assertIn("retro_linux_memories", text)
+        self.assertIn('THEME_NAME="dreamworlds_ultra"', text)
         self.assertNotIn("charcoal_vault", text)
         self.assertIn("--keep-theme", text)
         self.assertIn("scripts/mp_gui_focus.sh", text)
@@ -222,6 +220,12 @@ class TestGuiLauncher(unittest.TestCase):
         self.assertTrue(popen.call_args.kwargs["start_new_session"])
 
     def test_hosts_stop_playback_and_the_visualizer_for_the_manager(self):
+        """MP Gui closes the GUI's companion, not the player's.
+
+        Both hosts share one visualizer process list. The GUI companion carries
+        MP_VISUALIZER_MATCH_GUI=1, and passing ``for_gui=True`` is what keeps a
+        GUI close from blanking the background behind an open Liquid Player.
+        """
         for name in (
             "MP_Audio_Player_Liquid_Glass_OpenGL.py",
             "MP_Audio_Player_Liquid_Glass.py",
@@ -231,7 +235,7 @@ class TestGuiLauncher(unittest.TestCase):
             text = (ROOT / name).read_text(encoding="utf-8")
             self.assertIn('os.environ["MP_GUI_SESSION"] = "1"', text)
             self.assertIn("stop_companion_playback()", text)
-            self.assertIn("stop_companion_visualizer(force=True)", text)
+            self.assertIn("stop_companion_visualizer(force=True, for_gui=True)", text)
             self.assertIn("stop_companion_visualizer()", text)
 
 

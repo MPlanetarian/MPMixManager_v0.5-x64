@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Menu item numbers and their brackets follow the active theme accent."""
+"""Menu item numbers and their brackets follow the active theme accent.
+
+The selected row itself is painted from the 0.4 four-colour navigation
+rotation (see tests/test_nav_bar_same_in_both_windows.py). These tests cover
+the other half of the menu styling: the ``[ n ]`` key beside every label keeps
+one theme hue, and that hue is not the shared light-blue used before 0.4.
+"""
 
 import subprocess
 import unittest
@@ -11,8 +17,8 @@ MGR_SH = BASE_DIR / "Mix_Archive_Manager.sh"
 # One truecolor hue per theme. These replace the shared light-blue menu-number cyan.
 EXPECTED = {
     "stream_of_frequency": "255;237;20",
-    "dreamworlds": "46;107;255",
-    "dreamworlds_ultra": "165;20;255",
+    "dreamworlds": "255;20;129",
+    "dreamworlds_ultra": "216;180;254",
     "dynamic_rainbow_liquid_glass": "255;20;237",
     "cosmic_supernova": "255;129;20",
     "dreamworlds_liquid": "20;255;147",
@@ -22,10 +28,7 @@ EXPECTED = {
     "phosphor": "165;255;20",
     "ice_cold": "20;147;255",
     "retro_terminal": "255;255;255",
-    "cosmic_dreamworlds_radioactive": "111;255;20",
-    "cosmic_dreamworlds": "255;20;183",
-    "orbital_void_reflux": "56;20;255",
-    "sensorium_interface": "111;20;255",
+    "sensorium": "92;36;0",
     "retro_linux_memories": "255;183;20",
     "cyberpunk": "200;0;180",
     "dracula": "255;20;75",
@@ -54,55 +57,48 @@ LIGHT_BLUE = (
 
 
 class TestMenuNumberThemeColor(unittest.TestCase):
-    def test_selection_bar_uses_the_players_navigation_hue(self):
-        """The manager's selected row must be the player's playlist bar colour.
-
-        MP Liquid Player fills the selected playlist row from
-        _THEME_PALETTES[theme]["highlight"]. MP Gui walks the same theme list on
-        C, so its navigation bar has to publish the identical RGB or the two
-        windows look different on every theme.
-        """
-        import MP_Audio_Player as player
-
+    def test_menu_numbers_use_each_themes_accent(self):
+        """Every theme publishes its own MENU_NUM hue, not the old light blue."""
         themes = " ".join(EXPECTED)
         script = f"""
         set -e
         eval "$(awk '/^set_theme_colors\\(\\)/{{f=1}} f{{print}} f&&/^}}/{{exit}}' "{MGR_SH}")"
-        eval "$(sed -n '/^highlight_menu_line() {{/,/^}}/p' "{MGR_SH}")"
         for theme in {themes}; do
             set_theme_colors "$theme"
-            line=""
-            highlight_menu_line "0" "Play Mix" "" 0 line 74 100
-            printf '%s\\t%s\\t%s\\t%s\\t%s\\n' "$theme" "$SEL_BAR_R" "$SEL_BAR_G" "$SEL_BAR_B" "$line"
+            printf '%s\\t%s;%s;%s\\n' "$theme" "$MENU_NUM_R" "$MENU_NUM_G" "$MENU_NUM_B"
         done
         """
         res = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
         self.assertEqual(res.returncode, 0, res.stderr)
-        bars = []
+        seen = {}
         for raw in res.stdout.splitlines():
-            theme, r, g, b = raw.split("\t")[:4]
-            line = raw.split("\t", 4)[4]
-            # The bar hue is the one the player paints behind its selection.
-            player_theme = player._THEME_ALIASES.get(theme, theme)
-            expected_bg, expected_fg = player._selection_bar_ansi(player_theme)
-            self.assertEqual((int(r), int(g), int(b)), player._rgb_from_ansi(expected_bg), theme)
-            # highlight_menu_line returns printf-ready text, so ESC is spelled \\033.
-            expected_esc = expected_bg.replace("\x1b", "\\033")
-            self.assertIn(expected_esc, line, f"{theme} bar does not match the player")
-            # Legible text on that fill, using the same rule as the player.
-            fg_colour = expected_fg.split("[1;", 1)[-1]
-            self.assertIn(fg_colour, line, theme)
-            # The old 1;37;40m foreground carried its own black background.
-            self.assertNotIn("1;37;40m", line, theme)
-            self.assertNotIn("48;5;", line, theme)
-            bars.append((player_theme, (r, g, b)))
-        # Themes that resolve to the same player palette share one bar colour;
-        # distinct themes must not collapse onto one.
-        by_theme = {}
-        for player_theme, rgb in bars:
-            by_theme.setdefault(player_theme, set()).add(rgb)
-        for player_theme, rgbs in by_theme.items():
-            self.assertEqual(len(rgbs), 1, player_theme)
+            theme, rgb = raw.split("\t")
+            seen[theme] = rgb
+        self.assertEqual(set(seen), set(EXPECTED))
+        for theme, rgb in EXPECTED.items():
+            self.assertEqual(seen[theme], rgb, theme)
+            accent = f"38;2;{rgb}"
+            self.assertNotIn(accent, LIGHT_BLUE, f"{theme} still uses the old light blue")
+
+    def test_selected_row_steps_the_navigation_rotation(self):
+        """The bar is the 0.4 palette, independent of the menu-number accent."""
+        script = f"""
+        set -e
+        eval "$(awk '/^set_theme_colors\\(\\)/{{f=1}} f{{print}} f&&/^}}/{{exit}}' "{MGR_SH}")"
+        eval "$(sed -n '/^highlight_menu_line() {{/,/^}}/p' "{MGR_SH}")"
+        set_theme_colors cyberpunk
+        for idx in 0 1 2 3; do
+            line=""
+            highlight_menu_line "0" "Play Mix" "" "$idx" line 74 100
+            printf '%s\\n' "$line"
+        done
+        """
+        res = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        for expected in ("247;37;133", "0;229;255", "255;140;0", "88;98;118"):
+            self.assertIn(f"48;2;{expected}", res.stdout, expected)
+        # The retired single-fill behaviour must not come back.
+        self.assertNotIn("48;2;76;201;240", res.stdout)
 
 
 def _is_light_blue(accent: str) -> bool:

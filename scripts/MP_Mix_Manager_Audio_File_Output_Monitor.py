@@ -16,6 +16,8 @@ Features:
 - Drive capacity forecasting (estimated mix headroom remaining before disk full)
 """
 
+from __future__ import annotations
+
 import os
 import sys
 import time

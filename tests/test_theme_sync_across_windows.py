@@ -103,9 +103,9 @@ second="$(_theme_file_stamp)"
         self.theme_file.write_text("dreamworlds_ultra\n", encoding="utf-8")
         viz = player.EqualizerVisualizer()
         self.assertEqual(viz.theme, "dreamworlds_ultra")
-        self.theme_file.write_text("cosmic_dreamworlds\n", encoding="utf-8")
+        self.theme_file.write_text("sensorium\n", encoding="utf-8")
         self.assertTrue(viz.sync_theme_from_file())
-        self.assertEqual(viz.theme, "cosmic_dreamworlds")
+        self.assertEqual(viz.theme, "sensorium")
         self.assertFalse(viz.sync_theme_from_file())
 
     def test_player_resolves_manager_aliases_from_the_file(self):

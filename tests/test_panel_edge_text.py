@@ -24,7 +24,7 @@ def _width(text: str) -> int:
 
 def _run(script: str) -> str:
     proc = subprocess.run(
-        ["bash", "--noprofile", "--norc", "-c", script],
+        [BASH, "--noprofile", "--norc", "-c", script],
         cwd=str(ROOT),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,

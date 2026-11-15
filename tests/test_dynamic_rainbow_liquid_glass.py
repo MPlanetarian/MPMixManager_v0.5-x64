@@ -104,6 +104,7 @@ class TestDynamicRainbowLiquidGlass(unittest.TestCase):
         self.assertIn("dynamicRainbowBreath", html_out)
         self.assertIn("24s linear infinite", html_out)
         self.assertIn("6s ease-in-out infinite", html_out)
+        self.assertIn('class="dynamic-rainbow-glass-active"', html_out)
 
     def test_web_companion_rainbow_css_available_without_reload(self):
         """The rainbow animation rules must ship with every render.
@@ -117,7 +118,27 @@ class TestDynamicRainbowLiquidGlass(unittest.TestCase):
             html_out = render_html_page(theme)
             self.assertIn("@keyframes dynamicRainbowHue", html_out, theme_id)
             self.assertIn("@keyframes dynamicRainbowBreath", html_out, theme_id)
-            self.assertIn("body.dynamic-rainbow-glass-active::before", html_out, theme_id)
+            self.assertIn('id="rainbowWash"', html_out, theme_id)
+            self.assertIn("isolation: isolate", html_out, theme_id)
+            self.assertIn("function syncRainbowDrive", html_out, theme_id)
+            self.assertNotIn("body.dynamic-rainbow-glass-active::before", html_out, theme_id)
+
+    def test_rainbow_colour_is_painted_not_stuck_on_a_hidden_layer(self):
+        """iOS Safari never showed the old hue spin.
+
+        The spin was `filter` on a ::before with z-index -1, which paints
+        under the body's opaque background, and WebKit does not animate that
+        filter. pagehide also froze the animation while the page was still
+        visible, and pageshow only unfroze a restored page.
+        """
+        html_out = render_html_page(WEB_THEMES["dynamic_rainbow_liquid_glass"])
+        self.assertIn("hsl(var(--rainbow-hue)", html_out)
+        self.assertIn("function tickRainbow", html_out)
+        self.assertIn("if (document.hidden) setPollingPaused(true)", html_out)
+        self.assertIn("if (!document.hidden) setPollingPaused(false)", html_out)
+        self.assertNotIn("e.persisted", html_out)
+        plain = render_html_page(next(th for tid, th in WEB_THEMES.items() if tid != "dynamic_rainbow_liquid_glass"))
+        self.assertNotIn('class="dynamic-rainbow-glass-active"', plain)
 
     def test_manager_themes_menu_includes_option_16(self):
         """Verify Mix_Archive_Manager.sh includes option 16 for Dynamic Liquid Glass."""

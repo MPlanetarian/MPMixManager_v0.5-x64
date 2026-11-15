@@ -4,6 +4,8 @@ Unit and integration tests for Option 2 Submenus in Mix_Archive_Manager.sh and M
 Verifies keyboard navigation (Up/Down arrow keys + Enter to activate), direct hotkeys, and non-interactive fallback.
 """
 
+from __future__ import annotations
+
 import os
 import pty
 import re

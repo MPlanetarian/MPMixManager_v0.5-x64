@@ -26,10 +26,7 @@ THEMES = (
     "phosphor",
     "ice_cold",
     "retro_terminal",
-    "cosmic_dreamworlds_radioactive",
-    "cosmic_dreamworlds",
-    "orbital_void_reflux",
-    "sensorium_interface",
+    "sensorium",
     "retro_linux_memories",
     "cyberpunk",
     "dracula",
@@ -54,7 +51,7 @@ def _bash(script: str) -> subprocess.CompletedProcess:
 
 
 class TestCliThemeBackground(unittest.TestCase):
-    def test_each_theme_has_its_own_dark_background(self):
+    def test_each_theme_has_its_own_background(self):
         themes = " ".join(THEMES)
         script = f"""
         set -e
@@ -71,9 +68,14 @@ class TestCliThemeBackground(unittest.TestCase):
             theme, r, g, b = raw.split("\t")
             seen[theme] = (int(r), int(g), int(b))
         self.assertEqual(set(seen), set(THEMES))
-        # MPlanetarian Dreamworlds is black. The white-on-black retro
-        # terminal uses the same pane, so that one pair is shared.
-        self.assertEqual(seen["dreamworlds"], (0, 0, 0))
+        # Dreamworlds Ultra is the first-run default. MPlanetarian Dreamworlds
+        # is the second light pane (light coral with white ink), and retro
+        # terminal stays black.
+        self.assertEqual(seen["dreamworlds"], (240, 128, 128))
+        self.assertEqual(seen["dreamworlds_ultra"], (85, 74, 107))
+        # Sensorium is the other light pane: its dark ink is checked in
+        # test_menu_text_theme_ink, so here the colour itself is pinned.
+        self.assertEqual(seen["sensorium"], (240, 128, 128))
         alias = _bash(
             f"""
             set -e
@@ -85,9 +87,14 @@ class TestCliThemeBackground(unittest.TestCase):
             """
         )
         self.assertEqual(alias.returncode, 0, alias.stderr)
+        expected_alias = {
+            "default": (85, 74, 107),
+            "mplanetarian": (240, 128, 128),
+            "mplanetarian_dreamworlds": (240, 128, 128),
+        }
         for raw in alias.stdout.splitlines():
             theme, r, g, b = raw.split("\t")
-            self.assertEqual((int(r), int(g), int(b)), (0, 0, 0), theme)
+            self.assertEqual((int(r), int(g), int(b)), expected_alias[theme], theme)
         colours = [rgb for theme, rgb in seen.items() if theme != "dreamworlds"]
         self.assertEqual(len(colours), len(set(colours)))
         for theme, (r, g, b) in seen.items():
@@ -95,7 +102,24 @@ class TestCliThemeBackground(unittest.TestCase):
                 self.assertGreaterEqual(channel, 0, theme)
                 self.assertLessEqual(channel, 255, theme)
             luma = 0.299 * r + 0.587 * g + 0.114 * b
-            self.assertLess(luma, 90, f"{theme} background is too light for the menu text")
+            if theme in ("sensorium", "dreamworlds"):
+                self.assertGreaterEqual(
+                    luma, 140,
+                    f"{theme} should keep its light coral pane",
+                )
+            elif theme in (
+                "stream_of_frequency",
+                "cosmic_supernova",
+                "phosphor",
+                "retro_studio",
+                "retro_linux_memories",
+            ):
+                self.assertGreaterEqual(
+                    luma, 140,
+                    f"{theme} should keep the light tint of its own colour",
+                )
+            else:
+                self.assertLess(luma, 90, f"{theme} background is too light for the menu text")
         # Neighbouring themes in the C-key cycle must be visibly different.
         cycle = [
             "stream_of_frequency",
@@ -109,10 +133,7 @@ class TestCliThemeBackground(unittest.TestCase):
             "phosphor",
             "ice_cold",
             "retro_terminal",
-            "cosmic_dreamworlds_radioactive",
-            "cosmic_dreamworlds",
-            "orbital_void_reflux",
-            "sensorium_interface",
+            "sensorium",
             "retro_linux_memories",
         ]
         for left, right in zip(cycle, cycle[1:] + cycle[:1]):
@@ -139,10 +160,10 @@ class TestCliThemeBackground(unittest.TestCase):
         chunks = res.stdout.split("\n--\n")
         self.assertEqual(len(chunks), 2)
         # BEL form and ST form, so Windows Terminal, Terminal-class Linux, and Konsole all take it.
-        self.assertIn("\033]11;#16062e\007", chunks[0])
-        self.assertIn("\033]11;#16062e\033\\", chunks[0])
-        self.assertIn("\033]11;#1a1e21\007", chunks[1])
-        self.assertIn("\033]11;#1a1e21\033\\", chunks[1])
+        self.assertIn("\033]11;#554a6b\007", chunks[0])
+        self.assertIn("\033]11;#554a6b\033\\", chunks[0])
+        self.assertIn("\033]11;#b0c4d6\007", chunks[1])
+        self.assertIn("\033]11;#b0c4d6\033\\", chunks[1])
 
     def test_glass_hosts_do_not_take_a_console_background(self):
         script = f"""

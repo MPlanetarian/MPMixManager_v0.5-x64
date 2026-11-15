@@ -8,6 +8,8 @@ Verifies:
 - Keyboard arrow navigation and Esc/q/0 exit functionality
 """
 
+from __future__ import annotations
+
 import os
 import pty
 import re

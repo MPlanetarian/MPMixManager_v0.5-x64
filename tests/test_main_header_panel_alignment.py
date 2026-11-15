@@ -43,7 +43,7 @@ class TestMainHeaderPanelAlignment(unittest.TestCase):
         done
         """
         proc = subprocess.run(
-            ["bash", "-c", bash_script],
+            [BASH, "-c", bash_script],
             cwd=str(BASE_DIR),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -90,7 +90,7 @@ class TestMainHeaderPanelAlignment(unittest.TestCase):
         done
         """
         proc = subprocess.run(
-            ["bash", "-c", bash_script],
+            [BASH, "-c", bash_script],
             cwd=str(BASE_DIR),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
