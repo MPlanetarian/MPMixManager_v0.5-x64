@@ -718,7 +718,9 @@ def get_current_theme_id(cli_theme: Optional[str] = None) -> str:
         except Exception:
             pass
 
-    return "cosmic_supernova" if "cosmic_supernova" in THEMES else "dreamworlds"
+    # Last resort: Dreamworlds Ultra, matching MP Gui, the CLI manager and the
+    # Liquid Player. Cosmic Supernova stays a normal selectable theme.
+    return "dreamworlds_ultra" if "dreamworlds_ultra" in THEMES else "dreamworlds"
 
 
 def get_theme_palette(cli_theme: Optional[str] = None) -> Dict[str, Any]:

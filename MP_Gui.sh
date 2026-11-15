@@ -5,7 +5,7 @@
 # The same glass, bezel, opacity slider, and VTE terminal are used, and the
 # window follows ~/.config/mix-manager/theme (the built-in themes).
 #
-# The shared theme file is set to Retro Linux Memories on launch so the window
+# The shared theme file is set to Dreamworlds Ultra [Default] on launch so the window
 # matches that theme immediately. That also changes an already-open terminal
 # manager, which uses the same file. Pass --keep-theme to leave it alone.
 # Pass --theme NAME to write a different theme instead.
@@ -231,11 +231,11 @@ fi
 
 mkdir -p "$HOME/.config/mix-manager" 2>/dev/null || true
 if [ "$KEEP_THEME" -eq 0 ]; then
-    # Preserve the shared theme selected by the CLI manager. Retro Linux
-    # Memories remains the first-run default, while --theme stays explicit.
+    # Preserve the shared theme selected by the CLI manager. Dreamworlds Ultra
+    # is the first-run default, while --theme stays explicit.
     if [ -z "$THEME_NAME" ]; then
         THEME_NAME="$(tr -d ' \t\n\r' < "$HOME/.config/mix-manager/theme" 2>/dev/null)"
-        [ -n "$THEME_NAME" ] || THEME_NAME="retro_linux_memories"
+        [ -n "$THEME_NAME" ] || THEME_NAME="dreamworlds_ultra"
     fi
     printf '%s\n' "$THEME_NAME" > "$HOME/.config/mix-manager/theme"
 fi

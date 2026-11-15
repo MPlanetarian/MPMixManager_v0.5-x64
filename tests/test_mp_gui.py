@@ -177,7 +177,7 @@ class TestGuiLauncher(unittest.TestCase):
         self.assertIn("windows_find_python.cmd", text)
         self.assertIn('exec "$MP_PY"', text)
         self.assertNotIn("exec python3 ", text)
-        self.assertIn("retro_linux_memories", text)
+        self.assertIn("dreamworlds_ultra", text)
         self.assertNotIn("charcoal_vault", text)
         self.assertIn("--keep-theme", text)
         self.assertIn("scripts/mp_gui_focus.sh", text)

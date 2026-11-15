@@ -78,16 +78,25 @@ class TestCliThemeBackground(unittest.TestCase):
             f"""
             set -e
             eval "$(awk '/^set_theme_colors\\(\\)/{{f=1}} f{{print}} f&&/^}}/{{exit}}' "{MGR_SH}")"
-            for theme in default mplanetarian mplanetarian_dreamworlds; do
+            for theme in mplanetarian mplanetarian_dreamworlds; do
                 set_theme_colors "$theme"
                 printf '%s\\t%s\\t%s\\t%s\\n' "$theme" "$THEME_BG_R" "$THEME_BG_G" "$THEME_BG_B"
             done
+            set_theme_colors default
+            printf 'default\\t%s\\t%s\\t%s\\n' "$THEME_BG_R" "$THEME_BG_G" "$THEME_BG_B"
             """
         )
         self.assertEqual(alias.returncode, 0, alias.stderr)
-        for raw in alias.stdout.splitlines():
-            theme, r, g, b = raw.split("\t")
-            self.assertEqual((int(r), int(g), int(b)), (0, 0, 0), theme)
+        rows = dict(
+            (theme, (int(r), int(g), int(b)))
+            for theme, r, g, b in (raw.split("\t") for raw in alias.stdout.splitlines())
+        )
+        # MPlanetarian Dreamworlds keeps its own black pane.
+        self.assertEqual(rows["mplanetarian"], (0, 0, 0))
+        self.assertEqual(rows["mplanetarian_dreamworlds"], (0, 0, 0))
+        # `default` now means Dreamworlds Ultra, the first-run default, so it
+        # must resolve to the Ultra pane rather than Dreamworlds' black.
+        self.assertEqual(rows["default"], seen["dreamworlds_ultra"])
         colours = [rgb for theme, rgb in seen.items() if theme != "dreamworlds"]
         self.assertEqual(len(colours), len(set(colours)))
         for theme, (r, g, b) in seen.items():

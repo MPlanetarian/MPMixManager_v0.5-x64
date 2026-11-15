@@ -57,7 +57,7 @@ TRACKLIST_THEMES=(
 )
 
 set_theme_colors() {
-    local raw_name="${1:-dreamworlds}"
+    local raw_name="${1:-dreamworlds_ultra}"
     local theme_name
     theme_name="$(printf '%s' "$raw_name" | tr '[:upper:]' '[:lower:]' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
 
@@ -369,7 +369,7 @@ _USER_CYCLED_THEME=""
 load_tracklist_theme() {
     local file_theme
     file_theme="$(_read_saved_theme_file)"
-    local chosen_theme="dreamworlds"
+    local chosen_theme="dreamworlds_ultra"
 
     if [ -n "$file_theme" ] && [ "$file_theme" != "$_LAST_SEEN_FILE_THEME" ]; then
         _LAST_SEEN_FILE_THEME="$file_theme"

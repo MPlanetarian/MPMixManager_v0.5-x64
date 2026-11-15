@@ -3996,6 +3996,10 @@ class EqualizerVisualizer:
             th_file = CONFIG_DIR / "theme"
             if not selected_theme and th_file.is_file():
                 selected_theme = th_file.read_text(encoding="utf-8").strip().lower()
+            # Dreamworlds Ultra is the built-in default when no theme has ever
+            # been saved, so a bare player launch matches MP Gui and the CLI.
+            if not selected_theme:
+                selected_theme = "dreamworlds_ultra"
             if selected_theme:
                 self.set_theme(selected_theme)
         except Exception: pass

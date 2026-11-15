@@ -137,12 +137,12 @@ class ThemeColors:
         self.primary, self.secondary, self.accent, self.border, self.text, self.text_dim, self.green, self.red, self.yellow = c
         self.reset, self.bold, self.dim = ("\033[0m", "\033[1m", "\033[2m") if enabled else ("", "", "")
 
-_ACTIVE_THEME_ID = "dreamworlds"
+_ACTIVE_THEME_ID = "dreamworlds_ultra"
 
 def resolve_theme_id(name: Optional[str]) -> str:
-    if not name: return "dreamworlds"
+    if not name: return "dreamworlds_ultra"
     clean = name.strip().lower()
-    return clean if clean in THEMES else THEME_ALIASES.get(clean, next((k for k in THEMES if k in clean or clean in k), "dreamworlds"))
+    return clean if clean in THEMES else THEME_ALIASES.get(clean, next((k for k in THEMES if k in clean or clean in k), "dreamworlds_ultra"))
 
 def get_theme(theme_id: Optional[str] = None, no_color: bool = False) -> ThemeColors:
     tid = resolve_theme_id(theme_id or _ACTIVE_THEME_ID)
@@ -156,7 +156,7 @@ def load_saved_theme() -> str:
     try:
         return resolve_theme_id(THEME_CONFIG_FILE.read_text("utf-8").strip())
     except Exception:
-        return "dreamworlds"
+        return "dreamworlds_ultra"
 
 def save_active_theme(tid: str) -> bool:
     try:
