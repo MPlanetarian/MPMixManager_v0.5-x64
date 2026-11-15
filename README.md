@@ -58,7 +58,7 @@ An enterprise-grade workstation orchestration console and media management suite
 
 > [!NOTE]
 > ### 🎵 Celebrating the Release of MP Mix Manager 0.5 (Sensorium)
-> **The release theme track is here:** ***MPlanetarian - The Orbits of Planets (Cosmic Dreamworlds Remake)*** — a **48 kHz FLAC**, **14:17** long, shipped in [`MP_SAMPLES/`](MP_SAMPLES/) and preloaded into the Liquid Transparent Audio Player at **0:00** on first launch.
+> **The release theme track is here:** ***MPlanetarian - The Orbits of Planets (Cosmic Dreamworlds Remake)*** — a **48 kHz / 16-bit FLAC**, **27:27** long, shipped in [`MP_SAMPLES/`](MP_SAMPLES/) and preloaded into the Liquid Transparent Audio Player at **0:00** on first launch.
 >
 > The new artwork ships as **`MP_SAMPLES/The_Orbits_of_Planets_Dreamworlds_Cover.png`** and is embedded in the FLAC's ID tags as both its **Cover (front)** and **Cover (back)** pictures. The cover is shown below the MP Audio Player screenshot.
 

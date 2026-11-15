@@ -13,6 +13,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > and are the newest; the block headed _Originally documented for the November 13 build_ further down holds
 > the notes published with the first cut. Release date is the final public date, **November 14, 2026**.
 
+### Changed
+
+- **The bundled release theme track is the Dreamworlds Remix, re-encoded to fit GitHub** (`MP_SAMPLES/`):
+  - `MPlanetarian - The Orbits of Planets (MPlanetarian Dreamworlds Remix).wav` — the 924 MiB / 27:27 24-bit
+    96 kHz master — is now the source instead of the older 14:17 cut. GitHub rejects any file over 100 MiB,
+    so the WAV itself is never committed (it is gitignored, as before) and the shipped artifact is a FLAC.
+  - **The filename is deliberately unchanged:** `MPlanetarian - The Orbits of Planets (Cosmic Dreamworlds
+    Remake).flac`. `scripts/liquid_glass_reward.py` builds `SAMPLE_TRACK_FILE` from `SAMPLE_TRACK_NAME`, the
+    installer copies the track on first run, and `tests/test_first_run_sample_track.py` asserts the path, so
+    renaming it would have broken first-run preload for every existing install.
+  - **Encoded at 16-bit / 48 kHz** to match the format the previous file used, so nothing that reads the
+    sample track sees a different bit depth or rate. `flac -t` verifies clean; the result is 96.3 MiB, inside
+    GitHub's 100 MiB limit with 3.7 MiB to spare.
+  - **The cover is embedded twice**, as `Cover (front)` (picture type 3) and `Cover (back)` (type 4), both
+    from `MP_SAMPLES/The_Orbits_of_Planets_Dreamworlds_Cover.png` (1200×1200 PNG) — the same pairing the
+    previous file carried.
+  - Metadata is the previous file's tag set with the title updated to `The Orbits of Planets (MPlanetarian
+    Dreamworlds Remix)`, so album, artist, genre, label and catalogue fields stay consistent with the release.
+  - The README now states the real duration (**27:27**) and bit depth instead of the old **14:17**.
+
 ### Added
 - **Raspberry Pi support: MP Mix Manager now runs on a Pi 3/4/5 and Zero 2 W, and the Development Utility can build the packages for it** (`scripts/mp_raspberry_pi.py`, `scripts/lib/mp_pi_detect.sh`, `MP_Dev_Utility.sh`, `tests/test_raspberry_pi.py`):
   - **Why it did not run before.** The Broadcom VideoCore GPU reports **OpenGL 3.1 core / GLSL 1.40** through Mesa V3D, never desktop OpenGL 3.3. Every renderer asked for a 3.3 core context and compiled `#version 330 core` shaders, so `glfwCreateWindow` returned NULL and the Liquid Glass window never opened. On top of that, GLFW is loaded through `ctypes`, and Raspberry Pi OS Bookworm ships libglfw3 **3.3** while the code called `glfwInitHint` (a 3.4-only symbol) unguarded, raising `AttributeError` before any window existed. `libglfw3` was also not a declared dependency anywhere, so a stock Pi image did not have it at all.
