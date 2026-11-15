@@ -69,7 +69,7 @@ An enterprise-grade workstation orchestration console and media management suite
 - [🎉 Download & Experience v0.5.3 Stable (Sensorium)](#-download--experience-v053-stable-sensorium)
 - [📜 Previous Release: v0.4.3 Stable (Liquid)](#-previous-release-v043-stable-liquid--november-12-2026)
 - [🚀 What's New in v0.4.0 Stable](#-whats-new-in-v040-stable)
-- [🔥 Core v0.4 Architecture Highlights](#-core-v04-architecture-highlights)
+- [🔥 Core v0.5.3 Architecture Highlights](#-core-v053-architecture-highlights)
 - [🪟 Spotlight: MP Liquid Glass Audio Player (OpenGL • Vulkan • Apple Silicon Metal)](#-spotlight-mp-liquid-glass-audio-player-opengl--vulkan--apple-silicon-metal)
 - [🔮 Spotlight: MP Liquid Visualizer (Native Vulkan 3D Audio-Reactive Raymarching)](#-spotlight-mp-liquid-visualizer-native-vulkan-3d-audio-reactive-raymarching)
 - [🌌 MPlanetarian Dreamworlds & TUI Navigation](#-spotlight-mplanetarian-dreamworlds--tui-navigation)
@@ -122,7 +122,7 @@ An enterprise-grade workstation orchestration console and media management suite
 
 ### 🧭 Install-Tree Resolver — Shortcuts That Survive a Move
 
-| Change | What you see |
+| Change | Final Result |
 | :--- | :--- |
 | **Nothing hard-codes a version-numbered folder** | Launchers, `.desktop` entries, the tray icon and the Python helpers no longer point at `/var/home/<user>/MP_Mix_Manager_v0.x` or any other fixed path. The tree is found from `$MP_MIX_MANAGER_DIR`, then `~/.config/mix-manager/install_dir`, then the `~/.local/bin` launcher symlinks, then the newest matching tree under `$HOME` and `/opt`. Every candidate is verified against a marker file, so a stale symlink or a backup copy cannot win. |
 | **`Mix_Archive_Manager.sh` follows its own symlink** | `manager` and `~/.local/bin/mix-archive-manager` report the tree they really resolve into, so the header and every relative path stay correct. |
@@ -198,7 +198,7 @@ An enterprise-grade workstation orchestration console and media management suite
 
 ### Player and desktop
 
-| Fix | What you see |
+| Fix | Final Result |
 | :--- | :--- |
 | **Vulkan keeps its themed glass, a moving visualizer and the transparency bar** | Three separate faults on the Vulkan path: the renderer painted the visualizer *inside* the player window and skipped the themed glass shader (measured mean RGB **(150, 175, 201)** with 0% near-black after the fix); the standalone Vulkan renderer never called `march_advance()`, so the scene was a still image while no audio played (`accum_time 0.000 → 0.931`, 70% of pixels changing over two seconds); and the transparency bar only ever existed in the OpenGL host. A new borderless GTK overlay, `scripts/liquid_glass_slider.py`, draws the same track and thumb for both backends in the 44 px strip the terminal well reserves. |
 | **Every Liquid Glass theme renders again, with readable ink** | `liquid_glass_vulkan.py` imported `preset_by_id` from the wrong module, so the in-player visualizer layer raised on every frame and every theme fell back to black (**mean RGB (27, 33, 33)** with 53% near-black). The import is corrected — **(126, 141, 170)** with 0% near-black. The transparency slider's NDC y was inverted, drawing it into the bezel; it now sits in the reserved bottom strip. `place_terminal()` had been discarding its geometry on X11, so VTE painted over the bar; the terminal is now moved and resized to the well rectangle. |
@@ -213,7 +213,7 @@ An enterprise-grade workstation orchestration console and media management suite
 
 ### Web Companion and macOS
 
-| Fix | What you see |
+| Fix | Final Result |
 | :--- | :--- |
 | **No more flickering "has been restarted" banner** | The queue had been serving 44-byte `RIFF/WAVE` stubs — a valid header whose `data` chunk declares zero frames — left behind by interrupted recordings. The only gate was `st_size <= 0`, so they passed as streamable, the phone raised a media error, and the dashboard read that as "the companion restarted". `is_streamable_file()` now requires a regular file, more than 32 bytes, and — for WAV and FLAC — walks the container to confirm audio follows the header. Other formats are never header-probed, so a large library pays no extra I/O. `/api/stream` returns a JSON **404** instead of an empty 200, and client recovery is capped at two attempts per file. |
 | **The macOS privacy grant lands on the app, not on `python3`** | The bundle entry point is now a native launcher that **embeds libpython** via `Py_BytesMain` instead of `exec`-ing the interpreter, so the bundle stays the responsible process and one grant is enough. The launchd job runs `/usr/bin/open -g -W <bundle>` so the app gets a LaunchServices record and appears in **Privacy & Security**; `Info.plist` declares `NSRemovableVolumesUsageDescription` and `NSNetworkVolumesUsageDescription`; `status` asks the running service whether it can read the archive; and `grant` copies the bundle path, reveals it in Finder, and explains the steps. The bundle now lives in `~/Applications/MP Web Companion.app` with a real `.icns`, is re-registered with `lsregister -f` after every install, and `uninstall` removes both the new and legacy locations with their LaunchServices records. |
@@ -264,7 +264,7 @@ Your 0.4 folder is **never modified or deleted**. Converted audio is not moved. 
 
 ### Player, visualizer, and menu
 
-| Change | What you see |
+| Change | Final Result |
 | :--- | :--- |
 | **Visualizer window** | On Linux the window matches the Liquid Player after the font is measured. When MP Gui starts the visualizer, the window uses MP Gui's fitted size. macOS stays **1094×734**, the same size as the Liquid Player. Windows stays **700×700** and still shrinks to the work area. Fullscreen on a 4K TV is unchanged. Press **`Z`** to cycle **fullscreen → half the default size → default size**; double-click the window to toggle fullscreen. Keys **`1`** through **`9`** select the first nine presets. Preset 10, Resonant Fluid Dynamics, opens with `--preset 10`. |
 | **Visualizer picture on Linux** | The raymarch is one pixel for each pixel of the window, so the picture is sharp. The old Linux image was 224 pixels on the long edge and was scaled up. macOS still uses a 768 long edge. Fullscreen on a 4K TV stays 1920×1080. |
@@ -278,7 +278,7 @@ Your 0.4 folder is **never modified or deleted**. Converted audio is not moved. 
 
 ### Windows 10 and 11
 
-| Change | What you see |
+| Change | Final Result |
 | :--- | :--- |
 | **The Liquid Player runs on Windows** | OpenGL is the default. `launch_liquid_glass.bat` starts it. The glass theme shows through the console. The shortcut uses the project Python. |
 | **You can move the window after it loads** | The player console sits over the borderless glass. The top strip, the outer bezel, and Alt or the Windows key move the glass, and the console follows. A second click on that strip still maximizes. The close button and the opacity slider still take their clicks. |
@@ -287,7 +287,7 @@ Your 0.4 folder is **never modified or deleted**. Converted audio is not moved. 
 
 ### macOS
 
-| Change | What you see |
+| Change | Final Result |
 | :--- | :--- |
 | **`G` in the Liquid Player** | Opens MP Gui. The OpenGL host raises that window in front of a fullscreen Terminal. |
 | **Shortcuts open as apps** | **MP Liquid Player**, **MP Mix Manager**, **MP Gui**, and **MP Liquid Visualizer** open as apps. |
@@ -467,7 +467,7 @@ Two releases back, October 24, 2026. Current release notes are [What's New in v0
 
 ---
 
-## 🔥 Core v0.4 Architecture Highlights
+## 🔥 Core v0.5.3 Architecture Highlights
 
 | Feature Area | Component | Highlights & Capability Summary |
 | :--- | :--- | :--- |
