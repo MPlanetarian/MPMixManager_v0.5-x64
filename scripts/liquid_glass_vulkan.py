@@ -1020,14 +1020,20 @@ class LiquidGlassRenderer:
         self.panels = tuple(rects)
 
     def window_size(self):
+        if getattr(self, "_cur_size", None) is not None:
+            return self._cur_size
         w, h = c_int(), c_int()
         self._glfw.glfwGetWindowSize(self._window, byref(w), byref(h))
-        return int(w.value), int(h.value)
+        self._cur_size = (int(w.value), int(h.value))
+        return self._cur_size
 
     def framebuffer_size(self):
+        if getattr(self, "_cur_fb_size", None) is not None:
+            return self._cur_fb_size
         w, h = c_int(), c_int()
         self._glfw.glfwGetFramebufferSize(self._window, byref(w), byref(h))
-        return max(1, int(w.value)), max(1, int(h.value))
+        self._cur_fb_size = (max(1, int(w.value)), max(1, int(h.value)))
+        return self._cur_fb_size
 
     def window_pos(self):
         if getattr(self, "_cur_pos", None) is not None:
@@ -1044,6 +1050,7 @@ class LiquidGlassRenderer:
         self._glfw.glfwSetWindowPos(self._window, pos[0], pos[1])
 
     def set_window_size(self, w, h):
+        self._cur_size = (int(w), int(h))
         self._glfw.glfwSetWindowSize(self._window, int(w), int(h))
         self._resize = True
 
@@ -1151,12 +1158,7 @@ class LiquidGlassRenderer:
                 return self._render(capture, visualizer=visualizer)
         self.sync_player_visualizer_opacity(False)
         colors, effective_opacity, factor = get_dynamic_theme_state(theme_name, opacity)
-        win = self.x11_window() if hasattr(self, "x11_window") else None
-        if factor != 1.0 and win:
-            target_op = int(self.clear_opacity * factor * 1000)
-            if getattr(self, "_last_dyn_opacity", None) != target_op:
-                self._last_dyn_opacity = target_op
-                self._set_opacity(win, self.clear_opacity * factor)
+        self.apply_clear_opacity(factor)
         self._write_ubo(colors, effective_opacity)
         return self._render(capture)
 
@@ -1536,6 +1538,37 @@ class LiquidGlassRenderer:
         value = int(max(0.0, min(1.0, float(opacity))) * 0xFFFFFFFF)
         self._change_cardinal(window, self._x_atom("_NET_WM_WINDOW_OPACITY"), [value])
 
+    def apply_clear_opacity(self, factor=1.0):
+        """Publish ``clear_opacity * factor`` to the window, once per change.
+
+        The OpenGL host shares this contract. The write used to be guarded by
+        ``factor != 1.0``, so a static theme (every one without the rainbow
+        oscillation) never republished the property and the transparency slider
+        only moved its thumb while the window kept the startup opacity.
+        """
+        try:
+            base = float(self.clear_opacity)
+            factor = float(factor)
+        except (TypeError, ValueError):
+            return False
+        target_op = int(base * factor * 1000)
+        if getattr(self, "_last_dyn_opacity", None) == target_op:
+            return False
+        self._last_dyn_opacity = target_op
+        win = self.x11_window() if hasattr(self, "x11_window") else 0
+        if win:
+            self._set_opacity(win, base * factor)
+            return True
+        if (
+            self._window
+            and hasattr(getattr(self, "_glfw", None), "glfwSetWindowOpacity")
+        ):
+            self._glfw.glfwSetWindowOpacity(
+                self._window, c_float(max(0.0, min(1.0, base * factor)))
+            )
+            return True
+        return False
+
     def _apply_desktop_glass(self):
         """Blur the desktop behind the pane and fade it to clear glass."""
         if is_windows():
@@ -1773,6 +1806,9 @@ class LiquidGlassRenderer:
         g.glfwSetFramebufferSizeCallback.restype = c_void_p
         g.glfwSetWindowPosCallback.argtypes = [c_void_p, c_void_p]
         g.glfwSetWindowPosCallback.restype = c_void_p
+        if hasattr(g, "glfwSetWindowSizeCallback"):
+            g.glfwSetWindowSizeCallback.argtypes = [c_void_p, c_void_p]
+            g.glfwSetWindowSizeCallback.restype = c_void_p
 
     def _bind_loader(self):
         v = self._vulkan
@@ -1807,6 +1843,7 @@ class LiquidGlassRenderer:
         origin_x, origin_y = window_launch_origin(72, 64)
         g.glfwSetWindowPos(window, origin_x, origin_y)
         self._cur_pos = (origin_x, origin_y)
+        self._cur_size = (int(self.width), int(self.height))
         self._resize = False
         return window
 
@@ -1815,10 +1852,16 @@ class LiquidGlassRenderer:
         self._on_cursor = CFUNCTYPE(None, c_void_p, c_double, c_double)(self._cursor)
         self._on_fb = CFUNCTYPE(None, c_void_p, c_int, c_int)(self._framebuffer)
         self._on_pos = CFUNCTYPE(None, c_void_p, c_int, c_int)(self._pos_callback)
+        self._on_size = CFUNCTYPE(None, c_void_p, c_int, c_int)(self._size_callback)
         self._glfw.glfwSetMouseButtonCallback(self._window, ctypes.cast(self._on_mouse, c_void_p))
         self._glfw.glfwSetCursorPosCallback(self._window, ctypes.cast(self._on_cursor, c_void_p))
         self._glfw.glfwSetFramebufferSizeCallback(self._window, ctypes.cast(self._on_fb, c_void_p))
         self._glfw.glfwSetWindowPosCallback(self._window, ctypes.cast(self._on_pos, c_void_p))
+        if hasattr(self._glfw, "glfwSetWindowSizeCallback"):
+            self._glfw.glfwSetWindowSizeCallback(self._window, ctypes.cast(self._on_size, c_void_p))
+
+    def _size_callback(self, _window, w, h):
+        self._cur_size = (int(w), int(h))
 
     def _pos_callback(self, _window, x, y):
         self._cur_pos = (int(x), int(y))
@@ -1833,6 +1876,7 @@ class LiquidGlassRenderer:
         self.cursor = (float(x), float(y))
 
     def _framebuffer(self, _window, _w, _h):
+        self._cur_fb_size = (max(1, int(_w)), max(1, int(_h)))
         self._resize = True
 
     def _create_instance(self):

@@ -34,6 +34,14 @@ elif sys.platform.startswith("linux"):
 
 CONFIG_DIR = Path.home() / ".config" / "mix-manager"
 
+# Raspberry Pi / low-power ARM tuning, shared with the player and visualizer.
+try:
+    import mp_raspberry_pi
+except ImportError:  # imported as scripts.liquid_player_visualizer
+    from scripts import mp_raspberry_pi  # type: ignore
+
+_LOW_POWER_GPU = mp_raspberry_pi.is_low_power_gpu()
+
 # GLFW window hints. These live here because the standalone OpenGL visualizer
 # creates its own window. The numeric values are GLFW's, and VISIBLE/DECORATED
 # are easy to transpose: passing them the wrong way round creates a hidden
@@ -47,6 +55,7 @@ GLFW_RESIZABLE = 0x00020003
 GLFW_VISIBLE = 0x00020004
 GLFW_DECORATED = 0x00020005
 GLFW_FOCUSED = 0x00020001
+GLFW_ICONIFIED = 0x00020002
 GLFW_PLATFORM = 0x00050003
 GLFW_PLATFORM_X11 = 0x00060004
 GLFW_OPENGL_API = 0x00030001
@@ -69,6 +78,20 @@ try:
     from visualizer_player_bond import PlayerBondMixin
 except ImportError:
     from scripts.visualizer_player_bond import PlayerBondMixin
+try:
+    from visualizer_z_cycle import (
+        WINDOW_MODE_DEFAULT,
+        WINDOW_MODE_FULLSCREEN,
+        WINDOW_MODE_HALF,
+        ZWindowCycleMixin,
+    )
+except ImportError:
+    from scripts.visualizer_z_cycle import (
+        WINDOW_MODE_DEFAULT,
+        WINDOW_MODE_FULLSCREEN,
+        WINDOW_MODE_HALF,
+        ZWindowCycleMixin,
+    )
 _CACHE: Dict[str, Any] = {"path": "", "mtime": None, "state": None}
 
 _TEXT_GUARD = """
@@ -255,6 +278,38 @@ def macos_visualizer_march_steps() -> int:
     return _env_int("MP_VISUALIZER_GL_MARCH_STEPS", _MACOS_MARCH_STEPS, 24, _FULL_MARCH_STEPS)
 
 
+def linux_visualizer_long_edge() -> int:
+    """Long-edge cap for the Linux raymarch.
+
+    Linux used to march exactly at the framebuffer size. That is crisp on a
+    desktop GPU and unusable on a Raspberry Pi, where the 84-step
+    twelve-scene SDF runs at single-digit frames per second. The cap stays 0
+    (no cap) on a normal desktop and takes the value from
+    ``mp_raspberry_pi`` on a Pi. An explicit MP_VISUALIZER_GL_LONG_EDGE
+    always wins because the env is consulted first.
+    """
+    if (os.environ.get("MP_VISUALIZER_GL_LONG_EDGE") or "").strip():
+        return macos_visualizer_long_edge()
+    if not _LOW_POWER_GPU:
+        return 0
+    return mp_raspberry_pi.visualizer_limits()["long_edge"] or 640
+
+
+def visualizer_march_steps() -> int:
+    """March steps for this host.
+
+    macOS historically used 64 and Windows/Linux 84. A Pi uses the lower
+    value from mp_raspberry_pi so the frame budget is reachable.
+    """
+    if sys.platform == "darwin":
+        return macos_visualizer_march_steps()
+    if _LOW_POWER_GPU:
+        return _env_int("MP_VISUALIZER_GL_MARCH_STEPS",
+                        mp_raspberry_pi.visualizer_limits()["march_steps"] or 44,
+                        16, _FULL_MARCH_STEPS)
+    return _env_int("MP_VISUALIZER_GL_MARCH_STEPS", _FULL_MARCH_STEPS, 24, _FULL_MARCH_STEPS)
+
+
 def macos_liquid_player_window_size(
     cols: int = 120, rows: int = 40, char_w: int = 9, char_h: int = 18, margin: int = 7
 ) -> tuple:
@@ -343,8 +398,10 @@ def gui_window_size_path() -> Path:
     return CONFIG_DIR / "liquid_gui_window.json"
 
 
-# (path, width, height, pid). Skips rewriting the same size every frame.
-_PUBLISHED_CACHE: Optional[tuple] = None
+# (path -> last token written). Skips rewriting an unchanged record. Keyed by
+# path because a host publishes sizes and geometry through the same module, and
+# a single shared token made the second write look like a duplicate.
+_PUBLISHED_CACHE: Dict[str, tuple] = {}
 
 
 def _publish_window_size(
@@ -354,9 +411,14 @@ def _publish_window_size(
     pid: Optional[int] = None,
     x: Optional[int] = None,
     y: Optional[int] = None,
+    wid: Optional[int] = None,
 ) -> None:
-    """Record an outer window size so the visualizer can match it."""
-    global _PUBLISHED_CACHE
+    """Record an outer window size so the visualizer can match it.
+
+    ``wid`` is the host's own X11 window id. The bonded visualizer stacks
+    itself against that exact window, so it does not have to guess which of
+    several players (or the player and MP Gui) it belongs behind.
+    """
     try:
         width_i = int(width)
         height_i = int(height)
@@ -365,24 +427,29 @@ def _publish_window_size(
         return
     if width_i < 64 or height_i < 64 or pid_i <= 0:
         return
-    if x is None or y is None:
+    if x is None or y is None or wid is None:
         try:
             previous = json.loads(path.read_text(encoding="utf-8"))
             x = int(previous["x"]) if x is None and "x" in previous else x
             y = int(previous["y"]) if y is None and "y" in previous else y
+            wid = int(previous["wid"]) if wid is None and "wid" in previous else wid
         except (OSError, ValueError, TypeError, json.JSONDecodeError):
             pass
     try:
         x_i = int(x) if x is not None else None
         y_i = int(y) if y is not None else None
+        wid_i = int(wid) if wid is not None else None
     except (TypeError, ValueError):
-        x_i = y_i = None
-    token = (str(path), width_i, height_i, pid_i, x_i, y_i)
-    if token == _PUBLISHED_CACHE:
+        x_i = y_i = wid_i = None
+    token = (width_i, height_i, pid_i, x_i, y_i, wid_i)
+    key = str(path)
+    if _PUBLISHED_CACHE.get(key) == token:
         return
     payload = {"width": width_i, "height": height_i, "pid": pid_i}
     if x_i is not None and y_i is not None:
         payload.update(x=x_i, y=y_i)
+    if wid_i:
+        payload["wid"] = wid_i
     body = json.dumps(payload) + "\n"
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -391,7 +458,7 @@ def _publish_window_size(
         os.replace(temporary, path)
     except OSError:
         return
-    _PUBLISHED_CACHE = token
+    _PUBLISHED_CACHE[key] = token
 
 
 def publish_liquid_player_window_size(width: int, height: int, pid: Optional[int] = None) -> None:
@@ -399,26 +466,76 @@ def publish_liquid_player_window_size(width: int, height: int, pid: Optional[int
     _publish_window_size(player_window_size_path(), width, height, pid)
 
 
-def publish_liquid_player_window_geometry(x: int, y: int, width: int, height: int, pid: Optional[int] = None) -> None:
+def publish_liquid_player_window_geometry(x: int, y: int, width: int, height: int,
+                                          pid: Optional[int] = None,
+                                          wid: Optional[int] = None) -> None:
     """Record the player's outer position and size for the bonded visualizer."""
-    _publish_window_size(player_window_size_path(), width, height, pid, x, y)
+    _publish_window_size(player_window_size_path(), width, height, pid, x, y, wid)
 
 
 def read_published_player_window_geometry() -> Optional[tuple]:
     """Return (x, y, width, height) while the publishing player is alive."""
-    record = _read_published_window_record(player_window_size_path())
-    if record is None:
-        return None
-    try:
-        payload = json.loads(player_window_size_path().read_text(encoding="utf-8"))
-        return int(payload["x"]), int(payload["y"]), record[0], record[1]
-    except (OSError, KeyError, ValueError, TypeError, json.JSONDecodeError):
-        return None
+    return _read_published_window_geometry(player_window_size_path())
 
 
 def publish_liquid_gui_window_size(width: int, height: int, pid: Optional[int] = None) -> None:
     """Record the MP Gui window so a visualizer started with it can match it."""
     _publish_window_size(gui_window_size_path(), width, height, pid)
+
+
+def publish_liquid_gui_window_geometry(x: int, y: int, width: int, height: int,
+                                       pid: Optional[int] = None,
+                                       wid: Optional[int] = None) -> None:
+    """Record MP Gui's outer position and size for its bonded companion.
+
+    The GUI companion sits behind MP Gui, not behind whichever Liquid Player
+    happens to be open, so it needs the GUI's own rectangle. Before this only a
+    size was published, which let a GUI companion keep the size but stack
+    against the wrong host window.
+    """
+    _publish_window_size(gui_window_size_path(), width, height, pid, x, y, wid)
+
+
+def read_published_gui_window_geometry() -> Optional[tuple]:
+    """Return (x, y, width, height) for MP Gui while that process lives."""
+    return _read_published_window_geometry(gui_window_size_path())
+
+
+def _read_published_window_geometry(path: Path) -> Optional[tuple]:
+    """(x, y, width, height) for a publisher that is still running."""
+    record = _read_published_window_record(path)
+    if record is None:
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        return int(payload["x"]), int(payload["y"]), record[0], record[1]
+    except (OSError, KeyError, ValueError, TypeError, json.JSONDecodeError):
+        return None
+
+
+def read_published_player_window_id() -> int:
+    """X11 window id the Liquid Player published, or 0 when unknown."""
+    return _read_published_window_id(player_window_size_path())
+
+
+def read_published_gui_window_id() -> int:
+    """X11 window id MP Gui published, or 0 when unknown."""
+    return _read_published_window_id(gui_window_size_path())
+
+
+def _read_published_window_id(path: Path) -> int:
+    """The ``wid`` in a published record, while its publisher is alive.
+
+    An old record with no ``wid`` returns 0 and the bond falls back to the
+    title lookup, so a half-upgraded tree keeps working.
+    """
+    if _read_published_window_record(path) is None:
+        return 0
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        return int(payload.get("wid") or 0)
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return 0
 
 
 def _pid_alive(pid: int) -> bool:
@@ -503,6 +620,53 @@ def liquid_player_host_running() -> bool:
 def liquid_gui_host_running() -> bool:
     """True when MP Gui's Liquid Glass host is up."""
     return _glass_host_running(True)
+
+
+def _iter_visualizer_processes():
+    """Yield ``(pid, environ)`` for every MP Visualizer process."""
+    root = Path("/proc")
+    if not root.is_dir():
+        return
+    try:
+        entries = os.listdir(root)
+    except OSError:
+        return
+    for entry in entries:
+        if not entry.isdigit():
+            continue
+        proc = root / entry
+        try:
+            command = (proc / "cmdline").read_bytes()
+        except OSError:
+            continue
+        if b"MP_Liquid_Visualizer" not in command and b"mp_liquid_visualizer_vulkan" not in command:
+            continue
+        try:
+            environ = (proc / "environ").read_bytes()
+        except OSError:
+            environ = b""
+        yield int(entry), environ
+
+
+def companion_visualizer_running(for_gui: bool) -> bool:
+    """True when the companion belonging to this host kind is already up.
+
+    The two hosts keep separate companions. A single "some visualizer exists"
+    check made each one skip its own spawn whenever the other was up: open the
+    Liquid Player, then MP Gui, and the GUI never got a background window. The
+    companion is identified by the flags its host sets — ``COMPANION=1`` plus
+    ``MATCH_GUI=1`` for MP Gui, ``COMPANION=1`` alone for the player — so a
+    free window opened with Z (``DETACHED=1``) never counts either.
+    """
+    want_gui = b"MP_VISUALIZER_MATCH_GUI=1"
+    have_companion = b"MP_VISUALIZER_COMPANION=1"
+    for _pid, environ in _iter_visualizer_processes():
+        flags = environ.split(b"\x00")
+        if have_companion not in flags:
+            continue
+        if (want_gui in flags) == bool(for_gui):
+            return True
+    return False
 
 
 def _wait_for_published_window(
@@ -725,8 +889,28 @@ def march_target_size(
     if host == "darwin":
         return _scale_long_edge(width_i, height_i, macos_visualizer_long_edge())
     if host.startswith("linux"):
+        cap = linux_visualizer_long_edge()
+        if cap:
+            return _scale_long_edge(width_i, height_i, cap)
         return width_i, height_i
     return _scale_long_edge(width_i, height_i, _UNFOLDED_LONG_EDGE)
+
+
+def fullscreen_render_cap(width: int, height: int, fullscreen: bool) -> tuple:
+    """Cap a fullscreen render at 1080p on a 4K panel, keeping the aspect ratio.
+
+    A 4K desktop that fills the screen but does not change the panel's mode (a
+    compositor that ignores the mode request, a TV left at 2160p) hands the
+    renderer a 3840x2160 surface. Raymarching that is four times the pixels of
+    1080p for a picture that is scaled back up anyway, so both backends draw the
+    scene at 1080p and blit it to the surface instead. A surface that is already
+    1080p or smaller is returned unchanged.
+    """
+    width, height = max(2, int(width)), max(2, int(height))
+    if not fullscreen or (width < 3840 and height < 2160):
+        return width, height
+    scale = min(1920.0 / width, 1080.0 / height)
+    return max(2, int(round(width * scale))), max(2, int(round(height * scale)))
 
 
 def visualizer_internal_size(
@@ -752,9 +936,12 @@ def visualizer_internal_size(
     fh_i = max(2, int(fh))
     if macos is None:
         macos = sys.platform == "darwin"
-    if not macos:
+    # An explicit long edge applies on every platform, as it already does for the
+    # Vulkan march. Without one, only macOS caps the march.
+    explicit_cap = long_edge is not None or bool((os.environ.get("MP_VISUALIZER_GL_LONG_EDGE") or "").strip())
+    if not macos and not explicit_cap:
         return fw_i, fh_i
-    if long_edge is not None or bool((os.environ.get("MP_VISUALIZER_GL_LONG_EDGE") or "").strip()):
+    if explicit_cap:
         if ww is None or wh is None:
             rw, rh = fw_i, fh_i
         else:
@@ -765,24 +952,15 @@ def visualizer_internal_size(
     return _scale_long_edge(fw_i, fh_i, macos_visualizer_long_edge())
 
 
-# The CHROMATIC STORM preset blends twelve scenes, and every scene is a full
-# SDF. The crossfade holds one scene at weight 1.0 and fades the next one in, so
-# at most two scenes ever have a nonzero weight; every other weight is exactly
-# 0.0 and contributes seq.x * 0.0 == 0.0 to the blend.
-#
-# The shipped shader builds all twelve anyway, at each of the up-to-84 march
-# steps, so eleven twelfths of that preset's per-pixel cost is work that cannot
-# change a pixel. Guarding each scene keeps the array, the accumulation loop and
-# the material scan exactly as they are, so the distance field and the blend
-# order are unchanged; only the faded-out scenes are skipped.
+# The CHROMATIC STORM preset blends six scenes. The crossfade holds one scene
+# at weight 1.0 and fades the next one in, so at most two weights are ever
+# nonzero. Guarding each scene keeps the faded-out scenes out of the march.
 #
 # This is applied to the OpenGL GLSL source only. shaders/mp_liquid_visualizer.frag
 # is shared with the Vulkan path, whose SPIR-V modules and manifest digest are
 # generated from it, so that file is deliberately left alone.
 _SWEEP_SEQUENCE_NAMES = (
-    "csSeqFurnaceHull", "csSeqFinCascade", "csSeqSplitKeel", "csSeqBeadSurge",
-    "csSeqEmberWake", "csSeqPlasmaCocoon", "csSeqSpineRing", "csSeqShardBloom",
-    "csSeqHullStrata", "csSeqTwinVessel", "csSeqNozzleFlare", "csSeqStormCollapse",
+    "csSeqClamshell", "csSeqHelix", "csSeqTwin", "csSeqGyre", "csSeqComet", "csSeqNova",
 )
 
 
@@ -1027,6 +1205,30 @@ class PlayerVisualizerLayer:
         self._upscale = 0
         self._upscale_tex = -1
         self._failed: set = set()
+        # Thermal back-off state for low-power ARM boards.
+        self._thermal_scale = 1.0
+        self._thermal_checked = 0.0
+        # Filled by Renderer.open()/_init_gl(); shader stages compile against
+        # this version, and the GLFW context ladder records what was granted.
+        self.requested_gl = (3, 3, "core")
+        self.glsl_version = "330"
+
+    def _thermally_limited_size(self, rw: int, rh: int) -> tuple:
+        """Shrink the march size while the SoC is hot.
+
+        A Pi throttles at 80-85 C and the visualizer loses most of its frame
+        rate before that. At 70 C the rendered size is halved, at 80 C it is
+        quartered. The check itself runs at most once every 10 seconds.
+        """
+        import time
+        now = time.monotonic()
+        if now - self._thermal_checked >= 10.0:
+            self._thermal_checked = now
+            state = mp_raspberry_pi.thermal_state()
+            self._thermal_scale = {"hot": 0.5, "warm": 0.75}.get(state, 1.0)
+        if self._thermal_scale >= 1.0:
+            return rw, rh
+        return max(2, int(rw * self._thermal_scale)), max(2, int(rh * self._thermal_scale))
 
     def draw(self, renderer, fw: int, fh: int) -> bool:
         state = read_player_visualizer_state()
@@ -1100,6 +1302,17 @@ class PlayerVisualizerLayer:
                     rh = max(2, int(round(rh * scale)))
             except (TypeError, ValueError, IndexError):
                 pass
+        # A 4K fullscreen surface is drawn at 1080p and scaled up, the same
+        # policy the Vulkan renderer applies. Without this the OpenGL backend
+        # raymarched four times the pixels on a 4K desktop.
+        rw, rh = fullscreen_render_cap(rw, rh, fullscreen)
+        # Thermal back-off. A Raspberry Pi throttles at 80-85 C, which shows up
+        # as a sudden frame-rate collapse rather than a clear warning. Halve the
+        # march resolution once the SoC is warm and again when it is hot, so the
+        # picture keeps moving instead of stuttering. The check is rate-limited
+        # because reading sysfs from the draw path is otherwise wasteful.
+        if _LOW_POWER_GPU:
+            rw, rh = self._thermally_limited_size(rw, rh)
         if (rw, rh) != (fw_i, fh_i) and self._ensure_target(GL, rw, rh) and self._ensure_upscale(GL):
             GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, self._fbo)
             GL.glViewport(0, 0, rw, rh)
@@ -1168,7 +1381,9 @@ class PlayerVisualizerLayer:
         if cached is None:
             try:
                 vert_src = (ROOT / "shaders" / "liquid_glass_gl.vert").read_text(encoding="utf-8")
-                steps = macos_visualizer_march_steps() if sys.platform == "darwin" else None
+                # Desktop defaults to the full 84 steps; macOS and a Pi use their
+                # reduced count. MP_VISUALIZER_GL_MARCH_STEPS applies everywhere.
+                steps = visualizer_march_steps()
                 frag_src = specialize_visualizer_source(opengl_visualizer_source(), preset_id, steps)
                 prog, locs = self._link_program(GL, vert_src, frag_src, _UNIFORM_NAMES)
                 if _loc(locs, "u_res") < 0:
@@ -1192,19 +1407,24 @@ class PlayerVisualizerLayer:
         return True
 
     def _link_program(self, GL, vert_src: str, frag_src: str, names) -> tuple:
-        vs = GL.glCreateShader(GL.GL_VERTEX_SHADER)
-        GL.glShaderSource(vs, vert_src)
-        GL.glCompileShader(vs)
-        if not GL.glGetShaderiv(vs, GL.GL_COMPILE_STATUS):
-            raise RuntimeError(self._shader_log(GL, vs))
-        fs = GL.glCreateShader(GL.GL_FRAGMENT_SHADER)
-        GL.glShaderSource(fs, frag_src)
-        GL.glCompileShader(fs)
-        if not GL.glGetShaderiv(fs, GL.GL_COMPILE_STATUS):
-            raise RuntimeError(self._shader_log(GL, fs))
+        vs = self._compile_stage(GL, GL.GL_VERTEX_SHADER, vert_src)
+        fs = self._compile_stage(GL, GL.GL_FRAGMENT_SHADER, frag_src)
         prog = GL.glCreateProgram()
         GL.glAttachShader(prog, vs)
         GL.glAttachShader(prog, fs)
+        # GLSL 1.40 has no explicit attribute locations. Bind the two the
+        # renderer uses so glVertexAttribPointer(0/1) keeps working.
+        try:
+            for _name, _index in mp_raspberry_pi.glsl_attribute_locations(vert_src):
+                GL.glBindAttribLocation(prog, _index, _name)
+        except Exception:
+            pass
+        # A single fragment output normally binds to 0 implicitly; say it
+        # explicitly for the stricter 3.1 core profile.
+        try:
+            GL.glBindFragDataLocation(prog, 0, "outColor")
+        except Exception:
+            pass
         GL.glLinkProgram(prog)
         GL.glDeleteShader(vs)
         GL.glDeleteShader(fs)
@@ -1215,6 +1435,27 @@ class PlayerVisualizerLayer:
             raise RuntimeError(str(log))
         locs = {name: int(GL.glGetUniformLocation(prog, name)) for name in names}
         return int(prog), locs
+
+    def _compile_stage(self, GL, stage, source: str):
+        """Compile one stage at the version this context supports.
+
+        Pre-adapting matters: Mesa 22.3 accepts a `#version 330` shader under a
+        3.1 context with COMPILE_STATUS set, but drops `main` so the link fails
+        with "vertex shader lacks `main'". Compiling the adapted source
+        directly avoids that. `adapt_glsl` is a no-op at 3.30 and above.
+        """
+        version = self.glsl_version or "330"
+        prepared = source if version in ("330", "410") else mp_raspberry_pi.adapt_glsl(source, version)
+
+        shader = GL.glCreateShader(stage)
+        GL.glShaderSource(shader, prepared)
+        GL.glCompileShader(shader)
+        if GL.glGetShaderiv(shader, GL.GL_COMPILE_STATUS):
+            return shader
+
+        log = self._shader_log(GL, shader)
+        GL.glDeleteShader(shader)
+        raise RuntimeError(log)
 
     def _shader_log(self, GL, shader) -> str:
         log = GL.glGetShaderInfoLog(shader)
@@ -1334,7 +1575,8 @@ class PlayerVisualizerLayer:
         self._target_size = (0, 0)
 
 
-class LiquidVisualizerOpenGLRenderer(MonitorSpanMixin, RandomPresetMixin, PlayerBondMixin):
+class LiquidVisualizerOpenGLRenderer(MonitorSpanMixin, RandomPresetMixin, PlayerBondMixin,
+                                     ZWindowCycleMixin):
     """Standalone MP Visualizer window drawn with OpenGL instead of Vulkan.
 
     This is the OpenGL twin of ``LiquidVisualizerVulkanRenderer``. It exists
@@ -1367,8 +1609,17 @@ class LiquidVisualizerOpenGLRenderer(MonitorSpanMixin, RandomPresetMixin, Player
                  target_4k: bool = False,
                  span_bounds: Optional[tuple] = None, span_role: str = "",
                  saver_render: Optional[tuple] = None):
-        from mp_liquid_visualizer_vulkan import WINDOW_MODE_DEFAULT, get_active_preset
+        from mp_liquid_visualizer_vulkan import (
+            WINDOW_MODE_DEFAULT, _RAND_KEYS, get_active_preset,
+        )
         self.preset = get_active_preset(preset_name)
+        # A preset named on the command line is a deliberate choice, so the
+        # player-bond sync must not drag this window back to the player's
+        # preset on its first poll. Without the pin, ``--preset 12`` opened the
+        # player's saved preset instead, which is why the Dynamic Waves pair
+        # used to be unreachable from a bonded window on this backend.
+        self._preset_pinned = (bool(preset_name)
+                               and str(preset_name).strip().lower() not in _RAND_KEYS)
         self.fullscreen_on_start = bool(fullscreen or target_4k)
         self.target_4k = bool(target_4k)
         self.should_close = False
@@ -1389,6 +1640,10 @@ class LiquidVisualizerOpenGLRenderer(MonitorSpanMixin, RandomPresetMixin, Player
         self.cursor = (0.0, 0.0)
         self.mouse_down = False
         self.window_mode = WINDOW_MODE_DEFAULT
+        # The shape the window had when the user first pressed Z; the third
+        # press restores it exactly (size and position).
+        self._z_original_size = None
+        self._z_original_pos = None
         self._alive = False
         self._glfw = None
         self._window = None
@@ -1513,27 +1768,9 @@ class LiquidVisualizerOpenGLRenderer(MonitorSpanMixin, RandomPresetMixin, Player
         if not glfw.glfwInit():
             raise RuntimeError("glfwInit failed")
 
-        glfw.glfwDefaultWindowHints()
-        for hint, value in (
-            (GLFW_CLIENT_API, GLFW_OPENGL_API),
-            (GLFW_CONTEXT_VERSION_MAJOR, 3),
-            (GLFW_CONTEXT_VERSION_MINOR, 3),
-            (GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE),
-            (GLFW_DECORATED, 0),
-            (GLFW_VISIBLE, 1),
-            (GLFW_FOCUSED, 1),
-            (GLFW_RESIZABLE, 0),
-        ):
-            glfw.glfwWindowHint(hint, value)
-        if sys.platform == "darwin":
-            glfw.glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, 1)
-        if hasattr(glfw, "glfwWindowHintString"):
-            try:
-                glfw.glfwWindowHintString(0x00024001, b"MP_Visualizer")
-                glfw.glfwWindowHintString(0x00024002, b"mp_visualizer")
-            except Exception:
-                pass
-
+        # Walk down the context ladder until the driver accepts one. A Pi 4/5
+        # V3D driver tops out at OpenGL 3.1 core, where a fixed 3.3 request
+        # returned no window at all.
         saver_bounds = getattr(self, "_saver_bounds", None)
         span_bounds = getattr(self, "_span_bounds", None)
         # A locked companion opens straight onto the player it belongs behind,
@@ -1555,9 +1792,43 @@ class LiquidVisualizerOpenGLRenderer(MonitorSpanMixin, RandomPresetMixin, Player
         self._size = (ww, wh)
         self._windowed_size = (ww, wh)
         self.width, self.height = ww, wh
-        window = glfw.glfwCreateWindow(ww, wh, self.title.encode("utf-8"), None, None)
+
+        window = 0
+        for major, minor, profile in mp_raspberry_pi.gl_create_attempts():
+            glfw.glfwDefaultWindowHints()
+            hints = [
+                (GLFW_CLIENT_API, GLFW_OPENGL_API),
+                (GLFW_DECORATED, 0),
+                (GLFW_VISIBLE, 1),
+                (GLFW_FOCUSED, 1),
+                (GLFW_RESIZABLE, 0),
+            ]
+            if major:
+                hints.insert(1, (GLFW_CONTEXT_VERSION_MAJOR, major))
+                hints.insert(2, (GLFW_CONTEXT_VERSION_MINOR, minor))
+            if profile == "core":
+                hints.insert(3, (GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE))
+            for hint, value in hints:
+                glfw.glfwWindowHint(hint, value)
+            if sys.platform == "darwin":
+                glfw.glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, 1)
+            if hasattr(glfw, "glfwWindowHintString"):
+                try:
+                    glfw.glfwWindowHintString(0x00024001, b"MP_Visualizer")
+                    glfw.glfwWindowHintString(0x00024002, b"mp_visualizer")
+                except Exception:
+                    pass
+            window = glfw.glfwCreateWindow(ww, wh, self.title.encode("utf-8"), None, None)
+            if window:
+                self.requested_gl = (major, minor, profile)
+                break
+
         if not window:
-            raise RuntimeError("GLFW could not open an OpenGL window for the MP Visualizer")
+            raise RuntimeError(
+                "GLFW could not open an OpenGL window for the MP Visualizer. "
+                "Install the GPU driver (on Raspberry Pi OS: sudo apt install "
+                "libglfw3 mesa-utils libgl1-mesa-dri) and check X11/XWayland."
+            )
         self._window = window
         if saver_bounds:
             ox, oy = int(saver_bounds[0]), int(saver_bounds[1])
@@ -1572,7 +1843,16 @@ class LiquidVisualizerOpenGLRenderer(MonitorSpanMixin, RandomPresetMixin, Player
         self._bind_input()
         glfw.glfwMakeContextCurrent(window)
         try:
-            glfw.glfwSwapInterval(1)
+            # Divide vsync when the display is faster than the frame cap, so a
+            # 60 Hz panel on a Raspberry Pi blocks in the driver instead of
+            # spinning in the loop. The loop deadline handles any remainder.
+            from liquid_glass_opengl import monitor_refresh_hz
+            glfw.glfwSwapInterval(
+                mp_raspberry_pi.swap_interval_for_cap(
+                    monitor_refresh_hz(glfw, window),
+                    mp_raspberry_pi.visualizer_fps_cap(),
+                )
+            )
         except Exception:
             pass
         # libX11 is needed for the root pointer while dragging, and for the
@@ -1598,6 +1878,10 @@ class LiquidVisualizerOpenGLRenderer(MonitorSpanMixin, RandomPresetMixin, Player
                     print(f"MP Visualizer: X11 setup failed: {exc}", file=sys.stderr)
                 self._x11 = None
         self._init_gl()
+        # The draw layer compiles the shaders, so it has to know which GLSL
+        # version this context accepts before its first frame. Without this a
+        # Pi context got `#version 330` and failed to draw.
+        self._layer.glsl_version = self.glsl_version
         self._alive = True
         self._apply_window_shape()
         if self.fullscreen_on_start:
@@ -1639,7 +1923,10 @@ class LiquidVisualizerOpenGLRenderer(MonitorSpanMixin, RandomPresetMixin, Player
     def _bind_glfw(self, g) -> None:
         from ctypes import POINTER, c_char_p, c_int, c_uint64, c_void_p
         g.glfwInit.restype = c_int
-        g.glfwInitHint.argtypes = [c_int, c_int]
+        # GLFW 3.4+ only. Raspberry Pi OS Bookworm ships 3.3, where an
+        # unconditional attribute write raises AttributeError at startup.
+        if hasattr(g, "glfwInitHint"):
+            g.glfwInitHint.argtypes = [c_int, c_int]
         g.glfwWindowHint.argtypes = [c_int, c_int]
         g.glfwDefaultWindowHints.argtypes = []
         if hasattr(g, "glfwWindowHintString"):
@@ -1665,6 +1952,9 @@ class LiquidVisualizerOpenGLRenderer(MonitorSpanMixin, RandomPresetMixin, Player
         g.glfwSetKeyCallback.argtypes = [c_void_p, c_void_p]
         if hasattr(g, "glfwSetWindowAttrib"):
             g.glfwSetWindowAttrib.argtypes = [c_void_p, c_int, c_int]
+        if hasattr(g, "glfwGetWindowAttrib"):
+            g.glfwGetWindowAttrib.argtypes = [c_void_p, c_int]
+            g.glfwGetWindowAttrib.restype = c_int
         if sys.platform.startswith("win"):
             if hasattr(g, "glfwGetWin32Window"):
                 g.glfwGetWin32Window.argtypes = [c_void_p]
@@ -1745,7 +2035,7 @@ class LiquidVisualizerOpenGLRenderer(MonitorSpanMixin, RandomPresetMixin, Player
             # The locked companion owns its geometry: it stays behind the
             # player and never cycles to half size or fullscreen.
             if not self._bond_is_locked():
-                self.cycle_window_mode()
+                self._cycle_window_mode_for_user()
         elif key == 72:  # H: hidden mode (hide or restore every MP window)
             try:
                 import mp_hidden_mode as hidden
@@ -1767,8 +2057,9 @@ class LiquidVisualizerOpenGLRenderer(MonitorSpanMixin, RandomPresetMixin, Player
             if nxt is not None:
                 self.switch_preset(nxt)
         elif key in (263, 262):  # Left / Right
-            # Same wrap-around preset stepping as the Vulkan window and the
-            # MP Liquid Player's own arrow keys.
+            # Same wrap-around preset stepping as the Vulkan window. This is the
+            # only place an arrow changes a preset: the MP Liquid Player keeps
+            # Left/Right for ±10 s seeking in every state.
             from mp_liquid_visualizer_vulkan import cycle_preset
             nxt = cycle_preset(self.preset, 1 if key == 262 else -1)
             if nxt is not None:
@@ -1878,6 +2169,20 @@ class LiquidVisualizerOpenGLRenderer(MonitorSpanMixin, RandomPresetMixin, Player
         self.vendor_name = (GL.glGetString(GL.GL_VENDOR) or b"Unknown").decode("utf-8", "replace")
         self.renderer_name = (GL.glGetString(GL.GL_RENDERER) or b"OpenGL").decode("utf-8", "replace")
         self.gl_version = (GL.glGetString(GL.GL_VERSION) or b"Unknown").decode("utf-8", "replace")
+        # Shader stages compile against this version. A Raspberry Pi driver
+        # reports 3.1 and rejects `#version 330`, so ask for GLSL 1.40 there.
+        # GL_VERSION wins when it advertises more than the granted context, as
+        # Mesa does when it answers a 3.0 compat request on a 3.1 driver.
+        major, minor = getattr(self, "requested_gl", (3, 3, "core"))[:2]
+        import re as _re
+        match = _re.search(r"(\d+)\.(\d+)", self.gl_version)
+        if match:
+            gl_major, gl_minor = int(match.group(1)), int(match.group(2))
+            if (gl_major, gl_minor) > (major, minor):
+                major, minor = gl_major, gl_minor
+        if not major:
+            major, minor = (gl_major, gl_minor) if match else (3, 3)
+        self.glsl_version = mp_raspberry_pi.preferred_glsl_version(major, minor)
         quad = np.array([
             -1.0, 1.0, 0.0, 0.0,
             -1.0, -1.0, 0.0, 1.0,
@@ -1901,6 +2206,9 @@ class LiquidVisualizerOpenGLRenderer(MonitorSpanMixin, RandomPresetMixin, Player
     def draw(self, bridge, capture: bool = False):
         from OpenGL import GL
         if not self.poll():
+            return None
+        # A minimized or hidden window shows no frame, so it is not rendered.
+        if not capture and self.view_hidden():
             return None
         # Random mode advances here so it follows the real render clock.
         self.poll_random_mode()
@@ -1931,6 +2239,17 @@ class LiquidVisualizerOpenGLRenderer(MonitorSpanMixin, RandomPresetMixin, Player
         return pixels
 
     # -- window state -----------------------------------------------------
+    def view_hidden(self) -> bool:
+        """True while the window is minimized or hidden; see the Vulkan renderer."""
+        g, w = getattr(self, "_glfw", None), getattr(self, "_window", None)
+        if g is None or not w or not hasattr(g, "glfwGetWindowAttrib"):
+            return False
+        try:
+            return (g.glfwGetWindowAttrib(w, GLFW_ICONIFIED) == 1
+                    or g.glfwGetWindowAttrib(w, GLFW_VISIBLE) == 0)
+        except Exception:
+            return False
+
     def poll(self) -> bool:
         g, w = self._glfw, self._window
         if not g or not w:
@@ -2023,19 +2342,34 @@ class LiquidVisualizerOpenGLRenderer(MonitorSpanMixin, RandomPresetMixin, Player
             self.width, self.height = ww, wh
         return self.is_fullscreen
 
-    def cycle_window_mode(self) -> str:
-        from mp_liquid_visualizer_vulkan import WINDOW_MODE_HALF, WINDOW_MODE_DEFAULT
-        if self.is_fullscreen:
-            self.toggle_fullscreen()
-            self._resize_window(*self._size)
-            self.window_mode = WINDOW_MODE_DEFAULT
-        elif self.window_mode == WINDOW_MODE_HALF:
-            self._resize_window(*self._size)
-            self.window_mode = WINDOW_MODE_DEFAULT
-        else:
-            self._resize_window(max(64, self._size[0] // 2), max(64, self._size[1] // 2))
-            self.window_mode = WINDOW_MODE_HALF
-        return self.window_mode
+    # -- ZWindowCycleMixin primitives -------------------------------------
+    def _z_window_size(self) -> tuple:
+        return int(self._size[0]), int(self._size[1])
+
+    def _z_window_pos(self) -> tuple:
+        return self.window_pos()
+
+    def _z_apply_windowed(self, width: int, height: int, x: int, y: int) -> None:
+        """Place the window at width/height/x/y and leave fullscreen.
+
+        This backend's ``toggle_fullscreen`` fills the monitor by moving and
+        resizing a borderless window rather than by a GLFW monitor mode, so
+        leaving it is the same two calls in reverse.
+        """
+        g, w = self._glfw, self._window
+        self.is_fullscreen = False
+        self._resize_window(width, height)
+        if g and w:
+            try:
+                g.glfwSetWindowPos(w, int(x), int(y))
+                # The size limit follows the chosen mode, or the next frame
+                # would put the window back to the shape it had before Z.
+                g.glfwSetWindowSizeLimits(w, int(width), int(height),
+                                          int(width), int(height))
+            except Exception:
+                pass
+        self._cur_pos = (int(x), int(y))
+        self._resize = True
 
     def _resize_window(self, width: int, height: int) -> None:
         g, w = self._glfw, self._window

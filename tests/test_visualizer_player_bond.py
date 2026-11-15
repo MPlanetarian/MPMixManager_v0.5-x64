@@ -200,12 +200,13 @@ class TestHostsMarkTheCompanionActive(unittest.TestCase):
     def _spawn(self, module, companion=False):
         """Spawn through the host, choosing the companion or a detached window.
 
-        ``pgrep`` is neutralised because the test runner's own command line can
-        contain the visualizer marker text, which would look like a running
-        companion and short-circuit the spawn.
+        The running-companion probe is neutralised because the test runner's
+        own command line can contain the visualizer marker text, which would
+        look like a running companion and short-circuit the spawn.
         """
         target = module.ensure_random_visualizer_started if companion else module.spawn_new_visualizer
         with patch.object(module.subprocess, "run", return_value=MagicMock(returncode=1)), \
+             patch.object(module, "_companion_already_running", return_value=False), \
              patch("subprocess.Popen") as popen:
             popen.return_value = MagicMock(pid=4242)
             started = target()
@@ -301,6 +302,193 @@ class TestBondedWindowOpensOnThePlayer(unittest.TestCase):
              patch("liquid_player_visualizer.read_player_visualizer_state", return_value={"active": True}), \
              patch("liquid_player_visualizer.read_published_player_window_geometry", return_value=None):
             self.assertIsNone(renderer._bond_initial_geometry())
+
+
+class TestAStandaloneWindowNeverBonds(unittest.TestCase):
+    """A window the user opened itself must not chase a stale "active" flag.
+
+    The desktop shortcut runs the same renderer as the player's companion.
+    ``liquid_player_visualizer.json`` keeps ``"active": true`` after the player
+    exits, so a standalone window used to adopt it, open unfocused, and then
+    bond "behind" a player that was not there. Without a player window to
+    stack against, the lowering fallback pushed it to the bottom of the window
+    stack, under every other app: the shortcut appeared to do nothing.
+
+    ``MP_VISUALIZER_DETACHED=1`` is that "this one is mine" signal.
+    """
+
+    def test_detached_window_ignores_the_active_state(self):
+        with patch.dict(os.environ, {"MP_VISUALIZER_DETACHED": "1"}, clear=False):
+            renderer = _renderer(vis, "LiquidVisualizerOpenGLRenderer")
+        with patch.object(vulkan_vis, "_IS_LINUX", True), \
+             patch("liquid_player_visualizer.read_player_visualizer_state",
+                   return_value={"active": True}), \
+             patch("liquid_player_visualizer.read_published_player_window_geometry",
+                   return_value=(510, 385, 1574, 1258)):
+            self.assertFalse(renderer._bonding_applies())
+            self.assertIsNone(renderer._bond_initial_geometry())
+
+    def test_detached_window_is_not_treated_as_the_owned_companion(self):
+        with patch.dict(os.environ, {"MP_VISUALIZER_DETACHED": "1",
+                                     "MP_VISUALIZER_COMPANION": ""}, clear=False):
+            renderer = _renderer(vis, "LiquidVisualizerOpenGLRenderer")
+        self.assertFalse(renderer._bond_is_locked())
+
+
+class TestTheBondServesMPGuiToo(unittest.TestCase):
+    """MP Gui's companion sits behind MP Gui, not behind the Liquid Player.
+
+    MP_Gui.sh launches its visualizer with ``MP_VISUALIZER_MATCH_GUI=1`` and
+    publishes to ``liquid_gui_window.json``. The bond used to read only the
+    player record, so a GUI companion bonded to whichever Liquid Player was
+    open — and did not move at all when only the GUI was up.
+    """
+
+    def test_match_gui_selects_the_gui_record(self):
+        renderer = _renderer(vis, "LiquidVisualizerOpenGLRenderer")
+        with patch.dict(os.environ, {"MP_VISUALIZER_MATCH_GUI": "1"}, clear=False), \
+             patch.object(vulkan_vis, "_IS_LINUX", True), \
+             patch("liquid_player_visualizer.read_player_visualizer_state",
+                   return_value={"active": True}), \
+             patch("liquid_player_visualizer.read_published_player_window_geometry",
+                   return_value=(0, 0, 640, 480)), \
+             patch("liquid_player_visualizer.read_published_gui_window_geometry",
+                   return_value=(72, 64, 1280, 900)), \
+             patch("liquid_player_visualizer.visualizer_presets", return_value=[]):
+            self.assertTrue(renderer._bond_targets_gui())
+            self.assertEqual(renderer._bond_initial_geometry(), (72, 64, 1280, 900))
+            renderer._sync_player_bond()
+        self.assertTrue(renderer._player_bonded)
+        renderer._set_windowed_size.assert_called_once_with(1280, 900, apply=True)
+        renderer.set_window_pos.assert_called_once_with(72, 64)
+
+    def test_without_match_gui_the_player_record_is_used(self):
+        renderer = _renderer(vis, "LiquidVisualizerOpenGLRenderer")
+        with patch.dict(os.environ, {"MP_VISUALIZER_MATCH_GUI": ""}, clear=False), \
+             patch.object(vulkan_vis, "_IS_LINUX", True), \
+             patch("liquid_player_visualizer.read_published_player_window_geometry",
+                   return_value=(10, 20, 1094, 778)), \
+             patch("liquid_player_visualizer.read_published_gui_window_geometry",
+                   return_value=(72, 64, 1280, 900)):
+            self.assertFalse(renderer._bond_targets_gui())
+            self.assertEqual(renderer._bond_initial_geometry(), (10, 20, 1094, 778))
+
+    def test_the_gui_companion_stacks_against_the_gui_window(self):
+        """A published window id wins over the title lookup.
+
+        Two hosts can be open at once. Stacking must target the window this
+        companion was started for, which the host names explicitly.
+        """
+        renderer = _renderer(vis, "LiquidVisualizerOpenGLRenderer")
+        with patch.dict(os.environ, {"MP_VISUALIZER_MATCH_GUI": "1"}, clear=False), \
+             patch("liquid_player_visualizer.read_published_gui_window_id", return_value=0x2A00007), \
+             patch("liquid_player_visualizer.read_published_gui_window_record",
+                   return_value=(1280, 900, 1.0)):
+            self.assertEqual(renderer._find_player_window(MagicMock()), 0x2A00007)
+
+    def test_gui_title_is_the_stacking_target_when_no_id_is_published(self):
+        renderer = _renderer(vis, "LiquidVisualizerOpenGLRenderer")
+        with patch.dict(os.environ, {"MP_VISUALIZER_MATCH_GUI": "1"}, clear=False):
+            self.assertEqual(renderer._bond_host_title(), "MP Mix Manager (Liquid Glass")
+        with patch.dict(os.environ, {"MP_VISUALIZER_MATCH_GUI": ""}, clear=False):
+            self.assertEqual(renderer._bond_host_title(), "MP Audio Player (Liquid Glass")
+
+
+class TestEachHostStopsOnlyItsOwnCompanion(unittest.TestCase):
+    """Closing one host must not blank the background of the other.
+
+    The visualizer process list is shared. ``visualizer_pids`` used to return
+    every visualizer, so a player close killed MP Gui's companion (and the
+    GUI's forced close killed the player's).
+    """
+
+    def test_companion_pids_are_split_by_owner(self):
+        import liquid_visualizer_session as sess
+
+        def is_gui(pid):
+            return pid == 200
+
+        with patch.object(sess, "visualizer_pids", return_value=[100, 200]), \
+             patch.object(sess, "_visualizer_is_gui_companion", side_effect=is_gui):
+            self.assertEqual(sess.companion_visualizer_pids(for_gui=False), [100])
+            self.assertEqual(sess.companion_visualizer_pids(for_gui=True), [200])
+
+    def test_a_player_close_leaves_the_gui_companion_alone(self):
+        import liquid_visualizer_session as sess
+
+        with patch.object(sess, "visualizer_pids", return_value=[100, 200]), \
+             patch.object(sess, "_visualizer_is_gui_companion", side_effect=lambda p: p == 200), \
+             patch.object(sess, "_alive", return_value=False), \
+             patch.object(sess, "_other_host_window_running", return_value=False), \
+             patch.object(sess, "_signal_visualizer") as signal_vis:
+            sess.stop_companion_visualizer()
+        signalled = [call.args[0] for call in signal_vis.call_args_list]
+        self.assertEqual(signalled, [100])
+
+    def test_a_gui_close_leaves_the_player_companion_alone(self):
+        import liquid_visualizer_session as sess
+
+        with patch.object(sess, "visualizer_pids", return_value=[100, 200]), \
+             patch.object(sess, "_visualizer_is_gui_companion", side_effect=lambda p: p == 200), \
+             patch.object(sess, "_alive", return_value=False), \
+             patch.object(sess, "_other_host_window_running", return_value=False), \
+             patch.object(sess, "_signal_visualizer") as signal_vis:
+            sess.stop_companion_visualizer(force=True, for_gui=True)
+        signalled = [call.args[0] for call in signal_vis.call_args_list]
+        self.assertEqual(signalled, [200])
+
+    def test_another_gui_window_keeps_the_gui_companion_up(self):
+        import liquid_visualizer_session as sess
+
+        with patch.object(sess, "visualizer_pids", return_value=[200]), \
+             patch.object(sess, "_other_host_window_running", return_value=True) as other, \
+             patch.object(sess, "_signal_visualizer") as signal_vis:
+            sess.stop_companion_visualizer(for_gui=True)
+        other.assert_called_once_with(sess._PLAYER_MARK, manager=True)
+        signal_vis.assert_not_called()
+
+
+class TestEachHostSpawnsItsOwnCompanion(unittest.TestCase):
+    """A running companion for one host must not suppress the other's.
+
+    This is the "the visualizer window went missing" regression. Both hosts
+    used one ``pgrep`` for *any* visualizer, so opening the Liquid Player and
+    then MP Gui left the menu with no background window at all.
+    """
+
+    def _run(self, entries, for_gui):
+        with patch.object(vis, "_iter_visualizer_processes", return_value=list(entries)):
+            return vis.companion_visualizer_running(for_gui)
+
+    def test_player_companion_does_not_suppress_the_gui_one(self):
+        entries = [(100, b"PATH=/bin\x00MP_VISUALIZER_COMPANION=1\x00")]
+        self.assertTrue(self._run(entries, for_gui=False))
+        self.assertFalse(self._run(entries, for_gui=True))
+
+    def test_gui_companion_does_not_suppress_the_player_one(self):
+        entries = [(100, b"MP_VISUALIZER_COMPANION=1\x00MP_VISUALIZER_MATCH_GUI=1\x00")]
+        self.assertTrue(self._run(entries, for_gui=True))
+        self.assertFalse(self._run(entries, for_gui=False))
+
+    def test_a_detached_z_window_never_counts(self):
+        entries = [(100, b"MP_VISUALIZER_DETACHED=1\x00")]
+        self.assertFalse(self._run(entries, for_gui=False))
+        self.assertFalse(self._run(entries, for_gui=True))
+
+    def test_no_visualizer_counts_as_not_running(self):
+        self.assertFalse(self._run([], for_gui=False))
+        self.assertFalse(self._run([], for_gui=True))
+
+    def test_without_proc_every_visualizer_is_returned_for_either_host(self):
+        """macOS and Windows have no /proc: the owner is unknown, so keep the
+        old "close every visualizer" behaviour rather than leaving one up.
+        """
+        import liquid_visualizer_session as sess
+
+        with patch.object(sess, "visualizer_pids", return_value=[100, 200]), \
+             patch.object(sess, "_has_proc_environ", return_value=False):
+            self.assertEqual(sess.companion_visualizer_pids(for_gui=False), [100, 200])
+            self.assertEqual(sess.companion_visualizer_pids(for_gui=True), [100, 200])
 
 
 if __name__ == "__main__":

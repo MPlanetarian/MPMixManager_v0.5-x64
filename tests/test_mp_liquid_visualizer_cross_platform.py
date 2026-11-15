@@ -255,6 +255,35 @@ class TestCrossPlatformKeyHandlingAndLaunchers(unittest.TestCase):
         self.assertIn("/opt/homebrew/bin", content)
         self.assertIn("MP_Liquid_Visualizer.py", content)
 
+    def test_shortcut_launcher_marks_its_window_as_standalone(self):
+        """The desktop shortcut must not inherit the player's bond state.
+
+        ``liquid_player_visualizer.json`` records ``"active": true`` while the
+        Liquid Player wants a companion, and nothing clears it when the player
+        exits. A standalone window that honoured that stale flag opened
+        unfocused, then bonded "behind" a player that was not running. With no
+        player window to stack against, ``_lower_below_player`` falls back to
+        ``XLowerWindow`` and drops the visualizer to the bottom of the stack,
+        under every other application -- so clicking the shortcut looked like
+        it did nothing.
+
+        ``MP_VISUALIZER_DETACHED=1`` is the flag the player's own free-window
+        path uses; the shortcut launcher has to set it too.
+        """
+        for name in ("scripts/launch_liquid_visualizer.sh",
+                     "scripts/launch_liquid_visualizer.bat"):
+            content = (ROOT / name).read_text(encoding="utf-8")
+            self.assertIn(
+                "MP_VISUALIZER_DETACHED",
+                content,
+                f"{name} must mark the shortcut window standalone",
+            )
+        sh = (ROOT / "scripts" / "launch_liquid_visualizer.sh").read_text(encoding="utf-8")
+        self.assertIn("export MP_VISUALIZER_DETACHED=1", sh)
+        # The player spawns its companion directly; this launcher must not mark
+        # itself as one (a comment mentioning the name is fine, an export is not).
+        self.assertNotIn("MP_VISUALIZER_COMPANION=1", sh)
+
     def test_mix_archive_manager_visualizer_cli_command(self):
         mam_sh = ROOT / "Mix_Archive_Manager.sh"
         content = mam_sh.read_text(encoding="utf-8")

@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""The CHROMATIC STORM preset must not evaluate the scenes it has faded out.
+"""The CHROMATIC STORM preset must stay as cheap to load as the other presets.
 
-Preset 11 blends twelve full SDF sequences and holds one at weight 1.0 while
-fading the next in, so ten of the twelve weights are always exactly 0.0. The
-shader used to build all twelve at every march step, which cost more than the
-70 missing frames per second the preset was reported to be short of: it ran at
-about 5 fps while every other preset held 60 fps.
+Preset 11 crossfades six scenes and holds one at weight 1.0 while fading the
+next in, so four of the six weights are always exactly 0.0. Each scene is
+evaluated only while its weight is nonzero. The hulls are smooth shells: a
+box carved out of the vessel read as a square window inside the ship, so the
+scene kit must not call sdBox.
 
 These tests pin the guard in place in the GLSL source (which both the Vulkan
 and OpenGL backends compile from) and in the shipped SPIR-V manifest.
@@ -32,9 +32,7 @@ SHADER = ROOT / "shaders" / "mp_liquid_visualizer.frag"
 PRESET_SPIRV = ROOT / "shaders" / "presets"
 
 SEQUENCE_NAMES = (
-    "csSeqFurnaceHull", "csSeqFinCascade", "csSeqSplitKeel", "csSeqBeadSurge",
-    "csSeqEmberWake", "csSeqPlasmaCocoon", "csSeqSpineRing", "csSeqShardBloom",
-    "csSeqHullStrata", "csSeqTwinVessel", "csSeqNozzleFlare", "csSeqStormCollapse",
+    "csSeqClamshell", "csSeqHelix", "csSeqTwin", "csSeqGyre", "csSeqComet", "csSeqNova",
 )
 
 
@@ -44,7 +42,7 @@ def _shader_source() -> str:
 
 def _dispatch_block(source: str) -> str:
     """The csMapSequences body from the seq[] array to its return."""
-    start = source.index("vec2 seq[12];")
+    start = source.index("vec2 seq[6];")
     end = source.index("return vec2(dMix, mat);", start)
     return source[start:end]
 
@@ -62,7 +60,7 @@ class TestChromaticStormSkipsFadedScenes(unittest.TestCase):
             self.assertIsNotNone(guarded, f"{name} is not guarded by w[{index}]")
 
     def test_no_sequence_is_called_unconditionally(self):
-        """An unguarded call would restore the full twelve-scene cost."""
+        """An unguarded call would evaluate every sequence on every step."""
         block = _dispatch_block(_shader_source())
         real_lines = [ln.strip() for ln in block.splitlines() if "csSeq" in ln]
         self.assertTrue(real_lines, "the dispatch block lost its sequence calls")
@@ -72,6 +70,26 @@ class TestChromaticStormSkipsFadedScenes(unittest.TestCase):
                 r"^if \(w\[\d+\]\s*>\s*0\.0\) seq\[\d+\]\s*=\s*csSeq\w+\(p\);$",
                 f"unguarded sequence evaluation: {line}",
             )
+
+    def test_the_hull_is_not_cut_with_a_box(self):
+        """A box subtracted from the hull is the square inside the ship."""
+        source = _shader_source()
+        start = source.index("const float CS_CYCLE_RATE")
+        end = source.index("return vec2(dMix, mat);", start)
+        self.assertNotIn("sdBox", source[start:end])
+
+    def test_preset_ten_module_stays_near_the_other_presets(self):
+        """The old twelve-scene module was 316KB and stalled while it loaded.
+
+        The rest of the library ships between about 40KB and 110KB. Preset 10
+        has to stay in that band or switching to it is slow again.
+        """
+        sizes = {
+            preset_id: (PRESET_SPIRV / f"p{preset_id}.frag.spv").stat().st_size
+            for preset_id in range(13)
+        }
+        heaviest_other = max(size for preset_id, size in sizes.items() if preset_id != 10)
+        self.assertLess(sizes[10], max(150_000, int(heaviest_other * 1.25)))
 
     def test_a_skipped_slot_can_never_resolve_as_a_surface(self):
         """Skipped slots must stay out of both the distance blend and the surface.
@@ -95,8 +113,8 @@ class TestChromaticStormSkipsFadedScenes(unittest.TestCase):
 
         gl = opengl_visualizer_source()
         guarded = re.findall(r"if \(w\[\d+\]\s*>\s*0\.0\) seq\[\d+\]\s*=\s*csSeq\w+\(p\);", gl)
-        self.assertEqual(len(guarded), 12)
-        for index in range(12):
+        self.assertEqual(len(guarded), len(SEQUENCE_NAMES))
+        for index in range(len(SEQUENCE_NAMES)):
             self.assertNotRegex(
                 gl, r"^    seq\[" + str(index) + r"\] = csSeq\w+\(p\);", re.MULTILINE
             )

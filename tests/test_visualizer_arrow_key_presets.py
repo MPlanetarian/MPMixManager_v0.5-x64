@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
-"""Left/Right arrow keys switch MP Visualizer presets and wrap at both ends.
+"""Left/Right arrow keys step MP Visualizer presets inside the visualizer only.
 
 The MP Liquid Player already owns ``+``/``-`` for the playing track's pitch, so
-the visualizer presets are bound to the arrow keys instead:
+the visualizer presets are bound to the arrow keys *in the visualizer window*:
 
 * Inside the MP Visualizer window, Left/Right step through the whole preset
   library. Right on the last preset returns to the first, and Left on the first
   goes to the last.
-* In the MP Liquid Player, Left/Right do the same while the MP Visualizer is on
-  behind it. With the visualizer off the arrows keep their original ±10 s seek.
+* In the MP Liquid Player, Left/Right always keep their original ±10 s seek,
+  whether the MP Visualizer is on behind it or not. Pressing an arrow while
+  watching a visualizer video must never change the theme; the player still
+  switches themes with 0-9 and Shift+V.
 """
 
 import json
@@ -195,7 +197,15 @@ class TestBondedVisualizerPublishesItsPreset(unittest.TestCase):
         self.assertEqual(ui.mp_visualizer_preset_id, 0)
 
 
-class TestPlayerArrowKeysSwitchPresets(unittest.TestCase):
+class TestPlayerArrowKeysAlwaysSeek(unittest.TestCase):
+    """Left/Right seek in the MP Liquid Player, even with the visualizer on.
+
+    Preset stepping belongs to the MP Visualizer window (Left/Right, +/- and
+    1-9 there). The player only ever *shows* a preset; its own Left/Right stay
+    the ±10 s seek they have always been, so an arrow can no longer change the
+    theme while the user is watching a visualizer video.
+    """
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.state = Path(self.tmp.name) / "liquid_player_visualizer.json"
@@ -211,55 +221,48 @@ class TestPlayerArrowKeysSwitchPresets(unittest.TestCase):
         self.tmp.cleanup()
         vis._CACHE.update(path="", mtime=None, state=None)
 
-    def test_arrows_keep_seeking_while_the_visualizer_is_off(self):
+    def test_arrows_seek_while_the_visualizer_is_off(self):
         ui = _make_player_ui(on=False)
-        with patch.object(ui, "_send_cmd") as send, \
-             patch.object(ui, "_step_mp_visualizer_preset", return_value=False) as step:
+        with patch.object(ui, "_send_cmd") as send:
             ui._process_key(b"\x1b[C")
             ui._process_key(b"\x1b[D")
         send.assert_any_call("seek", seconds=10.0)
         send.assert_any_call("seek", seconds=-10.0)
         self.assertEqual(send.call_count, 2)
-        self.assertEqual(step.call_count, 2)
 
-    def test_arrow_keys_switch_presets_while_the_visualizer_is_on(self):
+    def test_arrows_seek_while_the_visualizer_is_on(self):
         ui = _make_player_ui(on=True)
         with patch.object(ui, "_send_cmd") as send:
             ui._process_key(b"\x1b[C")
-            self.assertEqual(ui.mp_visualizer_preset_id, 1)
             ui._process_key(b"\x1b[D")
-            self.assertEqual(ui.mp_visualizer_preset_id, 0)
-        send.assert_not_called()
-        saved = json.loads(self.state.read_text(encoding="utf-8"))
-        self.assertTrue(saved["active"])
-        self.assertEqual(saved["preset_id"], 0)
+        send.assert_any_call("seek", seconds=10.0)
+        send.assert_any_call("seek", seconds=-10.0)
+        self.assertEqual(send.call_count, 2)
 
-    def test_right_on_the_last_preset_wraps_to_the_first(self):
+    def test_arrows_never_change_the_preset_from_the_player(self):
         ui = _make_player_ui(on=True)
-        ui.mp_visualizer_preset_id = int(vulkan_vis.VISUALIZER_PRESETS[-1]["id"])
-        ui._process_key(b"\x1b[C")
-        self.assertEqual(ui.mp_visualizer_preset_id, int(vulkan_vis.VISUALIZER_PRESETS[0]["id"]))
+        ui.mp_visualizer_preset_id = 3
+        with patch.object(ui, "_send_cmd"):
+            ui._process_key(b"\x1b[C")
+            ui._process_key(b"\x1b[D")
+            ui._process_key(b"\x1bOC")
+            ui._process_key(b"\x1bOD")
+        self.assertEqual(ui.mp_visualizer_preset_id, 3)
+        self.assertFalse(self.state.exists())
 
-    def test_left_on_the_first_preset_wraps_to_the_last(self):
-        ui = _make_player_ui(on=True)
-        ui._process_key(b"\x1b[D")
-        self.assertEqual(ui.mp_visualizer_preset_id, int(vulkan_vis.VISUALIZER_PRESETS[-1]["id"]))
-
-    def test_application_cursor_mode_codes_work_too(self):
+    def test_application_cursor_mode_codes_seek_too(self):
         """Some terminals send \x1bOC / \x1bOD for the arrows."""
         ui = _make_player_ui(on=True)
-        ui._process_key(b"\x1bOC")
-        self.assertEqual(ui.mp_visualizer_preset_id, 1)
+        with patch.object(ui, "_send_cmd") as send:
+            ui._process_key(b"\x1bOC")
+            ui._process_key(b"\x1bOD")
+        send.assert_any_call("seek", seconds=10.0)
+        send.assert_any_call("seek", seconds=-10.0)
 
-    def test_every_preset_is_reachable_by_repeated_right_presses(self):
+    def test_number_keys_still_select_a_theme_in_the_player(self):
         ui = _make_player_ui(on=True)
-        count = len(vulkan_vis.VISUALIZER_PRESETS)
-        seen = []
-        for _ in range(count):
-            ui._process_key(b"\x1b[C")
-            seen.append(ui.mp_visualizer_preset_id)
-        self.assertEqual(sorted(seen), sorted(int(p["id"]) for p in vulkan_vis.VISUALIZER_PRESETS))
-        self.assertEqual(seen[-1], int(vulkan_vis.VISUALIZER_PRESETS[0]["id"]))
+        ui._process_key(b"5")
+        self.assertEqual(ui.mp_visualizer_preset_id, 5)
 
 
 if __name__ == "__main__":

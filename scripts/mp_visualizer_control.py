@@ -44,6 +44,19 @@ PUBLISH_MIN_INTERVAL = 0.0
 # window's own publish replaces it long before this expires; the margin covers
 # a cold Vulkan/GLFW start and a player-size wait.
 PENDING_TIMEOUT_SECONDS = 45.0
+# How long a commanded mode is trusted before the window's own publish is
+# believed instead. A fullscreen toggle is applied on the render thread on the
+# next frame and then republished, so this only has to cover the couple of
+# frames between the signal and the write. It exists so a *lost* command (a
+# wedged window, a signal that never arrived) cannot latch the button in the
+# wrong state forever -- the window's truthful publish wins once it expires.
+COMMAND_GRACE_SECONDS = 2.0
+
+# Phases the companion may record for a window it owns. ``pending`` means the
+# launcher was started and the window has not published yet.
+PHASE_PENDING = "pending"
+PHASE_WINDOWED = "windowed"
+PHASE_FULLSCREEN = "fullscreen"
 
 
 def config_dir() -> Path:
@@ -103,7 +116,53 @@ def read_state(path: Optional[Path] = None) -> Optional[Dict[str, Any]]:
     data["pid"] = pid
     data["pending"] = pending
     data["fullscreen"] = bool(data.get("fullscreen", False))
+    data["phase"] = _phase_from_record(data, pending)
     return data
+
+
+def _phase_from_record(data: Dict[str, Any], pending: bool) -> str:
+    """The mode the button should act on: the command it sent, else reality.
+
+    The companion writes ``command`` the instant it asks the window to change
+    mode, because the window can only apply a toggle on its next render frame
+    and then republish. Without this an impatient second tap re-read the old
+    mode and sent a *second* fullscreen toggle instead of a close -- the window
+    stayed open and looked like the button did nothing.
+
+    The command is trusted only for ``COMMAND_GRACE_SECONDS``. After that the
+    window's own publish is authoritative again, so a command that was never
+    delivered cannot latch the button in the wrong mode.
+    """
+    if pending:
+        return PHASE_PENDING
+    command = str(data.get("command", "")).strip()
+    if command in (PHASE_WINDOWED, PHASE_FULLSCREEN):
+        try:
+            sent = float(data.get("command_at", 0.0))
+        except (TypeError, ValueError):
+            sent = 0.0
+        if 0.0 <= (time.time() - sent) <= COMMAND_GRACE_SECONDS:
+            return command
+    return PHASE_FULLSCREEN if bool(data.get("fullscreen", False)) else PHASE_WINDOWED
+
+
+def record_command(state: Dict[str, Any], phase: str, path: Optional[Path] = None) -> bool:
+    """Remember the mode the companion just asked for, before the window reports.
+
+    Merged into the existing record rather than replacing it, so the pid and
+    instance token that identify the window survive. Returns False when the
+    record could not be written, in which case the caller must not pretend the
+    command took effect.
+    """
+    candidate = Path(path) if path is not None else state_path()
+    current = read_state(candidate)
+    if current is None:
+        return False
+    payload = dict(current)
+    payload["command"] = phase
+    payload["command_at"] = time.time()
+    write_state(payload, candidate)
+    return True
 
 
 def write_state(state: Dict[str, Any], path: Optional[Path] = None) -> None:

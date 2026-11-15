@@ -218,7 +218,11 @@ class LiquidPlayerVisualizerModeTests(unittest.TestCase):
                 self.assertIn("FAVORITES", drawn)
                 self.assertIn("38;2;255;196;0", drawn)
                 self.assertNotIn("48;2;255;196;0", drawn)
-                self.assertIn("48;2;16;28;52", drawn)
+                # The chips follow the selected theme, so they must not be the
+                # old fixed near-blacks (16;28;52 / 0;48;72) any more.
+                off_fill, _off_ink = player.theme_chip_style(ui.visualizer.theme)
+                self.assertIn(f"48;2;{off_fill[0]};{off_fill[1]};{off_fill[2]}", drawn)
+                self.assertNotIn("48;2;16;28;52", drawn)
                 self.assertFalse(ui._favorites_button_whole_row)
                 fav = ui._favorites_button_span
                 vis_span = ui._visualizer_button_span
@@ -230,7 +234,9 @@ class LiquidPlayerVisualizerModeTests(unittest.TestCase):
                 self.assertNotEqual(ui.mode, "FAVORITES")
                 drawn_on = self._draw(ui, kind)
                 self.assertIn("MP LIQUID GLASS VISUALIZER", drawn_on)
-                self.assertIn("48;2;0;48;72", drawn_on)
+                on_fill, _on_ink = player.theme_chip_style(ui.visualizer.theme, lift=0.9)
+                self.assertIn(f"48;2;{on_fill[0]};{on_fill[1]};{on_fill[2]}", drawn_on)
+                self.assertNotIn("48;2;0;48;72", drawn_on)
                 self._click(ui, ui._favorites_button_span[0], ui._favorites_button_row)
                 self.assertEqual(ui.mode, "FAVORITES")
 
@@ -544,7 +550,11 @@ class LiquidPlayerVisualizerModeTests(unittest.TestCase):
         glfw.glfwSetWindowSize.assert_called_once()
 
     def test_liquid_host_publishes_geometry_in_mini_and_micro(self):
-        """Mini and Micro are published too, so the visualizer follows the resize."""
+        """Mini and Micro are published too, so the visualizer follows the resize.
+
+        The record also carries the host's own X11 window id, so the companion
+        stacks against this exact window instead of the first title it finds.
+        """
         if str(BASE) not in sys.path:
             sys.path.insert(0, str(BASE))
         import MP_Audio_Player_Liquid_Glass_OpenGL as host_mod
@@ -554,26 +564,41 @@ class LiquidPlayerVisualizerModeTests(unittest.TestCase):
             host.renderer = MagicMock()
             host.renderer.window_pos.return_value = (240, 260)
             host.renderer.window_size.return_value = (680, 140)
+            host.renderer.x11_window.return_value = 0x1E00021
             host._window_target = (680, 266)
             host._window_target_until = time.monotonic() + 3.0
             with patch.object(host_mod.sys, "platform", "linux"), \
                  patch("liquid_player_visualizer.publish_liquid_player_window_geometry") as publish:
                 host._publish_player_window_geometry()
             # The size the host asked for wins while the resize is in flight.
-            publish.assert_called_once_with(240, 260, 680, 266)
+            publish.assert_called_once_with(240, 260, 680, 266, wid=0x1E00021)
             host._window_target_until = 0.0
+            host._last_published_geom = None
             with patch.object(host_mod.sys, "platform", "linux"), \
                  patch("liquid_player_visualizer.publish_liquid_player_window_geometry") as publish:
                 host._publish_player_window_geometry()
-            publish.assert_called_once_with(240, 260, 680, 140)
-        for mode in ("MANAGER", "TRACKLIST"):
-            host = object.__new__(host_mod.GlassHost)
-            host.mode = mode
-            host.renderer = MagicMock()
-            with patch.object(host_mod.sys, "platform", "linux"), \
-                 patch("liquid_player_visualizer.publish_liquid_player_window_geometry") as publish:
-                host._publish_player_window_geometry()
-            publish.assert_not_called()
+            publish.assert_called_once_with(240, 260, 680, 140, wid=0x1E00021)
+        # MP Gui publishes its own record: its companion sits behind the GUI,
+        # so it needs the GUI rectangle and not a Liquid Player's.
+        gui = object.__new__(host_mod.GlassHost)
+        gui.mode = "MANAGER"
+        gui.renderer = MagicMock()
+        gui.renderer.window_pos.return_value = (10, 20)
+        gui.renderer.window_size.return_value = (900, 700)
+        gui.renderer.x11_window.return_value = 0x2A00007
+        with patch.object(host_mod.sys, "platform", "linux"), \
+             patch("liquid_player_visualizer.publish_liquid_gui_window_geometry") as gui_publish, \
+             patch("liquid_player_visualizer.publish_liquid_player_window_geometry") as publish:
+            gui._publish_player_window_geometry()
+        gui_publish.assert_called_once_with(10, 20, 900, 700, wid=0x2A00007)
+        publish.assert_not_called()
+        track = object.__new__(host_mod.GlassHost)
+        track.mode = "TRACKLIST"
+        track.renderer = MagicMock()
+        with patch.object(host_mod.sys, "platform", "linux"), \
+             patch("liquid_player_visualizer.publish_liquid_player_window_geometry") as publish:
+            track._publish_player_window_geometry()
+        publish.assert_not_called()
 
     def test_missing_linux_companion_is_started_with_the_selected_preset(self):
         env = dict(os.environ)

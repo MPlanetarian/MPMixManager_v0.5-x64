@@ -13,6 +13,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Optional
 
 _VISUALIZER_MARK = "MP_Liquid_Visualizer|mp_liquid_visualizer_vulkan"
 _PLAYER_MARK = "MP_Audio_Player_Liquid_Glass"
@@ -91,7 +92,87 @@ def _is_descendant(pid: int, ancestor: int) -> bool:
 
 
 def visualizer_pids() -> list[int]:
-    return _pgrep(_VISUALIZER_MARK)
+    """PIDs of running MP Visualizer processes.
+
+    ``_VISUALIZER_MARK`` matches any command line that merely *mentions* the
+    script, which includes the shell wrapper that launches it. A wrapper is not
+    a window: signalling it would only kill a launcher, and counting it made
+    the shutdown logic think a second window was open. Only processes whose
+    executable is a Python interpreter are kept.
+    """
+    pids = []
+    for pid in _pgrep(_VISUALIZER_MARK):
+        cmd = _cmdline(pid)
+        if not cmd:
+            pids.append(pid)          # no /proc: keep the historical behaviour
+            continue
+        argv0 = cmd.split(" ", 1)[0]
+        name = os.path.basename(argv0).lower()
+        if not name.startswith("python"):
+            continue
+        if "pgrep" in cmd or "pkill" in cmd:
+            continue
+        pids.append(pid)
+    return pids
+
+
+def _visualizer_is_gui_companion(pid: int) -> bool:
+    """True when ``pid`` is the companion MP Gui launched.
+
+    MP Gui starts its visualizer with ``MP_VISUALIZER_MATCH_GUI=1``; the Liquid
+    Player's companion does not set it. The distinction matters at shutdown:
+    closing a player used to signal every visualizer process, which took MP
+    Gui's companion down with it (and the GUI's forced close did the same to
+    the player's). Each host must only retire the companion it owns.
+    """
+    try:
+        blob = Path(f"/proc/{pid}/environ").read_bytes()
+    except OSError:
+        return False
+    return b"MP_VISUALIZER_MATCH_GUI=1" in blob.split(b"\x00")
+
+
+def _has_proc_environ() -> bool:
+    """True when per-process environments can be read (Linux ``/proc``)."""
+    return Path("/proc/self/environ").is_file()
+
+
+def companion_visualizer_pids(for_gui: bool) -> list[int]:
+    """Visualizers belonging to the MP Gui (``for_gui``) or the player.
+
+    Without ``/proc`` the owner cannot be read, so every visualizer is
+    returned for either host. That is the old behaviour, and it is the safe
+    direction: a companion is still retired on macOS and Windows.
+    """
+    pids = visualizer_pids()
+    if not _has_proc_environ():
+        return pids
+    return [pid for pid in pids
+            if _visualizer_is_gui_companion(pid) == bool(for_gui)]
+
+
+def _other_host_window_running(marker: str, manager: Optional[bool] = None) -> bool:
+    """True when another Liquid Glass window with ``marker`` is still open.
+
+    ``manager`` distinguishes MP Gui from the MP Liquid Player: both run the
+    same host module and differ only by ``--manager`` on the command line.
+    """
+    me = os.getpid()
+    parent = os.getppid()
+    for pid in _pgrep(marker):
+        if pid in (me, parent) or pid <= 1:
+            continue
+        cmd = _cmdline(pid).lower()
+        if "pgrep" in cmd or "pkill" in cmd:
+            continue
+        if marker.lower() not in cmd:
+            continue
+        if _is_descendant(pid, me):
+            continue
+        if manager is not None and ("--manager" in cmd) != bool(manager):
+            continue
+        return True
+    return False
 
 
 def other_liquid_player_running() -> bool:
@@ -101,20 +182,7 @@ def other_liquid_player_running() -> bool:
     process's own parent, are not another window. Counting those used to skip
     the visualizer shutdown.
     """
-    me = os.getpid()
-    parent = os.getppid()
-    for pid in _pgrep(_PLAYER_MARK):
-        if pid in (me, parent) or pid <= 1:
-            continue
-        cmd = _cmdline(pid).lower()
-        if "pgrep" in cmd or "pkill" in cmd:
-            continue
-        if "mp_audio_player_liquid_glass" not in cmd:
-            continue
-        if _is_descendant(pid, me):
-            continue
-        return True
-    return False
+    return _other_host_window_running(_PLAYER_MARK)
 
 
 def _alive(pid: int) -> bool:
@@ -157,15 +225,25 @@ def _signal_visualizer(pid: int, sig: int) -> None:
             pass
 
 
-def stop_companion_visualizer(force: bool = False) -> None:
+def stop_companion_visualizer(force: bool = False, for_gui: bool = False) -> None:
     """Close visualizer windows opened for this Liquid Glass window.
 
-    Leave the window up when another Liquid Glass host is still open,
-    unless force is set (the Mix Manager GUI always closes it).
+    Leave the window up when another Liquid Glass host of the *same* kind is
+    still open, unless force is set.
+
+    ``for_gui`` selects MP Gui's companion (started with
+    ``MP_VISUALIZER_MATCH_GUI=1``) instead of the Liquid Player's. Only that
+    host's companion is signalled. The two windows are separate processes with
+    separate owners, and closing one host must not blank the other's
+    background.
     """
-    if not force and other_liquid_player_running():
-        return
-    pids = visualizer_pids()
+    if not force:
+        # Another MP Gui window keeps the GUI's companion alive; another player
+        # window keeps the player's. A window of the other kind is not a reason
+        # to keep this one up.
+        if _other_host_window_running(_PLAYER_MARK, manager=for_gui):
+            return
+    pids = companion_visualizer_pids(for_gui)
     if not pids:
         return
     for pid in pids:
