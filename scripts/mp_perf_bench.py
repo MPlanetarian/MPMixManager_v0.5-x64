@@ -597,6 +597,8 @@ def measure_launch(name: str, meta: Dict[str, str], seconds: float) -> Dict[str,
         cmd = ["bash", str(entry)]
 
     try:
+        # A movie in front of the first player window would be sampled as
+        # launch CPU, so the benchmark asks for a window without it.
         proc = subprocess.Popen(
             cmd,
             cwd=str(ROOT),
@@ -604,6 +606,7 @@ def measure_launch(name: str, meta: Dict[str, str], seconds: float) -> Dict[str,
             stderr=subprocess.DEVNULL,
             stdin=subprocess.DEVNULL,
             start_new_session=True,
+            env={**os.environ, "MP_NO_PLAYER_INTRO": "1"},
         )
     except OSError as exc:
         return {"error": f"{type(exc).__name__}: {exc}"}

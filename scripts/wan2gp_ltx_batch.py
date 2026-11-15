@@ -50,6 +50,8 @@ fi
 exec "$VENV_PYTHON" "$0" "$@"
 '''
 
+from __future__ import annotations
+
 import argparse
 import gc
 import math

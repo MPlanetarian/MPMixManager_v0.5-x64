@@ -115,6 +115,22 @@ VOICES: List[Dict[str, str]] = [
         "engine": "espeak",
         "desc": "Received Pronunciation British male voice (Offline)"
     },
+    {
+        "id": "piper:jenny",
+        "name": "Jenny (British Piper)",
+        "gender": "Female",
+        "accent": "British (English)",
+        "engine": "piper",
+        "desc": "Neutral British English, fully offline (Piper ONNX)"
+    },
+    {
+        "id": "piper:amy",
+        "name": "Amy (US Piper)",
+        "gender": "Female",
+        "accent": "American (US)",
+        "engine": "piper",
+        "desc": "American English, fully offline (Piper ONNX)"
+    },
     # American (English) Voices (9-16)
     {
         "id": "en-US-JennyNeural",
@@ -507,6 +523,62 @@ def get_next_id(converted_dir: Path, date_str: str) -> str:
     return f"ID{next_num:03d}"
 
 
+def _find_piper_model(voice_id: str) -> Optional[Path]:
+    """Locate a local Piper .onnx model for a voice id.
+
+    Piper voices are fully offline, so a Piper entry keeps working with no
+    network. ``voice_id`` may be an alias such as "piper:jenny".
+    """
+    wanted = (voice_id or "").lower().replace("piper:", "").strip()
+    if not wanted:
+        return None
+    aliases = {
+        "jenny": "jenny_dioco",
+        "jenny_dioco": "jenny_dioco",
+        "amy": "amy",
+        "cori": "cori",
+        "alan": "alan",
+        "lessac": "lessac",
+        "alba": "alba",
+    }
+    needle = aliases.get(wanted, wanted)
+    for d in (
+        os.path.expanduser("~/voice-ai/voices"),
+        os.path.expanduser("~/.local/share/piper-voices"),
+        os.path.expanduser("~/MP_REPORTER/share/voices"),
+        "/usr/share/piper-voices",
+    ):
+        try:
+            if not os.path.isdir(d):
+                continue
+            for name in sorted(os.listdir(d)):
+                if name.endswith(".onnx") and needle in name.lower():
+                    return Path(d) / name
+        except Exception:
+            continue
+    return None
+
+
+def synthesize_speech_piper(text: str, voice_id: str, output_wav: Path, speed: float = 1.0) -> bool:
+    """Synthesize speech with a local Piper ONNX voice. Fully offline."""
+    model = _find_piper_model(voice_id)
+    if not model or not model.exists():
+        print(f"{YELLOW}[!] No Piper model matched '{voice_id}'{RESET}")
+        return False
+    try:
+        from piper import PiperVoice
+        from piper.config import SynthesisConfig
+        import wave as _wave
+        voice = PiperVoice.load(str(model))
+        cfg = SynthesisConfig(length_scale=1.0 / max(0.4, min(2.5, speed))) if speed != 1.0 else None
+        with _wave.open(str(output_wav), "wb") as wf:
+            voice.synthesize_wav(text, wf, syn_config=cfg)
+        return output_wav.exists() and output_wav.stat().st_size > 44
+    except Exception as exc:
+        print(f"{YELLOW}[!] Piper synthesis failed ({model.name}): {exc}{RESET}")
+        return False
+
+
 def synthesize_speech_espeak(text: str, voice_code_or_id: str, output_wav: Path, speed_wpm: int = 130) -> bool:
     """Synthesize speech using local eSpeak-NG engine with optional pitch, speed, and audio filtering."""
     v_info = get_voice_info(voice_code_or_id)
@@ -802,6 +874,13 @@ def convert_text_to_speech(text_file: Path, voice_id: str, tts_dir: Path) -> Opt
     if v_info["engine"] == "espeak":
         print(f"[*] Synthesizing via eSpeak-NG local engine...")
         success = synthesize_speech_espeak(cleaned_content, v_info["id"], initial_wav)
+    elif v_info["engine"] == "piper":
+        print(f"[*] Synthesizing via Piper local neural engine ({v_info['name']})...")
+        success = synthesize_speech_piper(cleaned_content, v_info["id"], initial_wav)
+        if not success:
+            print(f"{YELLOW}[!] Piper unavailable. Falling back to eSpeak-NG...{RESET}")
+            fallback_voice = "en-gb+f3" if v_info["gender"] == "Female" else "en-gb"
+            success = synthesize_speech_espeak(cleaned_content, fallback_voice, initial_wav)
     elif v_info.get("engine") == "xtts" or v_info.get("xtts_voice"):
         print(f"[*] Synthesizing via XTTS-v2 Matrix Neural Engine ({v_info['name']})...")
         success = synthesize_speech_xtts(cleaned_content, v_info["id"], initial_wav)

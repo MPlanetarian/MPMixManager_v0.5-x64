@@ -7,6 +7,7 @@
 set -euo pipefail
 
 BOLD='\033[1m'
+DIM='\033[2m'
 GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
 RED='\033[0;31m'
@@ -27,24 +28,13 @@ for cfg in "$SCRIPT_DIR/config.env" "$PARENT_DIR/config.env" "$PWD/config.env" "
     fi
 done
 
-# Parse command line flags if invoked non-interactively or from menu
+# Parse command line flags if invoked non-interactively or from menu.
+# The loop stays inside the main guard so sourcing this file does not
+# consume the caller's positional parameters.
 CLI_SCOPE=""
 CLI_FORMAT=""
 CLI_BITRATE=""
 CLI_BITDEPTH=""
-
-while [[ $# -gt 0 ]]; do
-    case "$1" in
-        -i) CLI_SCOPE="1"; shift ;;
-        -c) CLI_SCOPE="2"; shift ;;
-        -w) CLI_SCOPE="3"; shift ;;
-        -f) CLI_SCOPE="4"; shift ;;
-        -o) CLI_FORMAT="$2"; shift 2 ;;
-        -b) CLI_BITRATE="$2"; shift 2 ;;
-        -d) CLI_BITDEPTH="$2"; shift 2 ;;
-        *) shift ;;
-    esac
-done
 
 # Discover all configured mix archive root directories
 all_mix_archive_roots=()
@@ -394,6 +384,7 @@ convert_file() {
         local sz
         sz=$(ls -lh "$out_file" 2>/dev/null | awk '{print $5}')
         echo -e "  ${GREEN}✓ Done:${NC} $out_file (${CYAN}${sz}${NC})\n"
+        generate_conversion_spek "$out_file"
         prompt_split_audio "$out_file"
         return 0
     else
@@ -402,6 +393,7 @@ convert_file() {
             local sz
             sz=$(ls -lh "$out_file" 2>/dev/null | awk '{print $5}')
             echo -e "  ${GREEN}✓ Done (audio only):${NC} $out_file (${CYAN}${sz}${NC})\n"
+            generate_conversion_spek "$out_file"
             prompt_split_audio "$out_file"
             return 0
         else
@@ -409,6 +401,86 @@ convert_file() {
             return 1
         fi
     fi
+}
+
+# Archive folder for the spectrogram of a converted file.
+# FLAC_CONVERTED_OUTPUTS/mix.flac -> ../SPEK_OUTPUTS/mix_spectrogram.png
+# CONVERTED_AUDIO_OUTPUTS/OPUS_160K/mix.opus walks up to the same archive.
+resolve_spek_output_dir() {
+    local audio_file="$1"
+    local dir d base arch hops=0
+    dir="$(cd "$(dirname "$audio_file")" && pwd)" || return 1
+    d="$dir"
+    while [ "$hops" -lt 6 ]; do
+        base="$(basename "$d")"
+        case "$base" in
+            FLAC_CONVERTED_OUTPUTS|MP3_CONVERTED_OUTPUTS|WAV_CONVERTED_OUTPUTS|CONVERTED_AUDIO_OUTPUTS|*_CONVERTED_OUTPUTS)
+                echo "$(dirname "$d")/SPEK_OUTPUTS"
+                return 0
+                ;;
+        esac
+        if [ -d "$d/SPEK_OUTPUTS" ]; then
+            echo "$d/SPEK_OUTPUTS"
+            return 0
+        fi
+        if [ "${#all_mix_archive_roots[@]}" -gt 0 ]; then
+            for arch in "${all_mix_archive_roots[@]}"; do
+                if [ "$d" = "$arch" ]; then
+                    echo "$d/SPEK_OUTPUTS"
+                    return 0
+                fi
+            done
+        fi
+        [ "$d" = "/" ] && break
+        d="$(dirname "$d")"
+        hops=$((hops + 1))
+    done
+    if [ -n "${SPEK_DIR:-}" ]; then
+        echo "$SPEK_DIR"
+        return 0
+    fi
+    if [ -n "${MIX_ARCHIVE_DIR:-}" ] && [ -d "$MIX_ARCHIVE_DIR" ]; then
+        echo "${MIX_ARCHIVE_DIR%/}/SPEK_OUTPUTS"
+        return 0
+    fi
+    echo "$(dirname "$dir")/SPEK_OUTPUTS"
+}
+
+# Write <stem>_spectrogram.png next to the archive. A spek failure leaves the
+# converted audio in place; the caller still returns success for the encode.
+generate_conversion_spek() {
+    local audio_file="$1"
+    [ -f "$audio_file" ] || return 0
+    local spek_dir
+    spek_dir="$(resolve_spek_output_dir "$audio_file")" || return 0
+    [ -n "$spek_dir" ] || return 0
+    local stem out_png
+    stem="$(basename "$audio_file")"
+    stem="${stem%.*}"
+    out_png="${spek_dir}/${stem}_spectrogram.png"
+    if [ -s "$out_png" ]; then
+        echo -e "  ${DIM}Spek already in archive:${NC} $out_png"
+        return 0
+    fi
+    if ! mkdir -p "$spek_dir" 2>/dev/null; then
+        echo -e "  ${YELLOW}Warning: could not create spectrogram folder '$spek_dir'.${NC}"
+        return 0
+    fi
+    echo -e "  ${BOLD}${CYAN}Generating 1080p spectrogram:${NC} ${stem}_spectrogram.png"
+    echo -e "  ${DIM}Writing to ${spek_dir}${NC}"
+    local ff_exit=0
+    ffmpeg -hide_banner -loglevel error -stats -y -i "$audio_file" \
+        -lavfi "showspectrumpic=s=1920x1080:mode=combined:color=intensity:scale=log:legend=1:saturation=1.2" \
+        -frames:v 1 "$out_png" || ff_exit=$?
+    if [ "$ff_exit" -eq 0 ] && [ -s "$out_png" ]; then
+        local sz
+        sz=$(ls -lh "$out_png" 2>/dev/null | awk '{print $5}')
+        echo -e "  ${GREEN}✓ Spek:${NC} $out_png (${CYAN}${sz}${NC})\n"
+    else
+        rm -f "$out_png" 2>/dev/null || true
+        echo -e "  ${YELLOW}Warning: spectrogram was not written. The converted audio is unchanged.${NC}\n"
+    fi
+    return 0
 }
 
 prompt_split_audio() {
@@ -437,6 +509,21 @@ prompt_split_audio() {
             ;;
     esac
 }
+
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -i) CLI_SCOPE="1"; shift ;;
+        -c) CLI_SCOPE="2"; shift ;;
+        -w) CLI_SCOPE="3"; shift ;;
+        -f) CLI_SCOPE="4"; shift ;;
+        -o) CLI_FORMAT="$2"; shift 2 ;;
+        -b) CLI_BITRATE="$2"; shift 2 ;;
+        -d) CLI_BITDEPTH="$2"; shift 2 ;;
+        *) shift ;;
+    esac
+done
 
 FMT_NAME=""
 OPTS=""
@@ -679,7 +766,7 @@ case "$scope_choice" in
         success=0
         for wf in "${wav_files[@]}"; do
             if convert_file "$wf" "$FMT_NAME" "$final_out" "$OPTS" "$EXT"; then
-                ((success++))
+                success=$((success + 1))
             fi
         done
         echo -e "${BOLD}${GREEN}✓ Batch conversion completed: $success / ${#wav_files[@]} succeeded!${NC}\n"
@@ -703,7 +790,7 @@ case "$scope_choice" in
         success=0
         for wf in "${wav_files[@]}"; do
             if convert_file "$wf" "$FMT_NAME" "$final_out" "$OPTS" "$EXT"; then
-                ((success++))
+                success=$((success + 1))
             fi
         done
         echo -e "${BOLD}${GREEN}✓ Batch conversion completed: $success / ${#wav_files[@]} succeeded!${NC}\n"
@@ -727,7 +814,7 @@ case "$scope_choice" in
         success=0
         for ff in "${flac_files[@]}"; do
             if convert_file "$ff" "$FMT_NAME" "$final_out" "$OPTS" "$EXT"; then
-                ((success++))
+                success=$((success + 1))
             fi
         done
         echo -e "${BOLD}${GREEN}✓ Batch conversion completed: $success / ${#flac_files[@]} succeeded!${NC}\n"
@@ -737,3 +824,4 @@ case "$scope_choice" in
         exit 1
         ;;
 esac
+fi

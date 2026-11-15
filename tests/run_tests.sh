@@ -154,6 +154,12 @@ else
         report_fail "package dev utility" "--help does not list arm64 target"
     fi
 
+    if [[ "$_help_out" == *"raspberrypi"* ]]; then
+        report_pass "Raspberry Pi target advertised in --help"
+    else
+        report_fail "package dev utility" "--help does not list the raspberrypi target"
+    fi
+
     _dry_out="$(MP_PKG_OUT="$(mktemp -d)" bash "$PKG_UTIL" --arch all --format deb,tar --dry-run 2>&1)"
     if [[ "$_dry_out" == *"Dry run complete"* ]] && [[ "$_dry_out" == *"arm64"* ]]; then
         report_pass "arm64 dry-run resolves both architectures"

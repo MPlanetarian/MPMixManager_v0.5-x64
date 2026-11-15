@@ -63,6 +63,9 @@ def configure_environment(full: bool) -> None:
     os.environ.setdefault("MP_DISABLE_AUDIO_OUTPUT", "1")
     # Keep the player from writing into the developer's real config directory.
     os.environ.setdefault("MP_TEST_MODE", "1")
+    # install.sh plays the theme track and loops the exit movie. The suite
+    # must not start either one when a test happens to invoke the installer.
+    os.environ.setdefault("MP_INSTALL_ACCOMPANIMENT", "0")
     # Quiet the sounddevice/numpy warnings that otherwise drown the result line.
     os.environ.setdefault("PYTHONWARNINGS", "ignore::DeprecationWarning")
     if full:

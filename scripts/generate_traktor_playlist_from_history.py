@@ -7,6 +7,9 @@ it into collection.nml under the default $ROOT playlist folder.
 
 The same helpers are imported by MP_Fav_Playlist_Track_Exporter.py so the
 Favorites exporter can create a playlist for the exact tracks it just copied.
+The Tracklist menu's artist playlist tool uses them too: it scans the
+collection for one artist name, then inserts, renames, or removes a playlist
+with the same backup and write path.
 
 Interactive use (Manager menu option 17 > 3):
     python3 scripts/generate_traktor_playlist_from_history.py
@@ -15,6 +18,10 @@ Headless use:
     python3 scripts/generate_traktor_playlist_from_history.py \
         --history-id history_2026y07m20d_08h01m28s.nml \
         --playlist-name "Favourites 2026-11-12"
+
+Artist playlist (Manager Tracklist menu):
+    python3 scripts/generate_traktor_playlist_from_history.py \
+        --artist "Airbase" --playlist-name "Airbase — Collection"
 """
 
 from __future__ import annotations
@@ -321,6 +328,31 @@ def _decode_name(value: str) -> str:
         return str(value or "")
 
 
+def traktor_fs_path(volume: str, directory: str, filename: str) -> str:
+    """Turn a Traktor LOCATION into a filesystem path. Nothing is deleted."""
+    filename = _decode_name(filename)
+    directory = _decode_name(directory)
+    folder = directory.replace("/:", "/")
+    folder = folder.replace(":", "")
+    if folder and not folder.startswith("/"):
+        folder = "/" + folder
+    folder = os.path.normpath(folder or "/")
+    path = os.path.join(folder, filename) if filename else folder
+    if os.path.isfile(path):
+        return path
+    label = _decode_name(volume).strip().strip("/")
+    if label:
+        user = os.environ.get("USER") or ""
+        roots = [os.path.join("/Volumes", label), os.path.join("/media", label)]
+        if user:
+            roots.append(os.path.join("/run/media", user, label))
+        for root in roots:
+            candidate = os.path.join(root, folder.lstrip("/"), filename)
+            if os.path.isfile(candidate):
+                return candidate
+    return path
+
+
 def _make_track(entry: ET.Element) -> Dict[str, Any]:
     location = entry.find("LOCATION")
     volume = location.attrib.get("VOLUME", "") if location is not None else ""
@@ -363,7 +395,37 @@ def _make_track(entry: ET.Element) -> Dict[str, Any]:
         "entry_elem": entry,
         "file": _decode_name(filename),
         "basename": os.path.basename(_decode_name(filename)).casefold(),
+        "fs_path": traktor_fs_path(volume, directory, filename),
     }
+
+
+def playlist_name_exists(collection_path: str, playlist_name: str) -> bool:
+    """True when collection.nml already has a playlist with this exact name."""
+    name = str(playlist_name or "").strip()
+    if not name or not collection_path or not os.path.isfile(collection_path):
+        return False
+    try:
+        root = ET.parse(collection_path).getroot()
+    except Exception:
+        return False
+    for node in root.findall(".//NODE"):
+        if node.attrib.get("TYPE") == "PLAYLIST" and node.attrib.get("NAME") == name:
+            return True
+    return False
+
+
+def metadata_agrees(left: Dict[str, Any], right: Dict[str, Any]) -> bool:
+    """Artist, title and file name agree when both sides actually have them."""
+    for field in ("artist", "title"):
+        a = str(left.get(field) or "").strip().casefold()
+        b = str(right.get(field) or "").strip().casefold()
+        if a and b and a != b:
+            return False
+    left_base = str(left.get("basename") or os.path.basename(str(left.get("file") or ""))).casefold()
+    right_base = str(right.get("basename") or os.path.basename(str(right.get("file") or ""))).casefold()
+    if left_base and right_base and left_base != right_base:
+        return False
+    return True
 
 
 def _index_tracks(root: ET.Element) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, Dict[str, Any]]]:
@@ -546,6 +608,807 @@ def insert_playlist_into_collection(
     )
 
 
+# ------------------------------------------------------------------------------
+# Artist playlists, folder tree, rename and remove
+# ------------------------------------------------------------------------------
+# Folder and playlist paths use this separator so a name that itself contains
+# "/" still round-trips. The menu prints it as " / ".
+PLAYLIST_PATH_SEP = "\x1f"
+
+
+def _clean_label(value: str) -> str:
+    return " ".join(str(value or "").replace("\t", " ").replace("\r", " ").replace("\n", " ").split())
+
+
+def _join_playlist_path(parent: str, name: str) -> str:
+    parent = str(parent or "")
+    name = str(name or "")
+    return f"{parent}{PLAYLIST_PATH_SEP}{name}" if parent else name
+
+
+def display_playlist_path(path: str) -> str:
+    return str(path or "").replace(PLAYLIST_PATH_SEP, " / ")
+
+
+def _collection_target(
+    collection_path: Optional[str], cfg: Optional[Dict[str, str]]
+) -> Optional[Path]:
+    if collection_path:
+        path = Path(os.path.expanduser(str(collection_path)))
+        return path if path.is_file() else None
+    return find_collection_path(cfg)
+
+
+def _same_file(left: Path, right: Path) -> bool:
+    try:
+        return left.resolve() == right.resolve()
+    except OSError:
+        return str(left) == str(right)
+
+
+def _blocked_by_running_traktor(
+    path: Path, cfg: Optional[Dict[str, str]], close_traktor: bool
+) -> Optional[str]:
+    """Refuse to rewrite the live collection while Traktor still has it open."""
+    live = find_collection_path(cfg)
+    if live is None or not _same_file(path, live) or not is_traktor_running():
+        return None
+    if close_traktor and quit_traktor():
+        return None
+    if close_traktor:
+        return "Could not close Traktor. Close it manually and try again."
+    return (
+        "Traktor is running. Close Traktor cleanly so collection.nml is not "
+        "overwritten, then try again."
+    )
+
+
+def _save_nml(path: Path, tree: ET.ElementTree) -> Tuple[bool, str]:
+    """Back up collection.nml, write the tree, and restore the backup on failure.
+
+    This is the same backup-then-replace sequence insert_playlist_into_collection
+    uses, so a failed rename or remove cannot leave a half-written collection.
+    """
+    if not path.is_file():
+        return False, f"collection.nml not found at {path}"
+    stamp = time.strftime("%Y%m%d_%H%M%S")
+    backup = path.with_name(path.name + f".bak_{stamp}")
+    suffix = 2
+    while backup.exists():
+        backup = path.with_name(path.name + f".bak_{stamp}_{suffix}")
+        suffix += 1
+    try:
+        shutil.copy2(path, backup)
+    except OSError as exc:
+        return False, f"Could not back up collection.nml: {exc}"
+    temp = path.with_name(path.name + ".tmp")
+    try:
+        tree.write(temp, encoding="utf-8", xml_declaration=True)
+        temp.replace(path)
+    except Exception as exc:
+        try:
+            if temp.exists():
+                temp.unlink()
+        except OSError:
+            pass
+        try:
+            shutil.copy2(backup, path)
+        except OSError:
+            pass
+        return False, f"Could not write collection.nml: {exc}"
+    return True, backup.name
+
+
+def _refresh_subnode_count(parent: Optional[ET.Element]) -> None:
+    if parent is None:
+        return
+    if parent.tag == "SUBNODES" or "COUNT" in parent.attrib:
+        parent.attrib["COUNT"] = str(len(list(parent.findall("NODE"))))
+
+
+def _parse_playlist_index(
+    root: ET.Element,
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Folders and playlists, including playlists nested inside folders.
+
+    Each playlist row keeps the XML node so rename and remove can edit it.
+    ``path`` is unique. ``folder`` is empty for playlists that sit in $ROOT.
+    """
+    folders: List[Dict[str, Any]] = []
+    playlists: List[Dict[str, Any]] = []
+
+    def add_playlist(node: ET.Element, parent_path: str, parent: ET.Element) -> None:
+        name = str(node.attrib.get("NAME", "") or "").strip() or "(untitled)"
+        content = node.find("PLAYLIST")
+        entries = content.findall("ENTRY") if content is not None else []
+        playlists.append(
+            {
+                "path": _join_playlist_path(parent_path, name),
+                "name": name,
+                "folder": parent_path,
+                "entries": len(entries),
+                "uuid": content.attrib.get("UUID", "") if content is not None else "",
+                "node": node,
+                "parent": parent,
+            }
+        )
+
+    def walk(subnodes: Optional[ET.Element], parent_path: str) -> None:
+        if subnodes is None:
+            return
+        for child in list(subnodes.findall("NODE")):
+            kind = child.attrib.get("TYPE", "")
+            name = str(child.attrib.get("NAME", "") or "").strip()
+            if kind == "PLAYLIST":
+                add_playlist(child, parent_path, subnodes)
+                continue
+            if kind != "FOLDER":
+                continue
+            if name == "$ROOT":
+                walk(child.find("SUBNODES"), parent_path)
+                continue
+            name = name or "(untitled folder)"
+            path = _join_playlist_path(parent_path, name)
+            nested = child.find("SUBNODES")
+            kids = list(nested.findall("NODE")) if nested is not None else []
+            folders.append(
+                {
+                    "path": path,
+                    "name": name,
+                    "parent": parent_path,
+                    "playlists": sum(1 for kid in kids if kid.attrib.get("TYPE") == "PLAYLIST"),
+                    "folders": sum(
+                        1
+                        for kid in kids
+                        if kid.attrib.get("TYPE") == "FOLDER" and kid.attrib.get("NAME") != "$ROOT"
+                    ),
+                }
+            )
+            walk(nested, path)
+
+    playlists_node = root.find("PLAYLISTS")
+    if playlists_node is None:
+        return folders, playlists
+    for top in list(playlists_node.findall("NODE")):
+        kind = top.attrib.get("TYPE", "")
+        name = str(top.attrib.get("NAME", "") or "").strip()
+        if kind == "FOLDER" and name == "$ROOT":
+            walk(top.find("SUBNODES"), "")
+        elif kind == "FOLDER":
+            # A folder that is not $ROOT still belongs in the tree. walk()
+            # records children only, so the top-level folder is recorded here.
+            label = name or "(untitled folder)"
+            nested = top.find("SUBNODES")
+            kids = list(nested.findall("NODE")) if nested is not None else []
+            folders.append(
+                {
+                    "path": label,
+                    "name": label,
+                    "parent": "",
+                    "playlists": sum(1 for kid in kids if kid.attrib.get("TYPE") == "PLAYLIST"),
+                    "folders": sum(
+                        1
+                        for kid in kids
+                        if kid.attrib.get("TYPE") == "FOLDER" and kid.attrib.get("NAME") != "$ROOT"
+                    ),
+                }
+            )
+            walk(nested, label)
+        elif kind == "PLAYLIST":
+            add_playlist(top, "", playlists_node)
+    seen: Dict[str, int] = {}
+    for row in playlists:
+        base = str(row["path"])
+        seen[base] = seen.get(base, 0) + 1
+        if seen[base] > 1:
+            row["path"] = f"{base} #{seen[base]}"
+    return folders, playlists
+
+
+def _public_tree(
+    folders: Sequence[Dict[str, Any]], playlists: Sequence[Dict[str, Any]]
+) -> Dict[str, Any]:
+    return {
+        "folders": [
+            {
+                "path": row["path"],
+                "name": row["name"],
+                "parent": row["parent"],
+                "playlists": row["playlists"],
+                "folders": row["folders"],
+                "display": display_playlist_path(str(row["path"])),
+            }
+            for row in folders
+        ],
+        "playlists": [
+            {
+                "path": row["path"],
+                "name": row["name"],
+                "folder": row["folder"],
+                "entries": row["entries"],
+                "uuid": row["uuid"],
+                "display": display_playlist_path(str(row["path"])),
+            }
+            for row in playlists
+        ],
+    }
+
+
+def _tsv_field(value: Any) -> str:
+    """One TSV column. The folder separator inside a path is kept."""
+    text = str(value or "")
+    return text.replace("\t", " ").replace("\r", " ").replace("\n", " ")
+
+
+def format_playlist_tree_tsv(
+    folders: Sequence[Dict[str, Any]], playlists: Sequence[Dict[str, Any]]
+) -> str:
+    """Tab rows the Tracklist menu reads. Names never contain a tab."""
+    lines: List[str] = []
+    for row in folders:
+        lines.append(
+            "\t".join(
+                [
+                    "FOLDER",
+                    _tsv_field(row["path"]),
+                    _clean_label(row["name"]),
+                    _tsv_field(row["parent"]),
+                    str(row["playlists"]),
+                    str(row["folders"]),
+                ]
+            )
+        )
+    for row in playlists:
+        lines.append(
+            "\t".join(
+                [
+                    "PLAYLIST",
+                    _tsv_field(row["path"]),
+                    _clean_label(row["name"]),
+                    _tsv_field(row["folder"]),
+                    str(row["entries"]),
+                    "",
+                ]
+            )
+        )
+    return "\n".join(lines)
+
+
+def load_playlist_tree(collection_path: str) -> Dict[str, Any]:
+    root = ET.parse(collection_path).getroot()
+    folders, playlists = _parse_playlist_index(root)
+    return _public_tree(folders, playlists)
+
+
+def tracks_for_artist(collection_path: str, artist_name: str) -> List[Dict[str, Any]]:
+    """Collection entries whose ARTIST field is exactly this name.
+
+    Matching ignores case and repeated spaces. A different artist, including
+    a collaboration that only starts with the name, is left out.
+    """
+    wanted = _clean_label(artist_name).casefold()
+    if not wanted:
+        return []
+    by_pkey, _ = _index_tracks(ET.parse(collection_path).getroot())
+    matched = [
+        track
+        for track in by_pkey.values()
+        if _clean_label(str(track.get("artist") or "")).casefold() == wanted
+    ]
+    matched.sort(
+        key=lambda track: (
+            _clean_label(str(track.get("title") or "")).casefold(),
+            _clean_label(str(track.get("file") or "")).casefold(),
+            str(track.get("pkey") or ""),
+        )
+    )
+    return matched
+
+
+def suggest_artists(
+    collection_path: str, artist_name: str, limit: int = 8
+) -> List[Dict[str, Any]]:
+    """Nearby artist names when an exact search finds nothing."""
+    query = _clean_label(artist_name).casefold()
+    if len(query) < 2 or not os.path.isfile(collection_path):
+        return []
+    by_pkey, _ = _index_tracks(ET.parse(collection_path).getroot())
+    counts: Dict[str, Dict[str, Any]] = {}
+    for track in by_pkey.values():
+        raw = _clean_label(str(track.get("artist") or ""))
+        if not raw:
+            continue
+        key = raw.casefold()
+        if key == query:
+            continue
+        contained = query in key or (len(key) >= 3 and key in query)
+        if not contained:
+            continue
+        row = counts.setdefault(key, {"artist": raw, "tracks": 0})
+        row["tracks"] += 1
+    rows = list(counts.values())
+    rows.sort(
+        key=lambda row: (
+            0 if str(row["artist"]).casefold().startswith(query) else 1,
+            -int(row["tracks"]),
+            str(row["artist"]).casefold(),
+        )
+    )
+    return rows[: max(0, int(limit))]
+
+
+def _playlist_name_taken(collection_path: str, playlist_name: str, except_path: str = "") -> bool:
+    """True when some other playlist already uses this name, ignoring case."""
+    wanted = _clean_label(playlist_name).casefold()
+    if not wanted:
+        return False
+    if except_path == "" and playlist_name_exists(collection_path, _clean_label(playlist_name)):
+        return True
+    try:
+        _, playlists = _parse_playlist_index(ET.parse(collection_path).getroot())
+    except Exception:
+        return False
+    for row in playlists:
+        if except_path and row["path"] == except_path:
+            continue
+        if _clean_label(str(row["name"])).casefold() == wanted:
+            return True
+    return False
+
+
+def _prepare_collection_write(
+    collection_path: Optional[str],
+    cfg: Optional[Dict[str, str]],
+    close_traktor: bool,
+) -> Tuple[Optional[Path], Optional[Dict[str, Any]]]:
+    cfg = cfg or load_config()
+    path = _collection_target(collection_path, cfg)
+    if path is None:
+        return None, {
+            "ok": False,
+            "reason": "collection",
+            "message": (
+                "collection.nml was not found. Set TRAKTOR_COLLECTION_PATH in "
+                "config.env, or open Traktor once so the collection is created."
+            ),
+        }
+    blocked = _blocked_by_running_traktor(path, cfg, close_traktor)
+    if blocked:
+        return None, {
+            "ok": False,
+            "reason": "running",
+            "message": blocked,
+            "collection": str(path),
+        }
+    return path, None
+
+
+def create_artist_playlist(
+    artist_name: str,
+    playlist_name: str,
+    collection_path: Optional[str] = None,
+    cfg: Optional[Dict[str, str]] = None,
+    close_traktor: bool = False,
+) -> Dict[str, Any]:
+    """Scan the collection and write one playlist that contains only this artist.
+
+    The playlist is inserted with insert_playlist_into_collection, under the
+    same $ROOT folder the history generator uses.
+    """
+    artist = _clean_label(artist_name)
+    playlist = _clean_label(playlist_name)
+    if not artist:
+        return {"ok": False, "reason": "artist", "message": "An artist name is required."}
+    if not playlist or playlist == "$ROOT":
+        return {"ok": False, "reason": "name", "message": "A playlist name is required."}
+    if len(artist) > 200 or len(playlist) > 200:
+        return {
+            "ok": False,
+            "reason": "name",
+            "message": "Artist and playlist names must be 200 characters or fewer.",
+        }
+    path, blocked = _prepare_collection_write(collection_path, cfg, close_traktor)
+    if blocked is not None or path is None:
+        return blocked or {"ok": False, "reason": "collection", "message": "collection.nml was not found."}
+    if _playlist_name_taken(str(path), playlist):
+        return {
+            "ok": False,
+            "reason": "exists",
+            "message": (
+                f"A playlist named '{playlist}' already exists. "
+                "Rename that playlist or choose another name."
+            ),
+            "collection": str(path),
+            "playlist": playlist,
+            "artist": artist,
+        }
+    try:
+        matched = tracks_for_artist(str(path), artist)
+    except Exception as exc:
+        return {"ok": False, "reason": "parse", "message": f"Could not read collection.nml: {exc}"}
+    if not matched:
+        suggestions = []
+        try:
+            suggestions = suggest_artists(str(path), artist)
+        except Exception:
+            suggestions = []
+        return {
+            "ok": False,
+            "reason": "no_match",
+            "message": f"No tracks in the Traktor collection use the artist name '{artist}'.",
+            "artist": artist,
+            "playlist": playlist,
+            "matched": 0,
+            "suggestions": suggestions,
+            "collection": str(path),
+        }
+    ok, message = insert_playlist_into_collection(str(path), playlist, matched)
+    if ok:
+        message = (
+            f"{message} Artist filter: {artist} "
+            "(exact name, case-insensitive), sorted by title."
+        )
+    return {
+        "ok": ok,
+        "reason": "written" if ok else "write",
+        "message": message,
+        "artist": artist,
+        "playlist": playlist,
+        "matched": len(matched) if ok else 0,
+        "suggestions": [],
+        "collection": str(path),
+    }
+
+
+def _find_playlist_row(
+    playlists: Sequence[Dict[str, Any]], playlist_path: str
+) -> Optional[Dict[str, Any]]:
+    target = str(playlist_path or "")
+    for row in playlists:
+        if row["path"] == target:
+            return row
+    displayed = target.replace(" / ", PLAYLIST_PATH_SEP)
+    for row in playlists:
+        if row["path"] == displayed or display_playlist_path(str(row["path"])) == target:
+            return row
+    return None
+
+
+def rename_playlist(
+    playlist_path: str,
+    new_name: str,
+    collection_path: Optional[str] = None,
+    cfg: Optional[Dict[str, str]] = None,
+    close_traktor: bool = False,
+) -> Dict[str, Any]:
+    """Rename one playlist node. Audio files in the collection are not touched."""
+    updated = _clean_label(new_name)
+    if not updated or updated == "$ROOT":
+        return {"ok": False, "reason": "name", "message": "A new playlist name is required."}
+    if len(updated) > 200:
+        return {
+            "ok": False,
+            "reason": "name",
+            "message": "Playlist names must be 200 characters or fewer.",
+        }
+    path, blocked = _prepare_collection_write(collection_path, cfg, close_traktor)
+    if blocked is not None or path is None:
+        return blocked or {"ok": False, "reason": "collection", "message": "collection.nml was not found."}
+    try:
+        tree = ET.parse(str(path))
+        _, playlists = _parse_playlist_index(tree.getroot())
+    except Exception as exc:
+        return {"ok": False, "reason": "parse", "message": f"Could not read collection.nml: {exc}"}
+    row = _find_playlist_row(playlists, playlist_path)
+    if row is None:
+        return {
+            "ok": False,
+            "reason": "missing",
+            "message": f"Playlist '{display_playlist_path(playlist_path)}' was not found.",
+            "collection": str(path),
+        }
+    if _clean_label(str(row["name"])) == updated:
+        return {
+            "ok": True,
+            "reason": "unchanged",
+            "message": f"Playlist '{updated}' already has that name.",
+            "playlist": updated,
+            "path": row["path"],
+            "collection": str(path),
+        }
+    if _playlist_name_taken(str(path), updated, except_path=str(row["path"])):
+        return {
+            "ok": False,
+            "reason": "exists",
+            "message": f"A playlist named '{updated}' already exists.",
+            "collection": str(path),
+        }
+    row["node"].attrib["NAME"] = updated
+    ok, detail = _save_nml(path, tree)
+    if not ok:
+        return {"ok": False, "reason": "write", "message": detail, "collection": str(path)}
+    return {
+        "ok": True,
+        "reason": "renamed",
+        "message": (
+            f"Renamed '{row['name']}' to '{updated}'. Backup: {detail}"
+        ),
+        "playlist": updated,
+        "previous": row["name"],
+        "collection": str(path),
+    }
+
+
+def remove_playlist(
+    playlist_path: str,
+    collection_path: Optional[str] = None,
+    cfg: Optional[Dict[str, str]] = None,
+    close_traktor: bool = False,
+) -> Dict[str, Any]:
+    """Remove one playlist node. Tracks stay in the Traktor collection."""
+    path, blocked = _prepare_collection_write(collection_path, cfg, close_traktor)
+    if blocked is not None or path is None:
+        return blocked or {"ok": False, "reason": "collection", "message": "collection.nml was not found."}
+    try:
+        tree = ET.parse(str(path))
+        _, playlists = _parse_playlist_index(tree.getroot())
+    except Exception as exc:
+        return {"ok": False, "reason": "parse", "message": f"Could not read collection.nml: {exc}"}
+    row = _find_playlist_row(playlists, playlist_path)
+    if row is None:
+        return {
+            "ok": False,
+            "reason": "missing",
+            "message": f"Playlist '{display_playlist_path(playlist_path)}' was not found.",
+            "collection": str(path),
+        }
+    parent = row.get("parent")
+    if isinstance(parent, ET.Element):
+        parent.remove(row["node"])
+        _refresh_subnode_count(parent)
+    ok, detail = _save_nml(path, tree)
+    if not ok:
+        return {"ok": False, "reason": "write", "message": detail, "collection": str(path)}
+    return {
+        "ok": True,
+        "reason": "removed",
+        "message": f"Removed playlist '{row['name']}'. The audio files are still in the collection. Backup: {detail}",
+        "playlist": row["name"],
+        "collection": str(path),
+    }
+
+
+def playlist_entries(collection_path: str, playlist_path: str) -> Dict[str, Any]:
+    """Tracks inside one playlist, resolved against the collection when possible."""
+    tree = ET.parse(collection_path)
+    root = tree.getroot()
+    by_pkey, _ = _index_tracks(root)
+    _, playlists = _parse_playlist_index(root)
+    row = _find_playlist_row(playlists, playlist_path)
+    if row is None:
+        return {
+            "ok": False,
+            "reason": "missing",
+            "message": f"Playlist '{display_playlist_path(playlist_path)}' was not found.",
+        }
+    content = row["node"].find("PLAYLIST")
+    tracks: List[Dict[str, Any]] = []
+    if content is not None:
+        for entry in content.findall("ENTRY"):
+            primary = entry.find("PRIMARYKEY")
+            key = primary.attrib.get("KEY", "") if primary is not None else ""
+            known = by_pkey.get(key)
+            if known is not None:
+                tracks.append(
+                    {
+                        "artist": known.get("artist") or "",
+                        "title": known.get("title") or "",
+                        "file": known.get("file") or "",
+                        "duration": known.get("duration") or 0,
+                    }
+                )
+            else:
+                decoded = _decode_name(key)
+                tracks.append(
+                    {
+                        "artist": "",
+                        "title": os.path.basename(decoded) or decoded or "(missing track)",
+                        "file": decoded,
+                        "duration": 0,
+                    }
+                )
+    return {
+        "ok": True,
+        "reason": "listed",
+        "name": row["name"],
+        "path": row["path"],
+        "folder": display_playlist_path(str(row["folder"])) or "Root",
+        "message": f"{row['name']}: {len(tracks)} tracks",
+        "tracks": tracks,
+    }
+
+
+def format_playlist_entries(details: Dict[str, Any], limit: int = 60) -> str:
+    tracks = list(details.get("tracks") or [])
+    title = str(details.get("name") or "Playlist")
+    folder = str(details.get("folder") or "Root")
+    lines = [
+        f"{title}",
+        f"Folder: {folder}",
+        f"Tracks: {len(tracks)}",
+        f"{'-' * 72}",
+    ]
+    shown = tracks[: max(0, int(limit))]
+    for index, track in enumerate(shown, 1):
+        artist = _clean_label(str(track.get("artist") or "")) or "-"
+        name = _clean_label(str(track.get("title") or "")) or "-"
+        lines.append(
+            f"{index:4d}  {format_duration(int(track.get('duration') or 0))}  "
+            f"{artist[:28]:<28}  {name[:36]}"
+        )
+    hidden = len(tracks) - len(shown)
+    if hidden > 0:
+        lines.append(f"  ... {hidden} more tracks")
+    lines.append(f"{'-' * 72}")
+    return "\n".join(lines)
+
+
+def collection_status(cfg: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+    cfg = cfg or load_config()
+    path = find_collection_path(cfg)
+    return {
+        "ok": path is not None,
+        "path": str(path) if path else "",
+        "running": is_traktor_running(),
+    }
+
+
+def _emit_result(result: Dict[str, Any], as_json: bool) -> int:
+    if as_json:
+        clean: Dict[str, Any] = {}
+        for key, value in result.items():
+            if key in ("node", "parent", "entry_elem"):
+                continue
+            try:
+                json.dumps(value)
+            except TypeError:
+                continue
+            clean[key] = value
+        print(json.dumps(clean))
+    else:
+        print(result.get("message", ""))
+        suggestions = result.get("suggestions") or []
+        if suggestions and not result.get("ok"):
+            print("Close artist names in the collection:")
+            for row in suggestions:
+                print(f"  {row.get('artist')} ({row.get('tracks')} tracks)")
+    return 0 if result.get("ok") else 1
+
+
+def _dispatch_artist_tools(args: argparse.Namespace) -> Optional[int]:
+    """Handle artist-playlist and folder commands. None lets the history tool run."""
+    wanted = any(
+        [
+            bool(getattr(args, "collection_status", False)),
+            bool(getattr(args, "list_playlist_tree", False)),
+            getattr(args, "suggest_artists", None) is not None,
+            getattr(args, "show_playlist", None) is not None,
+            getattr(args, "artist", None) is not None,
+            getattr(args, "rename_playlist", None) is not None,
+            getattr(args, "remove_playlist", None) is not None,
+        ]
+    )
+    if not wanted:
+        return None
+    cfg = load_config()
+    if args.collection_status:
+        status = collection_status(cfg)
+        if args.json:
+            print(json.dumps(status))
+        else:
+            print(f"PATH: {status['path']}")
+            print(f"RUNNING: {'yes' if status['running'] else 'no'}")
+        return 0 if status["ok"] else 1
+
+    path = _collection_target(args.collection, cfg)
+    if path is None:
+        message = "collection.nml was not found."
+        if args.json:
+            print(json.dumps({"ok": False, "reason": "collection", "message": message}))
+        else:
+            print(message, file=sys.stderr)
+        return 1
+
+    if args.list_playlist_tree:
+        try:
+            tree = ET.parse(str(path))
+            folders, playlists = _parse_playlist_index(tree.getroot())
+        except Exception as exc:
+            print(f"Could not read collection.nml: {exc}", file=sys.stderr)
+            return 1
+        if args.tsv:
+            text = format_playlist_tree_tsv(folders, playlists)
+            if text:
+                print(text)
+            return 0
+        public = _public_tree(folders, playlists)
+        if args.json:
+            print(json.dumps(public))
+        else:
+            print(f"{len(public['folders'])} playlist folders, {len(public['playlists'])} playlists")
+            for folder in public["folders"]:
+                print(
+                    f"  [Folder] {folder['display']} "
+                    f"({folder['playlists']} playlists, {folder['folders']} folders)"
+                )
+            for playlist in public["playlists"]:
+                where = display_playlist_path(str(playlist["folder"])) or "Root"
+                print(f"  [Playlist] {playlist['name']} ({playlist['entries']} tracks, {where})")
+        return 0
+
+    if args.suggest_artists is not None:
+        try:
+            rows = suggest_artists(str(path), args.suggest_artists)
+        except Exception as exc:
+            print(f"Could not read collection.nml: {exc}", file=sys.stderr)
+            return 1
+        if args.json:
+            print(json.dumps(rows))
+        elif args.tsv:
+            for row in rows:
+                artist = _clean_label(str(row.get("artist") or ""))
+                if artist:
+                    print(f"{artist}\t{int(row.get('tracks') or 0)}")
+        else:
+            for row in rows:
+                print(f"{row.get('artist')} ({row.get('tracks')} tracks)")
+        return 0
+
+    if args.show_playlist is not None:
+        try:
+            details = playlist_entries(str(path), args.show_playlist)
+        except Exception as exc:
+            print(f"Could not read collection.nml: {exc}", file=sys.stderr)
+            return 1
+        if args.json:
+            return _emit_result(details, True)
+        if not details.get("ok"):
+            print(details.get("message", "Playlist was not found."), file=sys.stderr)
+            return 1
+        print(format_playlist_entries(details))
+        return 0
+
+    if args.artist is not None:
+        result = create_artist_playlist(
+            args.artist,
+            args.playlist_name or "",
+            collection_path=str(path),
+            cfg=cfg,
+            close_traktor=bool(args.close_traktor),
+        )
+        return _emit_result(result, bool(args.json))
+
+    if args.rename_playlist is not None:
+        result = rename_playlist(
+            args.rename_playlist,
+            args.playlist_name or "",
+            collection_path=str(path),
+            cfg=cfg,
+            close_traktor=bool(args.close_traktor),
+        )
+        return _emit_result(result, bool(args.json))
+
+    if args.remove_playlist is not None:
+        result = remove_playlist(
+            args.remove_playlist,
+            collection_path=str(path),
+            cfg=cfg,
+            close_traktor=bool(args.close_traktor),
+        )
+        return _emit_result(result, bool(args.json))
+    return None
+
+
 def build_traktor_playlist(
     favorite_paths: Sequence[str],
     history_id: Optional[str] = None,
@@ -597,7 +1460,19 @@ def build_traktor_playlist(
     seen: set = set()
     for file_path in favorite_paths:
         basename = os.path.basename(str(file_path)).casefold()
+        stem = os.path.splitext(os.path.basename(str(file_path)))[0]
+        artist, title = "", ""
+        parts = re.match(r"^(.+?)\s+-\s+(.+)$", stem)
+        if parts:
+            artist, title = parts.group(1).strip(), parts.group(2).strip()
+        wanted = {"artist": artist, "title": title, "basename": basename, "file": basename}
         track = history_index.get(basename) or collection_index.get(basename)
+        if track is None or not metadata_agrees(wanted, track):
+            track = None
+            for candidate in collection_index.values():
+                if metadata_agrees(wanted, candidate):
+                    track = candidate
+                    break
         if not track:
             missing.append(os.path.basename(str(file_path)))
             continue
@@ -743,6 +1618,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--collection", help="Path to collection.nml")
     parser.add_argument("--history-dir", action="append", default=[], help="Extra History directory (repeatable)")
     parser.add_argument("--track", "-t", action="append", default=[], help="File to include (repeatable)")
+    parser.add_argument("--artist", default=None, help="Create a playlist containing only this artist's tracks")
+    parser.add_argument("--list-playlist-tree", action="store_true", help="List playlist folders and the playlists inside them")
+    parser.add_argument("--tsv", action="store_true", help="Write --list-playlist-tree or --suggest-artists as tab-separated rows")
+    parser.add_argument("--rename-playlist", default=None, help="Path of the playlist to rename (from --list-playlist-tree)")
+    parser.add_argument("--remove-playlist", default=None, help="Path of the playlist to remove")
+    parser.add_argument("--show-playlist", default=None, help="Print the tracks in one playlist")
+    parser.add_argument("--suggest-artists", default=None, help="List collection artist names close to this text")
+    parser.add_argument("--collection-status", action="store_true", help="Print the collection path and whether Traktor is running")
+    parser.add_argument("--close-traktor", action="store_true", help="Ask Traktor to quit before writing the live collection")
     args = parser.parse_args(argv)
 
     if args.version_only:
@@ -759,6 +1643,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             for index, row in enumerate(rows, 1):
                 print(f"{index:2d}) {row['datetime']}  {row['name']}  ({row['size'] // 1024} KB)")
         return 0 if rows else 1
+
+    artist_result = _dispatch_artist_tools(args)
+    if artist_result is not None:
+        return artist_result
 
     if args.track or args.playlist_name or args.history_id:
         if not args.track:

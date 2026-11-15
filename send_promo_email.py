@@ -581,6 +581,8 @@ def render_email_content(template_id, context):
     # 1. PODCAST NETWORK & SYNDICATION PITCH
     # --------------------------------------------------------------------------
     if template_id == "podcast_publisher":
+        # Python 3.8 rejects a backslash inside an f-string expression.
+        _note_promo = ("NOTE:\n" + custom_msg + "\n\n") if custom_msg else ""
         text_body = f"""Dear {recip_name} and the {recip_org} editorial team,
 
 I hope this email finds you well.
@@ -605,7 +607,7 @@ WHY IT FITS {recip_org.upper()}:
 - Dedicated listener engagement across progressive, melodic, and trance demographics.
 - Full rights clarity and complete track attribution for all featured artists and labels.
 
-{("NOTE:\n" + custom_msg + "\n\n") if custom_msg else ""}We would be thrilled to provide a dedicated syndication package, bespoke station IDs, or exclusive guest editions tailored to {recip_org}.
+{_note_promo}We would be thrilled to provide a dedicated syndication package, bespoke station IDs, or exclusive guest editions tailored to {recip_org}.
 
 Thank you very much for your time and consideration.
 
@@ -706,7 +708,8 @@ Tracklist ({track_count} tracks):
 TECHNICAL SETUP & RIDER:
 {rider}
 
-{f"NOTE FOR {recip_org.upper()}:\n{custom_msg}\n\n" if custom_msg else ""}High-resolution press photos, logos, and technical documentation are attached or available at:
+_note_1 = f"NOTE FOR {recip_org.upper()}:\n{custom_msg}\n\n" if custom_msg else ""
+{_note_1}High-resolution press photos, logos, and technical documentation are attached or available at:
 {cfg.get("PROMO_WEBSITE_URL", "")}
 
 We would love to collaborate for an upcoming date or guest mix session. Please let us know if you need any additional promotional assets or schedule availability.
@@ -788,6 +791,8 @@ YouTube: {youtube_url}
     # 3. NEW EPISODE PROMO RELEASE & PRESS BLAST
     # --------------------------------------------------------------------------
     elif template_id == "episode_promo":
+        # Python 3.8 rejects a backslash inside an f-string expression.
+        editorial_note = ("EDITORIAL NOTE:\n" + custom_msg + "\n\n") if custom_msg else ""
         text_body = f"""Hello {recip_name},
 
 We are thrilled to announce the brand new episode of 'Stream of Frequency':
@@ -807,7 +812,7 @@ Featuring {track_count} handpicked progressive and trance records, seamlessly mi
 TRACKLIST:
 {tl_plain}
 
-{("EDITORIAL NOTE:\n" + custom_msg + "\n\n") if custom_msg else ""}Artwork, promotional assets, and lossless downloads are available upon request. Feel free to include this release in your upcoming charts, blog roundups, and playlists.
+{editorial_note}Artwork, promotional assets, and lossless downloads are available upon request. Feel free to include this release in your upcoming charts, blog roundups, and playlists.
 
 Thank you for your continued support!
 
@@ -943,6 +948,8 @@ Email: {sender_email}
     # 5. RADIO GUEST MIX & SYNDICATION SUBMISSION
     # --------------------------------------------------------------------------
     elif template_id == "radio_guestmix":
+        # Python 3.8 rejects a backslash inside an f-string expression.
+        special_note = ("SPECIAL NOTE:\n" + custom_msg + "\n\n") if custom_msg else ""
         text_body = f"""Dear {recip_name} and {recip_org} Programming Team,
 
 I am pleased to submit a guest mix edition of 'Stream of Frequency' for airplay consideration on your station.
@@ -962,7 +969,7 @@ STATION COMPLIANCE:
 - Complete cue times and track-by-track attribution provided.
 - Voiceover intros or custom station id drops available on request.
 
-{("SPECIAL NOTE:\n" + custom_msg + "\n\n") if custom_msg else ""}Please let us know if you would like to include this in your upcoming weekly schedule.
+{special_note}Please let us know if you would like to include this in your upcoming weekly schedule.
 
 Warm regards,
 

@@ -4,7 +4,7 @@ mp_win_agent_server.py - one-shot task server for the Windows 11 test bed
 =======================================================================
 
 The Windows 11 VM runs ``C:\\MP_AGENT\\agent.ps1``, which polls
-``http://192.168.150.1:8099`` for work, downloads a PowerShell script, runs it
+``http://192.0.2.1:8099`` for work, downloads a PowerShell script, runs it
 and posts the transcript back.  That channel already exists and is far more
 reliable than typing command lines into the guest through QMP, which depends on
 window focus, keyboard layout and screen state.

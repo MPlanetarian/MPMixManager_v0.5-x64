@@ -17,7 +17,7 @@ import music_folders_manager as mfm
 def _folder():
     return {
         "type": "smb", "id": "DATAMAC1", "name": "DATAMAC1",
-        "host": "192.168.1.138", "share": "DATAMAC1", "subpath": "", "user": "",
+        "host": "192.0.2.20", "share": "DATAMAC1", "subpath": "", "user": "",
     }
 
 

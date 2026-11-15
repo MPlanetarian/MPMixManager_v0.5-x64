@@ -528,7 +528,7 @@ def interactive_ui():
                 time.sleep(1.5)
                 continue
         elif choice_num == custom_smb_opt:
-            smb_host = input("Enter SMB Host/IP (e.g. 192.168.1.138): ").strip()
+            smb_host = input("Enter SMB Host/IP (e.g. 192.0.2.20): ").strip()
             if not smb_host:
                 continue
             smb_share = input("Enter Share or Export Name (e.g. Music or Documents): ").strip()

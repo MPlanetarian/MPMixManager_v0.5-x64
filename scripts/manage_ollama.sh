@@ -140,6 +140,17 @@ ensure_vroc_mounted() {
     fi
 }
 
+# The cloned Matrix voices are rendered by the XTTS service. It reserves about
+# 4 GB of VRAM, so it is not started by default; without it those voices fall
+# back to Stephen Hawking, which is synthesised locally.
+_xtts_running() {
+    local url="${XTTS_URL:-http://127.0.0.1:8020}"
+    if command -v curl >/dev/null 2>&1; then
+        curl -s --connect-timeout 1 "${url}/health" >/dev/null 2>&1 && return 0
+    fi
+    return 1
+}
+
 is_ollama_running() {
     if curl -s --connect-timeout 1 "${OLLAMA_CHECK_URL}/" 2>/dev/null | grep -qi "Ollama is running"; then
         return 0
@@ -695,23 +706,27 @@ run_voice_chat_cli() {
             *) chosen_voice_name="$chosen_voice" ;;
         esac
     else
-        echo -e "\nSelect a Matrix Voice character (or press Enter for Morpheus):"
-        echo -e "  1) Morpheus (The Matrix - Master) [Default]"
-        echo -e "  2) Morpheus (The Construct - 'What is real?')"
-        echo -e "  3) Morpheus (Red Pill - 'Rabbit Hole')"
-        echo -e "  4) Morpheus (Combat Dojo - 'Free your mind')"
-        echo -e "  5) Morpheus (The System - 'Our enemy')"
-        echo -e "  6) Agent Smith (The Matrix)"
-        echo -e "  7) Neo (The Matrix)"
-        echo -e "  8) Trinity (The Matrix)"
-        echo -e "  9) The Oracle (The Matrix)"
-        echo -e " 10) Zion (Councillor Hamann)"
-        echo -e " 11) Stephen Hawking (Enters the Matrix)"
+        # The cloned Matrix voices need XTTS, which reserves about 4 GB of
+        # VRAM and is off by default, so Hawking is the working default.
+        local _xtts_tag="${DIM}[needs XTTS - off]${NC}"
+        if _xtts_running; then _xtts_tag="${GREEN}[ready]${NC}"; fi
+        echo -e "\nSelect a Matrix Voice character (or press Enter for Stephen Hawking):"
+        echo -e "  1) Morpheus (The Matrix - Master)           ${_xtts_tag}"
+        echo -e "  2) Morpheus (The Construct - 'What is real?') ${_xtts_tag}"
+        echo -e "  3) Morpheus (Red Pill - 'Rabbit Hole')       ${_xtts_tag}"
+        echo -e "  4) Morpheus (Combat Dojo - 'Free your mind') ${_xtts_tag}"
+        echo -e "  5) Morpheus (The System - 'Our enemy')       ${_xtts_tag}"
+        echo -e "  6) Agent Smith (The Matrix)                  ${_xtts_tag}"
+        echo -e "  7) Neo (The Matrix)                          ${_xtts_tag}"
+        echo -e "  8) Trinity (The Matrix)                      ${_xtts_tag}"
+        echo -e "  9) The Oracle (The Matrix)                   ${_xtts_tag}"
+        echo -e " 10) Zion (Councillor Hamann)                  ${_xtts_tag}"
+        echo -e " 11) Stephen Hawking (Enters the Matrix)       ${GREEN}[ready - local]${NC}"
         echo ""
-        read -r -p "Enter voice choice [1-11, Enter=1]: " v_choice
+        read -r -p "Enter voice choice [1-11, Enter=11]: " v_choice
 
-        local chosen_voice="morpheus"
-        local chosen_voice_name="Morpheus (The Matrix - Master)"
+        local chosen_voice="stephen_hawking_matrix"
+        local chosen_voice_name="Stephen Hawking (Enters the Matrix)"
         case "$v_choice" in
             1) chosen_voice="morpheus"; chosen_voice_name="Morpheus (The Matrix - Master)" ;;
             2) chosen_voice="morpheus_construct"; chosen_voice_name="Morpheus (The Construct - 'What is real?')" ;;
@@ -723,8 +738,8 @@ run_voice_chat_cli() {
             8) chosen_voice="trinity"; chosen_voice_name="Trinity (The Matrix)" ;;
             9) chosen_voice="oracle"; chosen_voice_name="The Oracle (The Matrix)" ;;
             10) chosen_voice="zion"; chosen_voice_name="Zion (Councillor Hamann)" ;;
-            11) chosen_voice="stephen_hawking_matrix"; chosen_voice_name="Stephen Hawking (Enters the Matrix)" ;;
-            *) chosen_voice="morpheus"; chosen_voice_name="Morpheus (The Matrix - Master)" ;;
+            11|"") chosen_voice="stephen_hawking_matrix"; chosen_voice_name="Stephen Hawking (Enters the Matrix)" ;;
+            *) chosen_voice="stephen_hawking_matrix"; chosen_voice_name="Stephen Hawking (Enters the Matrix)" ;;
         esac
     fi
 
@@ -910,7 +925,7 @@ interactive_menu() {
         echo -e "  ${BOLD}${CYAN} 3)${NC} Stop Running Ollama Server"
         echo -e "  ${BOLD}${CYAN} 4)${NC} Restart Ollama Server"
         echo -e "  ${BOLD}${CYAN} 5)${NC} Chat with a Local Model (Interactive CLI: Qwen, LLaMA...)"
-        echo -e "  ${BOLD}${CYAN} 6)${NC} Start Voice Chat with Local Models (${BOLD}${MAGENTA}Matrix Cast: Morpheus [5 Variations], Smith, Neo, Trinity...${NC})"
+        echo -e "  ${BOLD}${CYAN} 6)${NC} Start Voice Chat with Local Models (${BOLD}${MAGENTA}Voice: Stephen Hawking [cloned cast needs XTTS]${NC})"
         echo -e "  ${BOLD}${CYAN} 7)${NC} View Archived Audio Responses & Transcripts (${AUDIO_DIR})"
         echo -e "  ${BOLD}${CYAN} 8)${NC} View Server Log File (${LOG_FILE})"
         echo -e "  ${BOLD}${CYAN} 9)${NC} Return to Previous Menu\n"

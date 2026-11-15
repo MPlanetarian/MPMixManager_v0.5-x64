@@ -73,6 +73,59 @@ class TestRoleDetection(LimiterCase):
         self.assertEqual(limiter.role_pids(limiter.ROLE_GUI, table), {100})
         self.assertEqual(limiter.role_pids(limiter.ROLE_PLAYER, table), {101})
 
+    def test_only_a_real_host_run_counts_as_a_window(self):
+        """The host name in an argument is not an open window.
+
+        The count used to scan every token of every command line, so a text
+        editor with the host open, a `tail -f`, or a resident shell whose
+        arguments merely mentioned the file name each took one of the four
+        slots. Four such processes filled the cap, and the real player then
+        refused to open its window after the intro movie with "already open 4
+        times" while nothing was on screen.
+        """
+        for cmdline in (
+            "vim /opt/MP_Audio_Player_Liquid_Glass.py",
+            "vim +120 /opt/MP_Audio_Player_Liquid_Glass.py",
+            "tail -f /opt/MP_Audio_Player_Liquid_Glass.py.log",
+            "bash -c 'while :; do sleep 60; done # MP_Audio_Player_Liquid_Glass.py'",
+            'python3 -c \'print("MP_Audio_Player_Liquid_Glass.py")\'',
+            "less /opt/MP_Audio_Player_Liquid_Glass.py",
+        ):
+            self.assertIsNone(limiter.role_from_cmdline(cmdline), cmdline)
+
+    def test_every_launch_spelling_of_a_host_still_counts(self):
+        """The stricter match must not lose a real window.
+
+        Launchers start the host through `env`, `nice`, `setsid` or `stdbuf`,
+        and the interpreter may be a versioned build. A host that stopped
+        counting would let the suite grow past four windows.
+        """
+        for cmdline in (
+            "/opt/MP_Audio_Player_Liquid_Glass.py",
+            "/usr/bin/python3.14 /opt/MP_Audio_Player_Liquid_Glass.py",
+            "env PYTHONPATH=/opt python3 /opt/MP_Audio_Player_Liquid_Glass.py",
+            "env -u LINES -u COLUMNS python3 /opt/MP_Audio_Player_Liquid_Glass.py",
+            "nice -n 5 python3 /opt/MP_Audio_Player_Liquid_Glass.py",
+            "setsid python3 /opt/MP_Audio_Player_Liquid_Glass.py",
+            "stdbuf -oL -eL python3 /opt/MP_Audio_Player_Liquid_Glass.py",
+            "python3 '/opt/MP_Audio_Player_Liquid_Glass.py' --mini",
+        ):
+            self.assertEqual(
+                limiter.role_from_cmdline(cmdline), limiter.ROLE_PLAYER, cmdline,
+            )
+        self.assertEqual(
+            limiter.role_from_cmdline("env PYTHONPATH=/opt python3 /opt/MP_Audio_Player_Liquid_Glass.py --manager"),
+            limiter.ROLE_GUI,
+        )
+
+    def test_a_python_dash_c_is_not_a_host_window(self):
+        """`python3 -c` runs a program, so its text is not a script argument."""
+        for cmdline in (
+            'python3 -c \'import MP_Audio_Player_Liquid_Glass\'',
+            'python3 -c \'Popen(["MP_Audio_Player_Liquid_Glass.py"])\'',
+        ):
+            self.assertIsNone(limiter.role_from_cmdline(cmdline), cmdline)
+
 
 class TestCap(LimiterCase):
     def test_four_windows_are_allowed_and_a_fifth_is_not(self):
@@ -174,15 +227,19 @@ class TestCommandLine(LimiterCase):
             self.assertEqual(limiter.main(["status"]), 0)
 
     def test_count_prints_a_number_for_one_role(self):
-        hosts = self.table("python3 /opt/MP_Audio_Player_Liquid_Glass_OpenGL.py")
-        with patch.object(limiter, "process_table", return_value=hosts):
-            result = subprocess.run(
-                [sys.executable, str(ROOT / "scripts" / "mp_instance_limit.py"), "count", "player"],
-                capture_output=True,
-                text=True,
-                env={**os.environ, "MP_INSTANCE_STATE_DIR": self._tmp.name},
-                timeout=20,
-            )
+        result = subprocess.run(
+            [sys.executable, str(ROOT / "scripts" / "mp_instance_limit.py"), "count", "player"],
+            capture_output=True,
+            text=True,
+            env={
+                **os.environ,
+                "MP_INSTANCE_STATE_DIR": self._tmp.name,
+                # The child scans its own process table; an empty one keeps a
+                # player the user has open out of this assertion.
+                "MP_INSTANCE_PROC_TABLE": "empty",
+            },
+            timeout=20,
+        )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), "0")
 
@@ -224,7 +281,15 @@ class TestLaunchersSourceTheCap(unittest.TestCase):
         ):
             text = (ROOT / name).read_text(encoding="utf-8")
             self.assertIn("host_allowed", text, name)
-            self.assertIn("4 is the maximum", text, name)
+            # A shortcut launch discards stderr, so the refusal must also reach
+            # the desktop. Every host reports through the shared notifier.
+            self.assertIn("notify_limit", text, name)
+
+    def test_the_limit_message_is_visible_on_the_desktop(self):
+        """notify_limit carries the full sentence, not just the role name."""
+        self.assertIn("4 is the maximum", limiter.limit_message(limiter.ROLE_PLAYER))
+        self.assertIn("MP Liquid Player", limiter.limit_message(limiter.ROLE_PLAYER))
+        self.assertIn("MP Gui", limiter.limit_message(limiter.ROLE_GUI))
 
     def test_console_menu_and_vr_mode_obey_the_cap(self):
         manager = (ROOT / "Mix_Archive_Manager.sh").read_text(encoding="utf-8")
@@ -244,7 +309,14 @@ class TestLaunchersSourceTheCap(unittest.TestCase):
 class TestShellCap(unittest.TestCase):
     def test_claim_blocks_the_fifth_window(self):
         with tempfile.TemporaryDirectory() as tmp:
-            env = {**os.environ, "MP_INSTANCE_STATE_DIR": tmp}
+            env = {
+                **os.environ,
+                "MP_INSTANCE_STATE_DIR": tmp,
+                # The helper shells out to a fresh interpreter, which would
+                # otherwise count a real player the user has open and refuse a
+                # slot this test expects to be free.
+                "MP_INSTANCE_PROC_TABLE": "empty",
+            }
             helper = (
                 'source "$PWD/scripts/mp_instance_limit.sh"; '
                 'mp_instance_claim player "$MP_FAKE_PID" || exit 3'

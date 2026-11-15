@@ -49,7 +49,10 @@ def extract_snippet(audio_file, start_sec, duration_sec, output_wav):
         return False
 
 
-def identify_via_fpcalc(snippet_path, api_key="8XaBELgH"):
+def identify_via_fpcalc(snippet_path, api_key=None):
+    # AcoustID client keys identify the application, not the user, and
+    # are published on purpose. Still allow an override.
+    api_key = api_key or os.environ.get("ACOUSTID_API_KEY", "8XaBELgH")
     """Query AcoustID API using fpcalc."""
     fpcalc_bin = shutil.which("fpcalc")
     if not fpcalc_bin:

@@ -210,7 +210,7 @@ def load_music_config() -> Dict[str, Any]:
 _SMB_RE = re.compile(r'^(?:smb:)?(?:\\\\|//)([^\\/]+)[\\/]+([^\\/]+)(?:[\\/]+(.*))?$', re.I)
 _ONLY_LOCAL_OR_SMB = (
     "Only a local drive path or an SMB share is allowed "
-    "(for example D:\\Music, \\\\192.168.1.138\\music001, or smb://host/share)."
+    "(for example D:\\Music, \\\\192.0.2.20\\music001, or smb://host/share)."
 )
 
 def _normalize_extended_path(s: str) -> str:
@@ -267,12 +267,12 @@ def parse_folder_path(raw: str) -> Dict[str, Any]:
             user = user.split(":", 1)[0]
         sub = sub.replace("\\", "/").strip("/")
         if not host or not share or host in ("?", "."):
-            raise ValueError("SMB paths must include both a host and a share, e.g. \\\\192.168.1.138\\music001")
+            raise ValueError("SMB paths must include both a host and a share, e.g. \\\\192.0.2.20\\music001")
         return {"type": "smb", "host": host, "share": share, "subpath": sub, "user": user}
     if re.match(r'^[a-z][a-z0-9+.\-]*://', s, re.I):
         raise ValueError(_ONLY_LOCAL_OR_SMB)
     if s.startswith(("\\\\", "//")):
-        raise ValueError("SMB paths must include both a host and a share, e.g. \\\\192.168.1.138\\music001")
+        raise ValueError("SMB paths must include both a host and a share, e.g. \\\\192.0.2.20\\music001")
     # Classify by the *shape* of the path, not by the host OS. A Windows
     # drive-letter path is legitimate input here even on Linux and macOS: the
     # folder list can be imported from a Windows machine, and the parser has to

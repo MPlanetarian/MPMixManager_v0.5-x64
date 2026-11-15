@@ -267,10 +267,28 @@ if [ "$PROFILE" != "2" ] && [ "$PROFILE" != "4.5" ] && [ "$PROFILE" != "1" ] && 
     PROFILE="2"
 fi
 
-# Disable systemd-oomd if active on Linux to prevent premature OOM kills
-if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet systemd-oomd 2>/dev/null; then
-    sudo systemctl stop systemd-oomd 2>/dev/null || true
-    sudo systemctl mask systemd-oomd 2>/dev/null || true
+# Leave systemd-oomd ENABLED (changed 2026-11-14).
+#
+# This script used to stop and mask systemd-oomd "to prevent premature OOM
+# kills". That was the wrong trade on this box: the kernel OOM killer with
+# zram-only swap deadlocked and panicked instead of killing anything --
+#
+#   Out of memory and no killable processes...
+#   Kernel panic - not syncing: System is deadlocked on memory
+#     __swap_cache_alloc -> swapin_sync -> do_swap_page
+#
+# oomd is the only thing that reclaims BEFORE that state is reachable. It acts
+# on PSI memory pressure (kill at 80% for 20s, per
+# /usr/lib/systemd/{system,user}/slice.d/10-oomd-per-slice-defaults.conf), so it
+# targets the cgroup that is actually thrashing rather than picking a victim at
+# random after the machine is already wedged.
+#
+# If oomd ever kills something you wanted to keep, tune the cgroup's
+# ManagedOOMMemoryPressureLimit instead of masking it again.
+if command -v systemctl >/dev/null 2>&1; then
+    if ! systemctl is-active --quiet systemd-oomd 2>/dev/null; then
+        sudo systemctl start systemd-oomd.socket 2>/dev/null || true
+    fi
 fi
 
 resolve_wan2gp_paths

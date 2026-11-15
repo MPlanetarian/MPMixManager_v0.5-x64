@@ -16,6 +16,17 @@ BRIDGE = ROOT / "scripts" / "mp_auto_tester_report.sh"
 BUILDER = ROOT / "scripts" / "mp_auto_tester_report.py"
 WIN_SERVER = ROOT / "scripts" / "mp_win_agent_server.py"
 
+# MP_Auto_Tester_Flash.sh is an internal Dreamworlds Productions dev utility and
+# is gitignored, so a public checkout does not contain it. The report builder,
+# the Reporter bridge and the Windows agent ARE shipped, so their tests run
+# everywhere; only the assertions that read the controller source need the file.
+HARNESS_SKIP = "MP_Auto_Tester_Flash.sh is an internal utility and is not in this checkout"
+
+# Applied to every assertion that reads the controller's source. On this studio
+# machine the file is present and the checks run; from a public clone they skip
+# instead of failing, because the file is gitignored on purpose.
+needs_harness = unittest.skipUnless(HARNESS.is_file(), HARNESS_SKIP)
+
 sys.path.insert(0, str(ROOT / "scripts"))
 
 
@@ -67,15 +78,34 @@ def sample_results() -> dict:
 
 
 class TestHarnessContract(unittest.TestCase):
+    """Contract checks that read the internal Auto Tester controller.
+
+    The whole class is skipped when the controller is absent, rather than each
+    method: several methods read HARNESS without a decorator and a public clone
+    reported them as errors instead of skips. A class-level guard cannot be
+    forgotten when a new method is added.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        if not HARNESS.is_file():
+            raise unittest.SkipTest(HARNESS_SKIP)
+
     def test_all_pieces_exist_and_are_executable(self):
-        for path in (HARNESS, BRIDGE):
-            self.assertTrue(path.is_file(), path)
-            self.assertTrue(os.access(path, os.X_OK), f"{path} is not executable")
+        # The bridge, builder and Windows agent ship publicly; the controller is
+        # internal, so it is only checked when this checkout has it.
+        if HARNESS.is_file():
+            self.assertTrue(os.access(HARNESS, os.X_OK), f"{HARNESS} is not executable")
+        self.assertTrue(BRIDGE.is_file(), BRIDGE)
+        self.assertTrue(os.access(BRIDGE, os.X_OK), f"{BRIDGE} is not executable")
         for path in (BUILDER, WIN_SERVER):
             self.assertTrue(path.is_file(), path)
 
     def test_shell_syntax(self):
-        for path in (HARNESS, BRIDGE):
+        # Same split: always syntax-check the shipped bridge, and the internal
+        # controller only when it is present.
+        paths = [BRIDGE] + ([HARNESS] if HARNESS.is_file() else [])
+        for path in paths:
             res = subprocess.run([_bash(), "-n", str(path)],
                                  capture_output=True, text=True)
             self.assertEqual(res.returncode, 0, f"{path}: {res.stderr}")
@@ -86,12 +116,14 @@ class TestHarnessContract(unittest.TestCase):
                                  capture_output=True, text=True)
             self.assertEqual(res.returncode, 0, f"{path}: {res.stderr}")
 
+    @needs_harness
     def test_the_four_required_screenshot_names(self):
         text = HARNESS.read_text(encoding="utf-8")
         for stem in ("TEST_MP_VISUALISER", "TEST_MP_GUI",
                      "TEST_MP_LIQUID_PLAYER", "TEST_MP_MIX_MANAGER"):
             self.assertIn(stem, text)
 
+    @needs_harness
     def test_settle_time_can_never_drop_below_twenty_seconds(self):
         text = HARNESS.read_text(encoding="utf-8")
         self.assertIn("WAIT_SECONDS=20", text)
@@ -102,6 +134,7 @@ class TestHarnessContract(unittest.TestCase):
         self.assertEqual(res.returncode, 0)
         self.assertIn("wait", res.stdout.lower())
 
+    @needs_harness
     def test_all_five_systems_are_known(self):
         text = HARNESS.read_text(encoding="utf-8")
         for token in ("local", "fedora", "mac", "windows", "freebsd"):
@@ -110,6 +143,7 @@ class TestHarnessContract(unittest.TestCase):
         self.assertIn("MP_FEDORA_HOST", text)
         self.assertIn("MP_FREEBSD_HOST", text)
 
+    @needs_harness
     def test_screenshot_archive_name_and_shortcut(self):
         text = HARNESS.read_text(encoding="utf-8")
         self.assertIn("MP_TESTER_MIX_MANAGER_SCREENSHOTS", text)
@@ -118,11 +152,117 @@ class TestHarnessContract(unittest.TestCase):
         self.assertIn(".lnk", text)
         self.assertIn("[Desktop Entry]", text)
 
+    @needs_harness
+    def test_shortcut_always_targets_the_archive_root(self):
+        text = HARNESS.read_text(encoding="utf-8")
+        # A --stamp or MP_TEST_SCREENSHOT_ROOT override must not be baked into
+        # the desktop shortcut; it must always open the archive root.
+        self.assertNotIn('create_screenshot_shortcut "$SHOT_ROOT"', text)
+        self.assertIn(
+            'local target="${1:-$HOME/$SCREENSHOT_DIRNAME}"', text)
+
+    @needs_harness
     def test_mp_reporter_is_wired_in(self):
         text = HARNESS.read_text(encoding="utf-8")
         self.assertIn("DAILY_REPORT_TASK_005_AUTO_TESTER", text)
         self.assertIn("MP_Reporter.sh", text)
         self.assertIn("run DAILY_REPORT_TASK_005_AUTO_TESTER", text)
+
+    @needs_harness
+    def test_the_bazzite_laptop_is_a_target(self):
+        """The BazziteMac test bed is its own system, not the Fedora host."""
+        text = HARNESS.read_text(encoding="utf-8")
+        self.assertIn("MP_BAZZITE_HOST", text)
+        # The controller is deliberately not published (it carries this
+        # studio's test-bed topology), so assert the address is configurable
+        # rather than pinning a specific LAN address.
+        self.assertRegex(text, r'BAZZITE_HOST="\$\{MP_BAZZITE_HOST:-[0-9.]+\}"')
+        self.assertIn("bazzite|bazzitemac|laptop", text)
+        res = subprocess.run(
+            [_bash(), str(HARNESS), "--help"], capture_output=True, text=True)
+        self.assertEqual(res.returncode, 0)
+        self.assertIn("bazzite", res.stdout.lower())
+
+    @needs_harness
+    def test_the_ubuntu_38_host_is_a_target(self):
+        """Ubuntu 20.04 ships Python 3.8, the oldest platform we support.
+
+        It is the only test bed that fails when PEP 585 (`dict[...]`) or
+        PEP 604 (`X | None`) syntax creeps in, so it must stay a target.
+        """
+        text = HARNESS.read_text(encoding="utf-8")
+        self.assertIn("MP_UBUNTU_HOST", text)
+        self.assertRegex(text, r'UBUNTU_HOST="\$\{MP_UBUNTU_HOST:-[0-9.]+\}"')
+        self.assertIn('ubuntu)  echo "Ubuntu 20.04 LTS', text)
+        self.assertRegex(
+            text,
+            r'REMOTE_HOST=\([^)]*\[ubuntu\]="\$UBUNTU_HOST"',
+        )
+
+    @needs_harness
+    def test_window_lookup_works_on_wayland(self):
+        """wmctrl -l is empty on KWin Wayland; xdotool must be the fallback.
+
+        The laptop runs Plasma Wayland, where the X11 root belongs to Xwayland
+        and carries no EWMH client list. Relying on wmctrl made every window
+        lookup fail and no screenshot was ever captured.
+        """
+        text = HARNESS.read_text(encoding="utf-8")
+        body = text.split("list_windows_linux() {", 1)[1].split("\n}", 1)[0]
+        self.assertIn("xdotool", body)
+        self.assertIn("wmctrl -l", body)
+
+    @needs_harness
+    def test_the_deployed_tree_includes_symlink_targets(self):
+        """A copy with dangling links failed a dozen tests for the wrong reason.
+
+        bin/* and scripts/* are symlinks into the tree, and assets/Exit_MP_Video
+        .mp4 points at the root file. Deploying the links without their targets
+        made the remote run look like a product regression.
+        """
+        text = HARNESS.read_text(encoding="utf-8")
+        self.assertIn("Exit_MP_Video.mp4", text)
+        deploy = text.split("deploy_tree() {", 1)[1].split("tar -czf", 1)[0]
+        self.assertIn("readlink", deploy)
+
+    @needs_harness
+    def test_the_windows_bundle_dereferences_symlinks(self):
+        """Windows tar cannot make a Unix symlink, so it must dereference.
+
+        The SSH path expands each link's target explicitly; the Windows bundle
+        is a whole-tree tar and only --dereference makes it safe. Without it the
+        guest got "Can't create ... Invalid argument" for every link and a
+        truncated tree.
+        """
+        text = HARNESS.read_text(encoding="utf-8")
+        windows_bundle = text.split("Bundling the MP Mix Manager tree for Windows", 1)[1]
+        windows_bundle = windows_bundle.split("could not bundle the tree for Windows", 1)[0]
+        self.assertIn("--dereference", windows_bundle)
+
+    @needs_harness
+    def test_the_companion_launcher_is_deployed(self):
+        """The Windows companion launcher has to reach the guest.
+
+        install.sh runs it from the install root on Windows, so a bundle without
+        launch_web_companion.bat would install everything except the dashboard.
+        """
+        text = HARNESS.read_text(encoding="utf-8")
+        deploy_block = text.split("DEPLOY_PATHS=(", 1)[1].split(")", 1)[0]
+        self.assertIn("launch_web_companion.bat", deploy_block)
+
+    @needs_harness
+    def test_a_test_run_pins_the_resolver_at_the_tree_under_test(self):
+        """On a deployed copy the resolver otherwise finds the real install."""
+        text = HARNESS.read_text(encoding="utf-8")
+        run_tests = text.split("run_unit_tests() {", 1)[1].split("\n}", 1)[0]
+        self.assertIn("MP_MIX_MANAGER_DIR=\"$tree\"", run_tests)
+
+    @needs_harness
+    def test_a_run_holds_a_sleep_inhibitor(self):
+        """An idle desktop must not suspend in the middle of a test run."""
+        text = HARNESS.read_text(encoding="utf-8")
+        self.assertIn("systemd-inhibit", text)
+        self.assertIn("keep_awake", text)
 
 
 class TestReportBuilder(unittest.TestCase):
@@ -195,6 +335,13 @@ class TestReportBuilder(unittest.TestCase):
                 self.skipTest("reportlab is not installed")
             self.assertTrue(pdf.is_file())
             self.assertGreater(pdf.stat().st_size, 2000)
+            # pdfimages comes from poppler-utils and is not installed on every
+            # test bed (it is absent from the Windows VM). Verify the image is
+            # embedded only when the tool is there, so a missing utility reads
+            # as "not checked" rather than as a broken report builder.
+            import shutil as _shutil
+            if not _shutil.which("pdfimages"):
+                return
             listing = subprocess.run(["pdfimages", "-list", str(pdf)],
                                      capture_output=True, text=True)
             if listing.returncode == 0:
@@ -346,6 +493,14 @@ class TestWindowsAgentServer(unittest.TestCase):
 
 
 class TestDeploymentBundle(unittest.TestCase):
+    """Deploy-bundle checks, all of which read the internal controller."""
+
+    @classmethod
+    def setUpClass(cls):
+        if not HARNESS.is_file():
+            raise unittest.SkipTest(HARNESS_SKIP)
+
+    @needs_harness
     def test_only_the_application_and_tests_are_shipped(self):
         text = HARNESS.read_text(encoding="utf-8")
         start = text.index("DEPLOY_PATHS=(")
@@ -357,10 +512,53 @@ class TestDeploymentBundle(unittest.TestCase):
         for required in ("scripts", "tests", "themes", "shaders", "MP_Audio_Player.py"):
             self.assertIn(required, block)
 
+    @needs_harness
     def test_remote_home_directories_are_resolved_not_expanded_by_scp(self):
         text = HARNESS.read_text(encoding="utf-8")
         # scp does not expand $HOME, so the controller has to resolve the path.
         self.assertIn("cd \\\"$rtree\\\" 2>/dev/null && pwd", text)
+
+    def test_sync_finds_a_moved_u_disks_mount(self):
+        text = HARNESS.read_text(encoding="utf-8")
+        # The other Bazzite install is a udisks mount whose path has changed
+        # between /run/media/system/... and /run/media/<user>/.... A hard-coded
+        # default silently stops syncing, so the script has to probe.
+        self.assertIn("find_other_bazzite()", text)
+        self.assertIn("/run/media/$(id -un)/bazzite_raid/home/$(id -un)", text)
+        self.assertNotIn(
+            'local other="${MP_OTHER_BAZZITE:-/run/media/system/bazzite_raid', text)
+
+    def test_synced_reporter_task_uses_the_guest_own_path(self):
+        text = HARNESS.read_text(encoding="utf-8")
+        # The task runs on the other machine, so REPORT_SCRIPT must be that
+        # machine's /home/<user>/... path, never this host's /run/media mount.
+        self.assertIn('suffix="${other#*/home/}"', text)
+        self.assertIn('bridge="/home/$suffix/$(basename "$ROOT")/scripts/mp_auto_tester_report.sh"', text)
+
+    def test_tests_cannot_repoint_the_users_launchers(self):
+        text = HARNESS.read_text(encoding="utf-8")
+        # Some suites run install.sh, which publishes ~/.local/bin links. That
+        # repointed fedora's real desktop launcher on 2026-11-14. The harness
+        # snapshots the user's shims before a test run and restores them after.
+        self.assertIn("snapshot_shims", text)
+        self.assertIn("restore_shims", text)
+        self.assertIn('ln -sfn "$target" "$bin/$name"', text)
+        self.assertIn("MP_RUN_SLOW_INSTALLER_TESTS=0", text)
+
+    def test_freebsd_guest_address_is_the_live_one_not_the_advertised_one(self):
+        text = HARNESS.read_text(encoding="utf-8")
+        # The X299ROGFREEBSD image answers on .16 while cloud-init still says
+        # .14; a hard-coded .14 reports a running VM as unreachable.
+        self.assertRegex(text, r'FREEBSD_HOST="\$\{MP_FREEBSD_HOST:-[0-9.]+\}"')
+        self.assertIn("freebsd_reachable()", text)
+
+    def test_sync_installs_the_daily_timer_on_the_other_system(self):
+        text = HARNESS.read_text(encoding="utf-8")
+        # Without the timer units the other machine only has the task file and
+        # never runs it, which is silently broken.
+        self.assertIn('mp-reporter-DAILY_REPORT_TASK_005_AUTO_TESTER.timer', text)
+        self.assertIn('OnCalendar=*-*-* 10:10:00', text)
+        self.assertIn('ln -sfn "../mp-reporter-DAILY_REPORT_TASK_005_AUTO_TESTER.timer"', text)
 
 
 if __name__ == "__main__":

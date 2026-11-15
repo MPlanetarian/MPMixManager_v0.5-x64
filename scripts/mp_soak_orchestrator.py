@@ -32,7 +32,7 @@ Usage
 -----
     ./scripts/mp_soak_orchestrator.py --soak 120 --scripts 20
     ./scripts/mp_soak_orchestrator.py --soak 1800 --scripts 20 --json
-    ./scripts/mp_soak_orchestrator.py --remote 192.168.1.13 --soak 120
+    ./scripts/mp_soak_orchestrator.py --remote 192.0.2.13 --soak 120
     ./scripts/mp_soak_orchestrator.py --list-scripts
 """
 from __future__ import annotations
