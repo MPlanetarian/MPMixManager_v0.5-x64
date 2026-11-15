@@ -17,6 +17,14 @@ Two rules decide whether it plays at all:
 The four Liquid Glass hosts use `ExitVideo`: `start()` elects and launches the
 movie, the host keeps pumping its own window while `wait()` runs, then
 `finish()` clears the marker so a later launch is elected normally.
+
+The same movie is the intro for the **first MP Liquid Player window** and the
+**first MP Gui window**. `PlayerIntro` plays it *before* the window exists, and
+only for the first of the four allowed windows of that kind: instances two,
+three and four open straight away and never show it. The election is that
+role's own count with this process excluded, so a second shortcut pressed
+while the intro is on screen is already counted and stays silent. Closing
+every window of that kind and opening one again plays it once more.
 """
 
 from __future__ import annotations
@@ -29,6 +37,13 @@ from pathlib import Path
 
 EXIT_VIDEO_NAME = "Exit_MP_Video.mp4"
 EXIT_VIDEO_TIMEOUT_SECONDS = 90
+
+# The first MP Liquid Player window and the first MP Gui window play the same
+# movie as an intro. Later windows of that kind (two to four) open straight
+# away and never show it.
+INTRO_SCRIPT_ARG = "--intro"
+INTRO_VIDEO_TIMEOUT_SECONDS = 90
+PLAYER_MODES = ("NORMAL", "MINI", "MICRO")
 
 # The loader script is the single player implementation. Hosts pass --exit so
 # it plays Exit_MP_Video.mp4 instead of the startup logo.
@@ -84,6 +99,21 @@ def exit_video_timeout(root: Path | None = None) -> int:
         return max(5, int(float(raw)))
     except (TypeError, ValueError):
         return EXIT_VIDEO_TIMEOUT_SECONDS
+
+
+def intro_video_enabled(root: Path | None = None) -> bool:
+    """`SHOW_PLAYER_INTRO_VIDEO` decides whether the first window gets an intro."""
+    return config_value("SHOW_PLAYER_INTRO_VIDEO", "true", root).strip().lower() not in (
+        "false", "0", "no", "off",
+    )
+
+
+def intro_video_timeout(root: Path | None = None) -> int:
+    raw = config_value("PLAYER_INTRO_VIDEO_MAX_SECONDS", str(INTRO_VIDEO_TIMEOUT_SECONDS), root)
+    try:
+        return max(5, int(float(raw)))
+    except (TypeError, ValueError):
+        return INTRO_VIDEO_TIMEOUT_SECONDS
 
 
 def script_root() -> Path:
@@ -158,6 +188,199 @@ def finish_exit_video(role: str = "") -> None:
         pass
 
 
+def intro_role(mode: str | None) -> str:
+    """Which window kind this launch is, or "" when it gets no intro."""
+    upper = (mode or "").upper()
+    if upper == "MANAGER":
+        return "gui"
+    if upper in PLAYER_MODES:
+        return "player"
+    return ""
+
+
+def _intro_blocked(done_var: str) -> bool:
+    """Shared reasons an opening movie must not start."""
+    if os.environ.get("MP_NO_PLAYER_INTRO") == "1" or os.environ.get("MP_NO_GUI_INTRO") == "1":
+        return True
+    # A launcher that already played the movie passes this through exec, so
+    # the window it starts does not play the same movie twice.
+    if os.environ.get(done_var) == "1":
+        return True
+    if os.environ.get("MP_BENCHMARK_MODE") == "1" or os.environ.get("MP_VR_MODE") == "1":
+        return True
+    return False
+
+
+def player_intro_wanted(mode: str | None = None, root: Path | None = None) -> bool:
+    """True when this launch is a plain MP Liquid Player window.
+
+    The tracklist viewer and the embed and self-test helpers never show the
+    intro. MP Gui has its own election (`gui_intro_wanted`). Benchmark, soak
+    and VR runs skip it too: the first two measure window timing, and VR
+    places the player on a canvas where a full-screen movie would cover the
+    headset view.
+    """
+    del root
+    if _intro_blocked("MP_PLAYER_INTRO_DONE"):
+        return False
+    return (mode or "").upper() in PLAYER_MODES
+
+
+def gui_intro_wanted(mode: str | None = None, root: Path | None = None) -> bool:
+    """True when this launch is an MP Gui window that may show the intro.
+
+    Only the first MP Gui of the session plays it. The tracklist viewer and
+    the helper flags are not MP Gui. A second, third, or fourth MP Gui never
+    shows the movie.
+    """
+    del root
+    if _intro_blocked("MP_GUI_INTRO_DONE"):
+        return False
+    return (mode or "").upper() == "MANAGER"
+
+
+def is_first_window(role: str, pid: int | None = None) -> bool:
+    """True when no other window of this role is open.
+
+    The caller's own claim is excluded: the launcher reserved it before exec
+    (or the host reserved it for itself on Windows), and it must not make the
+    first window look like the second.
+    """
+    if role not in ("gui", "player"):
+        return False
+    limiter = _limiter()
+    if limiter is None:
+        # Without the counter there is no way to tell a first launch from a
+        # fourth one. Showing the intro once more is better than never.
+        return True
+    try:
+        return limiter.instance_count(role, exclude_pid=int(pid or os.getpid())) == 0
+    except Exception:
+        return False
+
+
+def is_first_player_window(pid: int | None = None) -> bool:
+    """True when no other MP Liquid Player window is open."""
+    return is_first_window("player", pid)
+
+
+def is_first_gui_window(pid: int | None = None) -> bool:
+    """True when no other MP Gui window is open."""
+    return is_first_window("gui", pid)
+
+
+class PlayerIntro:
+    """The intro movie played by the first MP Gui or MP Liquid Player window.
+
+    `play()` blocks until the movie ends, is skipped, or reaches its timeout,
+    and runs before the window is created, so the movie is the first thing on
+    screen and is gone before the glass appears. A second, third, or fourth
+    window of the same kind never plays it.
+    """
+
+    def __init__(self, mode: str | None = None, root: Path | None = None, timeout: int | None = None):
+        self.mode = mode
+        self.root = Path(root) if root else script_root()
+        self.timeout = max(5, int(timeout if timeout is not None else intro_video_timeout(self.root)))
+        self.process: subprocess.Popen | None = None
+        self.played = False
+
+    def play(self) -> bool:
+        """Play the intro once. False means this window skipped it."""
+        if self.played:
+            return True
+        role = intro_role(self.mode)
+        if role == "gui":
+            if not gui_intro_wanted(self.mode, self.root):
+                return False
+            first = is_first_gui_window()
+        elif role == "player":
+            if not player_intro_wanted(self.mode, self.root):
+                return False
+            first = is_first_player_window()
+        else:
+            return False
+        if not intro_video_enabled(self.root):
+            return False
+        # Instance two and above never show the movie, even if this process
+        # is the one that happens to be closing later.
+        if not first:
+            return False
+        script = display_script(self.root)
+        video = find_exit_video(self.root)
+        if script is None or video is None:
+            return False
+
+        env = dict(os.environ)
+        env["PLAYER_INTRO_VIDEO_MAX_SECONDS"] = str(self.timeout)
+        # Skip keys are read from the terminal that launched the player. A
+        # detached child has no controlling terminal, so it is attached to a
+        # fresh session instead and left to finish, time out, or be closed by
+        # clicking its own window.
+        attached = _has_tty()
+        kwargs = {}
+        if not attached:
+            kwargs["start_new_session"] = True
+        try:
+            self.process = subprocess.Popen(
+                ["bash", str(script), INTRO_SCRIPT_ARG],
+                cwd=str(self.root),
+                env=env,
+                stdin=None if attached else subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                **kwargs,
+            )
+        except (OSError, subprocess.SubprocessError):
+            self.process = None
+            return False
+        self.played = True
+        try:
+            self.process.wait(timeout=self.timeout + 5)
+        except subprocess.TimeoutExpired:
+            self.stop()
+        finally:
+            # The movie window must be gone before the player is created, or
+            # it would sit on top of the brand-new glass.
+            self.process = None
+        return True
+
+    def stop(self) -> None:
+        proc, self.process = self.process, None
+        if proc is None:
+            return
+        try:
+            if proc.poll() is None:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+        except (OSError, subprocess.SubprocessError):
+            pass
+
+
+def _has_tty() -> bool:
+    try:
+        return sys.stdin is not None and sys.stdin.isatty()
+    except (ValueError, OSError):
+        return False
+
+
+def play_player_intro(
+    mode: str | None = None,
+    root: Path | None = None,
+    timeout: int | None = None,
+) -> bool:
+    """Play the first-window intro movie. True when it actually played.
+
+    `mode="MANAGER"` is the first MP Gui. A plain player mode is the first
+    MP Liquid Player. Anything else, and every window after the first of
+    that kind, returns False without starting a player.
+    """
+    return PlayerIntro(mode, root, timeout).play()
+
+
 class ExitVideo:
     """One run of the exit movie, owned by the window that is closing.
 
@@ -171,6 +394,7 @@ class ExitVideo:
         mode: str | None = None,
         root: Path | None = None,
         timeout: int | None = None,
+        elect: bool = True,
     ):
         self.mode = mode
         self.role = role_for_mode(mode)
@@ -178,6 +402,10 @@ class ExitVideo:
         self.timeout = max(5, int(timeout if timeout is not None else exit_video_timeout(self.root)))
         self.process: subprocess.Popen | None = None
         self.elected = False
+        # `elect=False` is for an explicit close of the whole suite (the tray's
+        # Close MP Mix Manager item). It must play regardless of how many
+        # windows are open, because they are all about to be stopped.
+        self.elect = bool(elect)
         self._deadline = 0.0
 
     # -- election ---------------------------------------------------------
@@ -187,7 +415,7 @@ class ExitVideo:
             return True
         if not exit_video_enabled(self.root):
             return False
-        if not should_play_exit_video(self.role):
+        if self.elect and not should_play_exit_video(self.role):
             return False
         self.elected = True
 
@@ -281,13 +509,14 @@ def play_exit_video(
     root: Path | None = None,
     timeout: int | None = None,
     pump=None,
+    elect: bool = True,
 ) -> bool:
     """Start, wait for, and finish the exit movie in one call.
 
     Returns True when the movie played on this window. Call it before the
     window is destroyed and pass `pump` to keep the window responsive.
     """
-    video = ExitVideo(mode, root, timeout)
+    video = ExitVideo(mode, root, timeout, elect=elect)
     if not video.start():
         return False
     try:

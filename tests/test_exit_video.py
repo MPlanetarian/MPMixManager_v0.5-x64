@@ -1,0 +1,304 @@
+#!/usr/bin/env python3
+"""The MP exit movie plays once, for the last MP Gui / MP Liquid Player window.
+
+`Exit_MP_Video.mp4` is shown by the same player script as the startup logo, so
+the two behave identically. These tests pin the four things that make the
+feature correct:
+
+  * the MP4 ships next to MP_loader.mp4 and the loader resolves it,
+  * the movie is played with the loader's own window flags,
+  * only the last window of *either* role is elected (closing one of two open
+    windows stays silent), and
+  * every Liquid Glass host runs the movie before it destroys its window.
+"""
+
+import os
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "scripts"))
+
+import exit_video as exit_video_mod
+import mp_instance_limit as limiter
+
+SCRIPT = ROOT / "scripts" / "display_loader_video.sh"
+
+HOSTS = (
+    "MP_Audio_Player_Liquid_Glass_OpenGL.py",
+    "MP_Audio_Player_Liquid_Glass.py",
+    "MP_Audio_Player_Liquid_Glass_macOS.py",
+    "MP_Audio_Player_Liquid_Glass_OpenGL_macOS.py",
+)
+
+
+class LimiterCase(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.addCleanup(
+            setattr, os.environ, "MP_INSTANCE_STATE_DIR",
+            os.environ.get("MP_INSTANCE_STATE_DIR", ""),
+        )
+        os.environ["MP_INSTANCE_STATE_DIR"] = self._tmp.name
+
+    def table(self, *cmdlines):
+        return [(100 + index, cmdline) for index, cmdline in enumerate(cmdlines)]
+
+    def close_all_markers(self):
+        for path in (Path(self._tmp.name) / "closing").glob("*.closing"):
+            path.unlink()
+
+
+class TestExitVideoAsset(unittest.TestCase):
+    def test_the_mp4_sits_beside_the_loader_video(self):
+        video = ROOT / "Exit_MP_Video.mp4"
+        self.assertTrue(video.is_file())
+        self.assertGreater(video.stat().st_size, 1024)
+        # MP4 magic: a size word followed by the ftyp box.
+        self.assertEqual(video.read_bytes()[4:8], b"ftyp")
+
+    def test_the_mp4_is_a_real_h264_movie(self):
+        probe = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "stream=codec_name",
+             "-of", "default=nw=1:nk=1", str(ROOT / "Exit_MP_Video.mp4")],
+            capture_output=True, text=True,
+        )
+        if probe.returncode != 0:
+            self.skipTest("ffprobe is not installed")
+        self.assertIn("h264", probe.stdout)
+
+    def test_the_loader_script_resolves_the_exit_movie(self):
+        res = subprocess.run(
+            ["bash", str(SCRIPT), "--exit-path"],
+            capture_output=True, text=True, cwd=str(ROOT),
+        )
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertTrue(res.stdout.strip().endswith("Exit_MP_Video.mp4"))
+
+    def test_config_example_documents_the_switch(self):
+        text = (ROOT / "config.env.example").read_text(encoding="utf-8")
+        self.assertIn('SHOW_EXIT_VIDEO="true"', text)
+        self.assertIn('EXIT_VIDEO_FILE="Exit_MP_Video.mp4"', text)
+        self.assertIn("EXIT_VIDEO_MAX_SECONDS", text)
+
+
+class TestLoaderReuse(unittest.TestCase):
+    def test_the_exit_movie_uses_the_loader_player_flags(self):
+        """Same borderless, always-on-top window as MP_loader.mp4."""
+        fake = tempfile.mkdtemp()
+        self.addCleanup(lambda: subprocess.run(["rm", "-rf", fake]))
+        log = Path(fake) / "args.txt"
+        player = Path(fake) / "ffplay"
+        player.write_text(
+            "#!/bin/sh\n"
+            f'printf "%s\\n" "$*" >> "{log}"\n'
+            "sleep 0.2\n"
+            "exit 0\n",
+            encoding="utf-8",
+        )
+        player.chmod(0o755)
+        res = subprocess.run(
+            ["bash", str(SCRIPT), "--exit"],
+            capture_output=True, text=True, cwd=str(ROOT),
+            env={**os.environ, "PATH": f"{fake}:/usr/bin:/bin",
+                 "MP_EXIT_VIDEO_NO_TTY": "1", "EXIT_VIDEO_MAX_SECONDS": "5"},
+        )
+        self.assertEqual(res.returncode, 0, res.stderr)
+        args = log.read_text(encoding="utf-8") if log.exists() else ""
+        self.assertIn("-noborder", args)
+        self.assertIn("-alwaysontop", args)
+        self.assertIn("-autoexit", args)
+        self.assertIn("Exit_MP_Video.mp4", args)
+
+    def test_the_exit_switch_turns_the_movie_off(self):
+        fake = tempfile.mkdtemp()
+        self.addCleanup(lambda: subprocess.run(["rm", "-rf", fake]))
+        log = Path(fake) / "args.txt"
+        player = Path(fake) / "ffplay"
+        player.write_text(f'#!/bin/sh\nprintf "%s\\n" "$*" >> "{log}"\n', encoding="utf-8")
+        player.chmod(0o755)
+        res = subprocess.run(
+            ["bash", str(SCRIPT), "--exit"],
+            capture_output=True, text=True, cwd=str(ROOT),
+            env={**os.environ, "PATH": f"{fake}:/usr/bin:/bin",
+                 "SHOW_EXIT_VIDEO": "false", "MP_EXIT_VIDEO_NO_TTY": "1"},
+        )
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertFalse(log.exists(), "the movie started although SHOW_EXIT_VIDEO=false")
+
+    def test_the_loader_video_still_plays(self):
+        res = subprocess.run(
+            ["bash", str(SCRIPT), "--path"],
+            capture_output=True, text=True, cwd=str(ROOT),
+        )
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertTrue(res.stdout.strip().endswith("MP_loader.mp4"))
+
+
+class TestLastWindowElection(LimiterCase):
+    def test_one_of_two_open_windows_stays_silent(self):
+        hosts = self.table(
+            "python3 /opt/MP_Audio_Player_Liquid_Glass_OpenGL.py --manager",
+            "python3 /opt/MP_Audio_Player_Liquid_Glass_OpenGL.py",
+        )
+        with patch.object(limiter, "process_table", return_value=hosts), \
+             patch.object(limiter, "_pid_alive", return_value=True):
+            self.assertFalse(limiter.is_last_window("gui", 100))
+
+    def test_the_second_of_two_windows_plays_the_movie(self):
+        hosts = self.table(
+            "python3 /opt/MP_Audio_Player_Liquid_Glass_OpenGL.py --manager",
+            "python3 /opt/MP_Audio_Player_Liquid_Glass_OpenGL.py",
+        )
+        with patch.object(limiter, "process_table", return_value=hosts), \
+             patch.object(limiter, "_pid_alive", return_value=True):
+            self.assertFalse(limiter.is_last_window("gui", 100))
+            # The Gui marked itself; only the Player is left.
+            self.assertTrue(limiter.is_last_window("player", 101))
+
+    def test_gui_and_player_are_counted_together(self):
+        """Closing MP Gui must not play while MP Liquid Player is still open."""
+        hosts = self.table("python3 /opt/MP_Audio_Player_Liquid_Glass_OpenGL.py")
+        with patch.object(limiter, "process_table", return_value=hosts), \
+             patch.object(limiter, "_pid_alive", return_value=True):
+            self.assertFalse(limiter.is_last_window("gui", 900))
+
+    def test_an_unrelated_window_does_not_count(self):
+        hosts = self.table(
+            "python3 /opt/MP_Liquid_Visualizer.py --preset random",
+            "bash /opt/Mix_Archive_Manager.sh",
+            "python3 /opt/MP_Audio_Player_Liquid_Glass_OpenGL.py --tracklist /tmp/a.txt",
+        )
+        with patch.object(limiter, "process_table", return_value=hosts), \
+             patch.object(limiter, "_pid_alive", return_value=True):
+            self.assertTrue(limiter.is_last_window("player", 500))
+
+    def test_the_marker_is_cleared_after_the_movie(self):
+        with patch.object(limiter, "process_table", return_value=[]), \
+             patch.object(limiter, "_pid_alive", return_value=True):
+            self.assertTrue(limiter.is_last_window("player", 4321))
+        marker = Path(os.environ["MP_INSTANCE_STATE_DIR"]) / "closing" / "4321.closing"
+        self.assertTrue(marker.exists())
+        limiter.end_closing("player", 4321)
+        self.assertFalse(marker.exists())
+
+    def test_a_dead_marker_does_not_block_a_later_window(self):
+        with patch.object(limiter, "process_table", return_value=[]), \
+             patch.object(limiter, "_pid_alive", return_value=True):
+            self.assertTrue(limiter.is_last_window("player", 111))
+        with patch.object(limiter, "process_table", return_value=[]), \
+             patch.object(limiter, "_pid_alive", return_value=False):
+            # 111 is gone, so its marker is dropped rather than blocking 222.
+            self.assertTrue(limiter.is_last_window("player", 222))
+        markers = {p.stem for p in (Path(os.environ["MP_INSTANCE_STATE_DIR"]) / "closing").glob("*.closing")}
+        self.assertNotIn("111", markers)
+
+
+class TestHostsPlayItBeforeClosing(unittest.TestCase):
+    def test_every_host_runs_the_movie_in_its_shutdown_path(self):
+        for name in HOSTS:
+            text = (ROOT / name).read_text(encoding="utf-8")
+            self.assertIn("from exit_video import ExitVideo", text, name)
+            self.assertIn("_exit_video_then_close", text, name)
+            self.assertIn("video.finish()", text, name)
+
+    def test_the_movie_runs_before_the_window_is_destroyed(self):
+        for name in ("MP_Audio_Player_Liquid_Glass_OpenGL.py", "MP_Audio_Player_Liquid_Glass.py"):
+            text = (ROOT / name).read_text(encoding="utf-8")
+            fn = text.split("def _exit_video_then_close", 1)[1].split("\n    def ", 1)[0]
+            self.assertIn("video.start()", fn, name)
+            self.assertLess(fn.index("video.start()"), fn.index("self.close()"), name)
+
+    def test_the_host_keeps_drawing_while_the_movie_plays(self):
+        for name in HOSTS:
+            text = (ROOT / name).read_text(encoding="utf-8")
+            self.assertIn("_pump_exit_frame", text, name)
+            self.assertIn("video.wait(", text, name)
+
+    def test_tracklist_and_embed_check_stay_silent(self):
+        for name in HOSTS:
+            text = (ROOT / name).read_text(encoding="utf-8")
+            self.assertIn('"MANAGER"', text, name)
+            self.assertNotIn('mode in ("TRACKLIST", "MANAGER")', text, name)
+
+
+class TestExitVideoModule(LimiterCase):
+    def test_manager_mode_counts_as_gui(self):
+        self.assertEqual(exit_video_mod.role_for_mode("MANAGER"), "gui")
+        self.assertEqual(exit_video_mod.role_for_mode("NORMAL"), "player")
+        self.assertEqual(exit_video_mod.role_for_mode(None), "player")
+
+    def test_the_movie_is_launched_through_the_loader_script(self):
+        calls = []
+
+        class FakeProc:
+            pid = 777
+
+            def poll(self):
+                return 0
+
+            def terminate(self):
+                pass
+
+            def wait(self, timeout=None):
+                return 0
+
+            def kill(self):
+                pass
+
+        def fake_popen(argv, **kwargs):
+            calls.append((argv, kwargs))
+            return FakeProc()
+
+        with patch.object(limiter, "process_table", return_value=[]), \
+             patch.object(limiter, "_pid_alive", return_value=True), \
+             patch.object(subprocess, "Popen", side_effect=fake_popen):
+            video = exit_video_mod.ExitVideo("MANAGER", timeout=20)
+            self.assertTrue(video.start())
+            video.finish()
+
+        self.assertEqual(len(calls), 1)
+        argv, kwargs = calls[0]
+        self.assertEqual(Path(argv[1]), SCRIPT)
+        self.assertIn("--exit", argv)
+        self.assertEqual(kwargs["env"]["MP_EXIT_VIDEO_NO_TTY"], "1")
+        self.assertEqual(kwargs["env"]["EXIT_VIDEO_MAX_SECONDS"], "20")
+
+    def test_a_second_window_is_not_elected(self):
+        hosts = self.table("python3 /opt/MP_Audio_Player_Liquid_Glass_OpenGL.py")
+        with patch.object(limiter, "process_table", return_value=hosts), \
+             patch.object(limiter, "_pid_alive", return_value=True):
+            video = exit_video_mod.ExitVideo("NORMAL")
+            self.assertFalse(video.start())
+            self.assertIsNone(video.process)
+
+    def test_the_switch_is_read_without_sourcing_the_file(self):
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(lambda: subprocess.run(["rm", "-rf", tmp]))
+        cfg = Path(tmp) / "config.env"
+        cfg.write_text('SHOW_EXIT_VIDEO="false"\n', encoding="utf-8")
+        self.assertFalse(exit_video_mod.exit_video_enabled(Path(tmp)))
+        cfg.write_text('SHOW_EXIT_VIDEO="true"\n', encoding="utf-8")
+        self.assertTrue(exit_video_mod.exit_video_enabled(Path(tmp)))
+
+    def test_an_environment_value_wins_over_the_file(self):
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(lambda: subprocess.run(["rm", "-rf", tmp]))
+        (Path(tmp) / "config.env").write_text('SHOW_EXIT_VIDEO="false"\n', encoding="utf-8")
+        with patch.dict(os.environ, {"SHOW_EXIT_VIDEO": "true"}):
+            self.assertTrue(exit_video_mod.exit_video_enabled(Path(tmp)))
+
+    def test_the_timeout_has_a_sane_floor(self):
+        with patch.dict(os.environ, {"EXIT_VIDEO_MAX_SECONDS": "1"}):
+            self.assertGreaterEqual(exit_video_mod.exit_video_timeout(), 5)
+        with patch.dict(os.environ, {"EXIT_VIDEO_MAX_SECONDS": "nonsense"}):
+            self.assertEqual(exit_video_mod.exit_video_timeout(), 90)
+
+
+if __name__ == "__main__":
+    unittest.main()
