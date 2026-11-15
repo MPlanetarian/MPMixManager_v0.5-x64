@@ -66,6 +66,16 @@ class CompanionTestBase(unittest.TestCase):
         self.addCleanup(self._archive_patch.stop)
 
         self._music_files = []
+        # `scan_music_files` must be stubbed here as well: `set_library_mode()`
+        # rebuilds the queue, and the MUSIC branch reaches this scanner directly.
+        # Left real, it read the generated 55k-track playlist and stat'd it over
+        # the SMB share - ~2.4 s per miss, 120 s per test, which tripped the
+        # runner's 300 s module timeout and looked like a hang.
+        self._music_patch = patch.object(
+            companion, "scan_music_files", side_effect=lambda: list(self._music_files)
+        )
+        self._music_patch.start()
+        self.addCleanup(self._music_patch.stop)
 
         # The SMB/LAN mount probe blocks for 15 s and must never run in a test.
         self._mount_patch = patch.object(
@@ -97,12 +107,16 @@ class CompanionTestBase(unittest.TestCase):
     def use_music(self, files):
         """Point the MUSIC library at the given file list."""
         self._music_files[:] = [str(Path(f)) for f in files]
-        self._music_patch = patch.object(
-            companion, "scan_music_files", side_effect=lambda: list(self._music_files)
-        )
-        self._music_patch.start()
-        self.addCleanup(self._music_patch.stop)
         companion.invalidate_queue_cache()
+
+    def use_real_music_scanner(self):
+        """Let `scan_music_files()` run for real.
+
+        A handful of tests exist to exercise the scanner itself (its cache, and
+        how it reads a playlist whose paths are not on disk yet), so they need
+        the real function rather than the empty fixture.
+        """
+        self._music_patch.stop()
 
     def use_favorites(self, files):
         """Write a favorites.json the way the MP Audio Player stores it."""
@@ -253,6 +267,7 @@ class TestLibraryMode(CompanionTestBase):
         """The generated playlist is the music list even before the share mounts."""
         mix = _touch_audio(self.home / "MIX_ARCHIVE" / "mix_one.flac")
         self.use_archive([mix])
+        self.use_real_music_scanner()
         missing = self.home / "MUSIC_SMB" / "DATAMAC1" / "Mateh - Oneness.mp3"
         playlist = self.home / "lists" / "DJ_Tracks_ALL_MUSIC_FOLDERS.json"
         _write(playlist, json.dumps([{"path": str(missing), "title": "Mateh - Oneness"}]))
@@ -515,6 +530,7 @@ class TestModeSwitchResponsiveness(CompanionTestBase):
 
     def test_music_playlist_is_parsed_only_once(self):
         """Re-parsing a 30 MB playlist on every tap made the buttons feel dead."""
+        self.use_real_music_scanner()
         playlist = self.home / "PLAYLISTS_GENERATED" / "DJ_Tracks_ALL_MUSIC_FOLDERS.json"
         track = _touch_audio(self.home / "MUSIC" / "song.mp3")
         _write(playlist, json.dumps([{"path": str(track)}]))
