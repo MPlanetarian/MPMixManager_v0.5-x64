@@ -10,7 +10,10 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$Root,
     [ValidateSet("Install", "EnsureTray", "Status")]
-    [string]$Action = "Install"
+    [string]$Action = "Install",
+    # Comma-separated shortcut names this install should create. Empty means
+    # all four, which keeps every older caller working unchanged.
+    [string]$Components = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -282,6 +285,119 @@ function Start-MpHiddenPowerShell {
     }
 }
 
+function Get-MpCompanionProcess {
+    foreach ($name in @("pythonw.exe", "python.exe")) {
+        $procs = @(Get-CimInstance Win32_Process -Filter "Name = '$name'" -ErrorAction SilentlyContinue)
+        foreach ($proc in $procs) {
+            if ($proc.CommandLine -and $proc.CommandLine -like "*mix_web_companion.py*") {
+                return $proc
+            }
+        }
+    }
+    return $null
+}
+
+function Get-MpCompanionStatus {
+    param([string]$InstallRoot)
+    $proc = Get-MpCompanionProcess
+    if ($proc) { return "RUNNING (pid $($proc.ProcessId))" }
+    return "STOPPED"
+}
+
+function Get-MpCompanionPort {
+    param([string]$InstallRoot)
+    $port = 8888
+    $config = Join-Path $InstallRoot "config.env"
+    if (Test-Path -LiteralPath $config) {
+        foreach ($line in Get-Content -LiteralPath $config -ErrorAction SilentlyContinue) {
+            if ($line -match '^\s*WEB_COMPANION_PORT\s*=\s*"?(\d+)"?') {
+                $port = [int]$Matches[1]
+                break
+            }
+        }
+    }
+    return $port
+}
+
+function Start-MpCompanion {
+    param([string]$InstallRoot)
+    if (Get-MpCompanionProcess) { return $true }
+    $bat = Join-Path $InstallRoot "launch_web_companion.bat"
+    if (-not (Test-Path -LiteralPath $bat)) {
+        throw "Companion launcher was not found: $bat"
+    }
+    # Same reasoning as the tray: install.sh runs under Git Bash, which kills
+    # child processes when it exits, and WMI creates the process in session 0
+    # where it cannot answer the LAN. Task Scheduler starts it in the signed-in
+    # user's session and it survives the installer exiting.
+    $exe = Join-Path $env:SystemRoot "System32\cmd.exe"
+    $taskName = "MP Web Companion Launch"
+    $action = New-ScheduledTaskAction -Execute $exe -Argument "/c `"`"$bat`"`"" -WorkingDirectory $InstallRoot
+    $user = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+    $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
+    Register-ScheduledTask -TaskName $taskName -Action $action -Principal $principal -Force | Out-Null
+    try {
+        Start-ScheduledTask -TaskName $taskName
+        $port = Get-MpCompanionPort -InstallRoot $InstallRoot
+        $deadline = (Get-Date).AddSeconds(20)
+        do {
+            if (Get-MpCompanionProcess) { break }
+            Start-Sleep -Milliseconds 300
+        } while ((Get-Date) -lt $deadline)
+        # A process is not proof it is serving; wait for the port to answer.
+        $deadline = (Get-Date).AddSeconds(20)
+        do {
+            try {
+                $client = New-Object System.Net.Sockets.TcpClient
+                $client.Connect("127.0.0.1", $port)
+                $client.Close()
+                return $true
+            } catch {
+                Start-Sleep -Milliseconds 400
+            }
+        } while ((Get-Date) -lt $deadline)
+    } finally {
+        Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
+    }
+    return ($null -ne (Get-MpCompanionProcess))
+}
+
+function Get-MpCompanionUrl {
+    param([string]$InstallRoot)
+    $port = Get-MpCompanionPort -InstallRoot $InstallRoot
+    $lan = ""
+    try {
+        $lan = (Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+                Where-Object { $_.IPAddress -notlike "127.*" -and $_.IPAddress -notlike "169.254.*" } |
+                Select-Object -First 1 -ExpandProperty IPAddress)
+    } catch { $lan = "" }
+    if (-not $lan) { $lan = "localhost" }
+    return "http://${lan}:${port}"
+}
+
+function Add-MpCompanionFirewallRule {
+    param([string]$InstallRoot)
+    # Without a rule, the first time python listens on 8888 Windows shows the
+    # "allow this app on public and private networks" dialog. If nobody is at
+    # the keyboard to answer it, Python stays blocked: the agent then cannot
+    # poll the host and the phone cannot reach the dashboard, which looks like
+    # a broken companion. A per-user install cannot write a firewall rule
+    # without elevation, so this is best effort and says so.
+    $port = Get-MpCompanionPort -InstallRoot $InstallRoot
+    $name = "MP Web Companion (TCP $port)"
+    try {
+        $existing = Get-NetFirewallRule -DisplayName $name -ErrorAction SilentlyContinue
+        if ($existing) { return $true }
+        New-NetFirewallRule -DisplayName $name -Direction Inbound -Action Allow `
+            -Protocol TCP -LocalPort $port -Profile Any -ErrorAction Stop | Out-Null
+        return $true
+    } catch {
+        Write-Host "Web Companion firewall rule needs an elevated shell:"
+        Write-Host "  New-NetFirewallRule -DisplayName '$name' -Direction Inbound -Action Allow -Protocol TCP -LocalPort $port -Profile Any"
+        return $false
+    }
+}
+
 function Stop-MpTrayProcess {
     $deadline = (Get-Date).AddSeconds(5)
     do {
@@ -337,7 +453,7 @@ exit /b %ERRORLEVEL%
 }
 
 function Install-MpUserShortcuts {
-    param([string]$InstallRoot)
+    param([string]$InstallRoot, [string]$Wanted = "")
     $context = Get-MpInteractiveContext
     $desktop = Get-MpUserShellFolder -Context $context -Kind "Desktop"
     $programs = Get-MpUserShellFolder -Context $context -Kind "Programs"
@@ -372,8 +488,44 @@ function Install-MpUserShortcuts {
         @{ Name = "MP Gui"; Target = $gui; Arguments = ""; Comment = "Launch MP Gui" },
         @{ Name = "MP Liquid Visualizer"; Target = $visualizer; Arguments = ""; Comment = "Launch MP Liquid Visualizer" }
     )
+
+    # -Components is a list of ids (manager, gui, liquid, visualizer) or
+    # shortcut names, comma or space separated. Empty means every one of them,
+    # which is what an older caller (and a plain install) gets. An unselected
+    # app also has its shortcut deleted, so switching to "only MP Gui" does
+    # not leave three dead icons behind.
+    $idToName = @{
+        "manager" = "MP Mix Manager"
+        "gui" = "MP Gui"
+        "liquid" = "MP Liquid Player"
+        "visualizer" = "MP Liquid Visualizer"
+    }
+    $wanted = @()
+    if ($Wanted) {
+        foreach ($part in ($Wanted -split "[,\s]+")) {
+            $trimmed = $part.Trim()
+            if (-not $trimmed) { continue }
+            $key = $trimmed.ToLowerInvariant()
+            if ($idToName.ContainsKey($key)) {
+                $wanted += $idToName[$key]
+            } else {
+                $wanted += $trimmed
+            }
+        }
+    }
+    $keepAll = ($wanted.Count -eq 0)
     $written = @()
     foreach ($item in $items) {
+        $selected = $keepAll -or ($wanted -contains $item.Name)
+        if (-not $selected) {
+            foreach ($dir in @($desktop, $menu)) {
+                $staleLink = Join-Path $dir ($item.Name + ".lnk")
+                if (Test-Path -LiteralPath $staleLink) {
+                    Remove-Item -LiteralPath $staleLink -Force -ErrorAction SilentlyContinue
+                }
+            }
+            continue
+        }
         if (-not (Test-Path -LiteralPath $item.Target)) {
             throw "Launcher was not found for $($item.Name): $($item.Target)"
         }
@@ -388,6 +540,22 @@ function Install-MpUserShortcuts {
     $powershell = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
     $trayArgs = "-NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hidden -File `"$trayScript`" -Root `"$InstallRoot`" -Stay"
     New-MpShortcut -Path (Join-Path $startup "MP Mix Manager Tray.lnk") -Target $powershell -Arguments $trayArgs -WorkDir $InstallRoot -Description "MP Mix Manager tray icon" -Icon $icon
+
+    # The Studio & DJ Booth Mobile Web Companion is a login service on Linux
+    # (systemd --user) and macOS (launchd). Windows has neither for a per-user
+    # process, so the equivalent is a shortcut in the user's Startup folder,
+    # which the shell runs at every sign-in. Without this the phone dashboard
+    # only existed on Linux and macOS.
+    $companionBat = Join-Path $InstallRoot "launch_web_companion.bat"
+    if (Test-Path -LiteralPath $companionBat) {
+        $companionIcon = "shell32.dll,21"
+        $status = Get-MpCompanionStatus -InstallRoot $InstallRoot
+        New-MpShortcut -Path (Join-Path $startup "MP Web Companion.lnk") -Target $companionBat -Arguments "" -WorkDir $InstallRoot -Description "MP Mix Manager Web Companion (phone / tablet dashboard, port 8888)" -Icon $companionIcon
+        Write-Host "Web Companion startup: $(Join-Path $startup 'MP Web Companion.lnk')"
+        Write-Host "Web Companion status: $status"
+    } else {
+        Write-Host "Web Companion launcher was not found: $companionBat"
+    }
 
     Update-MpDesktopView -Desktop $desktop
     Show-MpDesktopIcons
@@ -415,7 +583,7 @@ if ($Action -eq "EnsureTray") {
     exit 3
 }
 
-$context = Install-MpUserShortcuts -InstallRoot $Root
+$context = Install-MpUserShortcuts -InstallRoot $Root -Wanted $Components
 if ($context.IsCurrent) {
     Stop-MpTrayProcess
     if (-not (Start-MpTray -InstallRoot $Root -Stay)) {
@@ -423,7 +591,20 @@ if ($context.IsCurrent) {
         exit 3
     }
     Write-Host "Tray icon: started"
+
+    # Start the companion now as well as at every login, so a fresh install has
+    # a working dashboard immediately. A failure here must not fail the whole
+    # install: the shortcut is already in Startup and will start it next login.
+    if (Test-Path -LiteralPath (Join-Path $Root "launch_web_companion.bat")) {
+        Add-MpCompanionFirewallRule -InstallRoot $Root | Out-Null
+        if (Start-MpCompanion -InstallRoot $Root) {
+            Write-Host "Web Companion: started at $(Get-MpCompanionUrl -InstallRoot $Root)"
+        } else {
+            Write-Host "Web Companion: installed for next login; it did not start now."
+        }
+    }
 } else {
     Write-Host "Tray icon: will appear the next time this user signs in ($($context.Profile))"
+    Write-Host "Web Companion: will start the next time this user signs in ($($context.Profile))"
 }
 exit 0

@@ -13,12 +13,14 @@ shift
 
 ACTION="Install"
 STAY=0
+COMPONENTS=""
 for _arg in "$@"; do
     case "$_arg" in
         --ensure-tray) ACTION="EnsureTray" ;;
         --status) ACTION="Status" ;;
         --tray-foreground) ACTION="Tray" ;;
         --stay) STAY=1 ;;
+        --components=*) COMPONENTS="${_arg#--components=}" ;;
         *)
             echo "install_windows_user.sh: unknown option $_arg" >&2
             exit 2
@@ -100,4 +102,7 @@ if [ "$ACTION" = "Tray" ]; then
 fi
 
 SCRIPT="$(to_windows_path "$ROOT/scripts/windows_user_integration.ps1")"
+if [ -n "$COMPONENTS" ]; then
+    exec "$PS_EXE" -NoProfile -ExecutionPolicy Bypass -File "$SCRIPT" -Root "$WIN_ROOT" -Action "$ACTION" -Components "$COMPONENTS"
+fi
 exec "$PS_EXE" -NoProfile -ExecutionPolicy Bypass -File "$SCRIPT" -Root "$WIN_ROOT" -Action "$ACTION"

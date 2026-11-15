@@ -16,6 +16,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -36,6 +37,11 @@ try:
 except ImportError:  # pragma: no cover - the tray lives beside the helper
     web_service = None  # type: ignore[assignment]
 
+try:
+    import exit_video as exit_video_module
+except ImportError:  # pragma: no cover - the tray lives beside the helper
+    exit_video_module = None  # type: ignore[assignment]
+
 MENU_LAUNCH_GUI = "Launch MP Gui"
 MENU_LAUNCH_LIQUID = "Launch MP Liquid Player"
 MENU_LAUNCH_MANAGER = "Launch MP Mix Manager"
@@ -43,7 +49,7 @@ MENU_CLOSE_ALL = "Close MP Mix Manager (Closes everything)"
 # Label is filled in from the live service state: Stop while the companion is
 # serving, Start while it is not. Several dashboards may be connected, which is
 # why the label is re-read whenever the menu is opened.
-MENU_WEB_AUDIO = "Start / Stop MP Web Audio"
+MENU_WEB_AUDIO = "Start / Stop MP Audio Player (Web)"
 
 MENU_ENTRIES = (
     ("launch-gui", MENU_LAUNCH_GUI),
@@ -52,6 +58,55 @@ MENU_ENTRIES = (
     ("web-audio", MENU_WEB_AUDIO),
     ("close-all", MENU_CLOSE_ALL),
 )
+
+# Menu entry -> the install component that owns it. An install that set up
+# only one app must not offer to launch the three that are not there, so the
+# menu is filtered through the stored selection.
+ENTRY_COMPONENTS = {
+    "launch-gui": "gui",
+    "launch-liquid": "liquid",
+    "launch-manager": "manager",
+}
+
+
+def app_selection_module():
+    """The shared selection helper, or None when it cannot be imported."""
+    try:
+        import mp_app_selection as selection
+    except ImportError:  # pragma: no cover - the module ships beside the tray
+        try:
+            sys.path.insert(0, str(Path(__file__).resolve().parent))
+            import mp_app_selection as selection  # type: ignore[no-redef]
+        except ImportError:
+            return None
+    return selection
+
+
+def installed_components() -> set[str]:
+    """The apps this install set up. All four when the file is absent."""
+    selection = app_selection_module()
+    if selection is None:
+        return {"manager", "gui", "liquid", "visualizer"}
+    try:
+        return set(selection.read())
+    except Exception:
+        return {"manager", "gui", "liquid", "visualizer"}
+
+
+def menu_entries(components: set[str] | None = None) -> tuple[tuple[str, str], ...]:
+    """The menu entries that belong to the installed apps.
+
+    Close All and the Web Companion entry stay: they are not tied to one of
+    the four apps.
+    """
+    chosen = installed_components() if components is None else set(components)
+    if {"manager", "gui", "liquid"} <= chosen:
+        return MENU_ENTRIES
+    return tuple(
+        (ident, label)
+        for ident, label in MENU_ENTRIES
+        if ENTRY_COMPONENTS.get(ident) is None or ENTRY_COMPONENTS[ident] in chosen
+    )
 
 FOCUS_TITLES = {
     ROLE_GUI: "MP Mix Manager (Liquid Glass",
@@ -70,6 +125,42 @@ LIQUID_HOSTS = (
     "MP_Audio_Player_Liquid_Glass_OpenGL.py",
     "MP_Audio_Player_Liquid_Glass_macOS.py",
     "MP_Audio_Player_Liquid_Glass_OpenGL_macOS.py",
+)
+
+# Substrings that can possibly make `classify_process` return a role. Used as
+# a cheap prefilter so an unrelated process is rejected with a few `in` tests
+# instead of a full argv walk. Every name checked below must appear here, or a
+# real app would stop being detected.
+_CLASSIFY_MARKERS = (
+    "MP_Audio_Player_Liquid_Glass",
+    "MP_Gui.sh",
+    "launch-liquid-glass",
+    "launch_liquid_glass.sh",
+    "Mix_Archive_Manager.sh",
+    "mix-archive-manager",
+    "launch-manager",
+)
+
+# Processes that belong to the suite but hold no capped role of their own:
+# the standalone MP Liquid Visualizer, the terminal player (and its daemon),
+# the MIDI companion, and the launcher wrappers. The tray signals these itself
+# as well as running the kill script, so a Close All still closes them when the
+# script is missing or its patterns do not match the way this host launched
+# them.
+SUITE_HELPER_SCRIPTS = (
+    "MP_Liquid_Visualizer.py",
+    "mp_liquid_visualizer_vulkan.py",
+    "mp_liquid_visualizer_metal.py",
+    "MP_Audio_Player.py",
+    "MP_Audio_Player.sh",
+    "traktor_s4_midi.py",
+    "launch_liquid_visualizer",
+    "launch_liquid_visualizer.sh",
+    "launch-liquid-glass",
+    "launch_liquid_glass.sh",
+    "launch_mp_gui",
+    "MP_Gui.sh",
+    "mp_liquid_visualizer_vulkan",
 )
 
 # MP Gui and MP Liquid Player may have at most four windows. Launching a fifth
@@ -297,11 +388,22 @@ def command_argv(cmdline: str) -> list[str]:
     return parts[index:]
 
 
+def _basename(token: str) -> str:
+    """The last path component, without building a Path object.
+
+    ``Path(token).name`` was the single hottest call in the status poll: the
+    classifier runs it for every process on the machine, several times each.
+    ``rsplit`` gives the same answer for the polished argv tokens this sees and
+    allocates nothing.
+    """
+    return token.rstrip("/").rsplit("/", 1)[-1]
+
+
 def _basename_is(arg: str, script_name: str) -> bool:
     token = arg.strip("'\"")
     if not token or token.startswith("-") or any(ch.isspace() for ch in token):
         return False
-    return Path(token).name == script_name
+    return _basename(token) == script_name
 
 
 def invoked_script(cmdline: str, script_name: str) -> bool:
@@ -310,7 +412,7 @@ def invoked_script(cmdline: str, script_name: str) -> bool:
         return False
     if _basename_is(argv[0], script_name):
         return True
-    exe = Path(argv[0]).name
+    exe = _basename(argv[0].strip("'\""))
     if exe in _INTERPRETERS or exe.startswith("python"):
         for arg in argv[1:]:
             if arg.startswith("-"):
@@ -322,7 +424,8 @@ def invoked_script(cmdline: str, script_name: str) -> bool:
 def _hosted_by_gui(proc: ProcessInfo, by_pid: dict[int, ProcessInfo]) -> bool:
     # The GUI runs Mix_Archive_Manager.sh inside its own window. That shell
     # is not the console manager, even when its environment cannot be read.
-    if "MP_GUI_SESSION=1" in proc.environ.split("\n"):
+    environ = proc.environ or process_environ(proc.pid)
+    if "MP_GUI_SESSION=1" in environ.split("\n"):
         return True
     seen: set[int] = set()
     current = proc.ppid
@@ -352,22 +455,30 @@ def classify_process(
 ) -> str | None:
     if self_pids and proc.pid in self_pids:
         return None
-    if "mp_system_tray" in proc.cmdline:
+    cmdline = proc.cmdline
+    if "mp_system_tray" in cmdline:
+        return None
+    # A substring guard before the real classification. The marker set is tiny
+    # and most of a machine's processes match none of it, so one cheap `in`
+    # per marker avoids launching `command_argv` and the argv walks below for
+    # every unrelated process. This was the bulk of the Web Companion's status
+    # poll cost, which runs for every phone on the network every few seconds.
+    if not any(marker in cmdline for marker in _CLASSIFY_MARKERS):
         return None
     parents = by_pid or {}
     for name in LIQUID_HOSTS:
-        if invoked_script(proc.cmdline, name):
-            if "--manager" in command_argv(proc.cmdline):
+        if invoked_script(cmdline, name):
+            if "--manager" in command_argv(cmdline):
                 return ROLE_GUI
             return ROLE_LIQUID
-    if invoked_script(proc.cmdline, "MP_Gui.sh"):
+    if invoked_script(cmdline, "MP_Gui.sh"):
         return ROLE_GUI
-    if invoked_script(proc.cmdline, "launch-liquid-glass") or invoked_script(proc.cmdline, "launch_liquid_glass.sh"):
+    if invoked_script(cmdline, "launch-liquid-glass") or invoked_script(cmdline, "launch_liquid_glass.sh"):
         return ROLE_LIQUID
     if (
-        invoked_script(proc.cmdline, "Mix_Archive_Manager.sh")
-        or invoked_script(proc.cmdline, "mix-archive-manager")
-        or invoked_script(proc.cmdline, "launch-manager")
+        invoked_script(cmdline, "Mix_Archive_Manager.sh")
+        or invoked_script(cmdline, "mix-archive-manager")
+        or invoked_script(cmdline, "launch-manager")
     ):
         if _hosted_by_gui(proc, parents):
             return None
@@ -403,6 +514,41 @@ def manager_pids(
     for proc in processes:
         if classify_process(proc, by_pid, self_pids) == ROLE_MANAGER:
             found.append(proc.pid)
+    return found
+
+
+def suite_pids(
+    processes: list[ProcessInfo],
+    self_pids: set[int] | None = None,
+) -> list[int]:
+    """Every pid the tray owns: the three roles plus their helper processes.
+
+    `manager_pids()` alone was not enough for a Close All. The kill script
+    covers most of this by command-line pattern, but the console manager and
+    MP Gui are only matched by accident of argv, and nothing signalled them
+    directly. When the kill script was missing or its patterns missed (for
+    example a manager started through `bin/mix-archive-manager`, or an install
+    tree in another path), those windows simply stayed open.
+
+    Signalling the classified roles covers every window the tray can see,
+    whatever launched it. `SUITE_HELPER_SCRIPTS` then adds the visualizer and
+    the terminal player, which hold no capped role but are part of the suite.
+    """
+    by_pid = index_processes(processes)
+    me = {os.getpid()}
+    if self_pids:
+        me |= {int(pid) for pid in self_pids}
+    found = []
+    for proc in processes:
+        if proc.pid in me or "mp_system_tray" in proc.cmdline:
+            continue
+        if classify_process(proc, by_pid, me):
+            found.append(proc.pid)
+            continue
+        for script in SUITE_HELPER_SCRIPTS:
+            if invoked_script(proc.cmdline, script):
+                found.append(proc.pid)
+                break
     return found
 
 
@@ -502,6 +648,20 @@ def kill_all_script(base: Path) -> Path | None:
     return None
 
 
+def process_environ(pid: int) -> str:
+    """One process's environment, NUL-separated as newlines.
+
+    Read on demand rather than in :func:`read_proc_table`: only the console
+    manager's classification needs it, and slurping `/proc/*/environ` for every
+    process on the machine dominated the cost of a single status poll.
+    """
+    try:
+        raw = Path(f"/proc/{pid}/environ").read_bytes()
+    except OSError:
+        return ""
+    return raw.replace(b"\x00", b"\n").decode("utf-8", "replace")
+
+
 def read_proc_table() -> list[ProcessInfo]:
     proc_root = Path("/proc")
     if proc_root.is_dir():
@@ -517,14 +677,8 @@ def read_proc_table() -> list[ProcessInfo]:
             if not raw:
                 continue
             cmdline = raw.replace(b"\x00", b" ").decode("utf-8", "replace").strip()
-            environ = ""
-            try:
-                env_raw = (entry / "environ").read_bytes()
-                environ = env_raw.replace(b"\x00", b"\n").decode("utf-8", "replace")
-            except OSError:
-                environ = ""
             ppid = _ppid_from_stat(stat)
-            found.append(ProcessInfo(int(entry.name), ppid, cmdline, environ))
+            found.append(ProcessInfo(int(entry.name), ppid, cmdline, ""))
         return found
     return _read_proc_table_ps()
 
@@ -720,24 +874,52 @@ def _still_alive(pids: list[int]) -> list[int]:
     return alive
 
 
-def shutdown_suite(base: Path) -> list[int]:
-    """Stop playback, the GUI, the Liquid Player, and the console manager."""
-    script = kill_all_script(base)
-    if script is not None:
-        try:
-            subprocess.run(
-                [str(script), "-q"],
-                timeout=30,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                check=False,
-                start_new_session=True,
-            )
-        except (OSError, subprocess.TimeoutExpired):
-            pass
-    processes = read_proc_table()
-    pids = manager_pids(processes, {os.getpid()})
+def play_exit_video(base: Path) -> bool:
+    """Play the closing movie before the tray tears the suite down.
+
+    The tray's Close item terminates every MP process at once, so the windows
+    never reach the shutdown path that normally plays `Exit_MP_Video.mp4`.
+    Playing it here keeps the tray identical to closing the last window: the
+    movie runs first, while the windows are still on screen, and the suite is
+    only stopped once it ends.
+
+    Returns True when the movie played. An unset `SHOW_EXIT_VIDEO` still means
+    play; only an explicit off value suppresses it.
+    """
+    if exit_video_module is None:
+        return False
+    try:
+        if not exit_video_module.exit_video_enabled(base):
+            return False
+        if exit_video_module.find_exit_video(base) is None:
+            return False
+        return bool(exit_video_module.play_exit_video("MANAGER", base, elect=False))
+    except Exception:
+        return False
+
+
+def shutdown_suite(base: Path, play_exit: bool = True, verify: bool = True) -> list[int]:
+    """Stop playback, the GUI, the Liquid Player, and the console manager.
+
+    `play_exit` shows `Exit_MP_Video.mp4` first, because the close below is a
+    hard kill that leaves the windows no chance to show it themselves. While
+    the suite-close marker is set the windows also decline to play it, so the
+    movie never runs twice for one close.
+
+    `verify` re-reads the process table until every MP role is gone and
+    escalates to SIGKILL on anything the first sweep missed, so "Close" cannot
+    leave a window behind. The check only runs where a process is actually
+    being stopped, so a suite close with nothing open is still instant.
+    """
+    if play_exit:
+        if instance_limit is not None:
+            try:
+                instance_limit.mark_suite_closing()
+            except Exception:
+                pass
+        play_exit_video(base)
+    _run_kill_script(base)
+    pids = suite_pids(read_proc_table(), {os.getpid()})
     _signal_pids(pids, signal.SIGTERM)
     deadline = time.time() + 1.5
     alive = _still_alive(pids)
@@ -747,7 +929,64 @@ def shutdown_suite(base: Path) -> list[int]:
     if alive:
         _signal_pids(alive, signal.SIGKILL)
     close_windows()
+    if verify:
+        pids = _verify_suite_closed(base, pids)
+    if play_exit and instance_limit is not None:
+        try:
+            instance_limit.clear_suite_closing()
+        except Exception:
+            pass
     return pids
+
+
+def _run_kill_script(base: Path) -> None:
+    """Run the shared kill script, if this tree ships one."""
+    script = kill_all_script(base)
+    if script is None:
+        return
+    try:
+        subprocess.run(
+            [str(script), "-q"],
+            timeout=30,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            start_new_session=True,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+
+
+def _verify_suite_closed(base: Path, first_wave: list[int]) -> list[int]:
+    """Confirm nothing MP is still running, escalating once if it is.
+
+    This is the part that makes Close All trustworthy on every platform. The
+    kill script matches command-line patterns, and those patterns miss a
+    window launched through a wrapper, a renamed tree, or a different
+    interpreter. Reading the tray's own role table afterwards and killing
+    whatever is left closes the gap between "we asked for a close" and "the
+    windows are actually gone".
+    """
+    report = list(first_wave)
+    deadline = time.time() + 4.0
+    while True:
+        remaining = suite_pids(read_proc_table(), {os.getpid()})
+        if not remaining:
+            return report
+        if time.time() >= deadline:
+            break
+        time.sleep(0.2)
+    # Second pass: re-run the script (it also clears pid/state files) and
+    # SIGKILL every role pid still visible.
+    _run_kill_script(base)
+    _signal_pids(remaining, signal.SIGKILL)
+    report.extend(pid for pid in remaining if pid not in report)
+    deadline = time.time() + 2.0
+    while remaining and time.time() < deadline:
+        time.sleep(0.15)
+        remaining = suite_pids(read_proc_table(), {os.getpid()})
+    return report
 
 
 def spawn_argv(argv: list[str], base: Path, log_path: Path) -> None:
@@ -1031,6 +1270,14 @@ def toggle_web_audio() -> dict:
 def perform_menu_action(base: Path, action_id: str) -> int:
     if action_id not in _MENU_ACTIONS:
         return 2
+    component = ENTRY_COMPONENTS.get(action_id)
+    if component is not None and component not in installed_components():
+        print(
+            f"{FOCUS_TITLES[{'launch-gui': ROLE_GUI, 'launch-liquid': ROLE_LIQUID, 'launch-manager': ROLE_MANAGER}[action_id]]} "
+            "was not installed by this setup.",
+            file=sys.stderr,
+        )
+        return 1
     if action_id == "close-all":
         shutdown_suite(base)
         return 0
@@ -1038,7 +1285,7 @@ def perform_menu_action(base: Path, action_id: str) -> int:
         result = toggle_web_audio()
         if not result.get("supported"):
             print(
-                f"Start/Stop MP Web Audio is not available on {result.get('platform', sys.platform)}.",
+                f"Start/Stop MP Audio Player (Web) is not available on {result.get('platform', sys.platform)}.",
                 file=sys.stderr,
             )
         return 0 if result.get("supported") else 1
@@ -1501,6 +1748,7 @@ def run_tray(base: Path, config: Path, stay: bool = False) -> int:
               file=sys.stderr)
         return 0
 
+    from PySide6.QtCore import QTimer
     from PySide6.QtGui import QAction, QCursor, QIcon
     from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
@@ -1529,13 +1777,69 @@ def run_tray(base: Path, config: Path, stay: bool = False) -> int:
         state["busy_until"] = time.time() + LAUNCH_GRACE_SECONDS
         state["absent_since"] = None
 
+    def _run_close_all(state_box: dict) -> None:
+        """Play the movie and tear the suite down, without blocking the icon.
+
+        This used to run inline in the Qt slot. `shutdown_suite()` waits for
+        `Exit_MP_Video.mp4` (about 40 seconds) with `time.sleep()`, so the Qt
+        event loop was frozen for the whole movie: the menu stayed painted, the
+        icon stopped answering, and the desktop treated the tray as hung. On
+        Plasma the frozen StatusNotifier process is what made "Close" appear to
+        do nothing and leave every window open.
+
+        The teardown runs on this worker thread. It reports back through a
+        plain dict, and the main-thread timer started by `dispatch` performs
+        the quit. `QTimer.singleShot` cannot be used here: a timer created on a
+        thread without an event loop never fires, so the tray would never quit.
+        """
+        try:
+            shutdown_suite(base)
+        except Exception as exc:  # never leave the tray without an icon
+            state_box["error"] = str(exc)
+            try:
+                log_path.parent.mkdir(parents=True, exist_ok=True)
+                with open(log_path, "a", encoding="utf-8") as log_file:
+                    log_file.write(f"close-all failed: {exc}\n")
+            except OSError:
+                pass
+        finally:
+            state_box["done"] = True
+
+    close_state = {"done": False, "error": ""}
+
     def dispatch(action_id: str) -> None:
-        if state["closing"]:
+        if state["closing"] and action_id != "web-audio":
             return
         if action_id == "close-all":
             state["closing"] = True
-            shutdown_suite(base)
-            app.quit()
+            # Disable the menu item so a second click cannot start a second
+            # movie while the first is still playing.
+            close_action.setEnabled(False)
+            close_action.setText("Closing MP Mix Manager…")
+            worker = threading.Thread(
+                target=_run_close_all, args=(close_state,), name="mp-tray-close", daemon=True
+            )
+            worker.start()
+            # Watch the worker from the GUI thread. This timer lives in the
+            # thread that owns the event loop, so it really ticks.
+            watcher = QTimer()
+            watcher.setInterval(200)
+
+            def _check_closed() -> None:
+                if not close_state["done"]:
+                    return
+                watcher.stop()
+                if close_state["error"]:
+                    try:
+                        log_path.parent.mkdir(parents=True, exist_ok=True)
+                        with open(log_path, "a", encoding="utf-8") as log_file:
+                            log_file.write(f"close-all finished with: {close_state['error']}\n")
+                    except OSError:
+                        pass
+                app.quit()
+
+            watcher.timeout.connect(_check_closed)
+            watcher.start()
             return
         if action_id == "web-audio":
             # The label is refreshed in aboutToShow, so this is always the
@@ -1560,7 +1864,8 @@ def run_tray(base: Path, config: Path, stay: bool = False) -> int:
         spawn_argv(list(plan["argv"]), base, log_path)
 
     web_audio_action = None
-    for action_id, label in MENU_ENTRIES:
+    close_action = None
+    for action_id, label in menu_entries():
         if action_id == "close-all":
             menu.addSeparator()
         action = QAction(label, menu)
@@ -1568,6 +1873,8 @@ def run_tray(base: Path, config: Path, stay: bool = False) -> int:
         menu.addAction(action)
         if action_id == "web-audio":
             web_audio_action = action
+        elif action_id == "close-all":
+            close_action = action
 
     def refresh_web_audio_label() -> None:
         # Read the state when the menu opens, so "Stop" is shown only while the
@@ -1608,8 +1915,6 @@ def run_tray(base: Path, config: Path, stay: bool = False) -> int:
             return
         if now - state["absent_since"] >= ABSENT_QUIT_SECONDS:
             app.quit()
-
-    from PySide6.QtCore import QTimer
 
     timer = QTimer()
     timer.setInterval(2000)

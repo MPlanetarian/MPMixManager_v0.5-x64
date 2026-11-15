@@ -3,7 +3,7 @@
 # scripts/dsh_mobile.sh
 # Purpose: Start, stop, restart, and monitor DeepSeek Harness (dsh-mobile)
 #          Web UI server listening on port 3080 with LAN mobile access
-#          (http://192.168.1.11:3080 / http://localhost:3080)
+#          (http://<host>:3080 / http://localhost:3080)
 # Cross-Platform: Windows 10/11 (Git Bash, MSYS2, WSL), Linux (Fedora/Debian), macOS
 # ==============================================================================
 
@@ -79,7 +79,8 @@ if [ -z "$DSH_LAN_IP" ]; then
     if [ -z "$DSH_LAN_IP" ] && command -v ip >/dev/null 2>&1; then
         DSH_LAN_IP=$(ip -4 addr show 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | grep -v '127.0.0.1' | head -1)
     fi
-    [ -z "$DSH_LAN_IP" ] && DSH_LAN_IP="192.168.1.11"
+    # No address discovered: fall back to loopback rather than guessing a LAN IP.
+    [ -z "$DSH_LAN_IP" ] && DSH_LAN_IP="127.0.0.1"
 fi
 DSH_LOCAL_URL="http://localhost:${DSH_PORT}"
 DSH_LAN_URL="http://${DSH_LAN_IP}:${DSH_PORT}"
@@ -301,7 +302,7 @@ set HF_HOME=X:\DeepSeekHarness\cache\huggingface
 set TORCH_HOME=X:\DeepSeekHarness\cache\torch
 if not exist "X:\DeepSeekHarness\cache" mkdir "X:\DeepSeekHarness\cache"
 cd /d "X:\DEEPSEEK\deepseek-harness"
-node --import tsx/esm apps/cli/src/bin.ts web --host 192.168.1.11 --port 3080 --no-open > "X:\DEEPSEEK\dsh-mobile.log" 2>&1
+node --import tsx/esm apps/cli/src/bin.ts web --host 0.0.0.0 --port 3080 --no-open > "X:\DEEPSEEK\dsh-mobile.log" 2>&1
 EOFBAT
         fi
         if command -v powershell.exe >/dev/null 2>&1; then

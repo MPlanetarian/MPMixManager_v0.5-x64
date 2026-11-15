@@ -12,6 +12,10 @@ final class BorderlessWindow: NSWindow {
 }
 
 final class PlayerView: NSView {
+    // The uninstaller loops the exit movie until it finishes. A click or a key
+    // must not dismiss that window early; only the uninstaller stops it.
+    var loops = false
+
     override func makeBackingLayer() -> CALayer {
         let playerLayer = AVPlayerLayer()
         playerLayer.videoGravity = .resizeAspect
@@ -35,10 +39,12 @@ final class PlayerView: NSView {
     override var acceptsFirstResponder: Bool { return true }
 
     override func keyDown(with event: NSEvent) {
+        if loops { return }
         NSApp.terminate(nil)
     }
 
     override func mouseDown(with event: NSEvent) {
+        if loops { return }
         NSApp.terminate(nil)
     }
 }
@@ -49,15 +55,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let args = CommandLine.arguments
-        guard args.count > 1 else {
+        // The movie path is the first argument that is not a flag, so an older
+        // cached binary (which only reads args[1]) still opens the file when
+        // this build is invoked as `binary movie.mp4 --loop`.
+        let loop = args.contains("--loop")
+        // The installer plays the theme track beside this window, so the
+        // movie itself stays silent. The startup logo and the exit movie
+        // do not pass --silent and keep their own sound.
+        let silent = args.contains("--silent")
+        guard let path = args.dropFirst().first(where: { !$0.hasPrefix("--") }) else {
             NSApp.terminate(nil)
             return
         }
 
-        let url = URL(fileURLWithPath: args[1])
+        let url = URL(fileURLWithPath: path)
         let asset = AVURLAsset(url: url)
         let item = AVPlayerItem(asset: asset)
         let avPlayer = AVPlayer(playerItem: item)
+        if silent {
+            avPlayer.volume = 0
+        }
         player = avPlayer
 
         let screen = NSScreen.main?.frame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
@@ -101,6 +118,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         win.title = ""
 
         let view = PlayerView(frame: NSRect(x: 0, y: 0, width: width, height: height))
+        view.loops = loop
         view.playerLayer.player = avPlayer
         win.contentView = view
         window = win
@@ -115,13 +133,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             object: item,
             queue: .main
         ) { _ in
-            NSApp.terminate(nil)
+            if loop {
+                avPlayer.seek(to: .zero)
+                avPlayer.play()
+            } else {
+                NSApp.terminate(nil)
+            }
         }
         NotificationCenter.default.addObserver(
             forName: .AVPlayerItemFailedToPlayToEndTime,
             object: item,
             queue: .main
         ) { _ in
+            // A failed item cannot be looped. Closing lets the caller start
+            // another player, or give up, instead of spinning on a dead item.
             NSApp.terminate(nil)
         }
     }

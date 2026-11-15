@@ -33,6 +33,11 @@ if not exist "%TARGET_PY%" (
 
 set "MP_LIQUID_VISUALIZER=1"
 set "PYTHONIOENCODING=utf-8"
+:: A shortcut the user clicked is a standalone window, not the companion the
+:: player owns. Without this the renderer honours a stale "active": true in
+:: liquid_player_visualizer.json and opens unfocused, bonded "behind" a player
+:: that is not running. Same flag the player uses for its free windows.
+set "MP_VISUALIZER_DETACHED=1"
 
 start "" "%PYTHON_BIN%" "%TARGET_PY%" %*
 exit /b 0

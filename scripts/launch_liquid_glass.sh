@@ -47,6 +47,17 @@ unset _RESOLVED_SRC _RESOLVED_DIR _c _found _lib
 CONFIG_FILE="$HOME/.config/mix-manager/config.env"
 [ ! -f "$CONFIG_FILE" ] && CONFIG_FILE="$BASE_DIR/config.env"
 
+# Raspberry Pi / low-power ARM detection. A Pi cannot run the Vulkan host
+# (liquid_glass_vulkan.py refuses every non-NVIDIA device), so the backend
+# choice is corrected here instead of opening a dead window.
+_PI_LIB="$BASE_DIR/scripts/lib/mp_pi_detect.sh"
+[ ! -f "$_PI_LIB" ] && _PI_LIB="$SCRIPT_DIR/lib/mp_pi_detect.sh"
+# shellcheck source=/dev/null
+[ -f "$_PI_LIB" ] && . "$_PI_LIB"
+if command -v mp_pi_apply_defaults >/dev/null 2>&1; then
+    mp_pi_apply_defaults
+fi
+
 TARGET_PY=""
 # Keep the standalone visualizer on the same GPU path as this player host.
 VIS_BACKEND="auto"
@@ -70,6 +81,17 @@ if [ -z "$TARGET_PY" ]; then
     if [ -f "$CONFIG_FILE" ]; then
         VAL=$(grep -E "^LIQUID_GLASS_BACKEND=" "$CONFIG_FILE" 2>/dev/null | cut -d'=' -f2- | tr -d '"'\'' ')
         [ -n "$VAL" ] && BACKEND="$(echo "$VAL" | tr '[:upper:]' '[:lower:]')"
+    fi
+    # Correct the backend for this machine. On a Raspberry Pi the Vulkan host
+    # refuses to draw (no NVIDIA device), so `vulkan` in config.env used to
+    # leave the user with a window that never opened. OpenGL via Mesa V3D is
+    # the supported path there.
+    if command -v mp_renderer_backend >/dev/null 2>&1; then
+        RESOLVED_BACKEND="$(mp_renderer_backend "$BACKEND")"
+        if [ "$RESOLVED_BACKEND" != "$BACKEND" ]; then
+            echo "MP Liquid Glass: $BACKEND is not supported on $(mp_pi_summary | cut -d'|' -f1 | sed 's/ *$//'); using OpenGL." >&2
+        fi
+        BACKEND="$RESOLVED_BACKEND"
     fi
 
     VIS_BACKEND="$BACKEND"
@@ -171,7 +193,38 @@ if [ -f "$_mp_limit_sh" ]; then
         mp_instance_notify_limit player
         exit 0
     fi
+    # The first MP Liquid Player window of a session plays Exit_MP_Video.mp4
+    # before its glass appears. Do it here, before the companion visualizer
+    # starts, so the movie is the only thing on screen. Windows two to four
+    # open straight away. The host repeats the election (mp_instance_limit.py)
+    # for launch paths that skip this script; a second movie cannot happen
+    # because the claim above is already counted.
+    #
+    # Helper flags draw no player window, so they get no movie either.
+    _mp_intro_wanted=1
+    for _mp_arg in "$@"; do
+        case "$_mp_arg" in
+            --self-test|--embed-check|--list-fonts|--manager)
+                _mp_intro_wanted=0
+                ;;
+            --set-font|--set-font=*|--tracklist|--tracklist=*)
+                _mp_intro_wanted=0
+                ;;
+        esac
+    done
+    if [ "$_mp_intro_wanted" = "1" ] && mp_instance_is_first_player; then
+        _mp_intro_sh="$BASE_DIR/scripts/display_loader_video.sh"
+        [ ! -f "$_mp_intro_sh" ] && _mp_intro_sh="$SCRIPT_DIR/display_loader_video.sh"
+        if [ -f "$_mp_intro_sh" ]; then
+            bash "$_mp_intro_sh" --intro || true
+            # The host repeats the election for launch paths that skip this
+            # script. Tell it this launch has already had its movie, or a
+            # launcher-started window would play it a second time.
+            export MP_PLAYER_INTRO_DONE=1
+        fi
+    fi
 fi
+unset _mp_intro_sh _mp_intro_wanted _mp_arg
 
 # Start the companion visualizer. The Liquid Player closes this window on exit.
 # MP_VISUALIZER_COMPANION marks it as the window the player owns, so it stays

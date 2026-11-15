@@ -45,9 +45,9 @@ final class MenuBarController: NSObject, NSApplicationDelegate {
             ("launch-gui", "Launch MP Gui"),
             ("launch-liquid", "Launch MP Liquid Player"),
             ("launch-manager", "Launch MP Mix Manager"),
-            ("web-audio", "Start / Stop MP Web Audio"),
+            ("web-audio", "Start / Stop MP Audio Player (Web)"),
         ]
-        for (ident, title) in entries {
+        for (ident, title) in entries where self.entryEnabled(ident) {
             let menuItem = NSMenuItem(title: title, action: #selector(performAction(_:)), keyEquivalent: "")
             menuItem.target = self
             menuItem.representedObject = ident
@@ -73,6 +73,35 @@ final class MenuBarController: NSObject, NSApplicationDelegate {
         }
         fputs("ready pid=\(getpid()) image=\(hasImage)\n", stderr)
         fflush(stderr)
+    }
+
+    /// Ask the tray which components this install set up. A one-app install
+    /// must not show "Launch" items for the three apps that are not there.
+    func entryEnabled(_ ident: String) -> Bool {
+        let component: String?
+        switch ident {
+        case "launch-gui": component = "gui"
+        case "launch-liquid": component = "liquid"
+        case "launch-manager": component = "manager"
+        default: component = nil
+        }
+        guard let wanted = component else { return true }
+        let script = (root as NSString).appendingPathComponent("scripts/mp_app_selection.py")
+        guard FileManager.default.isReadableFile(atPath: script) else { return true }
+        guard FileManager.default.isExecutableFile(atPath: python) else { return true }
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: python)
+        task.arguments = [script, "--enabled", wanted]
+        task.currentDirectoryURL = URL(fileURLWithPath: root)
+        task.standardOutput = FileHandle.nullDevice
+        task.standardError = FileHandle.nullDevice
+        do {
+            try task.run()
+        } catch {
+            return true
+        }
+        task.waitUntilExit()
+        return task.terminationStatus == 0
     }
 
     @objc func performAction(_ sender: NSMenuItem) {

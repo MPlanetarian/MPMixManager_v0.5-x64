@@ -13,10 +13,55 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import mp_system_tray as tray
+from tests.mp_test_bash import BASH
 
 
 def proc(pid, ppid, cmdline, environ=""):
     return tray.ProcessInfo(pid, ppid, cmdline, environ)
+
+
+class TestPrefilter(unittest.TestCase):
+    """`classify_process` short-circuits on a substring before the argv walk.
+
+    The guard is what keeps a status poll cheap. If a name the classifier checks
+    is missing from the marker tuple, that app silently stops being detected --
+    no exception, just a button that never lights up. Pin the invariant.
+    """
+
+    CHECKED_NAMES = (
+        "MP_Gui.sh",
+        "launch-liquid-glass",
+        "launch_liquid_glass.sh",
+        "Mix_Archive_Manager.sh",
+        "mix-archive-manager",
+        "launch-manager",
+    )
+
+    def test_every_checked_name_is_in_the_prefilter(self):
+        """Each name must be covered by *some* marker as a substring.
+
+        ``LIQUID_HOSTS`` holds several suffixed variants (``...py``,
+        ``..._OpenGL.py``) that one shared prefix marker covers, so the check is
+        containment rather than equality.
+        """
+        markers = tray._CLASSIFY_MARKERS
+        for name in self.CHECKED_NAMES + tuple(tray.LIQUID_HOSTS):
+            self.assertTrue(
+                any(marker in name or name in marker for marker in markers),
+                f"{name} has no marker in _CLASSIFY_MARKERS: {markers}",
+            )
+
+    def test_a_real_launcher_survives_the_prefilter(self):
+        for name in self.CHECKED_NAMES + tuple(tray.LIQUID_HOSTS):
+            clicked = proc(9000, 1, f"/opt/scripts/{name}")
+            self.assertIsNotNone(
+                tray.classify_process(clicked, {}, {os.getpid()}),
+                f"{name} must still be classified after the prefilter",
+            )
+
+    def test_unrelated_processes_are_rejected_cheaply(self):
+        for cmdline in ("systemd --user", "vim /opt/notes.txt", "python3 app.py"):
+            self.assertIsNone(tray.classify_process(proc(9100, 1, cmdline), {}, {os.getpid()}))
 
 
 class TestClassify(unittest.TestCase):
@@ -88,7 +133,7 @@ class TestMenu(unittest.TestCase):
                 "Launch MP Gui",
                 "Launch MP Liquid Player",
                 "Launch MP Mix Manager",
-                "Start / Stop MP Web Audio",
+                "Start / Stop MP Audio Player (Web)",
                 "Close MP Mix Manager (Closes everything)",
             ],
         )
@@ -218,7 +263,7 @@ class TestHooks(unittest.TestCase):
             "Mix_Archive_Manager.sh",
         ):
             result = subprocess.run(
-                ["bash", "-n", str(ROOT / name)],
+                [BASH, "-n", str(ROOT / name)],
                 capture_output=True,
                 text=True,
             )
@@ -230,7 +275,7 @@ class TestHooks(unittest.TestCase):
         self.assertIn("Launch MP Gui", text)
         self.assertIn("Launch MP Liquid Player", text)
         self.assertIn("Launch MP Mix Manager", text)
-        self.assertIn("Start / Stop MP Web Audio", text)
+        self.assertIn("Start / Stop MP Audio Player (Web)", text)
 
     def test_the_installer_installs_and_starts_the_tray(self):
         install = (ROOT / "install.sh").read_text(encoding="utf-8")
@@ -344,6 +389,267 @@ class TestMacMenuBar(unittest.TestCase):
             self.assertIn(str(bundle), plist)
             self.assertIn(str(ROOT), plist)
             start.assert_called_once()
+
+
+class TestCloseAllPlaysTheExitVideo(unittest.TestCase):
+    """The tray's Close item is a hard kill, so it plays the movie itself."""
+
+    def setUp(self):
+        import exit_video
+        self.exit_video = exit_video
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.addCleanup(
+            setattr, os.environ, "MP_INSTANCE_STATE_DIR",
+            os.environ.get("MP_INSTANCE_STATE_DIR", ""),
+        )
+        os.environ["MP_INSTANCE_STATE_DIR"] = self._tmp.name
+
+    def test_close_all_plays_the_movie_before_stopping_anything(self):
+        order = []
+        with patch.object(tray, "play_exit_video", side_effect=lambda b: order.append("video")), \
+             patch.object(tray, "kill_all_script", return_value=None), \
+             patch.object(tray, "read_proc_table", return_value=[]), \
+             patch.object(tray, "close_windows", side_effect=lambda *a, **k: order.append("close")):
+            tray.shutdown_suite(ROOT)
+        self.assertEqual(order, ["video", "close"])
+
+    def test_the_suite_marker_blocks_the_windows_from_playing_it_twice(self):
+        import mp_instance_limit as limiter
+        with patch.object(tray, "play_exit_video", side_effect=lambda b: limiter.mark_suite_closing()), \
+             patch.object(tray, "kill_all_script", return_value=None), \
+             patch.object(tray, "read_proc_table", return_value=[]), \
+             patch.object(tray, "close_windows"), \
+             patch.object(limiter, "process_table", return_value=[]), \
+             patch.object(limiter, "_pid_alive", return_value=True):
+            tray.shutdown_suite(ROOT)
+            # The marker lives only for the close, and it is gone afterwards.
+            self.assertFalse(limiter.suite_closing())
+
+    def test_the_switch_turns_it_off(self):
+        calls = []
+        with patch.object(tray, "play_exit_video", side_effect=lambda b: calls.append(b)), \
+             patch.object(tray, "kill_all_script", return_value=None), \
+             patch.object(tray, "read_proc_table", return_value=[]), \
+             patch.object(tray, "close_windows"):
+            tray.shutdown_suite(ROOT, play_exit=False)
+        self.assertEqual(calls, [])
+
+    def test_the_movie_plays_even_with_several_windows_open(self):
+        """The tray closes everything, so it must not wait for the last one."""
+        import mp_instance_limit as limiter
+        with patch.object(limiter, "process_table", return_value=[
+            (100, "python3 /opt/MP_Audio_Player_Liquid_Glass_OpenGL.py --manager"),
+            (101, "python3 /opt/MP_Audio_Player_Liquid_Glass_OpenGL.py"),
+        ]), patch.object(limiter, "_pid_alive", return_value=True):
+            calls = []
+            with patch.object(tray, "exit_video_module") as module:
+                module.exit_video_enabled.return_value = True
+                module.find_exit_video.return_value = ROOT / "Exit_MP_Video.mp4"
+                module.play_exit_video.side_effect = lambda *a, **k: calls.append(k) or True
+                self.assertTrue(tray.play_exit_video(ROOT))
+        self.assertEqual(calls[0]["elect"], False)
+
+    def test_the_switch_off_means_no_playback(self):
+        with patch.object(tray, "exit_video_module") as module:
+            module.exit_video_enabled.return_value = False
+            self.assertFalse(tray.play_exit_video(ROOT))
+            module.play_exit_video.assert_not_called()
+
+    def test_a_missing_movie_is_not_an_error(self):
+        with patch.object(tray, "exit_video_module") as module:
+            module.exit_video_enabled.return_value = True
+            module.find_exit_video.return_value = None
+            self.assertFalse(tray.play_exit_video(ROOT))
+
+
+class TestWindowsTrayClose(unittest.TestCase):
+    """The PowerShell tray kills the suite too, so it plays the movie first."""
+
+    def test_the_video_uses_the_forced_exit_mode(self):
+        text = (ROOT / "scripts" / "windows_tray.ps1").read_text(encoding="utf-8")
+        fn = text.split("function Show-MpExitVideo", 1)[1].split("\nfunction ", 1)[0]
+        self.assertIn("--exit-force", fn)
+
+    def test_the_suite_marker_is_set_and_cleared(self):
+        text = (ROOT / "scripts" / "windows_tray.ps1").read_text(encoding="utf-8")
+        fn = text.split("function Show-MpExitVideo", 1)[1].split("\nfunction ", 1)[0]
+        self.assertIn("Set-MpSuiteClosing", fn)
+        # Cleared once the suite is stopped, so a later close plays normally.
+        self.assertIn("Clear-MpSuiteClosing", text)
+        self.assertIn("suite.closing", text)
+
+
+class TestCloseAllClosesEverything(unittest.TestCase):
+    """Close All must actually finish the job on every platform.
+
+    The reported bug: the tray's Close item left MP Liquid Player, MP Gui, the
+    console manager and MP Visualizer open after the exit movie finished. Two
+    independent causes are pinned here.
+
+      1. The close ran inline in the Qt slot. `shutdown_suite()` waits for the
+         whole 40-second movie with `time.sleep()`, so the tray's event loop was
+         frozen and the icon looked hung. The teardown now runs on a worker
+         thread and the quit is marshalled back to the GUI thread.
+      2. The sweep only signalled `manager_pids()`, and relied on the kill
+         script's `pgrep -f` patterns for everything else. A manager started
+         through `bin/mix-archive-manager` matches none of those patterns, so
+         it survived. The sweep now signals every classified role plus the
+         visualizer and terminal player, then verifies and escalates.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self._saved = {
+            name: getattr(tray, name)
+            for name in ("kill_all_script", "read_proc_table", "close_windows",
+                         "play_exit_video", "suite_pids", "_signal_pids")
+        }
+
+    def tearDown(self):
+        for name, value in self._saved.items():
+            setattr(tray, name, value)
+
+    # -- 1. the sweep covers every window -------------------------------
+    def test_suite_pids_includes_the_manager_gui_liquid_and_helpers(self):
+        table = [
+            proc(10, 1, "bash /opt/bin/mix-archive-manager"),
+            proc(11, 1, "python3 /opt/MP_Audio_Player_Liquid_Glass_OpenGL.py --manager"),
+            proc(12, 1, "python3 /opt/MP_Audio_Player_Liquid_Glass_OpenGL.py"),
+            proc(13, 1, "python3 /opt/MP_Liquid_Visualizer.py --preset random"),
+            proc(14, 1, "python3 /opt/MP_Audio_Player.py --interactive"),
+            proc(15, 1, "python3 /opt/scripts/mp_system_tray.py --stay"),
+        ]
+        self.assertEqual(sorted(tray.suite_pids(table, {15})), [10, 11, 12, 13, 14])
+
+    def test_a_manager_behind_a_wrapper_is_still_closed(self):
+        """The exact shape of the reported bug: argv matches no kill pattern."""
+        with patch.object(tray, "read_proc_table", return_value=[
+            proc(10, 1, "bash /opt/bin/mix-archive-manager"),
+            proc(11, 1, "python3 /opt/MP_Audio_Player_Liquid_Glass_OpenGL.py"),
+        ]), patch.object(tray, "kill_all_script", return_value=None), \
+             patch.object(tray, "play_exit_video", return_value=False), \
+             patch.object(tray, "close_windows"), \
+             patch.object(tray, "_still_alive", side_effect=lambda pids: []):
+            signalled = []
+            with patch.object(tray, "_signal_pids", side_effect=lambda pids, sig: signalled.extend(pids)):
+                tray.shutdown_suite(ROOT, play_exit=False, verify=False)
+        self.assertEqual(sorted(signalled), [10, 11])
+
+    def test_the_verify_pass_kills_what_the_first_sweep_missed(self):
+        """A survivor after the first sweep is re-swept, then SIGKILLed."""
+        calls = []
+        # A fake clock, because the verify pass waits out a real deadline.
+        clock = {"now": 0.0}
+        survivor = [proc(10, 1, "bash /opt/bin/mix-archive-manager")]
+        reads = {"count": 0}
+
+        def table():
+            reads["count"] += 1
+            # The first read is the kill sweep; everything after that still
+            # sees the wrapper until the SIGKILL is issued.
+            if reads["count"] == 1:
+                return survivor + [proc(11, 1, "python3 /opt/MP_Audio_Player.py")]
+            if any(sig == getattr(tray.signal, "SIGKILL") for sig, _ in calls):
+                return []
+            return list(survivor)
+
+        def fake_time():
+            clock["now"] += 1.0
+            return clock["now"]
+
+        with patch.object(tray, "read_proc_table", side_effect=table), \
+             patch.object(tray, "kill_all_script", return_value=None), \
+             patch.object(tray, "play_exit_video", return_value=False), \
+             patch.object(tray, "close_windows"), \
+             patch.object(tray, "_still_alive", side_effect=lambda pids: []), \
+             patch.object(tray, "_signal_pids", side_effect=lambda pids, sig: calls.append((sig, list(pids)))), \
+             patch.object(tray.time, "sleep"), \
+             patch.object(tray.time, "time", side_effect=fake_time):
+            tray.shutdown_suite(ROOT, play_exit=False)
+        self.assertIn((getattr(tray.signal, "SIGKILL"), [10]), calls)
+
+    def test_a_clean_close_needs_no_second_sweep(self):
+        with patch.object(tray, "read_proc_table", return_value=[
+            proc(10, 1, "python3 /opt/MP_Audio_Player_Liquid_Glass_OpenGL.py"),
+        ]), patch.object(tray, "kill_all_script", return_value=None), \
+             patch.object(tray, "play_exit_video", return_value=False), \
+             patch.object(tray, "close_windows"), \
+             patch.object(tray, "_still_alive", side_effect=lambda pids: []), \
+             patch.object(tray, "_signal_pids"), \
+             patch.object(tray, "_verify_suite_closed") as verify:
+            tray.shutdown_suite(ROOT, play_exit=False)
+        verify.assert_called_once()
+
+    # -- 2. the movie must not freeze the icon --------------------------
+    def test_the_close_runs_off_the_qt_thread(self):
+        text = (ROOT / "scripts" / "mp_system_tray.py").read_text(encoding="utf-8")
+        handler = text.split("def dispatch(action_id: str) -> None:", 1)[1].split(
+            "\n    web_audio_action = None", 1
+        )[0]
+        # The slot starts a worker; it does not call shutdown_suite itself.
+        self.assertIn("threading.Thread", handler)
+        self.assertIn("_run_close_all", handler)
+        self.assertNotIn("shutdown_suite(base)", handler)
+
+    def test_the_worker_quits_on_the_gui_thread_after_the_teardown(self):
+        text = (ROOT / "scripts" / "mp_system_tray.py").read_text(encoding="utf-8")
+        worker = text.split("def _run_close_all(state_box: dict) -> None:", 1)[1].split(
+            "\n    close_state = ", 1
+        )[0]
+        self.assertIn("shutdown_suite(base)", worker)
+        # It reports through a dict rather than touching Qt from the worker.
+        self.assertIn('state_box["done"] = True', worker)
+        self.assertIn("finally", worker)
+        self.assertNotIn("app.quit", worker)
+
+    def test_the_quit_timer_lives_on_the_gui_thread(self):
+        """A timer made on a worker thread never fires, so the tray never quits.
+
+        QTimer needs a running event loop on the thread that created it. The
+        worker sleeps through the movie, so the watcher must be created inside
+        dispatch (the GUI thread) and only read the worker's dict.
+        """
+        text = (ROOT / "scripts" / "mp_system_tray.py").read_text(encoding="utf-8")
+        handler = text.split("def dispatch(action_id: str) -> None:", 1)[1].split(
+            "\n    web_audio_action = None", 1
+        )[0]
+        self.assertIn("watcher = QTimer()", handler)
+        self.assertIn("watcher.timeout.connect(_check_closed)", handler)
+        self.assertIn("app.quit()", handler)
+        self.assertNotIn("QTimer.singleShot", handler)
+
+    def test_a_second_click_cannot_start_a_second_movie(self):
+        text = (ROOT / "scripts" / "mp_system_tray.py").read_text(encoding="utf-8")
+        handler = text.split("def dispatch(action_id: str) -> None:", 1)[1].split(
+            "\n    web_audio_action = None", 1
+        )[0]
+        self.assertIn('state["closing"]', handler)
+        self.assertIn("close_action.setEnabled(False)", handler)
+
+    def test_windows_tray_also_runs_the_close_off_the_message_loop(self):
+        text = (ROOT / "scripts" / "windows_tray.ps1").read_text(encoding="utf-8")
+        handler = text.split('if ($ActionId -eq "close") {', 1)[1].split("\n    }", 1)[0]
+        self.assertIn("PowerShell]::Create()", handler)
+        self.assertIn("BeginInvoke()", handler)
+        self.assertIn("closeTimer", handler)
+        # The inline path must be gone: no direct Show-MpExitVideo + Exit pair.
+        self.assertNotIn("Show-MpExitVideo\n        Stop-MpSuite", handler)
+
+    def test_windows_kill_list_covers_the_wrapper_launchers(self):
+        text = (ROOT / "scripts" / "windows_tray.ps1").read_text(encoding="utf-8")
+        fn = text.split("function Stop-MpSuite", 1)[1].split("\nfunction ", 1)[0]
+        for needle in ("mix-archive-manager", "launch-manager", "MP_Liquid_Visualizer",
+                       "MP_Audio_Player", "MP_Gui.sh", "traktor_s4_midi"):
+            self.assertIn(needle, fn, needle)
+
+    def test_macos_close_already_runs_off_the_main_thread(self):
+        text = (ROOT / "scripts" / "macos_menu_bar.swift").read_text(encoding="utf-8")
+        fn = text.split("@objc func performAction", 1)[1].split("\n    func ", 1)[0]
+        self.assertIn("DispatchQueue.global", fn)
+        # The quit is posted back to the main queue, after runPython returns.
+        self.assertLess(fn.index("runPython"), fn.index("NSApp.terminate"))
 
 
 if __name__ == "__main__":

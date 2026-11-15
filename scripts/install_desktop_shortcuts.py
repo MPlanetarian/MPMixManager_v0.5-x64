@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install the four MP desktop shortcuts on Linux, macOS, and Windows.
+"""Install the MP desktop shortcuts on Linux, macOS, and Windows.
 
 A first install, and the first launch of MP Mix Manager, puts these on the
 Desktop and in the application menu:
@@ -8,6 +8,11 @@ Desktop and in the application menu:
   MP Mix Manager
   MP Gui
   MP Liquid Visualizer
+
+The installer can be told to set up only some of them (``--components``, or the
+stored selection in ``scripts/mp_app_selection.py``), in which case only those
+shortcuts are written and the others are removed. ``SHORTCUT_NAMES`` stays the
+full catalogue in display order.
 
 On macOS, MP Mix Manager stays a Terminal .command file. The other three are
 application bundles, so opening them does not open a Terminal window. All four
@@ -28,12 +33,44 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
+try:
+    import mp_app_selection as app_selection
+except ImportError:  # imported from another directory
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import mp_app_selection as app_selection  # type: ignore[no-redef]
+
 SHORTCUT_NAMES = (
     "MP Liquid Player",
     "MP Mix Manager",
     "MP Gui",
     "MP Liquid Visualizer",
 )
+
+# Shortcut name -> the component id in scripts/mp_app_selection.py. The order
+# here follows SHORTCUT_NAMES, which is the order every surface displays.
+COMPONENT_BY_NAME = {
+    "MP Liquid Player": "liquid",
+    "MP Mix Manager": "manager",
+    "MP Gui": "gui",
+    "MP Liquid Visualizer": "visualizer",
+}
+
+
+def selected_names(components=None) -> tuple[str, ...]:
+    """The shortcut names this install should have.
+
+    ``components`` wins when given. Otherwise the stored selection is used, and
+    a missing or unreadable file means all four. A file the uninstaller wrote
+    as ``none`` means no shortcuts: the next launch must not put them back.
+    """
+    if components is None and app_selection.file_says_none():
+        return tuple()
+    chosen = set(components) if components is not None else set(app_selection.read())
+    names = tuple(
+        name for name in SHORTCUT_NAMES if COMPONENT_BY_NAME.get(name) in chosen
+    )
+    # An empty answer must never leave the Desktop bare.
+    return names or SHORTCUT_NAMES
 
 STALE_SHORTCUT_NAMES = (
     "MP_Liquid.desktop",
@@ -607,6 +644,28 @@ def _remove_stale(directory: Path) -> None:
                 pass
 
 
+def _remove_deselected(directory: Path, keep: tuple[str, ...]) -> None:
+    """Delete the shortcuts of the apps this install was not asked to set up.
+
+    Every extension a shortcut can carry is removed here, because a user who
+    switches from "all four" to "only MP Gui" must not be left with a dead
+    Liquid Player icon on the Desktop and in the menu.
+    """
+    if not directory.is_dir():
+        return
+    for name in SHORTCUT_NAMES:
+        if name in keep:
+            continue
+        for suffix in (".desktop", ".lnk", ".command"):
+            target = directory / f"{name}{suffix}"
+            if target.is_file() or target.is_symlink():
+                try:
+                    target.unlink()
+                except OSError:
+                    pass
+        _remove_tree(directory / f"{name}.app")
+
+
 def _write_text(path: Path, content: str, executable: bool = False) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     _write_text_newline(path, content, "\n")
@@ -739,21 +798,27 @@ def _windows_creationflags() -> int:
     return getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
-def run_windows_user_integration(root: Path, action: str = "Install") -> int:
+def run_windows_user_integration(
+    root: Path, action: str = "Install", components=None
+) -> int:
     """Create the signed-in user's shortcuts and tray. No Python GUI toolkit."""
     script = Path(root) / "scripts" / "windows_user_integration.ps1"
     powershell = _powershell()
     if powershell is None or not script.is_file():
         return 1
+    chosen = selected_names(components)
+    argv = [
+        powershell,
+        "-NoProfile",
+        "-ExecutionPolicy", "Bypass",
+        "-File", str(script),
+        "-Root", str(root),
+        "-Action", action,
+    ]
+    if action == "Install":
+        argv += ["-Components", ",".join(chosen)]
     result = subprocess.run(
-        [
-            powershell,
-            "-NoProfile",
-            "-ExecutionPolicy", "Bypass",
-            "-File", str(script),
-            "-Root", str(root),
-            "-Action", action,
-        ],
+        argv,
         check=False,
         creationflags=_windows_creationflags(),
     )
@@ -878,15 +943,23 @@ def install_desktop_shortcuts(
     apps_dir: Path | None = None,
     launcher_dir: Path | None = None,
     link_writer=None,
+    components=None,
 ) -> list[Path]:
-    """Write the four shortcuts. Returns the desktop paths."""
+    """Write the selected shortcuts. Returns the desktop paths.
+
+    ``components`` is a list of ids from ``mp_app_selection``; when omitted the
+    stored selection is used. Shortcuts for the components that were *not*
+    selected are removed, so switching to "only MP Gui" on a machine that
+    previously had all four does not leave three dead icons behind.
+    """
     root = Path(root) if root else ROOT
     platform_name = platform_name or detect_platform()
+    names = selected_names(components)
     if _delegate_windows_shortcuts(platform_name, desktop_dir, apps_dir, launcher_dir, link_writer):
-        code = run_windows_user_integration(root, "Install")
+        code = run_windows_user_integration(root, "Install", components)
         if code in (0, 3):
             desktop = desktop_dir_for("windows")
-            return [desktop / f"{name}.lnk" for name in SHORTCUT_NAMES]
+            return [desktop / f"{name}.lnk" for name in names]
     desktop = Path(desktop_dir) if desktop_dir else desktop_dir_for(platform_name)
     apps = Path(apps_dir) if apps_dir else apps_dir_for(platform_name)
     launchers = Path(launcher_dir) if launcher_dir else Path.home() / ".config" / "mix-manager" / "launchers"
@@ -894,6 +967,8 @@ def install_desktop_shortcuts(
     apps.mkdir(parents=True, exist_ok=True)
     _remove_stale(desktop)
     _remove_stale(apps)
+    _remove_deselected(desktop, names)
+    _remove_deselected(apps, names)
 
     targets = shortcut_targets(root)
     written: list[Path] = []
@@ -905,7 +980,7 @@ def install_desktop_shortcuts(
             candidate = Path(icon_workspace.name) / f"{MAC_ICON_NAME}.icns"
             if build_mac_icns(shared_png, candidate):
                 shared_icns = candidate
-        for name in SHORTCUT_NAMES:
+        for name in names:
             spec = targets[name]
             if platform_name == "macos":
                 content = mac_command(spec)
@@ -958,7 +1033,7 @@ def install_desktop_shortcuts(
     return written
 
 
-def _mac_shortcut_icons_present(desktop: Path) -> bool:
+def _mac_shortcut_icons_present(desktop: Path, names=None) -> bool:
     """An old install has the four shortcuts and none of the images."""
     if sys.platform != "darwin":
         return True
@@ -968,7 +1043,7 @@ def _mac_shortcut_icons_present(desktop: Path) -> bool:
     if not png.is_file():
         return True
     targets = shortcut_targets(ROOT)
-    for name in SHORTCUT_NAMES:
+    for name in (names if names is not None else SHORTCUT_NAMES):
         if targets[name].get("terminal"):
             command = desktop / f"{name}.command"
             if command.is_file() and not mac_finder_icon_present(command):
@@ -1010,21 +1085,37 @@ def linux_shortcut_is_healthy(path: Path) -> bool:
             # desktop session's PATH, so both forms make the entry unloadable.
             if "$" in value or "/" not in value:
                 return False
+            # GLib also suppresses the entry when TryExec names something it
+            # cannot run. An install tree that was moved or deleted leaves
+            # ~/.local/bin/mp-desktop-exec as a dangling symlink: it still
+            # exists as a link, so a bare existence check passes and every
+            # shortcut silently does nothing. Follow the link and require the
+            # helper to be a runnable file, so the entries are reported as
+            # missing and repaired on the next launch.
+            helper = Path(value).expanduser()
+            if not helper.is_file() or not os.access(helper, os.X_OK):
+                return False
     return True
 
 
-def desktop_shortcuts_present(desktop: Path, platform_name: str) -> bool:
+def desktop_shortcuts_present(desktop: Path, platform_name: str, components=None) -> bool:
+    """True when every shortcut this install should have is present and usable.
+
+    Only the selected components are required: a user who chose MP Gui alone
+    must not be nagged for the other three on every launch.
+    """
+    names = selected_names(components)
     if platform_name == "macos":
         targets = shortcut_targets(ROOT)
-        for name in SHORTCUT_NAMES:
+        for name in names:
             if targets[name].get("terminal"):
                 if not (desktop / f"{name}.command").is_file():
                     return False
             elif not (desktop / f"{name}.app" / "Contents" / "MacOS" / MAC_APP_EXECUTABLE).is_file():
                 return False
-        return _mac_shortcut_icons_present(desktop)
+        return _mac_shortcut_icons_present(desktop, names)
     suffix = { "windows": ".lnk" }.get(platform_name, ".desktop")
-    for name in SHORTCUT_NAMES:
+    for name in names:
         path = desktop / f"{name}{suffix}"
         if not path.is_file():
             return False
@@ -1033,14 +1124,16 @@ def desktop_shortcuts_present(desktop: Path, platform_name: str) -> bool:
     return True
 
 
-def ensure_installed(root: Path | None = None) -> bool:
-    """Create any of the four shortcuts that are not already on the Desktop."""
+def ensure_installed(root: Path | None = None, components=None) -> bool:
+    """Create any selected shortcut that is not already on the Desktop."""
     root = Path(root) if root else ROOT
     platform_name = detect_platform()
     desktop = desktop_dir_for(platform_name)
-    if desktop_shortcuts_present(desktop, platform_name):
+    if desktop_shortcuts_present(desktop, platform_name, components):
         return False
-    install_desktop_shortcuts(root, platform_name=platform_name, desktop_dir=desktop)
+    install_desktop_shortcuts(
+        root, platform_name=platform_name, desktop_dir=desktop, components=components
+    )
     return True
 
 
@@ -1049,7 +1142,13 @@ def main() -> int:
     args = sys.argv[1:]
     if "--root" in args:
         root = Path(args[args.index("--root") + 1])
-    paths = install_desktop_shortcuts(root)
+    components = None
+    if "--components" in args:
+        index = args.index("--components")
+        value = args[index + 1] if index + 1 < len(args) else ""
+        components = app_selection.parse(value)
+        app_selection.write(components)
+    paths = install_desktop_shortcuts(root, components=components)
     for path in paths:
         print(path)
         if path.suffix == ".app":

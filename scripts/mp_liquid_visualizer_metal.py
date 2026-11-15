@@ -18,9 +18,13 @@ Design notes
   Cocoa ``NSWindow`` gets a ``CAMetalLayer``. GLFW still owns the event loop,
   keyboard handling and monitor queries, so F10/F11 spanning, the screensaver
   and the window-shape code keep working unchanged.
-* **March resolution.** The raymarch is the expensive part. Like the Vulkan
-  macOS path this renders at a capped long edge and scales the result onto the
-  window with a second pass, so a 1094x734 window does not raymarch 803k pixels.
+* **March resolution.** The raymarch is the expensive part. Windowed, it
+  renders at a capped long edge and scales the result onto the window with a
+  second pass, so a 1094x734 window does not raymarch 803k pixels. Fullscreen
+  is the exception: the picture fills the user's whole display, where an
+  upscaled 768-wide march read as visibly blocky. A fullscreen window marches
+  from a full 1920x1080 target instead, and anything it has to scale is
+  resampled bicubically rather than bilinearly.
 """
 from __future__ import annotations
 
@@ -47,12 +51,18 @@ try:  # imported as ``scripts.mp_liquid_visualizer_metal``
     from visualizer_monitor_span import MonitorSpanMixin, ROLE_SPAWNED
     from visualizer_player_bond import PlayerBondMixin
     from visualizer_random_mode import RandomPresetMixin
+    from visualizer_window_shape import DEFAULT_CORNER_RADIUS, RoundedWindowShaper
+    from visualizer_z_cycle import (WINDOW_MODE_DEFAULT, WINDOW_MODE_FULLSCREEN,
+                                    WINDOW_MODE_HALF, ZWindowCycleMixin)
 except ImportError:  # imported from the project root's ``scripts`` directory
     from scripts.mp_metal_bridge import AutoreleasePool, MetalBridge, ObjC, CGSize, MetalError
     from scripts.mp_metal_shader import source_digest, translate_cached
     from scripts.visualizer_monitor_span import MonitorSpanMixin, ROLE_SPAWNED
     from scripts.visualizer_player_bond import PlayerBondMixin
     from scripts.visualizer_random_mode import RandomPresetMixin
+    from scripts.visualizer_window_shape import DEFAULT_CORNER_RADIUS, RoundedWindowShaper
+    from scripts.visualizer_z_cycle import (WINDOW_MODE_DEFAULT, WINDOW_MODE_FULLSCREEN,
+                                            WINDOW_MODE_HALF, ZWindowCycleMixin)
 
 # ---------------------------------------------------------------------------
 # GLFW constants (glfw3.h)
@@ -129,6 +139,14 @@ def metal_available() -> bool:
 # frame the scene identically at the same window size.
 # ---------------------------------------------------------------------------
 DEFAULT_LONG_EDGE = 768
+# Fullscreen is drawn from a real 1920x1080 target instead of the windowed cap.
+# A fill-the-display picture at 768 wide is upscaled 2.5x on a 1080p panel and
+# reads as blocky. Measured on an M2: a full 1920x1080 raymarch at the default
+# 64 steps costs ~144 ms/frame (7 fps), so this is the *ceiling*, and
+# ``FULLSCREEN_ADAPTIVE_MIN_SCALE`` below is what keeps the frame rate usable
+# by trading resolution down toward it rather than up from 768.
+FULLSCREEN_WIDTH, FULLSCREEN_HEIGHT = 1920, 1080
+FULLSCREEN_LONG_EDGE = FULLSCREEN_WIDTH
 MIN_MARCH_SIDE = 96
 DEFAULT_MARCH_STEPS = 64
 
@@ -152,6 +170,19 @@ def march_long_edge() -> int:
                     MIN_MARCH_SIDE, 7680)
 
 
+def fullscreen_long_edge() -> int:
+    """Long edge of the fullscreen raymarch target, in pixels.
+
+    1920 by default, which is exactly 1080p on a 16:9 display. ``MP_METAL_
+    FULLSCREEN_LONG_EDGE`` lowers or raises it the same way ``MP_METAL_LONG_
+    EDGE`` tunes the windowed cap; it exists so a slower Mac can trade a little
+    sharpness back for frame rate without giving up the whole fullscreen
+    improvement.
+    """
+    return _env_int("MP_METAL_FULLSCREEN_LONG_EDGE", FULLSCREEN_LONG_EDGE,
+                    MIN_MARCH_SIDE, 7680)
+
+
 def adaptive_enabled() -> bool:
     """Whether the renderer may trade march resolution for frame rate.
 
@@ -168,12 +199,41 @@ def adaptive_enabled() -> bool:
     return True
 
 
+def fullscreen_adaptive_enabled() -> bool:
+    """Whether the adaptive controller may retune a fullscreen march.
+
+    On by default. A Mac that cannot raymarch a full 1920x1080 at a playable
+    rate would otherwise drop to single-digit frame rates the moment the user
+    pressed Z, which is not a trade anyone wants. The controller now works
+    *from* a 1920x1080 target instead of the old 768 windowed cap, and stops at
+    ``FULLSCREEN_ADAPTIVE_MIN_SCALE`` -- a much higher floor than the windowed
+    one -- so the picture stays sharp while the frame rate stays usable. The
+    upscale that remains is bicubic, which is what keeps it from looking
+    blocky. ``MP_METAL_FULLSCREEN_ADAPTIVE=0`` pins the full 1920x1080.
+    """
+    raw = (os.environ.get("MP_METAL_FULLSCREEN_ADAPTIVE") or "").strip().lower()
+    if raw in ("0", "off", "false", "no"):
+        return False
+    return True
+
+
 # Frame-time targets for the adaptive march. Below MIN_SCALE the picture gets
 # visibly soft, so the renderer stops there and accepts the lower frame rate
 # rather than dropping resolution forever.
 ADAPTIVE_MIN_SCALE = 0.55
 ADAPTIVE_MAX_SCALE = 1.0
 ADAPTIVE_TARGET_MS = 1000.0 / 60.0
+# Fullscreen has its own, much higher floor. The windowed floor (0.55 of 768)
+# is fine for a small window but is the soft picture the user complained about
+# once it fills a display. Fullscreen therefore starts at a real 1920x1080 and
+# only descends as far as the GPU actually needs: 0.65 of 1920 is 1248x702,
+# still 1.6x the old 768 windowed cap and carried by a bicubic upscale. A
+# faster Mac settles much higher, up to the full 1920x1080.
+FULLSCREEN_ADAPTIVE_MIN_SCALE = 0.65
+# Fullscreen aims lower than the windowed 60 fps because a raymarched 1080p is
+# far more expensive; 30 fps is smooth for a slowly moving scene and leaves the
+# controller room to keep the picture sharp instead of dropping to the floor.
+FULLSCREEN_TARGET_MS = 1000.0 / 30.0
 
 # MTLCommandBufferStatusCompleted
 METAL_COMMAND_BUFFER_COMPLETED = 4
@@ -195,6 +255,25 @@ def scale_to_long_edge(width: int, height: int,
     if longest <= cap:
         return width, height
     scale = cap / longest
+    return max(2, int(round(width * scale))), max(2, int(round(height * scale)))
+
+
+def fullscreen_march_size(width: int, height: int,
+                          long_edge: Optional[int] = None) -> Tuple[int, int]:
+    """March size for a fullscreen window filling ``width``x``height``.
+
+    Fullscreen is the one place the picture is *not* allowed to be soft. The
+    windowed cap (768) upscaled to a display is what read as blocky, so a
+    fullscreen window marches the largest image that fits a 1920x1080 box with
+    its own aspect ratio -- exactly 1920x1080 on a 16:9 panel, 1728x1080 on a
+    16:10 one, 1920x804 on an ultrawide. A display smaller than the box is
+    still marched natively; nothing is ever upscaled past its own pixels.
+    """
+    width, height = max(2, int(width)), max(2, int(height))
+    cap = max(MIN_MARCH_SIDE, int(long_edge if long_edge is not None else fullscreen_long_edge()))
+    # The cap is a 16:9 long edge; the matching short edge is 9/16 of it.
+    box_height = max(2, int(round(cap * FULLSCREEN_HEIGHT / FULLSCREEN_WIDTH)))
+    scale = min(1.0, cap / width, box_height / height)
     return max(2, int(round(width * scale))), max(2, int(round(height * scale)))
 
 
@@ -280,6 +359,12 @@ def _texture_size(objc: ObjC, texture) -> Tuple[int, int]:
 
 # A tiny fullscreen blit used for the upscale pass. Kept in its own library so
 # switching presets (which rebuilds the raymarch library) never invalidates it.
+#
+# This is a Catmull-Rom bicubic resample, not a bilinear one. The raymarch runs
+# below the display size so it can hold its frame rate, which means this pass
+# scales the picture up -- and bilinear upscaling is exactly what made
+# fullscreen look blocky. Sixteen taps cost almost nothing on a GPU and keep
+# edges and the bright filaments sharp while the scene is enlarged.
 BLIT_MSL = """#include <metal_stdlib>
 using namespace metal;
 
@@ -291,6 +376,18 @@ struct MPBlitOut {
 constexpr sampler mp_blit_sampler(coord::normalized,
                                   address::clamp_to_edge,
                                   filter::linear);
+
+// Catmull-Rom (a = -0.5) reconstruction kernel.
+static inline float mp_catmull_rom(float t) {
+    t = fabs(t);
+    if (t < 1.0) {
+        return 1.5 * t * t * t - 2.5 * t * t + 1.0;
+    }
+    if (t < 2.0) {
+        return -0.5 * t * t * t + 2.5 * t * t - 4.0 * t + 2.0;
+    }
+    return 0.0;
+}
 
 vertex MPBlitOut mp_blit_vertex(uint vertexID [[vertex_id]]) {
     float2 corner = float2(float((vertexID << 1) & 2), float(vertexID & 2));
@@ -305,12 +402,32 @@ vertex MPBlitOut mp_blit_vertex(uint vertexID [[vertex_id]]) {
 
 fragment float4 mp_blit_fragment(MPBlitOut in [[stage_in]],
                                  texture2d<float> source [[texture(0)]]) {
-    return source.sample(mp_blit_sampler, in.uv);
+    float2 size = float2(float(source.get_width()), float(source.get_height()));
+    // Work in texel space so the reconstruction lands on texel centres.
+    float2 pos = in.uv * size - 0.5;
+    float2 origin = floor(pos);
+    float2 frac = pos - origin;
+
+    float4 sum = float4(0.0);
+    float weight_sum = 0.0;
+    for (int j = -1; j <= 2; ++j) {
+        float wy = mp_catmull_rom(float(j) - frac.y);
+        for (int i = -1; i <= 2; ++i) {
+            float wx = mp_catmull_rom(float(i) - frac.x);
+            float w = wx * wy;
+            float2 texel = (origin + float2(float(i), float(j)) + 0.5) / size;
+            sum += source.sample(mp_blit_sampler, texel) * w;
+            weight_sum += w;
+        }
+    }
+    // Guard against a zero sum so a pathological sample cannot divide by 0.
+    return sum / (fabs(weight_sum) < 1e-5 ? 1.0 : weight_sum);
 }
 """
 
 
-class LiquidVisualizerMetalRenderer(MonitorSpanMixin, RandomPresetMixin, PlayerBondMixin):
+class LiquidVisualizerMetalRenderer(MonitorSpanMixin, RandomPresetMixin, PlayerBondMixin,
+                                    ZWindowCycleMixin):
     """Metal backend for the standalone MP Visualizer.
 
     The public surface matches :class:`LiquidVisualizerVulkanRenderer`:
@@ -355,7 +472,12 @@ class LiquidVisualizerMetalRenderer(MonitorSpanMixin, RandomPresetMixin, PlayerB
         self._last_click_pos: Optional[Tuple[int, int]] = None
         self._user_selected_window_mode = False
         self._user_toggled_windowed = False
-        self.window_mode = "default"
+        self.window_mode = WINDOW_MODE_FULLSCREEN if self.fullscreen_on_start else WINDOW_MODE_DEFAULT
+        # The shape the user first pressed Z on. The Metal renderer used to
+        # start in "default" even with --fullscreen, so the first Z read as
+        # "leave fullscreen" instead of "enter it".
+        self._z_original_size: Optional[Tuple[int, int]] = None
+        self._z_original_pos: Optional[Tuple[int, int]] = None
         self._saver_render = (int(saver_render[0]), int(saver_render[1])) if saver_render else None
         self._saver_bounds = None
         self._init_span_state(span_bounds, span_role)
@@ -420,11 +542,18 @@ class LiquidVisualizerMetalRenderer(MonitorSpanMixin, RandomPresetMixin, PlayerB
         # slow frame (a preset switch, a disk hiccup) does not move it.
         self._adaptive = adaptive_enabled()
         self._resolution_scale = 1.0
+        # Fullscreen runs its own scale with a higher floor; see
+        # FULLSCREEN_ADAPTIVE_MIN_SCALE.
+        self._fullscreen_scale = 1.0
         self._next_adapt_at = 0.0
         self._frame_times: List[float] = []
         # Command buffers retained until the GPU reports their timings.
         self._pending_buffers: List[int] = []
         self._init_span_state(span_bounds, span_role)
+        # The window must share the Liquid Player's rounded silhouette. The
+        # player's glass is drawn to a 36 px rounded rectangle, so a plain
+        # square window shows its own corners through the player's cut-aways.
+        self._shaper = RoundedWindowShaper(DEFAULT_CORNER_RADIUS)
 
     # -- identity --------------------------------------------------------
     @property
@@ -486,6 +615,9 @@ class LiquidVisualizerMetalRenderer(MonitorSpanMixin, RandomPresetMixin, PlayerB
             raise
         self.device_name = self._bridge.device_name
         self._attach_metal_layer()
+        # Match the Liquid Player's rounded silhouette from the first frame,
+        # so the window never appears with square corners behind the player.
+        self._apply_window_shape()
         self._bind_input()
         self._compile_blit()
         self._build_pipeline(self.preset)
@@ -612,14 +744,18 @@ class LiquidVisualizerMetalRenderer(MonitorSpanMixin, RandomPresetMixin, PlayerB
         # framebufferOnly=0 is required: the upscale pass renders into the
         # drawable texture, which a framebuffer-only layer forbids.
         objc.send(layer, "setFramebufferOnly:", c_int(0), restype=None, argtypes=[c_int])
-        objc.send(layer, "setOpaque:", c_int(1), restype=None, argtypes=[c_int])
+        # Not opaque: the window is clipped to the Liquid Player's rounded
+        # rectangle (see ``_apply_window_shape``), and only a non-opaque layer
+        # lets the cut-away corners show what is behind the window instead of
+        # filling them with this layer's own black.
+        objc.send(layer, "setOpaque:", c_int(0), restype=None, argtypes=[c_int])
         self._layer = layer
 
         content = objc.send(nswindow, "contentView", restype=c_void_p, argtypes=[])
         objc.send(content, "setWantsLayer:", c_int(1), restype=None, argtypes=[c_int])
         objc.send(content, "setLayer:", layer, restype=None, argtypes=[c_void_p])
         objc.send(nswindow, "setReleasedWhenClosed:", c_int(0), restype=None, argtypes=[c_int])
-        objc.send(nswindow, "setOpaque:", c_int(1), restype=None, argtypes=[c_int])
+        objc.send(nswindow, "setOpaque:", c_int(0), restype=None, argtypes=[c_int])
         objc.send(nswindow, "makeKeyAndOrderFront:", c_void_p(0), restype=None,
                   argtypes=[c_void_p])
 
@@ -658,7 +794,22 @@ class LiquidVisualizerMetalRenderer(MonitorSpanMixin, RandomPresetMixin, PlayerB
     def _march_for_size(self, width: int, height: int) -> Tuple[int, int]:
         if self._saver_render:
             return saver_march_size(width, height, self._saver_render)
+        if self._want_fullscreen_march():
+            # Fullscreen fills the display, so it marches a real 1080p rather
+            # than the windowed cap that reads as blocky when upscaled.
+            return fullscreen_march_size(width, height,
+                                         self._fullscreen_long_edge_for_frame())
         return scale_to_long_edge(width, height, self._long_edge_for_frame())
+
+    def _want_fullscreen_march(self) -> bool:
+        """True when this window should march at the 1080p fullscreen size.
+
+        Only a plain user fullscreen qualifies. A screensaver window and an
+        F10/F11 span already have their own size policy (and the saver is a
+        background effect), so they keep the capped march.
+        """
+        return bool(self.is_fullscreen and not self._saver_render
+                    and not self.screensaver)
 
     def _long_edge_for_frame(self) -> int:
         """The march long edge for this frame, after adaptive scaling."""
@@ -668,6 +819,25 @@ class LiquidVisualizerMetalRenderer(MonitorSpanMixin, RandomPresetMixin, PlayerB
             return base
         return max(MIN_MARCH_SIDE, int(round(base * scale)))
 
+    def _fullscreen_long_edge_for_frame(self) -> int:
+        """The fullscreen march long edge after adaptive scaling.
+
+        Fullscreen runs its own controller with its own floor, because the
+        windowed scale would either drag it soft (0.55 of the windowed cap) or,
+        when pinned, drop a slower Mac to single-digit frame rates.
+        """
+        base = fullscreen_long_edge()
+        if not fullscreen_adaptive_enabled():
+            return base
+        scale = self._fullscreen_scale
+        if scale >= 0.999:
+            return base
+        # Clamp to the fullscreen floor here as well as in the controller: this
+        # is the single place the size is decided, so a stale or externally
+        # written scale can never make a fullscreen window soft.
+        scale = max(FULLSCREEN_ADAPTIVE_MIN_SCALE, min(ADAPTIVE_MAX_SCALE, scale))
+        return max(MIN_MARCH_SIDE, int(round(base * scale)))
+
     def _adapt_resolution(self, frame_ms: float) -> None:
         """Nudge the march scale toward the frame-time budget.
 
@@ -675,14 +845,25 @@ class LiquidVisualizerMetalRenderer(MonitorSpanMixin, RandomPresetMixin, PlayerB
         correction is scaled by how far off the target the last frame was.
         Changes are damped and rate-limited: without that the resolution
         visibly oscillates between two sizes while the scene animates.
+
+        Fullscreen and windowed keep separate scales. They have different
+        starting points (1920 vs 768) and different floors (0.75 vs 0.55), so
+        sharing one number would either make fullscreen soft or make the
+        windowed picture needlessly expensive.
         """
         if not self._adaptive:
+            return
+        fullscreen = self._want_fullscreen_march()
+        if fullscreen and not fullscreen_adaptive_enabled():
             return
         now = time.monotonic()
         if now < self._next_adapt_at:
             return
         self._next_adapt_at = now + 0.30
-        target = ADAPTIVE_TARGET_MS
+        # Fullscreen has its own, lower frame-time target: a raymarched 1080p
+        # cannot reach 60 fps on Apple Silicon, and pretending otherwise would
+        # only force the controller down to its floor on every machine.
+        target = FULLSCREEN_TARGET_MS if fullscreen else ADAPTIVE_TARGET_MS
         ratio = frame_ms / target
         if 0.85 <= ratio <= 1.20:
             return
@@ -690,8 +871,14 @@ class LiquidVisualizerMetalRenderer(MonitorSpanMixin, RandomPresetMixin, PlayerB
         # correction uses the square root of the time ratio.
         correction = math.sqrt(target / max(1.0, frame_ms))
         correction = max(0.85, min(1.15, correction))
-        scale = self._resolution_scale * correction
-        self._resolution_scale = max(ADAPTIVE_MIN_SCALE, min(ADAPTIVE_MAX_SCALE, scale))
+        if fullscreen:
+            floor = FULLSCREEN_ADAPTIVE_MIN_SCALE
+            scale = self._fullscreen_scale * correction
+            self._fullscreen_scale = max(floor, min(ADAPTIVE_MAX_SCALE, scale))
+        else:
+            floor = ADAPTIVE_MIN_SCALE
+            scale = self._resolution_scale * correction
+            self._resolution_scale = max(floor, min(ADAPTIVE_MAX_SCALE, scale))
 
     def _gpu_time_ms(self) -> float:
         """Milliseconds the most recent *completed* command buffer spent on the GPU.
@@ -917,6 +1104,53 @@ class LiquidVisualizerMetalRenderer(MonitorSpanMixin, RandomPresetMixin, PlayerB
         return max(0.0, min(0.05, now - last))
 
     # -- frame -----------------------------------------------------------
+    def view_hidden(self) -> bool:
+        """True while the window is minimized or hidden; see the Vulkan renderer."""
+        if not self._glfw or not self._window:
+            return False
+        try:
+            return (self._glfw.glfwGetWindowAttrib(self._window, GLFW_ICONIFIED) == GLFW_TRUE
+                    or self._glfw.glfwGetWindowAttrib(self._window, GLFW_VISIBLE) == GLFW_FALSE)
+        except Exception:
+            return False
+
+    def _apply_window_shape(self) -> bool:
+        """Clip the window to the Liquid Player's rounded corners.
+
+        The Liquid Glass player draws its pane into a 36 px rounded rectangle,
+        so the visualizer behind it is only hidden exactly where the pane is
+        opaque. A plain square window therefore showed its own corners through
+        the player's cut-aways. This applies the same rounded mask the Vulkan
+        and OpenGL backends use, so all three share one silhouette.
+
+        Fullscreen and screensaver windows fill their area on purpose and stay
+        rectangular; leaving those modes restores the rounding.
+        """
+        shaper = getattr(self, "_shaper", None)
+        if shaper is None or not self._window:
+            return False
+        if self.is_fullscreen or getattr(self, "_saver_bounds", None) or self.screensaver:
+            return shaper.apply(width=1, height=1, enabled=False,
+                                cocoa_window=self.cocoa_window())
+        width, height = self.width, self.height
+        if width < 8 or height < 8:
+            return False
+        return shaper.apply(width=width, height=height, enabled=True,
+                            cocoa_window=self.cocoa_window())
+
+    def cocoa_window(self) -> int:
+        """The window's ``NSWindow`` pointer, or 0 on a non-macOS host."""
+        nswindow = getattr(self, "_nswindow", None)
+        if nswindow:
+            return int(nswindow)
+        glfw, window = getattr(self, "_glfw", None), getattr(self, "_window", None)
+        if glfw is None or not window:
+            return 0
+        try:
+            return int(glfw.glfwGetCocoaWindow(window) or 0)
+        except Exception:
+            return 0
+
     def poll(self) -> bool:
         if not self._alive or not self._window:
             return not self.should_close
@@ -928,11 +1162,18 @@ class LiquidVisualizerMetalRenderer(MonitorSpanMixin, RandomPresetMixin, PlayerB
             self.poll_monitor_span()
         except Exception:
             pass
+        # Keep the corner mask in step with every resize and window-mode
+        # change. The shaper caches, so a frame where nothing moved is a
+        # dictionary lookup.
+        self._apply_window_shape()
         return not self.should_close
 
     def draw(self, bridge_state: Any, capture: bool = False):
         """Render one frame. Returns ``(w, h, bgra)`` when ``capture`` is set."""
         if not self.poll():
+            return None
+        # Minimized or hidden: nothing is shown, so no command buffer is encoded.
+        if not capture and self.view_hidden():
             return None
         try:
             self.poll_random_mode()
@@ -1083,7 +1324,7 @@ class LiquidVisualizerMetalRenderer(MonitorSpanMixin, RandomPresetMixin, PlayerB
             if not self._player_bonded:
                 self.request_close()
         elif key == GLFW_KEY_Z:
-            self.cycle_window_mode()
+            self._cycle_window_mode_for_user()
         elif key in (GLFW_KEY_EQUAL, GLFW_KEY_KP_ADD, GLFW_KEY_RIGHT):
             self._cycle_preset(1)
         elif key in (GLFW_KEY_MINUS, GLFW_KEY_KP_SUBTRACT, GLFW_KEY_LEFT):
@@ -1111,24 +1352,28 @@ class LiquidVisualizerMetalRenderer(MonitorSpanMixin, RandomPresetMixin, PlayerB
         if 0 <= index < len(slots):
             self.switch_preset(slots[index])
 
-    def cycle_window_mode(self) -> str:
-        """Z cycles fullscreen -> half size -> default size."""
-        self._user_selected_window_mode = True
-        if not self.is_fullscreen:
-            if self.window_mode != "half":
-                self.toggle_fullscreen()
-                self.window_mode = "fullscreen"
-                return self.window_mode
-            self.window_mode = "default"
-            self._apply_window_geometry(self._default_windowed_size[0],
-                                        self._default_windowed_size[1],
-                                        *self._windowed_offset)
-            return self.window_mode
-        self.toggle_fullscreen()
-        self.window_mode = "half"
-        self._apply_window_geometry(self._half_windowed_size[0], self._half_windowed_size[1],
-                                    *self._half_windowed_offset)
-        return self.window_mode
+    # -- ZWindowCycleMixin primitives -------------------------------------
+    def _z_window_size(self) -> Tuple[int, int]:
+        """The live windowed size, which is what the user sees when pressing Z."""
+        return int(self._windowed_size[0]), int(self._windowed_size[1])
+
+    def _z_window_pos(self) -> Tuple[int, int]:
+        return self.window_pos()
+
+    def _z_apply_windowed(self, width: int, height: int, x: int, y: int) -> None:
+        """Leave fullscreen (if needed) and place the window at that geometry."""
+        self._set_windowed_size(int(width), int(height))
+        if self.is_fullscreen and self._window and self._glfw:
+            # GLFW only leaves fullscreen through glfwSetWindowMonitor(NULL,...),
+            # so a plain resize would leave the window owning the whole screen.
+            try:
+                self._glfw.glfwSetWindowMonitor(self._window, None, int(x), int(y),
+                                                int(width), int(height), 0)
+            except Exception:
+                pass
+        self.is_fullscreen = False
+        self._user_toggled_windowed = True
+        self._apply_window_geometry(int(width), int(height), int(x), int(y))
 
     def _apply_window_geometry(self, width: int, height: int, x: int, y: int) -> None:
         if not (self._window and self._glfw):
