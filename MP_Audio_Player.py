@@ -2367,7 +2367,7 @@ class EqualizerManager:
 
 
 # ---------------------------------------------------------------------------
-# Crusher Bass Boost
+# MP Bass Boost
 #
 # Skullcandy's Crusher line (Crusher ANC 2, Crusher Evo, Crusher 1080 ANC) does
 # not boost bass with a shelf or a plain low-pass. The left ear cup carries a
@@ -10817,9 +10817,9 @@ def main():
         (("--list-eq-presets",), dict(action="store_true", help="List all available equalizer presets and their dB curves")),
         (("--eq-bands",), dict(type=str, help="Set 10-band equalizer gains in dB (e.g. '3.0,2.5,1.5,0,-1,-1.5,-0.5,1,2,2.5')")),
         (("--reset-eq",), dict(action="store_true", help="Reset equalizer to Flat preset (0 dB on all bands)")),
-        (("--bass-mode", "--bass"), dict(type=str, help="Set Crusher Bass Boost mode (Normal, Medium, High)")),
-        (("--cycle-bass",), dict(action="store_true", help="Step the Crusher Bass Boost dial up one mode")),
-        (("--list-bass-modes",), dict(action="store_true", help="List the Crusher Bass Boost modes and their boost levels"))
+        (("--bass-mode", "--bass"), dict(type=str, help="Set MP Bass Boost mode (Normal, Medium, High)")),
+        (("--cycle-bass",), dict(action="store_true", help="Step the MP Bass Boost dial up one mode")),
+        (("--list-bass-modes",), dict(action="store_true", help="List the MP Bass Boost modes and their boost levels"))
     ]: p.add_argument(*flags, **kw)
 
     args, _ = p.parse_known_args()
@@ -11171,7 +11171,7 @@ def main():
             sys.exit(1)
 
     if args.list_bass_modes:
-        print("MP Audio Player — Crusher Bass Boost modes (Skullcandy Crusher ANC 2 dial):")
+        print("MP Audio Player — MP Bass Boost modes (Skullcandy Crusher ANC 2 dial):")
         for mode in BASS_BOOST_MODES:
             pct = BASS_BOOST_FRACTIONS[mode] * 100.0
             peak = bass_mode_peak_db(mode)

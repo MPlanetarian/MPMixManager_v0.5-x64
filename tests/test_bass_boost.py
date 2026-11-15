@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Crusher Bass Boost for MP Liquid Player and MP Audio Player (CLI).
+MP Bass Boost for MP Liquid Player and MP Audio Player (CLI).
 
 The dial on the side of the Skullcandy Crusher ANC 2 changes how hard the
 headphone's second bass driver is driven. SoundGuys' measurements of the same

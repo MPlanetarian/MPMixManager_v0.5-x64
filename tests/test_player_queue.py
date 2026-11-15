@@ -159,7 +159,7 @@ class TestPlayerQueue(unittest.TestCase):
         self.assertFalse(ui.running)
 
     def test_ui_key_b_cycles_bass_mode_without_exiting(self):
-        """Verifies 'b' / 'B' step the Crusher Bass Boost dial and keep the UI alive."""
+        """Verifies 'b' / 'B' step the MP Bass Boost dial and keep the UI alive."""
         mock_scanner = MagicMock()
         mock_scanner.get_mixes.return_value = self.playlist
         with tempfile.TemporaryDirectory() as cfg, \
