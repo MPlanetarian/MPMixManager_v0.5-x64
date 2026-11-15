@@ -918,15 +918,26 @@ class StreamQueueCacheTest(unittest.TestCase):
         mwc._queue_cache["files"] = []
         mwc._queue_cache["built_at"] = 0.0
         # These tests count how often the queue is rebuilt by mocking
-        # scan_playlist_files, so the archive scanner has to route through it.
-        # The inner reader is stubbed to an empty library so an unmocked call
-        # returns nothing instead of walking the developer's 51k-file archive.
+        # scan_playlist_files, so the queue has to route through it. The music
+        # branch no longer falls back to the archive scan (an unmounted share
+        # must not be relabelled as mixes), so pin the mix library here and let
+        # scan_archive_files be the one scanner these tests observe. The inner
+        # reader is stubbed to an empty library so an unmocked call returns
+        # nothing instead of walking the developer's 51k-file archive.
         self._patches = [
             mock.patch.object(mwc, "_read_playlist_file", return_value=[]),
+            mock.patch.object(mwc, "get_library_mode", return_value=mwc.LIBRARY_MODE_MIX),
             mock.patch.object(mwc, "scan_archive_files",
                               side_effect=lambda: mwc.scan_playlist_files()),
             mock.patch.object(mwc, "scan_music_files", return_value=[]),
             mock.patch.object(mwc, "ensure_music_folders_mounted", return_value=None),
+            # A stale read spawns a refresh worker. That thread outlives the
+            # mocks torn down at the end of the test, so it then walks the
+            # developer's real 55k-file library while holding the build lock -
+            # the next test cannot take the lock for 90 s and fails. These
+            # tests assert cache/lock behaviour, never the worker itself, so
+            # keep the refresh from being started here.
+            mock.patch.object(mwc, "_refresh_queue_in_background", return_value=None),
         ]
         for patch_ in self._patches:
             patch_.start()

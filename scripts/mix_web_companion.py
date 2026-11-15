@@ -2482,7 +2482,22 @@ def build_stream_queue(force: bool = False) -> List[str]:
                 and (now - cached.get("built_at", 0.0)) < QUEUE_CACHE_TTL):
             return list(cached.get("files") or ())
 
-        if mode == LIBRARY_MODE_MUSIC:
+        # An explicit playlist outranks the library mode. `WEB_COMPANION_PLAYLIST`
+        # is documented as "overrides the mode" (README, config.env.example) and
+        # `scan_playlist_files()` exists to say so, but the streaming queue stopped
+        # consulting it, so a pinned playlist was silently replaced by whichever
+        # library the toggle happened to be on. Resolve it first, and keep the
+        # mode-only path below untouched for every operator who never sets it.
+        explicit = _config_value("WEB_COMPANION_PLAYLIST", "").strip()
+        if explicit:
+            files = scan_playlist_files()
+            _queue_source_state.update({
+                "fallback": False,
+                "detail": "" if files else (
+                    f"The playlist named by WEB_COMPANION_PLAYLIST is empty or missing ({explicit})"
+                ),
+            })
+        elif mode == LIBRARY_MODE_MUSIC:
             files = scan_music_files()
             # The Music button loads the music playlist. Substituting the mix
             # archive when a share was offline is what made the list say it was
