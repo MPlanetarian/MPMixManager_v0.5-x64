@@ -5,6 +5,7 @@ import re
 import subprocess
 import unittest
 from pathlib import Path
+from tests.mp_test_bash import BASH
 
 ROOT = Path(__file__).resolve().parent.parent
 ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")

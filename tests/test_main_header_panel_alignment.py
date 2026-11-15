@@ -12,6 +12,7 @@ import unittest
 import subprocess
 import re
 from pathlib import Path
+from tests.mp_test_bash import BASH
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
