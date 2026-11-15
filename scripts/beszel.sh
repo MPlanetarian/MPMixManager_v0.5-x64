@@ -41,8 +41,7 @@ if [ "$OS_TYPE" = "windows" ]; then
     [ ! -d "$BESZEL_DIR" ] && [ -d "C:/BESZEL" ] && BESZEL_DIR="C:/BESZEL"
     [ ! -d "$BESZEL_DIR" ] && BESZEL_DIR="$HOME/BESZEL"
 else
-    BESZEL_DIR="${BESZEL_DIR:-/var/home/mplanetarian/beszel-hub}"
-    [ ! -d "$BESZEL_DIR" ] && [ -d "$HOME/beszel-hub" ] && BESZEL_DIR="$HOME/beszel-hub"
+    BESZEL_DIR="${BESZEL_DIR:-$HOME/beszel-hub}"
 fi
 
 is_port_listening() {
@@ -122,8 +121,8 @@ start_hub_linux() {
         if ! podman ps --filter "name=beszel" --format "{{.Names}}" 2>/dev/null | grep -q "^beszel$"; then
             if [ -f "$BESZEL_DIR/launch_beszel_hub_replace.sh" ]; then
                 (cd "$BESZEL_DIR" && bash ./launch_beszel_hub_replace.sh >/dev/null 2>&1 || true)
-            elif [ -f "/var/home/mplanetarian/beszel-hub/launch_beszel_hub_replace.sh" ]; then
-                (cd "/var/home/mplanetarian/beszel-hub" && bash ./launch_beszel_hub_replace.sh >/dev/null 2>&1 || true)
+            elif [ -f "$HOME/beszel-hub/launch_beszel_hub_replace.sh" ]; then
+                (cd "$HOME/beszel-hub" && bash ./launch_beszel_hub_replace.sh >/dev/null 2>&1 || true)
             else
                 mkdir -p "$BESZEL_DIR/beszel_data" 2>/dev/null || true
                 podman run --replace -d \
@@ -175,8 +174,8 @@ start_agent_linux() {
         if ! podman ps --filter "name=beszel-agent" --format "{{.Names}}" 2>/dev/null | grep -q "^beszel-agent$"; then
             if [ -f "$BESZEL_DIR/launch_beszel_agent_replace.sh" ]; then
                 (cd "$BESZEL_DIR" && bash ./launch_beszel_agent_replace.sh >/dev/null 2>&1 || true)
-            elif [ -f "/var/home/mplanetarian/beszel-hub/launch_beszel_agent_replace.sh" ]; then
-                (cd "/var/home/mplanetarian/beszel-hub" && bash ./launch_beszel_agent_replace.sh >/dev/null 2>&1 || true)
+            elif [ -f "$HOME/beszel-hub/launch_beszel_agent_replace.sh" ]; then
+                (cd "$HOME/beszel-hub" && bash ./launch_beszel_agent_replace.sh >/dev/null 2>&1 || true)
             else
                 podman run --replace -d \
                   --name beszel-agent \

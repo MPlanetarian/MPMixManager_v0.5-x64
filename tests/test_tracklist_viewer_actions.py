@@ -238,7 +238,7 @@ class TestTracklistViewerActions(unittest.TestCase):
             ("cosmic_supernova", "Cosmic Supernova", "\033[38;2;224;86;253m", "\033[38;2;76;201;240m"),
             ("dreamworlds_ultra", "Dreamworlds Ultra", "\033[38;2;166;77;255m", "\033[38;2;153;153;255m"),
             ("dreamworlds_liquid", "MP Dreamworlds Liquid Transparency", "\033[38;2;199;125;255m", "\033[38;2;0;245;255m"),
-            ("orbital_void_reflux", "Orbital Void Reflux", "\033[38;2;157;78;221m", "\033[38;2;0;240;255m"),
+            ("sensorium", "Sensorium", "\033[38;2;92;36;0m", "\033[38;2;10;58;72m"),
             ("retro_terminal", "Retro Terminal", "\033[1;37m", "\033[1;37m"),
         ]
 

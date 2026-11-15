@@ -1,0 +1,94 @@
+#Sensorium MP Mix Manager
+#MPlanetarian Sensorium Theme adapted for BTOP
+#Dreamworlds Productions
+#Bright tangerine, acid chartreuse and electric azure accents on a light coral pane.
+
+# Main background (Light Coral)
+theme[main_bg]="#f08080"
+
+# Main text color (Deep Sensorium Maroon)
+theme[main_fg]="#2b0a10"
+
+# Title color for boxes (Dark Tangerine ink)
+theme[title]="#5c2400"
+
+# Highlight color for keyboard shortcuts (Dark Chartreuse ink)
+theme[hi_fg]="#263d00"
+
+# Background color of selected item in processes box (Deep Electric Azure)
+theme[selected_bg]="#0b2f6b"
+
+# Foreground color of selected item in processes box
+theme[selected_fg]="#fff6e8"
+
+# Color of inactive/disabled text
+theme[inactive_fg]="#52242c"
+
+# Color of text appearing on top of graphs (Dark Chartreuse ink)
+theme[graph_text]="#263d00"
+
+# Background color of the percentage meters (Light Coral Shadow)
+theme[meter_bg]="#d96c6c"
+
+# Misc colors for processes box (Dark Mango ink)
+theme[proc_misc]="#4a3400"
+
+# Cpu box outline color (Dark Tangerine ink)
+theme[cpu_box]="#5c2400"
+
+# Memory/disks box outline color (Deep Electric Azure)
+theme[mem_box]="#0b2f6b"
+
+# Net up/down box outline color (Dark Chartreuse ink)
+theme[net_box]="#263d00"
+
+# Processes box outline color (Dark Tangerine ink)
+theme[proc_box]="#5c2400"
+
+# Box divider line and small boxes line color
+theme[div_line]="#7a3a3a"
+
+# Temperature graph colors (Chartreuse -> Mango -> Coral ink)
+theme[temp_start]="#263d00"
+theme[temp_mid]="#4a3400"
+theme[temp_end]="#5e140f"
+
+# CPU graph colors (Chartreuse -> Mango -> Tangerine ink)
+theme[cpu_start]="#263d00"
+theme[cpu_mid]="#4a3400"
+theme[cpu_end]="#5c2400"
+
+# Mem/Disk free meter
+theme[free_end]="#263d00"
+theme[free_mid]="#4a3400"
+theme[free_start]="#5e140f"
+
+# Mem/Disk cached meter
+theme[cached_start]="#d96c6c"
+theme[cached_mid]="#5c2400"
+theme[cached_end]="#263d00"
+
+# Mem/Disk available meter
+theme[available_start]="#5e140f"
+theme[available_mid]="#4a3400"
+theme[available_end]="#0b2f6b"
+
+# Mem/Disk used meter
+theme[used_start]="#0b2f6b"
+theme[used_mid]="#5c2400"
+theme[used_end]="#263d00"
+
+# Download graph colors
+theme[download_start]="#d96c6c"
+theme[download_mid]="#0b2f6b"
+theme[download_end]="#263d00"
+
+# Upload graph colors
+theme[upload_start]="#5c2400"
+theme[upload_mid]="#4a3400"
+theme[upload_end]="#263d00"
+
+# Process box color gradient for threads, mem and cpu usage
+theme[process_start]="#d96c6c"
+theme[process_mid]="#5c2400"
+theme[process_end]="#263d00"

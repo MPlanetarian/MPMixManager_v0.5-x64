@@ -31,7 +31,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Sequence
 
 ROOT = Path(__file__).resolve().parent.parent
 if not (ROOT / "MP_Liquid_Visualizer.py").is_file():
@@ -49,6 +49,33 @@ DEFAULT_IDLE = 300.0      # 5 minutes
 DEFAULT_DWELL = 45.0      # seconds per preset inside the saver
 DEFAULT_COOLDOWN = 20.0   # seconds before the saver may trigger again
 POLL = 2.0
+
+# The saver cycles this pair rather than the whole library. Both are the
+# Stream of Frequency — Dynamic Waves river, so the wall reads as one effect:
+# the horizontal river, then the vertical one.
+DEFAULT_SAVER_PRESETS = (
+    "stream_of_frequency_dynamic_waves",
+    "stream_of_frequency_dynamic_waves_p2",
+)
+
+# Named pools selectable with --saver-pools. "dynamic_waves" is the default.
+SAVER_POOLS = {
+    "dynamic_waves": DEFAULT_SAVER_PRESETS,
+    "sof": DEFAULT_SAVER_PRESETS,
+    "waves": DEFAULT_SAVER_PRESETS,
+}
+
+
+def saver_pool(name: Optional[str]) -> tuple:
+    """Resolve a pool name to a tuple of preset keys, defaulting to the pair."""
+    key = str(name or "").strip().lower().replace("-", "_")
+    if not key:
+        return DEFAULT_SAVER_PRESETS
+    if key in SAVER_POOLS:
+        return tuple(SAVER_POOLS[key])
+    # An unknown name is treated as a comma-separated preset list.
+    parts = tuple(p.strip() for p in str(name).split(",") if p.strip())
+    return parts or DEFAULT_SAVER_PRESETS
 
 
 def _visualizer_entry() -> Optional[Path]:
@@ -130,13 +157,18 @@ def show_status() -> int:
     return 0
 
 
-def _launch_saver(dwell: float, preset: Optional[str], windowed: bool) -> subprocess.Popen:
+def _launch_saver(dwell: float, preset: Optional[str], windowed: bool,
+                  preset_pool: Optional[Sequence[str]] = None) -> subprocess.Popen:
     entry = _visualizer_entry()
     if entry is None:
         raise RuntimeError("MP_Liquid_Visualizer.py was not found")
     cmd = [sys.executable, str(entry), "--screensaver", "--saver-dwell", str(dwell)]
     if preset:
+        # An explicit preset locks the saver to one theme.
         cmd += ["--saver-preset", preset]
+    else:
+        pool = tuple(preset_pool or DEFAULT_SAVER_PRESETS)
+        cmd += ["--saver-presets", ",".join(pool)]
     if windowed:
         cmd.append("--saver-windowed")
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
@@ -152,7 +184,8 @@ def _launch_saver(dwell: float, preset: Optional[str], windowed: bool) -> subpro
 
 
 def run(idle_threshold: float, dwell: float, cooldown: float,
-        preset: Optional[str], windowed: bool) -> int:
+        preset: Optional[str], windowed: bool,
+        preset_pool: Optional[Sequence[str]] = None) -> int:
     from mp_liquid_visualizer_vulkan import idle_seconds
 
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
@@ -189,7 +222,7 @@ def run(idle_threshold: float, dwell: float, cooldown: float,
             if idle >= idle_threshold and time.time() >= next_allowed:
                 proc = None
                 try:
-                    proc = _launch_saver(dwell, preset, windowed)
+                    proc = _launch_saver(dwell, preset, windowed, preset_pool)
                 except Exception as exc:
                     print(f"[idle-saver] launch failed: {exc}", file=sys.stderr, flush=True)
                 if proc is not None:
@@ -225,6 +258,8 @@ def main(argv: Optional[list] = None) -> int:
     ap.add_argument("--dwell", type=float, default=DEFAULT_DWELL, help="Seconds per preset inside the saver (default: 45)")
     ap.add_argument("--cooldown", type=float, default=DEFAULT_COOLDOWN, help="Seconds before it may trigger again after closing (default: 20)")
     ap.add_argument("--preset", type=str, default=None, help="Lock the saver to a single preset instead of cycling")
+    ap.add_argument("--saver-pools", type=str, default="dynamic_waves",
+                    help="Named preset pool the saver cycles (dynamic_waves), or a comma-separated key list")
     ap.add_argument("--windowed", action="store_true", help="Run the saver in a window instead of fullscreen")
     ap.add_argument("--stop", action="store_true", help="Stop a running idle saver and exit")
     ap.add_argument("--status", action="store_true", help="Report whether the idle saver is running")
@@ -237,7 +272,8 @@ def main(argv: Optional[list] = None) -> int:
     if _running_pid():
         print("MP Visualizer idle saver is already running. Use --stop first.", file=sys.stderr)
         return 1
-    return run(max(5.0, args.idle), max(0.0, args.dwell), max(0.0, args.cooldown), args.preset, args.windowed)
+    return run(max(5.0, args.idle), max(0.0, args.dwell), max(0.0, args.cooldown),
+               args.preset, args.windowed, saver_pool(args.saver_pools))
 
 
 if __name__ == "__main__":

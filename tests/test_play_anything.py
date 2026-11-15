@@ -68,12 +68,24 @@ def _stub_harmony() -> None:
 
 
 def load_agent():
+    """Load the out-of-tree MP Harmony Agent, or skip.
+
+    The agent is a separate project (~/OpenAI/MP_Harmony_Agent) and is not part
+    of this repository. When it is present but cannot be imported - a different
+    openai_harmony version, a missing optional module - that is an environment
+    mismatch in somebody else's tree, not a failure of this one, so it skips.
+    """
     if not AGENT.is_file():
         raise unittest.SkipTest("MP Harmony Agent is not installed on this machine")
     _stub_harmony()
     spec = importlib.util.spec_from_file_location("mp_harmony_agent_play", AGENT)
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    try:
+        spec.loader.exec_module(module)
+    except ImportError as exc:
+        raise unittest.SkipTest(
+            f"MP Harmony Agent could not be imported in this environment: {exc}"
+        )
     return module
 
 

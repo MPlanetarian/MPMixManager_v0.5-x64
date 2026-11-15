@@ -3,7 +3,9 @@
 # If Ollama is not answering, offer to start it: a systemd user service,
 # a distrobox/podman container (the container name is asked for), or a
 # plain `ollama serve`. Declining returns straight to the manager.
-# The model is the local tag gpt-oss-pinned:latest (OpenAI gpt-oss-20b).
+# The model is the local tag gpt-oss-pinned:latest, which is now the NVIDIA
+# Nemotron 3.5 Bolt E4B build (8B total / 4B effective) sized for a 10 GB GPU.
+# The tag name is kept for compatibility with existing configs and tooling.
 # Shift+A on an empty assistant line returns to the manager.
 
 if [ "${MP_HARMONY_LIB:-0}" = "1" ]; then
@@ -13,7 +15,7 @@ else
 fi
 
 HARMONY_MODEL="${HARMONY_MODEL:-gpt-oss-pinned:latest}"
-HARMONY_PARENT_MODEL="${HARMONY_PARENT_MODEL:-gpt-oss:20b}"
+HARMONY_PARENT_MODEL="${HARMONY_PARENT_MODEL:-nemotron-3.5-bolt:e4b}"
 OLLAMA_API_URL="${OLLAMA_API_URL:-http://127.0.0.1:11434}"
 OLLAMA_API_URL="${OLLAMA_API_URL%/}"
 
@@ -217,22 +219,26 @@ ${BOLD}${CYAN}Ollama is running, but ${HARMONY_MODEL} is not installed.${NC}
 
 ${BOLD}You would be installing this Ollama model tag:${NC}
   ${BOLD}${HARMONY_MODEL}${NC}
-  About 14 GB on disk.
+  About 8 GB on disk.
 
 ${BOLD}What the model is${NC}
-  OpenAI gpt-oss-20b, the open-weight reasoning model.
-  20.9 billion parameters, about 3.6 billion active per token.
-  Mixture-of-experts, MXFP4 weights, GGUF, Apache License 2.0.
-  It speaks the OpenAI Harmony format: analysis, commentary, and
-  final channels. MP Harmony cannot drive a normal chat model.
-  Text in, text out. Knowledge cutoff June 2024.
-  Context window up to 131,072 tokens.
-  Reasoning effort can be low, medium, or high. This assistant
-  uses medium unless you change it.
+  NVIDIA Nemotron 3.5 Bolt E4B, a compact model for local coding,
+  reasoning, and tool use.
+  8 billion total parameters, about 4 billion effective per token.
+  Quantized GGUF weights, OpenMDW License 1.1.
+  It uses a normal chat template rather than OpenAI Harmony, so the
+  assistant translates turns for it automatically.
+  Text and image in, text out. Context window up to 128,000 tokens.
   The official Ollama parent is ${HARMONY_PARENT_MODEL}
   (the same weights and the same license).
   If the registry has no tag named ${HARMONY_MODEL}, the installer
   pulls ${HARMONY_PARENT_MODEL} and copies it to ${HARMONY_MODEL}.
+
+${BOLD}Why this model${NC}
+  The previous 20.9B gpt-oss model needed about 14 GB of weights, which
+  does not fit a 10 GB card such as the RTX 3080. Ollama then silently
+  ran it on the CPU at a fraction of the speed. This build fits in VRAM
+  and runs fully on the GPU.
 
 ${BOLD}What it is used for in MP Mix Manager${NC}
   This is the local brain of the MP Harmony AI Assistant.
@@ -372,7 +378,7 @@ harmony_load_model() {
         return 0
     fi
     harmony_say "${BOLD}Loading ${HARMONY_MODEL} into Ollama memory.${NC}"
-    harmony_say "  A 20.9B model can take a few minutes."
+    harmony_say "  The 8B model loads into GPU memory in a few seconds."
     if ! harmony_api_python "$OLLAMA_API_URL" load "$HARMONY_MODEL"; then
         harmony_say "${RED}Ollama did not load ${HARMONY_MODEL}. MP Harmony was not started.${NC}"
         return 1
@@ -382,11 +388,17 @@ harmony_load_model() {
 }
 
 harmony_resolve_script() {
-    local dir="${HARMONY_DIR:-/var/home/mplanetarian/OpenAI/MP_Harmony_Agent}"
-    if [ ! -d "$dir" ] && [ -d "${HOME}/OpenAI/MP_Harmony_Agent" ]; then
-        dir="${HOME}/OpenAI/MP_Harmony_Agent"
-    elif [ ! -d "$dir" ] && [ -d "${HOME}/OpenAI/Harmony_Agent" ]; then
-        dir="${HOME}/OpenAI/Harmony_Agent"
+    # MP Harmony Agent is a separate project installed at ~/OpenAI/MP_Harmony_Agent
+    # by scripts/install_harmony_agent.sh. It is not bundled in this tree.
+    local dir=""
+    if [ -n "${HARMONY_DIR:-}" ] && [ -f "${HARMONY_DIR}/MP_Harmony_Agent.py" ]; then
+        dir="$HARMONY_DIR"
+    elif [ -d "$HOME/OpenAI/MP_Harmony_Agent" ]; then
+        dir="$HOME/OpenAI/MP_Harmony_Agent"
+    elif [ -d "$HOME/OpenAI/Harmony_Agent" ]; then
+        dir="$HOME/OpenAI/Harmony_Agent"
+    else
+        dir="${HARMONY_DIR:-$HOME/OpenAI/MP_Harmony_Agent}"
     fi
     HARMONY_DIR="$dir"
     HARMONY_SCRIPT="${HARMONY_DIR}/MP_Harmony_Agent.py"
@@ -402,7 +414,11 @@ harmony_launch_agent() {
     fi
     harmony_resolve_script
     if [ ! -f "${HARMONY_SCRIPT:-}" ]; then
-        harmony_say "${RED}MP_Harmony_Agent.py was not found in ${HARMONY_DIR:-the Harmony directory}.${NC}"
+        harmony_say "${RED}The MP Harmony Agent is not installed.${NC}"
+        harmony_say "  It is a separate project, expected at ${HARMONY_DIR}."
+        harmony_say "  Install it from the manager tree:"
+        harmony_say "    ${BOLD}scripts/install_harmony_agent.sh install${NC}"
+        harmony_say "  Or re-run ${BOLD}./install.sh${NC} and accept the optional agent."
         return 1
     fi
     harmony_say ""

@@ -55,6 +55,7 @@ RULE_HEAVY = "=" * 50
 RULE_LIGHT = "-" * 50
 PLAYLIST_ID_ALPHABET = string.ascii_uppercase + string.digits
 PLAYLIST_ID_LENGTH = 12
+DEFAULT_PREP_FOLDER = "DJ Set Mix Preparation Folder"
 try:
     from audio_formats import AUDIO_EXTENSIONS
 except ImportError:  # imported as scripts.MP_Fav_Playlist_Track_Exporter
@@ -113,6 +114,93 @@ def new_playlist_name(tracklist_name: Optional[str] = None) -> str:
     date = time.strftime("%Y-%m-%d")
     ident = "".join(random.choice(PLAYLIST_ID_ALPHABET) for _ in range(PLAYLIST_ID_LENGTH))
     return f"MP_Fav_Set_{date}_{ident}"
+
+
+def primary_mix_archive(cfg: Optional[Dict[str, str]] = None) -> Optional[Path]:
+    """The primary MIX_ARCHIVE folder, when one is configured and present."""
+    cfg = cfg or load_config()
+    flag = str(cfg.get("MIX_ARCHIVE_CONFIGURED", "")).strip().lower()
+    if flag not in ("1", "true", "yes", "on"):
+        return None
+    raw = _expand(cfg.get("MIX_ARCHIVE_DIR") or "")
+    if not raw:
+        return None
+    path = Path(raw).expanduser()
+    if path.is_dir():
+        return path
+    return None
+
+
+def _export_stamp(when: Any = None) -> str:
+    if when is None or when == "":
+        return time.strftime("%Y-%m-%d")
+    if isinstance(when, str):
+        return when
+    try:
+        return time.strftime("%Y-%m-%d", when)
+    except (TypeError, ValueError):
+        return time.strftime("%Y-%m-%d")
+
+
+def preparation_output_dir(
+    destination: Optional[str] = None,
+    folder_name: Optional[str] = None,
+    cfg: Optional[Dict[str, str]] = None,
+    program_dir: Optional[Path] = None,
+    when: Any = None,
+) -> Path:
+    """Folder that receives the copied favorites.
+
+    A blank folder name becomes "DJ Set Mix Preparation Folder". With no
+    primary MIX_ARCHIVE and no custom name, the folder is
+    FAVORITES_EXPORTED_<date> in the program directory.
+    """
+    cfg = cfg or load_config()
+    program = Path(program_dir or APP_DIR)
+    stamp = _export_stamp(when)
+    custom = _sanitize_name(folder_name, "") if str(folder_name or "").strip() else ""
+    parent_raw = _expand(destination or "")
+    archive = primary_mix_archive(cfg)
+    dated = f"FAVORITES_EXPORTED_{stamp}"
+    if parent_raw:
+        parent = Path(parent_raw).expanduser()
+        try:
+            same_program = parent.expanduser().resolve() == program.expanduser().resolve()
+        except OSError:
+            same_program = False
+        if not custom and archive is None and same_program:
+            folder = dated
+        else:
+            folder = custom or DEFAULT_PREP_FOLDER
+    elif archive is not None:
+        parent = archive
+        folder = custom or DEFAULT_PREP_FOLDER
+    else:
+        parent = program
+        folder = custom or dated
+    return parent / folder
+
+
+def tracklist_from_manager(labels: Sequence[str], title: str, destination: str) -> str:
+    """Ask Mix_Archive_Manager.sh generate_favorites_tracklist for the text file."""
+    script = APP_DIR / "Mix_Archive_Manager.sh"
+    if not script.is_file():
+        return ""
+    try:
+        completed = subprocess.run(
+            ["bash", str(script), "--favorites-tracklist", title or "Favorites", destination or ""],
+            input="\n".join(str(label) for label in labels) + "\n",
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    text = completed.stdout or ""
+    if completed.returncode == 0 and "TRACKLIST" in text and "RELEASE INFO" in text:
+        return text if text.endswith("\n") else text + "\n"
+    return ""
 
 
 # ------------------------------------------------------------------------------
@@ -560,6 +648,11 @@ def write_m3u8(path: Path, playlist_name: str, entries: Sequence[Dict[str, Any]]
     return path
 
 
+def write_m3u(path: Path, playlist_name: str, entries: Sequence[Dict[str, Any]]) -> Path:
+    """Favorites .m3u beside the .m3u8. The audio files are only ever copied."""
+    return write_m3u8(path, playlist_name, entries)
+
+
 # ------------------------------------------------------------------------------
 # Traktor bridge
 # ------------------------------------------------------------------------------
@@ -584,6 +677,106 @@ def traktor_ready(cfg: Optional[Dict[str, str]] = None) -> Tuple[bool, str]:
     return True, "Traktor history and collection are ready."
 
 
+def traktor_playlist_exists(playlist_name: str, cfg: Optional[Dict[str, str]] = None) -> bool:
+    cfg = cfg or load_config()
+    try:
+        import generate_traktor_playlist_from_history as traktor
+    except Exception:
+        return False
+    collection = traktor.find_collection_path(cfg)
+    if not collection:
+        return False
+    return traktor.playlist_name_exists(str(collection), playlist_name)
+
+
+def favorites_from_history(history_id: str, cfg: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+    """Resolve one Traktor history file to on-disk tracks from collection.nml.
+
+    The history file supplies the play order. The file path comes from the
+    loaded Traktor collection. Audio files are not deleted or moved.
+    """
+    cfg = cfg or load_config()
+    try:
+        import generate_traktor_playlist_from_history as traktor
+    except Exception as exc:
+        return {"ok": False, "reason": "import", "message": str(exc), "tracks": [], "missing": []}
+    collection = traktor.find_collection_path(cfg)
+    if not collection or not Path(collection).is_file():
+        return {
+            "ok": False,
+            "reason": "collection",
+            "message": "collection.nml was not found. Load the Traktor collection first.",
+            "tracks": [],
+            "missing": [],
+        }
+    history_dirs = traktor.preferred_history_dirs(collection, cfg)
+    history = traktor.resolve_history_file(history_id, history_dirs, cfg=cfg)
+    if not history or not history.is_file():
+        return {
+            "ok": False,
+            "reason": "history",
+            "message": "No Traktor history file matched that ID.",
+            "tracks": [],
+            "missing": [],
+        }
+    try:
+        ordered, _index = traktor.parse_history_file(str(history))
+        collection_index = traktor.load_collection_index(str(collection))
+    except Exception as exc:
+        return {"ok": False, "reason": "parse", "message": str(exc), "tracks": [], "missing": []}
+    tracks: List[Dict[str, Any]] = []
+    missing: List[str] = []
+    seen: set = set()
+    for row in ordered:
+        basename = str(row.get("basename") or "")
+        coll = collection_index.get(basename)
+        if coll is None or not traktor.metadata_agrees(row, coll):
+            coll = None
+            for candidate in collection_index.values():
+                if traktor.metadata_agrees(row, candidate):
+                    coll = candidate
+                    break
+        label = row.get("file") or basename or "unknown"
+        if coll is None:
+            missing.append(str(label))
+            continue
+        path = str(coll.get("fs_path") or "")
+        if not path or not os.path.isfile(path):
+            missing.append(str(label))
+            continue
+        key = os.path.normcase(os.path.abspath(path))
+        if key in seen:
+            continue
+        seen.add(key)
+        artist = str(coll.get("artist") or row.get("artist") or "")
+        title = str(coll.get("title") or row.get("title") or Path(path).stem)
+        tracks.append(
+            {
+                "name": os.path.basename(path),
+                "path": path,
+                "ext": os.path.splitext(path)[1].lstrip(".").upper() or "AUDIO",
+                "artist": artist,
+                "title": title,
+            }
+        )
+    if not tracks:
+        return {
+            "ok": False,
+            "reason": "no_match",
+            "message": "None of the history tracks were found in the Traktor collection on disk.",
+            "tracks": [],
+            "missing": missing,
+            "history": history.name,
+        }
+    return {
+        "ok": True,
+        "tracks": tracks,
+        "missing": missing,
+        "history": history.name,
+        "message": f"{len(tracks)} track(s) from {history.name}",
+    }
+
+
 def create_traktor_playlist(favorite_paths: Sequence[str], playlist_name: str,
                             history_id: Optional[str] = None,
                             cfg: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
@@ -598,6 +791,15 @@ def create_traktor_playlist(favorite_paths: Sequence[str], playlist_name: str,
     history = traktor.resolve_history_file(history_id, history_dirs, cfg=cfg)
     if not history:
         return {"ok": False, "reason": "history", "message": "No matching Traktor History file was found."}
+    if playlist_name and traktor.playlist_name_exists(str(collection), playlist_name):
+        return {
+            "ok": False,
+            "reason": "duplicate_name",
+            "message": (
+                f"Traktor already has a playlist named '{playlist_name}'. "
+                "Choose a different name. The audio files were not changed."
+            ),
+        }
     result = traktor.build_traktor_playlist(
         favorite_paths,
         history_id=str(history),
@@ -647,37 +849,70 @@ def export_favorites(
     smb: Optional[Dict[str, str]] = None,
     tracklist_name: Optional[str] = None,
     playlist_name: Optional[str] = None,
+    folder_name: Optional[str] = None,
+    preparation: bool = False,
+    progress: Optional[Any] = None,
+    when: Any = None,
 ) -> Dict[str, Any]:
-    """Copy favorites, verify the copies, and write the tracklist and m3u8.
+    """Copy favorites, verify the copies, and write the tracklist and playlists.
 
     ``smb`` explicitly selects an SMB export; otherwise the local folder is used.
+    ``preparation`` places the copies in the DJ Set Mix Preparation folder.
+    Audio files are copied and checked. They are never deleted.
     """
+    started = time.time()
+
+    def note(message: str) -> None:
+        if progress:
+            progress(f"{time.strftime('%H:%M:%S')}  {message}")
+
     tracks = _normalize_tracks(list(tracks if tracks is not None else load_favorites()))
     result: Dict[str, Any] = {
         "ok": False,
         "playlist_name": "",
         "tracklist": "",
+        "m3u": "",
         "m3u8": "",
         "dest": "",
         "copied": [],
         "failed": [],
         "errors": [],
         "tracklist_name": "",
+        "elapsed_sec": 0.0,
+        "track_count": 0,
     }
+
+    def finish() -> Dict[str, Any]:
+        result["elapsed_sec"] = round(time.time() - started, 3)
+        result["track_count"] = len(result.get("copied") or [])
+        note(
+            f"DONE  tracks={result['track_count']}  "
+            f"elapsed={result['elapsed_sec']:.3f}s  delete=never"
+        )
+        return result
+
     if not tracks:
         result["errors"].append(
             "The Favorites playlist is empty. Add at least one track with [H] before exporting."
         )
-        return result
+        return finish()
 
     name = playlist_name or new_playlist_name(tracklist_name)
     name = _sanitize_name(name, "MP_Fav_Set")
     result["playlist_name"] = name
     result["tracklist_name"] = _sanitize_name(tracklist_name or name, name)
+    note(f"DECK OPEN  favorites={len(tracks)}  verify=size+audio  delete=never")
 
     settings = smb
+    use_preparation = preparation or folder_name is not None
     if settings and (settings.get("host") or settings.get("mount")):
-        copied_result = export_to_smb(tracks, name, settings)
+        folder = _sanitize_name(folder_name, name) if use_preparation and str(folder_name or "").strip() else name
+        note(f"BUS  smb  folder={folder}")
+        copied_result = export_to_smb(tracks, folder, settings)
+    elif use_preparation:
+        target = preparation_output_dir(destination, folder_name, when=when)
+        note(f"DEST  {target}")
+        copied_result = export_to_local(tracks, str(target.parent), target.name)
     else:
         copied_result = export_to_local(tracks, destination or DEFAULT_LOCAL_DIR, name)
 
@@ -697,14 +932,18 @@ def export_favorites(
         }
     )
 
+    for row in result["copied"]:
+        note(f"COPY OK  {row.get('name')}  size-match")
+    note(f"VERIFY  files={result.get('verified_files', 0)}  playable={result.get('playable_files', 0)}")
+
     if not result["copied"]:
         result["errors"].append("No tracks were copied. Nothing was exported.")
-        return result
+        return finish()
     if not result.get("playable_files"):
         result["errors"].append(
             "None of the copied tracks could be opened as audio. The copy is treated as failed."
         )
-        return result
+        return finish()
 
     # Tracklist labels: prefer embedded tags, then Artist - Title from the file name.
     probed: Dict[str, Dict[str, Any]] = {}
@@ -718,7 +957,13 @@ def export_favorites(
         probed[str(track.get("path"))] = info
         labels.append({**track, "label": clean_track_label(*track_artist_title(track, info))})
 
-    tracklist_content = build_tracklist(labels, name, result["dest"], probed)
+    label_lines = [str(item.get("label") or "") for item in labels]
+    tracklist_content = tracklist_from_manager(label_lines, name, result["dest"])
+    if not tracklist_content:
+        tracklist_content = build_tracklist(labels, name, result["dest"], probed)
+        note("CUE  tracklist from exporter fallback")
+    else:
+        note("CUE  Mix_Archive_Manager.sh generate_favorites_tracklist")
     tracklist_filename = f"{result['tracklist_name']}.txt"
     if result.get("kind") == "smb" and not (settings.get("mount") and os.path.isdir(settings["mount"])):
         with tempfile.TemporaryDirectory(prefix="mp_fav_tracklist_") as tmp:
@@ -731,7 +976,7 @@ def export_favorites(
             )
             if rc != 0:
                 result["errors"].append(f"Could not upload the tracklist: {err.strip()}")
-                return result
+                return finish()
     else:
         folder = Path(result.get("local_dest") or result["dest"])
         saved = write_tracklist(folder / tracklist_filename, tracklist_content)
@@ -744,26 +989,39 @@ def export_favorites(
         for row in result["copied"]
     ]
     m3u_name = f"{name}.m3u8"
+    favorites_m3u_name = "Favorites.m3u"
     if result.get("kind") == "smb" and not (settings.get("mount") and os.path.isdir(settings["mount"])):
         with tempfile.TemporaryDirectory(prefix="mp_fav_m3u_") as tmp:
             local_m3u = write_m3u8(Path(tmp) / m3u_name, name, entries)
+            local_fav = write_m3u(Path(tmp) / favorites_m3u_name, "Favorites", entries)
             rc, _, err = _smb_run(
                 settings,
                 f'prompt OFF; put {_smb_quote(str(local_m3u))} '
                 f'{_smb_quote(result["remote_dir"] + "/" + m3u_name)}',
                 timeout=180,
             )
+            rc_fav, _, err_fav = _smb_run(
+                settings,
+                f'prompt OFF; put {_smb_quote(str(local_fav))} '
+                f'{_smb_quote(result["remote_dir"] + "/" + favorites_m3u_name)}',
+                timeout=180,
+            )
             if rc == 0:
                 result["m3u8"] = result["dest"] + "/" + m3u_name
             elif err:
                 result["errors"].append(f"Could not upload the m3u8 playlist: {err.strip()}")
+            if rc_fav == 0:
+                result["m3u"] = result["dest"] + "/" + favorites_m3u_name
+            elif err_fav:
+                result["errors"].append(f"Could not upload the m3u playlist: {err_fav.strip()}")
     else:
-        result["m3u8"] = str(
-            write_m3u8(Path(result.get("local_dest") or result["dest"]) / m3u_name, name, entries)
-        )
+        folder = Path(result.get("local_dest") or result["dest"])
+        result["m3u8"] = str(write_m3u8(folder / m3u_name, name, entries))
+        result["m3u"] = str(write_m3u(folder / favorites_m3u_name, "Favorites", entries))
+    note(f"M3U  {favorites_m3u_name}  +  {m3u_name}")
 
     result["ok"] = bool(result["playable_files"])
-    return result
+    return finish()
 
 
 def summary_lines(result: Dict[str, Any]) -> List[str]:
@@ -775,8 +1033,12 @@ def summary_lines(result: Dict[str, Any]) -> List[str]:
     lines.append(f"Verified playable: {result.get('playable_files', 0)}")
     if result.get("tracklist"):
         lines.append(f"Tracklist: {os.path.basename(result['tracklist'])}")
+    if result.get("m3u"):
+        lines.append(f"Favorites playlist: {os.path.basename(result['m3u'])}")
     if result.get("m3u8"):
         lines.append(f"Playlist file: {os.path.basename(result['m3u8'])}")
+    if result.get("elapsed_sec"):
+        lines.append(f"Elapsed: {result['elapsed_sec']:.3f}s")
     traktor = result.get("traktor") or {}
     if traktor:
         lines.append(f"Traktor: {traktor.get('playlist') or traktor.get('message', '')}")
@@ -850,7 +1112,13 @@ def interactive_main() -> int:
         settings["path"] = _ask("Folder inside the share (Enter for the share root)", settings.get("path", ""))
         smb_options = {**settings, "kind": "smb"}
     elif choice in ("1", ""):
-        destination = _ask("Folder on this drive", str(Path(_expand(cfg.get("FAV_EXPORT_LOCAL_DIR")) or DEFAULT_LOCAL_DIR)))
+        archive = primary_mix_archive(cfg)
+        default_parent = str(archive or APP_DIR)
+        destination = _ask(
+            "Destination folder (Enter uses the primary MIX_ARCHIVE, or the program folder)",
+            default_parent,
+        )
+        folder_name = _ask(f"Folder name (Enter for {DEFAULT_PREP_FOLDER})", "")
     else:
         return 0
 
@@ -860,19 +1128,27 @@ def interactive_main() -> int:
     if ready:
         print(f"\n{GREEN}Traktor history is ready.{NC}")
         if _yes("Create a Traktor playlist for these favorites too?", True):
-            traktor_playlist = _ask("Traktor playlist name", playlist_name)
+            while True:
+                traktor_playlist = _ask("Traktor playlist name", playlist_name)
+                if traktor_playlist_exists(traktor_playlist, cfg):
+                    print(f"{YELLOW}That Traktor playlist name already exists. Choose another name.{NC}")
+                    continue
+                break
             history_id = _ask("Traktor history file ID (Enter uses the newest)", "")
             history_name = history_id
     else:
         print(f"\n{DIM}Traktor playlist skipped: {reason}{NC}")
 
-    print(f"\n{CYAN}Exporting {len(tracks)} favorite track(s)...{NC}")
+    print(f"\n{CYAN}Exporting {len(tracks)} favorite track(s). Audio files are copied, never deleted.{NC}")
     result = export_favorites(
         tracks,
         destination=destination,
         smb=smb_options,
         tracklist_name=custom_tracklist or None,
         playlist_name=playlist_name,
+        folder_name=folder_name if choice in ("1", "") else None,
+        preparation=choice in ("1", ""),
+        progress=lambda line: print(f"  {DIM}{line}{NC}"),
     )
     if result.get("ok") and traktor_playlist:
         result["traktor"] = create_traktor_playlist(
@@ -883,7 +1159,12 @@ def interactive_main() -> int:
     for line in summary_lines(result):
         print(f"  {line}")
     if result.get("ok"):
-        print(f"\n{BOLD}{GREEN}At least one copied track was verified as playable.{NC}")
+        copied = len(result.get("copied") or [])
+        elapsed = float(result.get("elapsed_sec") or 0.0)
+        print(f"\n{BOLD}{GREEN}Copied and verified {copied} track(s) in {elapsed:.3f}s.{NC}")
+        print(f"{BOLD}Audio files were not deleted.{NC}")
+        if _yes("Export again to another destination and create another Traktor playlist?", False):
+            return interactive_main()
     return 0 if result.get("ok") else 1
 
 

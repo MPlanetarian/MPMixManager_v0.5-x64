@@ -8,6 +8,9 @@ Automatically synchronizes with the active theme currently running in Manager.
 """
 
 import argparse
+import errno
+import glob
+import hashlib
 import html
 import http.server
 import json
@@ -26,7 +29,12 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
+
+try:
+    import mp_companion_security as sec
+except ImportError:  # when imported as scripts.mix_web_companion
+    from scripts import mp_companion_security as sec
 
 PORT = 8888
 
@@ -41,7 +49,7 @@ def _get_app_version() -> str:
                 return cand.read_text(encoding="utf-8").strip()
             except Exception:
                 pass
-    return "0.5.0 Stable (Sensorium)"
+    return "0.5.3 Stable (Sensorium)"
 
 VERSION = _get_app_version()
 
@@ -141,11 +149,11 @@ THEMES: Dict[str, Dict[str, Any]] = {
     "dreamworlds_ultra": {
         "id": "dreamworlds_ultra",
         "name": "MP Mix Archive Manager (Dreamworlds Ultra)",
-        "bg": "#000000",
-        "card_bg": "#110e20",
+        "bg": "#554a6b",
+        "card_bg": "#463b5c",
         "card_border": "rgba(166, 77, 255, 0.38)",
         "card_shadow": "0 12px 35px rgba(0, 0, 0, 0.9)",
-        "text_main": "#d1d1e0",
+        "text_main": "#d8b4fe",
         "text_dim": "#9999ff",
         "accent_primary": "#a64dff",     # Hot Purple
         "accent_secondary": "#00ff00",   # Traffic Green
@@ -446,96 +454,34 @@ THEMES: Dict[str, Dict[str, Any]] = {
         "eq_bar": "#c8c8c8",
         "eq_peak": "#ffffff",
     },
-    "cosmic_dreamworlds_radioactive": {
-        "id": "cosmic_dreamworlds_radioactive",
-        "name": "Cosmic Dreamworlds Radioactive (Liquid Glass Skin)",
-        "bg": "#050e08",
-        "card_bg": "rgba(8, 20, 14, 0.78)",
-        "card_border": "rgba(57, 255, 20, 0.45)",
-        "card_shadow": "0 14px 45px rgba(0, 0, 0, 0.85), 0 0 25px rgba(57, 255, 20, 0.22)",
-        "text_main": "#ffffff",
-        "text_dim": "#a2e6b5",
-        "accent_primary": "#39ff14",
-        "accent_secondary": "#00f5d4",
-        "accent_tertiary": "#a64dff",
-        "accent_crimson": "#00ff66",
-        "header_gradient": "linear-gradient(135deg, #39ff14 0%, #00f5d4 50%, #a64dff 100%)",
-        "btn_gradient": "linear-gradient(135deg, #39ff14, #00f5d4)",
-        "btn_shadow": "0 4px 18px rgba(57, 255, 20, 0.45)",
-        "progress_fill": "linear-gradient(90deg, #39ff14, #00f5d4, #a64dff)",
-        "badge_bg": "rgba(57, 255, 20, 0.20)",
-        "badge_color": "#39ff14",
-        "eq_bar": "#39ff14",
-        "eq_peak": "#00f5d4",
-    },
-    "cosmic_dreamworlds": {
-        "id": "cosmic_dreamworlds",
-        "name": "Cosmic Dreamworlds (Liquid Glass Skin)",
-        "bg": "#0c040d",
-        "card_bg": "rgba(22, 9, 25, 0.78)",
-        "card_border": "rgba(232, 13, 104, 0.45)",
-        "card_shadow": "0 14px 45px rgba(0, 0, 0, 0.85), 0 0 25px rgba(232, 13, 104, 0.22)",
-        "text_main": "#ffffff",
-        "text_dim": "#fbcfe8",
-        "accent_primary": "#e80d68",
-        "accent_secondary": "#00f5d4",
-        "accent_tertiary": "#b058ff",
-        "accent_crimson": "#ff007f",
-        "header_gradient": "linear-gradient(135deg, #e80d68 0%, #b058ff 50%, #00f5d4 100%)",
-        "btn_gradient": "linear-gradient(135deg, #e80d68, #b058ff)",
-        "btn_shadow": "0 4px 18px rgba(232, 13, 104, 0.45)",
-        "progress_fill": "linear-gradient(90deg, #e80d68, #b058ff, #00f5d4)",
-        "badge_bg": "rgba(232, 13, 104, 0.20)",
-        "badge_color": "#e80d68",
-        "eq_bar": "#e80d68",
-        "eq_peak": "#00f5d4",
-    },
-    "orbital_void_reflux": {
-        "id": "orbital_void_reflux",
-        "name": "Orbital Void Reflux (Liquid Glass Skin)",
-        "bg": "#080714",
-        "card_bg": "rgba(15, 13, 36, 0.78)",
-        "card_border": "rgba(0, 240, 255, 0.45)",
-        "card_shadow": "0 14px 45px rgba(0, 0, 0, 0.85), 0 0 25px rgba(157, 78, 221, 0.25)",
-        "text_main": "#ffffff",
-        "text_dim": "#c8b6ff",
-        "accent_primary": "#00f0ff",
-        "accent_secondary": "#ff007f",
-        "accent_tertiary": "#9d4edd",
-        "accent_crimson": "#ff0055",
-        "header_gradient": "linear-gradient(135deg, #00f0ff 0%, #9d4edd 50%, #ff007f 100%)",
-        "btn_gradient": "linear-gradient(135deg, #00f0ff, #9d4edd)",
-        "btn_shadow": "0 4px 18px rgba(0, 240, 255, 0.45)",
-        "progress_fill": "linear-gradient(90deg, #00f0ff, #9d4edd, #ff007f)",
-        "badge_bg": "rgba(0, 240, 255, 0.20)",
-        "badge_color": "#00f0ff",
-        "eq_bar": "#00f0ff",
-        "eq_peak": "#ff007f",
+    "sensorium": {
+        "id": "sensorium",
+        "name": "Sensorium",
+        "bg": "#f08080",
+        "card_bg": "rgba(255, 245, 240, 0.90)",
+        "card_border": "rgba(43, 10, 16, 0.40)",
+        "card_shadow": "0 14px 45px rgba(43, 10, 16, 0.30), 0 0 25px rgba(255, 122, 24, 0.18)",
+        "text_main": "#2b0a10",
+        "text_dim": "#52242c",
+        "accent_primary": "#5c2400",
+        "accent_secondary": "#263d00",
+        "accent_tertiary": "#0b2f6b",
+        "accent_crimson": "#5e140f",
+        "header_gradient": "linear-gradient(135deg, #5c2400 0%, #263d00 50%, #0b2f6b 100%)",
+        "btn_gradient": "linear-gradient(135deg, #ff7a18, #c8ff3d)",
+        "btn_shadow": "0 4px 18px rgba(92, 36, 0, 0.35)",
+        "progress_fill": "linear-gradient(90deg, #5c2400, #263d00, #0b2f6b)",
+        "badge_bg": "rgba(43, 10, 16, 0.12)",
+        "badge_color": "#2b0a10",
+        "eq_bar": "#5c2400",
+        "eq_peak": "#263d00",
     }
 }
 
 THEME_ALIASES: Dict[str, str] = {
-    "cosmic_dreamworlds": "cosmic_dreamworlds",
-    "cosmic_dreamworlds_(liquid_glass_skin)": "cosmic_dreamworlds",
-    "cosmic dreamworlds (liquid glass skin)": "cosmic_dreamworlds",
-    "cosmic dreamworlds": "cosmic_dreamworlds",
-    "cosmic_dream": "cosmic_dreamworlds",
-    "cosmic dream": "cosmic_dreamworlds",
-    "cosmic_dreamworld": "cosmic_dreamworlds",
-    "cosmic dreamworld": "cosmic_dreamworlds",
-    "cosmic_dreamworlds_radioactive": "cosmic_dreamworlds_radioactive",
-    "cosmic_dreamworlds_radioactive_(liquid_glass_skin)": "cosmic_dreamworlds_radioactive",
-    "cosmic dreamworlds radioactive (liquid glass skin)": "cosmic_dreamworlds_radioactive",
-    "cosmic dreamworlds radioactive": "cosmic_dreamworlds_radioactive",
-    "cosmic_radioactive": "cosmic_dreamworlds_radioactive",
-    "radioactive": "cosmic_dreamworlds_radioactive",
-    "orbital_void_reflux": "orbital_void_reflux",
-    "orbital_void_reflux_(liquid_glass_skin)": "orbital_void_reflux",
-    "orbital void reflux (liquid glass skin)": "orbital_void_reflux",
-    "orbital void reflux": "orbital_void_reflux",
-    "orbital_void": "orbital_void_reflux",
-    "void_reflux": "orbital_void_reflux",
-    "orbital": "orbital_void_reflux",
+    "sensorium": "sensorium",
+    "sensorium_interface": "sensorium",
+    "sensorium interface": "sensorium",
     "dynamic_rainbow_liquid_glass": "dynamic_rainbow_liquid_glass",
     "dynamic_liquid_glass_rainbow": "dynamic_rainbow_liquid_glass",
     "dynamic_rainbow": "dynamic_rainbow_liquid_glass",
@@ -554,7 +500,7 @@ THEME_ALIASES: Dict[str, str] = {
     "liquid_glass": "dreamworlds_liquid",
     "mplanetarian_dreamworlds": "dreamworlds",
     "mplanetarian": "dreamworlds",
-    "default": "dreamworlds",
+    "default": "dreamworlds_ultra",
     "ultra": "dreamworlds_ultra",
     "dreamworlds ultra": "dreamworlds_ultra",
     "dreamworlds_ultra_mp_mix_manager": "dreamworlds_ultra",
@@ -611,7 +557,7 @@ _announce_message: Optional[str] = None
 _announce_at = 0.0
 _announce_lock = threading.Lock()
 ANNOUNCE_TTL_SECONDS = 45.0
-ANNOUNCE_MESSAGE_DEFAULT = "MP Audio Web Companion has been restarted"
+ANNOUNCE_MESSAGE_DEFAULT = "MP Audio Player (Web) has been restarted"
 
 
 def set_announcement(message: str) -> Optional[Dict[str, Any]]:
@@ -711,12 +657,12 @@ def get_current_theme_id(cli_theme: Optional[str] = None) -> str:
         except Exception:
             pass
 
-    return "cosmic_supernova" if "cosmic_supernova" in THEMES else "dreamworlds"
+    return "dreamworlds_ultra" if "dreamworlds_ultra" in THEMES else "dreamworlds"
 
 
 def get_theme_palette(cli_theme: Optional[str] = None) -> Dict[str, Any]:
     tid = get_current_theme_id(cli_theme)
-    return THEMES.get(tid, THEMES["dreamworlds"])
+    return THEMES.get(tid, THEMES.get("dreamworlds_ultra", THEMES["dreamworlds"]))
 
 
 def get_local_ip() -> str:
@@ -767,13 +713,27 @@ def launch_pad_action(role: str) -> Dict[str, Any]:
         return {"success": False, "action": "error", "app": role, "detail": str(exc)}
 
 
-def launch_pad_close_all() -> Dict[str, Any]:
+def launch_pad_close_all(wait: bool = True) -> Dict[str, Any]:
     if suite_control is None:
         return {"success": False, "action": "unsupported", "remaining": []}
     try:
-        return suite_control.close_all_apps()
+        try:
+            return suite_control.close_all_apps(wait=wait)
+        except TypeError:
+            # Older companions take no wait argument and close in the request.
+            return suite_control.close_all_apps()
     except Exception as exc:
         return {"success": False, "action": "error", "remaining": [], "detail": str(exc)}
+
+
+def launch_pad_visualizer() -> Dict[str, Any]:
+    """Open, fullscreen, or close the one Web Companion visualizer window."""
+    if suite_control is None:
+        return {"success": False, "action": "unsupported"}
+    try:
+        return suite_control.web_visualizer_action()
+    except Exception as exc:
+        return {"success": False, "action": "error", "detail": str(exc)}
 
 
 # ------------------------------------------------------------------------------
@@ -793,6 +753,17 @@ RESUME_FILE = CONFIG_DIR / "playback_resume.json"
 PLAYLIST_DIR = CONFIG_DIR / "playlists"
 MUSIC_FOLDERS_FILE = CONFIG_DIR / "music_folders.json"
 WEB_MODE_FILE = CONFIG_DIR / "web_companion_mode"
+
+# Network containment. The dashboard is reachable only from the addresses in
+# `COMPANION_CIDRS` when the operator sets one; an empty list allows any device
+# that can connect. There is no password or access token to type — opening the
+# URL is enough, and the optional CIDR list is how a machine on an untrusted
+# network is restricted.
+COMPANION_CIDRS: List[Any] = []
+# Requests that change state must carry this header. A cross-origin form
+# cannot set a custom header without a preflight, and this server answers no
+# preflight, so this is what stops another web site from driving the controls.
+CSRF_HEADER = sec.REQUIRED_HEADER
 
 # The MP Audio Player daemon that is actually making sound on this machine.
 # The companion never starts one and never opens an audio device; it only
@@ -822,7 +793,12 @@ _autoplay_result: Dict[str, Any] = {"status": "pending", "detail": ""}
 # The resolved stream queue is expensive to build for a large music library, so
 # it is cached per mode for a few seconds while the dashboard polls.
 QUEUE_CACHE_TTL = 10.0
-_queue_cache: Optional[Tuple[str, float, Tuple[str, ...]]] = None
+# {"mode": str, "built_at": float, "files": tuple[str, ...]}
+#
+# A dict rather than a tuple: callers and tests need to read and reset the
+# fields by name, and a positional tuple silently changed meaning the last time
+# a field was added.
+_queue_cache: Optional[Dict[str, Any]] = None
 _queue_source_state: Dict[str, Any] = {"fallback": False, "detail": ""}
 # Resolving the queue can take seconds (a 51k-entry music playlist), and the
 # dashboard polls hard. Only one thread may scan; the rest wait and then read
@@ -891,6 +867,43 @@ _SPEECH_CACHE_MAX = 8
 
 def harmony_agent_url() -> str:
     return f"http://{HARMONY_AGENT_HOST}:{_harmony_agent_port()}"
+
+
+# Conversation limits for the proxied agent. The web dashboard is a public
+# surface on the LAN, so the payload is bounded and the roles are restricted:
+# a client-supplied `system` message would otherwise replace the agent's
+# instructions, and the agent holds shell tools.
+AGENT_MAX_MESSAGES = 24
+AGENT_MAX_CONTENT_CHARS = 16384
+AGENT_ALLOWED_ROLES = ("user", "assistant")
+
+
+def sanitize_agent_messages(messages: Any) -> List[Dict[str, str]]:
+    """Keep only well-formed user/assistant turns, bounded in size and count.
+
+    Anything else - a `system` role, a nested object, a 10 MB string - is
+    dropped rather than forwarded, so a malicious client cannot use the
+    conversation body to steer the agent or to burn memory. The *last* user
+    message always survives when it is the only one, because that is what the
+    `/voice` command parser and the model both need.
+    """
+    if not isinstance(messages, list):
+        return []
+    cleaned: List[Dict[str, str]] = []
+    for message in messages[-AGENT_MAX_MESSAGES:]:
+        if not isinstance(message, dict):
+            continue
+        role = str(message.get("role") or "").strip().lower()
+        if role not in AGENT_ALLOWED_ROLES:
+            continue
+        content = message.get("content")
+        if not isinstance(content, str):
+            continue
+        content = content.strip()
+        if not content:
+            continue
+        cleaned.append({"role": role, "content": content[:AGENT_MAX_CONTENT_CHARS]})
+    return cleaned
 
 
 def _harmony_agent_port() -> int:
@@ -1328,6 +1341,13 @@ def _wav_has_no_audio_frames(path: Any) -> bool:
             header = f.read(WAV_HEADER_SIZE)
     except OSError:
         return False
+    if header and not any(header):
+        # Every WAV variant (RIFF, RF64, BW64, RIFX) puts a magic at offset 0,
+        # so an all-zero head cannot be any of them. This is the observed
+        # "interrupted export": a multi-gigabyte file of nulls whose size passes
+        # the floor, so it reached the phone and produced a media error. It is
+        # the same failure class as the 44-byte stub, one layer down.
+        return True
     if header[0:4] != b"RIFF":
         # Not a WAV at all (or empty): leave it to the size floor.
         return False
@@ -1414,10 +1434,139 @@ def is_streamable_file(path: Any, st: Optional[os.stat_result] = None) -> bool:
     except Exception:
         return True
     if ext in (".wav", ".wave"):
-        return not _wav_has_no_audio_frames(path)
+        return not _wav_has_no_audio_frames_cached(path, st)
     if ext == ".flac":
-        return not _flac_has_no_audio_frames(path)
+        return not _flac_has_no_audio_frames_cached(path, st)
     return True
+
+
+# The frame probe opens the file and walks its metadata blocks. That is a few
+# syscalls on a local disk but a couple of network round trips per file on the
+# CIFS archives, and the archive is re-scanned on every queue rebuild. With
+# ~1k mixes of 2.5 GB each, an uncached probe made one scan take 196 s; the
+# pollers then queued behind `_queue_build_lock` and the dashboard stalled.
+# Keying on (mtime, size) keeps the verdict valid until the file changes, so a
+# rescan costs one stat per file instead of opening all of them.
+_frame_probe_cache: Dict[str, Tuple[float, int, bool]] = {}
+_frame_probe_lock = threading.Lock()
+_frame_probe_dirty = False
+FRAME_PROBE_CACHE_FILE = CONFIG_DIR / "web_companion_frame_cache.json"
+_FRAME_PROBE_CACHE_MAX = 20000
+# The verdict schema is versioned so a newer, stricter probe cannot inherit an
+# older verdict. Without this, a file already cached as "has audio" by a build
+# that only checked for a RIFF header keeps streaming forever: the (mtime, size)
+# signature never changes, so the wrong answer is never recomputed. Bumping the
+# version makes the next launch re-probe once and rewrite the cache.
+FRAME_PROBE_CACHE_VERSION = 2
+
+
+def _load_frame_probe_cache() -> None:
+    """Restore verdicts from the last run.
+
+    Without this every service restart (or reboot) reopens ~1k multi-GB files
+    over CIFS, which is minutes of fsck-like latency before the dashboard can
+    answer at all.
+
+    A cache written by an older build is ignored rather than migrated: its
+    verdicts came from a weaker probe, and the only safe way to keep them is to
+    know they were produced by the same rules. Ignoring is cheap (one re-probe
+    per file, once) and correct.
+    """
+    try:
+        if not FRAME_PROBE_CACHE_FILE.is_file():
+            return
+        raw = json.loads(
+            FRAME_PROBE_CACHE_FILE.read_text(encoding="utf-8", errors="ignore")
+        )
+        if not isinstance(raw, dict):
+            return
+        if raw.get("version") != FRAME_PROBE_CACHE_VERSION:
+            return
+        entries = raw.get("entries")
+        if not isinstance(entries, dict):
+            return
+        loaded = {}
+        for key, entry in entries.items():
+            if (
+                isinstance(entry, list) and len(entry) == 3
+                and isinstance(entry[0], (int, float))
+                and isinstance(entry[1], int)
+                and isinstance(entry[2], bool)
+            ):
+                loaded[key] = (float(entry[0]), int(entry[1]), entry[2])
+        with _frame_probe_lock:
+            _frame_probe_cache.update(loaded)
+    except Exception:
+        pass
+
+
+def _save_frame_probe_cache() -> None:
+    try:
+        with _frame_probe_lock:
+            if len(_frame_probe_cache) > _FRAME_PROBE_CACHE_MAX:
+                # Keep the most recently stamped entries; the archive only
+                # grows, and an unbounded file would grow with it.
+                ordered = sorted(
+                    _frame_probe_cache.items(), key=lambda kv: kv[1][0], reverse=True
+                )[:_FRAME_PROBE_CACHE_MAX]
+                _frame_probe_cache.clear()
+                _frame_probe_cache.update(ordered)
+            snapshot = {
+                "version": FRAME_PROBE_CACHE_VERSION,
+                "entries": {
+                    key: [value[0], value[1], value[2]]
+                    for key, value in _frame_probe_cache.items()
+                },
+            }
+        FRAME_PROBE_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = FRAME_PROBE_CACHE_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(snapshot), encoding="utf-8")
+        tmp.replace(FRAME_PROBE_CACHE_FILE)
+    except Exception:
+        pass
+
+
+def _wav_has_no_audio_frames_cached(path: Any, st: os.stat_result) -> bool:
+    return _cached_frame_probe(
+        "wav", path, st, lambda: _wav_has_no_audio_frames(path)
+    )
+
+
+def _flac_has_no_audio_frames_cached(path: Any, st: os.stat_result) -> bool:
+    return _cached_frame_probe(
+        "flac", path, st, lambda: _flac_has_no_audio_frames(path)
+    )
+
+
+def _cached_frame_probe(kind: str, path: Any, st: os.stat_result, probe) -> bool:
+    global _frame_probe_dirty
+    key = f"{kind}:{path}"
+    signature = (st.st_mtime, st.st_size)
+    with _frame_probe_lock:
+        cached = _frame_probe_cache.get(key)
+    if cached and cached[0] == signature[0] and cached[1] == signature[1]:
+        return cached[2]
+    result = bool(probe())
+    with _frame_probe_lock:
+        _frame_probe_cache[key] = (signature[0], signature[1], result)
+        # Writing the file on every miss would hammer the disk during a cold
+        # scan of a thousand files. A scan of this size runs once per restart,
+        # so flushing at the end of the scan is enough.
+        _frame_probe_dirty = True
+    return result
+
+
+def flush_frame_probe_cache() -> None:
+    """Persist verdicts after a scan finishes (see _cached_frame_probe)."""
+    global _frame_probe_dirty
+    with _frame_probe_lock:
+        dirty = _frame_probe_dirty
+        if not dirty:
+            return
+    if dirty:
+        _save_frame_probe_cache()
+        with _frame_probe_lock:
+            _frame_probe_dirty = False
 
 
 def get_library_mode() -> str:
@@ -1461,13 +1610,17 @@ def set_library_mode(mode: str) -> Optional[str]:
     # track one or pay for another library scan.
     if unchanged:
         return target
+    # Drop the previous library before the mount wait. A poll that arrives
+    # while the shares are connecting must build the new queue, not keep
+    # serving the mix list under the Music label.
+    invalidate_queue_cache()
     if target == LIBRARY_MODE_MUSIC:
         # The mix archive needs no preparation, but a music library on SMB does.
         # This runs inside the explicit tap, which the dashboard already paints
         # with a "Switching to Music…" state, so waiting here is safe and it
         # makes the very first Music tap list tracks instead of mixes.
-        ensure_music_folders_mounted(wait=True)
-    invalidate_queue_cache()
+        ensure_music_folders_mounted(wait=True, deadline_sec=20.0)
+        invalidate_queue_cache()
     reset_stream_for_new_library()
     return target
 
@@ -1511,12 +1664,10 @@ def scan_playlist_files() -> List[str]:
         return _read_playlist_file(Path(os.path.expanduser(explicit)))
 
     if get_library_mode() == LIBRARY_MODE_MUSIC:
-        files = scan_music_files()
-        if files:
-            return files
-        # An unconfigured or unreachable music library must not leave the
-        # companion with nothing to stream, so fall through to the archive.
-        return scan_archive_files()
+        # Music mode plays the music playlist. An unmounted share used to fall
+        # through to the mix archive, so the Music button listed mixes after
+        # the "Switching to Music…" state.
+        return scan_music_files()
 
     return scan_archive_files()
 
@@ -1556,7 +1707,7 @@ def _music_folders_data() -> List[Dict[str, Any]]:
 def music_folder_roots() -> List[Path]:
     """Local paths of the configured music folders, skipping SMB/UNC entries.
 
-    A share such as \\\\192.168.1.138\\MUSIC001 only becomes a filesystem path
+    A share such as \\\\192.0.2.20\\MUSIC001 only becomes a filesystem path
     once it is mounted, and walking a whole mounted home share picks up
     unrelated audio (application sound effects), so those entries are ignored
     here. The generated playlist is the authoritative music list; mounting the
@@ -1581,6 +1732,26 @@ def music_folder_roots() -> List[Path]:
         except OSError:
             continue
     return roots
+
+
+def ensure_user_tool_path(extra_dirs: Optional[List[str]] = None) -> None:
+    """Put the user bin directories on PATH.
+
+    The companion's systemd unit starts with `/usr/bin` only. rclone lives in
+    `~/.local/bin`, so `shutil.which("rclone")` failed inside the service and
+    Music mode never mounted the shares. The playlist paths then all missed
+    and the queue was replaced with the mix archive.
+    """
+    dirs: List[str] = []
+    for raw in list(extra_dirs or []) + [str(Path.home() / ".local" / "bin"), "/usr/local/bin"]:
+        if raw and raw not in dirs:
+            dirs.append(raw)
+    current = os.environ.get("PATH", "")
+    parts = [p for p in current.split(os.pathsep) if p]
+    for item in reversed(dirs):
+        if Path(item).is_dir() and item not in parts:
+            parts.insert(0, item)
+    os.environ["PATH"] = os.pathsep.join(parts)
 
 
 # Mounting is expensive (rclone startup plus a share listing per folder), so a
@@ -1631,33 +1802,59 @@ def ensure_music_folders_mounted(wait: bool = False, deadline_sec: float = 15.0)
         _last_music_mount_attempt = now
         _music_mount_in_flight = True
 
-    mounted = False
+    results: List[bool] = []
 
     def _mount_all() -> bool:
-        nonlocal mounted
+        threads: List[threading.Thread] = []
         try:
+            # The service PATH does not include ~/.local/bin. Do this before
+            # music_folders_manager looks up rclone.
+            ensure_user_tool_path()
             try:
                 import music_folders_manager as mfm
             except ImportError:  # imported as scripts.mix_web_companion
                 from scripts import music_folders_manager as mfm
             config = mfm.load_music_config()
-            stop_at = time.time() + max(0.0, deadline_sec)
-            for folder in folders:
-                if time.time() >= stop_at:
-                    break
+
+            def _one(folder: Dict[str, Any]) -> None:
                 try:
                     # connect_folder is a no-op when the share is already
                     # answering, and it remounts a wedged one.
                     ok, _detail = mfm.connect_folder(folder, config, interactive=False)
-                    mounted = mounted or bool(ok)
+                    results.append(bool(ok))
                 except Exception:
-                    continue
+                    results.append(False)
+
+            # One slow share must not eat the whole deadline before the others
+            # start. Six serial mounts never finished inside the old 15 s cap,
+            # so the scan still saw an empty library and listed mixes.
+            for folder in folders:
+                thread = threading.Thread(
+                    target=_one, args=(folder,), name="mp-music-share", daemon=True,
+                )
+                thread.start()
+                threads.append(thread)
+            stop_at = time.time() + max(0.0, deadline_sec)
+            for thread in threads:
+                thread.join(max(0.0, stop_at - time.time()))
         except Exception:
             pass
         finally:
-            with _music_mount_lock:
-                _music_mount_in_flight = False
-        return mounted
+            alive = [thread for thread in threads if thread.is_alive()]
+            if not alive:
+                with _music_mount_lock:
+                    _music_mount_in_flight = False
+            else:
+                def _clear_when_done() -> None:
+                    for thread in alive:
+                        thread.join()
+                    with _music_mount_lock:
+                        _music_mount_in_flight = False
+
+                threading.Thread(
+                    target=_clear_when_done, name="mp-music-mount-done", daemon=True,
+                ).start()
+        return any(results)
 
     if not wait:
         threading.Thread(target=_mount_all, name="mp-music-mount", daemon=True).start()
@@ -1688,6 +1885,45 @@ def _music_scan_signature() -> Tuple[Tuple[str, float, int], ...]:
     return tuple(sig)
 
 
+def _music_sample_paths(paths: List[str], sample: int = 12) -> List[str]:
+    """A spread of playlist paths, not just the first folder.
+
+    The generated list is grouped by share. The first entries can all sit on
+    one offline disk while a later share is mounted and playable.
+    """
+    if not paths:
+        return []
+    if len(paths) <= sample:
+        return list(paths)
+    step = max(1, len(paths) // sample)
+    picked: List[str] = []
+    for i in range(0, len(paths), step):
+        picked.append(paths[i])
+        if len(picked) >= sample - 1:
+            break
+    if paths[-1] not in picked:
+        picked.append(paths[-1])
+    return picked
+
+
+def _music_sample_reachable(paths: List[str], sample: int = 12) -> bool:
+    """True when at least one playlist path is a real file on disk.
+
+    The generated playlist names every track whether or not the SMB share is
+    mounted. Sampling a spread of entries tells the dashboard to say
+    "connecting" only when nothing in the library can be opened yet. It does
+    not decide membership: the playlist itself is the list.
+    """
+    for path in _music_sample_paths(paths, sample):
+        try:
+            st = os.stat(path)
+        except OSError:
+            continue
+        if stat.S_ISREG(st.st_mode) and st.st_size > MIN_STREAMABLE_BYTES:
+            return True
+    return False
+
+
 def scan_music_files() -> List[str]:
     """The MUSIC library: generated playlist first, then the folder roots.
 
@@ -1695,11 +1931,14 @@ def scan_music_files() -> List[str]:
     file, so a re-parse on every library switch made the Mix/Music buttons feel
     dead. The parsed result is reused until the playlist file changes.
 
+    Paths are kept even when the share is not mounted yet. Requiring every
+    file to stat before it could join the queue dropped the whole library
+    (the mount point exists, the files do not) and the companion then filled
+    the playlist with mixes. The desktop player lists these same paths.
+
     An empty result is re-scanned every MUSIC_SCAN_RETRY_TTL seconds: a share
     that was not mounted when the playlist was read leaves every path
     unresolved, and the playlist file itself never changes when it mounts.
-    Without the retry, Music mode stayed on the archive fallback for the life
-    of the process and the phone kept listing mixes.
     """
     global _music_scan_cache
 
@@ -1712,27 +1951,23 @@ def scan_music_files() -> List[str]:
             # A populated library is good until the playlist is rewritten. An
             # empty one is only a hint, because the share may mount at any time.
             if cached_files or (now - cached_at) < MUSIC_SCAN_RETRY_TTL:
-                return list(cached_files)
+                files = list(cached_files)
+                if files and not _music_sample_reachable(files):
+                    ensure_music_folders_mounted()
+                return files
 
     files: List[str] = []
     for cand in music_playlist_candidates():
         if not cand.is_file():
             continue
-        files = _read_playlist_file(cand)
+        # Do not drop a row because the share is offline. is_streamable_file
+        # stats the path, and an unmounted MUSIC_SMB directory makes every
+        # row miss, which is what emptied Music mode.
+        files = _playlist_entry_paths(cand)
         if files:
             break
-    if not files:
-        # The generated playlist exists but every path inside it is unresolved:
-        # its share is not mounted. Mount on demand, then read it again, so the
-        # first Music tap after a reboot fills the queue instead of reporting an
-        # offline library.
-        if ensure_music_folders_mounted():
-            for cand in music_playlist_candidates():
-                if not cand.is_file():
-                    continue
-                files = _read_playlist_file(cand)
-                if files:
-                    break
+    if files and not _music_sample_reachable(files):
+        ensure_music_folders_mounted()
     if not files:
         files = _scan_dirs(music_folder_roots())
 
@@ -1810,11 +2045,19 @@ def _scan_dirs(roots: List[Path]) -> List[str]:
                 if not is_streamable_file(full, st):
                     continue
                 found.append((st.st_mtime, full))
+    # Persist the frame verdicts once per scan rather than once per file.
+    flush_frame_probe_cache()
     found.sort(key=lambda item: item[0], reverse=True)
     return [path for _, path in found]
 
 
-def _read_playlist_file(path: Path) -> List[str]:
+def _playlist_entry_paths(path: Path) -> List[str]:
+    """Audio paths named by a playlist, including files that are not on disk yet.
+
+    The music playlist is the list the MP Audio Player shows. Filtering it
+    through `is_streamable_file` deleted every row while the SMB shares were
+    unmounted, and Music mode then had nothing of its own to display.
+    """
     if not path.is_file():
         return []
     try:
@@ -1827,7 +2070,7 @@ def _read_playlist_file(path: Path) -> List[str]:
                     item = item.get("path") or item.get("file") or ""
                 if isinstance(item, str) and is_audio_file(item):
                     paths.append(item)
-            return [p for p in paths if is_streamable_file(p)]
+            return paths
         paths = []
         for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
             line = line.strip()
@@ -1835,12 +2078,44 @@ def _read_playlist_file(path: Path) -> List[str]:
                 continue
             if is_audio_file(line):
                 paths.append(line)
-        # A saved playlist can still name a mix that was replaced by a
-        # header-only WAV stub, so the same frame check the archive scan uses
-        # applies here. Otherwise the queue hands the browser a dead file.
-        return [p for p in paths if is_streamable_file(p)]
+        return paths
     except Exception:
         return []
+
+
+def _read_playlist_file(path: Path) -> List[str]:
+    # A saved playlist can still name a mix that was replaced by a
+    # header-only WAV stub, so the same frame check the archive scan uses
+    # applies here. Otherwise the queue hands the browser a dead file.
+    # Music mode uses `_playlist_entry_paths` instead: that library is allowed
+    # to name files whose share is still connecting.
+    return [p for p in _playlist_entry_paths(path) if is_streamable_file(p)]
+
+
+# A removable archive does not keep its mount point. The same drive is
+# /run/media/<user>/WD BLACK B on one boot, /mnt/X299ROG_WD_BLACK on another,
+# and /Volumes/DATAMAC3 on the Mac, so a single MIX_ARCHIVE_DIR written once at
+# install time goes stale and the companion then streams nothing. These globs
+# are the mount roots each platform actually uses; the archive is found again
+# after a replug instead of needing a rewrite of config.env.
+ARCHIVE_MOUNT_GLOBS = (
+    "/run/media/*/*/MIX_ARCHIVE",       # Linux desktop automount (udisks2)
+    "/media/*/*/MIX_ARCHIVE",           # Ubuntu / older udisks
+    "/mnt/*/MIX_ARCHIVE",               # fstab / external-drive mounts
+    "/Volumes/*/MIX_ARCHIVE",           # macOS
+)
+
+
+def _archive_mount_globs() -> Tuple[str, ...]:
+    """The autodetect list, empty when the operator pinned the folders.
+
+    `WEB_COMPANION_ARCHIVE_AUTODETECT=0` keeps discovery to the configured
+    paths only, which matters on a machine whose /mnt holds unrelated
+    MIX_ARCHIVE folders that must not be streamed.
+    """
+    if not _env_flag("WEB_COMPANION_ARCHIVE_AUTODETECT", True):
+        return ()
+    return ARCHIVE_MOUNT_GLOBS
 
 
 def _archive_dirs() -> List[Path]:
@@ -1864,7 +2139,62 @@ def _archive_dirs() -> List[Path]:
     base = get_base_dir()
     for name in ("MIX_ARCHIVE", "FLAC_CONVERTED_OUTPUTS"):
         add(base / name)
+    # Configured folders that are missing must not hide a mounted archive: a
+    # stale MIX_ARCHIVE_DIR is the normal case for removable media, and
+    # returning only the empty install-tree folders is what made the phone
+    # report "Playlist is empty" while 694 mixes were sitting on a disk.
+    #
+    # ARCHIVE_MOUNT_GLOBS is emptied by the test suite, which must never walk
+    # the developer's real archive; setting WEB_COMPANION_ARCHIVE_AUTODETECT=0
+    # does the same for an operator who pins the exact folders.
+    globs = _archive_mount_globs()
+    if globs and not any(_dir_is_archive_candidate(p) for p in dirs):
+        for pattern in globs:
+            try:
+                for match in sorted(glob.glob(pattern)):
+                    add(match)
+            except Exception:
+                pass
     return dirs
+
+
+def _dir_is_archive_candidate(path: Path) -> bool:
+    """True when a folder looks like it holds mixes, not just the empty skeleton.
+
+    A freshly installed tree has MIX_ARCHIVE/FLAC_CONVERTED_OUTPUTS as empty
+    placeholder directories. Counting those as "the archive" is exactly how the
+    volume fallback above got skipped, so a folder only counts when it contains
+    an audio file directly or in one of the conversion subfolders.
+
+    The listing must be bounded: a privacy-blocked read on macOS parks for ~20 s
+    before the kernel interrupts it, and this runs inside `_archive_dirs()` on
+    every queue build. Using the cached `_dir_readable()` keeps the probe cheap
+    and stops a denied volume from stalling the status endpoint.
+    """
+    if not _dir_readable(path):
+        return False
+    try:
+        if path.name == "MIX_ARCHIVE":
+            for sub in ("FLAC_CONVERTED_OUTPUTS", "MP3_CONVERTED_OUTPUTS",
+                        "CONVERTED_WAV_FILES", ""):
+                probe = (path / sub) if sub else path
+                if not _dir_readable(probe):
+                    continue
+                try:
+                    with os.scandir(probe) as entries:
+                        for entry in entries:
+                            if entry.is_file() and is_audio_file(entry.name):
+                                return True
+                except OSError:
+                    continue
+            return False
+        with os.scandir(path) as entries:
+            for entry in entries:
+                if entry.is_file() and is_audio_file(entry.name):
+                    return True
+    except OSError:
+        return False
+    return False
 
 
 def scan_archive_files() -> List[str]:
@@ -1872,21 +2202,100 @@ def scan_archive_files() -> List[str]:
     return _scan_dirs(_archive_dirs())
 
 
+def music_mount_roots() -> List[Path]:
+    """The SMB mount root the music playlist paths live under.
+
+    `music_folder_roots` skips SMB entries on purpose: walking a mounted home
+    share would pick up unrelated audio. The playlist paths are still
+    `/MUSIC_SMB/<share>/...`, and the stream allow-list used to contain only
+    local folders, so every one of those tracks answered 404. The mount root
+    is the containment boundary. It is not walked to build the queue.
+    """
+    try:
+        try:
+            import music_folders_manager as mfm
+        except ImportError:
+            from scripts import music_folders_manager as mfm
+        configured = mfm.load_music_config().get("mount_root")
+        root = Path(configured) if configured else Path.home() / "MUSIC_SMB"
+    except Exception:
+        root = Path.home() / "MUSIC_SMB"
+    try:
+        root = Path(os.path.expanduser(str(root))).resolve()
+    except (OSError, RuntimeError, ValueError):
+        return []
+    try:
+        if root.is_dir():
+            return [root]
+    except OSError:
+        return []
+    return []
+
+
+def stream_roots() -> List[Path]:
+    """Every folder the stream endpoint may serve from.
+
+    The queue is built from three different libraries - the mix archive, the
+    configured music folders and Favorites - but the containment check used to
+    be handed `_archive_dirs()` alone. A Music-mode queue is therefore full of
+    paths the stream handler refused, so every tap answered 404 while the
+    playlist looked correct: the phone showed tracks and would not play one.
+
+    Favorites needs no root of its own: a favorite is a path the user marked in
+    the player, and it resolves inside the archive or a music folder. SMB
+    music is mounted under `music_mount_roots()`; without that root a track
+    on MUSIC003 answered 404 even after the share was mounted. Keeping the
+    list to real library roots is what stops the fix from turning the
+    endpoint back into an arbitrary-file read.
+    """
+    roots: List[Path] = []
+    seen = set()
+    for root in list(_archive_dirs()) + list(music_folder_roots()) + list(music_mount_roots()):
+        try:
+            key = str(root)
+        except Exception:
+            continue
+        if key and key not in seen:
+            seen.add(key)
+            roots.append(root)
+    return roots
+
+
 def _archive_dirs_permission_denied() -> str:
-    """First configured archive folder that exists but cannot be listed.
+    """First configured archive folder that exists but was *refused*.
 
     macOS privacy protection (TCC) refuses a background job access to external
-    volumes, and the failure is a plain PermissionError rather than a missing
-    path. Returning the folder lets the dashboard name the folder to approve.
+    volumes. Returning the folder lets the dashboard name the folder to
+    approve.
 
     This must use the bounded probe: under launchd the denied read can block
     instead of raising, and a plain os.listdir here hung the whole status
     request (the phone saw an empty reply).
+
+    Only a folder whose probe was refused counts. A folder that merely timed
+    out is reported by `_archive_dirs_stalled()` instead, because telling a
+    user to grant Full Disk Access for a spun-down USB disk sends them to the
+    wrong place.
     """
     for folder in _archive_dirs():
         if _dir_readable(folder):
             return ""
-        if Path(folder).is_dir():
+        if str(folder) in _BLOCKED_DIRS and Path(folder).is_dir():
+            return str(folder)
+    return ""
+
+
+def _archive_dirs_stalled() -> str:
+    """First archive folder that could not be read in time and was not refused.
+
+    Separate from a denial: this is a slow or unresponsive disk, a sleeping
+    USB enclosure, or a stale network mount. The dashboard says so instead of
+    blaming a permission that is already granted.
+    """
+    for folder in _archive_dirs():
+        if _dir_readable(folder):
+            return ""
+        if str(folder) in _STALLED_DIRS and Path(folder).is_dir():
             return str(folder)
     return ""
 
@@ -1897,46 +2306,114 @@ def _archive_dirs_permission_denied() -> str:
 # remembering the answer keeps the dashboard responsive instead of letting
 # every status poll wedge on the same folder for the life of the process.
 _BLOCKED_DIRS: Dict[str, float] = {}
-_BLOCKED_TTL = 60.0
+# Why five minutes: a denied read is not a transient state. Re-probing it every
+# minute made the status endpoint pay the whole probe again and, on macOS, put
+# another consent request in front of a user who had already said no (or never
+# saw the first one). A rescan clears these caches immediately, so an explicit
+# "try again" is still instant.
+_BLOCKED_TTL = 300.0
+# Folders that could not be read *at all* within the probe window. Kept apart
+# from _BLOCKED_DIRS because the two need different advice: a denial is fixed
+# in System Settings, a slow volume is fixed by waiting or reseating the disk.
+# A stall is retried sooner than a refusal, because a spun-down disk does wake.
+_STALLED_DIRS: Dict[str, float] = {}
+_STALLED_TTL = 60.0
+# Folders with a probe thread still running. A denied read parks for the whole
+# watchdog window, and a busy endpoint used to start a fresh probe per call, so
+# macOS saw a stream of consent requests. Only one may be outstanding per folder.
+_PROBE_INFLIGHT: Set[str] = set()
+_probe_inflight_lock = threading.Lock()
 
 
-def _dir_readable(path: Any, timeout: float = 2.0) -> bool:
+def _dir_readable(path: Any, timeout: float = 8.0) -> bool:
     """True when the directory can be listed, giving up after `timeout`.
 
     The listing runs on a daemon thread because a privacy-blocked read does not
     always return an error: it can park indefinitely. A hung probe only leaks
     that one thread and never blocks the caller.
+
+    Why 8 s rather than 2 s: macOS answers a *denied* read with EINTR when the
+    TCC consent watchdog expires, and that takes about five seconds. A shorter
+    probe always timed out first, so a real denial was recorded as "hung" and
+    the dashboard blamed a privacy block for what could equally have been a
+    spun-down disk. Waiting past the watchdog lets the denial identify itself,
+    and the verdict is cached so the cost is paid once.
+
+    A timeout is still *not* proof of a denial. A TCC refusal arrives as EINTR
+    or EACCES; anything else is recorded as a stall and reported in those
+    words, so the user is not sent to System Settings over a slow USB disk.
     """
     key = str(path)
     now = time.time()
     cached_at = _BLOCKED_DIRS.get(key)
     if cached_at is not None and (now - cached_at) < _BLOCKED_TTL:
         return False
+    stalled_at = _STALLED_DIRS.get(key)
+    if stalled_at is not None and (now - stalled_at) < _STALLED_TTL:
+        return False
 
-    result = {"ok": False, "done": False}
+    # Never stack probes for the same folder. Each scan used to start its own
+    # thread, and a denied read parks for the full watchdog window, so a busy
+    # endpoint could accumulate dozens of simultaneous requests. On macOS every
+    # one of those raises another TCC consent request, which is why the kernel
+    # log filled with "watchdog expired for approval entry" for this process.
+    with _probe_inflight_lock:
+        if key in _PROBE_INFLIGHT:
+            return False
+        _PROBE_INFLIGHT.add(key)
+
+    result = {"ok": False, "denied": False, "done": False}
 
     def _probe():
         try:
             os.listdir(key)
             result["ok"] = True
         except PermissionError:
-            result["ok"] = False
-        except OSError:
-            result["ok"] = False
+            # An explicit refusal: this really is a privacy denial.
+            result["denied"] = True
+        except OSError as exc:
+            # EINTR is how the TCC watchdog aborts a denied read on macOS, and
+            # EACCES is the plain POSIX refusal. Everything else (EIO, ENXIO,
+            # ESTALE) is a disk problem, not a permission one.
+            result["denied"] = exc.errno in (errno.EACCES, errno.EINTR)
         finally:
             result["done"] = True
+            # A probe that outlived the caller's wait still owns the mark; it
+            # must release it here or the folder is never probed again.
+            with _probe_inflight_lock:
+                _PROBE_INFLIGHT.discard(key)
 
     worker = threading.Thread(target=_probe, name="mp-dir-probe", daemon=True)
     worker.start()
     worker.join(max(0.1, timeout))
-    if not result["done"]:
-        _BLOCKED_DIRS[key] = now
-        return False
-    if not result["ok"]:
-        _BLOCKED_DIRS[key] = now
-    else:
+    try:
+        if not result["done"]:
+            # Still blocked after the full window: a denial would have returned
+            # by now on macOS, so this is reported as a stall and retried later.
+            _STALLED_DIRS[key] = now
+            _BLOCKED_DIRS.pop(key, None)
+            return False
+        if not result["ok"]:
+            if result["denied"]:
+                _STALLED_DIRS.pop(key, None)
+                _BLOCKED_DIRS[key] = now
+            else:
+                # An unreadable-but-not-denied folder (I/O error, stale handle)
+                # is also cached, but as a stall so the message stays honest.
+                _BLOCKED_DIRS.pop(key, None)
+                _STALLED_DIRS[key] = now
+            return False
         _BLOCKED_DIRS.pop(key, None)
-    return bool(result["ok"])
+        _STALLED_DIRS.pop(key, None)
+        return True
+    finally:
+        # Only the caller that started the probe clears the in-flight mark. A
+        # probe that is still parked when the timeout expires keeps its mark
+        # until its own thread finishes, so a second scan cannot stack a
+        # duplicate consent request on top of it.
+        if result["done"]:
+            with _probe_inflight_lock:
+                _PROBE_INFLIGHT.discard(key)
 
 
 # ------------------------------------------------------------------------------
@@ -1978,43 +2455,63 @@ def _pick_start_track(playlist: List[str]) -> Tuple[Optional[str], float]:
     return (playlist[0], 0.0) if playlist else (None, 0.0)
 
 
-def build_stream_queue() -> List[str]:
+def build_stream_queue(force: bool = False) -> List[str]:
     """Resolve the play queue the phones will stream through.
 
     Scanning the music playlist stats tens of thousands of paths, so the result
     is cached briefly. Without this every 2-second status poll would re-walk the
-    library.
+    library. `force` skips the cache, which is what a user-initiated "rescan"
+    or a library-mode switch needs: those must see the files that exist now,
+    not the ones that existed ten seconds ago.
     """
     global _queue_cache
 
     mode = get_library_mode()
     now = time.time()
     cached = _queue_cache
-    if cached and cached[0] == mode and (now - cached[1]) < QUEUE_CACHE_TTL:
-        return list(cached[2])
+    if not force and cached and cached.get("mode") == mode and (now - cached.get("built_at", 0.0)) < QUEUE_CACHE_TTL:
+        return list(cached.get("files") or ())
 
     with _queue_build_lock:
-        # Another request may have finished the scan while this one waited.
+        # Another request may have finished the scan while this one waited. A
+        # forced rebuild must not accept that result: the whole point of the
+        # call is to re-read what is on disk after the user changed it.
         now = time.time()
         cached = _queue_cache
-        if cached and cached[0] == mode and (now - cached[1]) < QUEUE_CACHE_TTL:
-            return list(cached[2])
+        if (not force and cached and cached.get("mode") == mode
+                and (now - cached.get("built_at", 0.0)) < QUEUE_CACHE_TTL):
+            return list(cached.get("files") or ())
 
-        if mode == LIBRARY_MODE_MUSIC:
-            files = scan_music_files()
-            # An unmounted SMB share leaves the generated playlist full of paths
-            # that no longer resolve. Falling back keeps audio flowing, but the
-            # status call reports it so the phone is not silently mislabelled:
-            # a fallback queue must never look like the Music library.
+        # An explicit playlist outranks the library mode. `WEB_COMPANION_PLAYLIST`
+        # is documented as "overrides the mode" (README, config.env.example) and
+        # `scan_playlist_files()` exists to say so, but the streaming queue stopped
+        # consulting it, so a pinned playlist was silently replaced by whichever
+        # library the toggle happened to be on. Resolve it first, and keep the
+        # mode-only path below untouched for every operator who never sets it.
+        explicit = _config_value("WEB_COMPANION_PLAYLIST", "").strip()
+        if explicit:
+            files = scan_playlist_files()
             _queue_source_state.update({
-                "fallback": not files,
+                "fallback": False,
                 "detail": "" if files else (
-                    "Music library offline - the music folders are not mounted, "
-                    "streaming Mix Archive"
+                    f"The playlist named by WEB_COMPANION_PLAYLIST is empty or missing ({explicit})"
                 ),
             })
-            if not files:
-                files = scan_archive_files()
+        elif mode == LIBRARY_MODE_MUSIC:
+            files = scan_music_files()
+            # The Music button loads the music playlist. Substituting the mix
+            # archive when a share was offline is what made the list say it was
+            # switching to Music and then fill with mixes.
+            if files and not _music_sample_reachable(files):
+                detail = (
+                    "Connecting the music folders. The playlist is loaded; "
+                    "playback starts as soon as the shares are online."
+                )
+            elif not files:
+                detail = "No music tracks found in the music library"
+            else:
+                detail = ""
+            _queue_source_state.update({"fallback": False, "detail": detail})
         elif mode == LIBRARY_MODE_FAVORITES:
             files = scan_favorite_files()
             # An empty Favorites playlist is a normal state, not a broken
@@ -2044,20 +2541,59 @@ def build_stream_queue() -> List[str]:
                         "detail": ("macOS blocked archive access - allow Removable Volumes "
                                    "(or Full Disk Access) for MP Web Companion.app "
                                    f"({blocked})"),
+                        "blocked_path": blocked,
                     })
+                else:
+                    stalled = _archive_dirs_stalled()
+                    if stalled:
+                        # The folder exists but did not answer in time. That is
+                        # a disk problem, not a permission one, and saying so
+                        # avoids sending the user to System Settings for a
+                        # drive that is simply asleep or unresponsive.
+                        _queue_source_state.update({
+                            "fallback": False,
+                            "detail": ("The archive folder did not respond in time - "
+                                       "the drive may be asleep, busy, or disconnected "
+                                       f"({stalled}). It is retried automatically."),
+                            "blocked_path": stalled,
+                        })
 
         if files and _env_flag("WEB_COMPANION_SHUFFLE", False):
             files = list(files)
             random.shuffle(files)
 
-        _queue_cache = (mode, now, tuple(files))
+        _queue_cache = {"mode": mode, "built_at": now, "files": tuple(files)}
         return list(files)
 
 
 def invalidate_queue_cache() -> None:
     global _queue_cache, _music_scan_cache
-    _queue_cache = None
+    # Reset in place so a caller holding the dict (or a test that reads it by
+    # key) keeps a valid object rather than a dangling None.
+    if not isinstance(_queue_cache, dict):
+        _queue_cache = {}
+    _queue_cache["mode"] = ""
+    _queue_cache["built_at"] = 0.0
+    _queue_cache["files"] = ()
     _music_scan_cache = None
+    # The search blob is built from that same tuple. Leaving it would let a
+    # rescan answer with titles from the playlist that was just replaced.
+    _playlist_search_cache["id"] = None
+    _playlist_search_cache["texts"] = ()
+    # A rescan must also forget which folders were unreadable. The negative
+    # probe is what makes a permission fix invisible: the user grants Full Disk
+    # Access, taps rescan, and the folder is still skipped from the cache, so
+    # the phone keeps saying "macOS blocked archive access" for up to a minute
+    # (or, with the queue cache also stale, until the service is restarted).
+    _BLOCKED_DIRS.clear()
+    _STALLED_DIRS.clear()
+
+
+# Older name for the same operation, still used by callers and by the control
+# API's "rescan" action. Kept as a real alias rather than deleted so an
+# out-of-tree caller does not crash on an AttributeError.
+def invalidate_stream_queue() -> None:
+    invalidate_queue_cache()
 
 
 # The dashboard polls /api/status, /api/playlist and /api/eq continuously, and
@@ -2100,17 +2636,47 @@ def build_stream_queue_cached() -> List[str]:
     """The stream queue for read-only endpoints: never waits on a scan.
 
     A populated cache is returned as-is, and a stale entry is refreshed on a
-    worker thread while the caller answers from the old copy. Only a cold cache
-    (no queue for this mode yet) builds synchronously, which is the cost the
-    very first request always paid anyway.
+    worker thread while the caller answers from the old copy.
+
+    A cold cache builds synchronously, which keeps control actions and the
+    tests on a predictable contract. The one case that must not block is a
+    scan already in progress (the startup prewarm, or a background refresh
+    after an invalidation): waiting for that lock is what made the first polls
+    after a reboot hang for minutes while the CIFS archive was walked. Then the
+    caller gets the last known queue (empty) and the running scan fills it in.
     """
     mode = get_library_mode()
     cached = _queue_cache
-    if cached and cached[0] == mode:
-        if (time.time() - cached[1]) >= QUEUE_CACHE_TTL:
+    if cached and cached.get("mode") == mode:
+        if (time.time() - cached.get("built_at", 0.0)) >= QUEUE_CACHE_TTL:
             _refresh_queue_in_background()
-        return list(cached[2])
+        return list(cached.get("files") or ())
+    if _queue_build_lock.locked():
+        # A scan is already underway; do not queue behind it.
+        return list((cached or {}).get("files") or ())
     return build_stream_queue()
+
+
+def _prewarm_queue_at_startup() -> None:
+    """Build the queue in the background so the first poll finds a cache.
+
+    Without this the first request after a restart paid the whole scan on a
+    request thread.
+    """
+    try:
+        build_stream_queue()
+    except Exception:
+        pass
+
+
+def start_prewarm_worker() -> threading.Thread:
+    thread = threading.Thread(
+        target=_prewarm_queue_at_startup,
+        name="mp-companion-queue-prewarm",
+        daemon=True,
+    )
+    thread.start()
+    return thread
 
 
 def autoplay_once() -> Dict[str, Any]:
@@ -2320,8 +2886,21 @@ def load_stream_session() -> Dict[str, Any]:
         "started_at": 0.0,
         "duration_sec": 0.0,
         "volume": 100,
+        # Mute keeps `volume` so a second tap can restore it. This key has to
+        # live in the template or the next read drops it and unmute is lost.
+        "muted": False,
+        # DJ pitch, in percent, matching MP Audio Player (-20..+20). It has to
+        # live in this template: load_stream_session() restores only the keys
+        # listed here, so a value written beside them is dropped on the next read
+        # and the pitch buttons appear to do nothing.
+        "pitch_percent": 0,
         "shuffle": False,
         "repeat": "all",
+        # Set when every candidate in the queue has been proven undecodable.
+        # It has to be part of the template: load_stream_session() restores only
+        # the keys listed here, so a flag written outside it is silently lost on
+        # the next read and the dashboard never hears that the playlist is dead.
+        "playback_exhausted": False,
     }
     if _stream_state_path().is_file():
         try:
@@ -2343,12 +2922,44 @@ def save_stream_session(state: Dict[str, Any]) -> None:
         pass
 
 
+def clamp_pitch(value: Any) -> int:
+    """DJ pitch percent, the same -20..+20 range as MP Audio Player."""
+    try:
+        percent = int(value)
+    except (TypeError, ValueError):
+        percent = 0
+    return max(-20, min(20, percent))
+
+
+def pitch_factor_for(percent: Any) -> float:
+    """Playback rate for a pitch percent. +10% plays at 1.10x, like the desk."""
+    return 1.0 + (clamp_pitch(percent) / 100.0)
+
+
 def stream_position(state: Dict[str, Any]) -> float:
-    """Elapsed seconds within the current file, accounting for active playback."""
+    """Elapsed seconds within the current file, accounting for active playback.
+
+    Wall time is scaled by the DJ pitch. A mix at +10% reaches the next second
+    of audio sooner, and the resume clock has to follow that or a later
+    listener starts behind the point this one actually heard.
+    """
     base = float(state.get("position_sec", 0.0) or 0.0)
     if state.get("playing") and state.get("started_at"):
-        base += max(0.0, time.time() - float(state["started_at"]))
+        elapsed = max(0.0, time.time() - float(state["started_at"]))
+        base += elapsed * pitch_factor_for(state.get("pitch_percent", 0))
     return max(0.0, base)
+
+
+def _set_stream_pitch(state: Dict[str, Any], percent: Any) -> None:
+    """Store a new pitch without rescoring the time already played.
+
+    stream_position() multiplies the whole interval since started_at by the
+    current factor. Changing the factor in place would jump the clock by that
+    whole interval times the difference.
+    """
+    state["position_sec"] = clamp_position(state, stream_position(state))
+    state["started_at"] = time.time() if state.get("playing") else 0.0
+    state["pitch_percent"] = clamp_pitch(percent)
 
 
 def clamp_position(state: Dict[str, Any], pos: float) -> float:
@@ -2390,11 +3001,170 @@ def resume_point(state: Dict[str, Any], duration: float = 0.0) -> float:
     return pos
 
 
+# ------------------------------------------------------------------------------
+# UNPLAYABLE FILE LEDGER
+#
+# The queue gate (is_streamable_file) can only judge the shapes it knows how to
+# read. Everything else is proven by the device that actually tries to decode
+# it: the phone reports a media error for a file, and that verdict is what stops
+# the next phone - or the next poll on the same phone - from being handed the
+# same dead URL.
+#
+# The ledger is keyed by path and stamped with (mtime, size), so it is not a
+# permanent blacklist: re-exporting or replacing the file changes its signature
+# and it becomes a candidate again automatically.
+#
+# It is persisted because the file outlives the process. A mix that a phone
+# proved undecodable stays on the archive, and a service restart (a tray toggle,
+# a reboot) would otherwise forget the verdict and hand the same dead URL to the
+# next listener - which is exactly the report this fix is for. The signature is
+# what makes persistence safe: a repaired file no longer matches, so a stale
+# entry can never outlive the repair.
+# ------------------------------------------------------------------------------
+_unplayable_lock = threading.Lock()
+# path -> (st_mtime, st_size) of the copy that failed
+_unplayable_files: Dict[str, Tuple[float, int]] = {}
+UNPLAYABLE_FILE = CONFIG_DIR / "web_companion_unplayable.json"
+_UNPLAYABLE_MAX = 5000
+
+
+def _load_unplayable() -> None:
+    """Restore the ledger so a restart does not re-serve a proven-dead mix."""
+    try:
+        if not UNPLAYABLE_FILE.is_file():
+            return
+        raw = json.loads(
+            UNPLAYABLE_FILE.read_text(encoding="utf-8", errors="ignore")
+        )
+        if not isinstance(raw, dict):
+            return
+        loaded: Dict[str, Tuple[float, int]] = {}
+        for path, stamp in raw.items():
+            if (isinstance(stamp, list) and len(stamp) == 2
+                    and isinstance(stamp[0], (int, float))
+                    and isinstance(stamp[1], int)):
+                loaded[str(path)] = (float(stamp[0]), int(stamp[1]))
+        with _unplayable_lock:
+            _unplayable_files.update(loaded)
+    except Exception:
+        pass
+
+
+def _save_unplayable() -> None:
+    try:
+        with _unplayable_lock:
+            if len(_unplayable_files) > _UNPLAYABLE_MAX:
+                # Keep this bounded: the archive only grows, and a caller that
+                # fails many files must not grow the file without limit.
+                keep = dict(list(_unplayable_files.items())[-_UNPLAYABLE_MAX:])
+                _unplayable_files.clear()
+                _unplayable_files.update(keep)
+            snapshot = {p: [s[0], s[1]] for p, s in _unplayable_files.items()}
+        UNPLAYABLE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = UNPLAYABLE_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(snapshot, indent=2) + "\n", encoding="utf-8")
+        tmp.replace(UNPLAYABLE_FILE)
+    except Exception:
+        pass
+
+
+def mark_unplayable(path: Any) -> bool:
+    """Record that a device could not decode this file. False if unknown."""
+    raw = str(path or "").strip()
+    if not raw:
+        return False
+    try:
+        st = os.stat(raw)
+    except OSError:
+        # Gone entirely: record it with a sentinel so it is skipped until a
+        # rescan drops it from the queue anyway.
+        with _unplayable_lock:
+            _unplayable_files[raw] = (-1.0, -1)
+        _save_unplayable()
+        return True
+    with _unplayable_lock:
+        _unplayable_files[raw] = (float(st.st_mtime), int(st.st_size))
+    _save_unplayable()
+    return True
+
+
+def clear_unplayable(path: Any = None) -> None:
+    """Forget failed files: one path, or the whole ledger on a rescan."""
+    with _unplayable_lock:
+        if path is None:
+            changed = bool(_unplayable_files)
+            _unplayable_files.clear()
+        else:
+            changed = _unplayable_files.pop(str(path or "").strip(), None) is not None
+    if changed:
+        _save_unplayable()
+
+
+def is_unplayable(path: Any) -> bool:
+    """True when this exact copy of the file has already failed to decode."""
+    raw = str(path or "").strip()
+    if not raw:
+        return False
+    with _unplayable_lock:
+        stamp = _unplayable_files.get(raw)
+    if stamp is None:
+        return False
+    try:
+        st = os.stat(raw)
+    except OSError:
+        # The recorded file no longer exists; nothing to skip, and the queue
+        # rebuild will drop it. Do not keep it in the ledger forever.
+        clear_unplayable(raw)
+        return False
+    if (float(st.st_mtime), int(st.st_size)) == stamp:
+        return True
+    # The file changed (re-exported, replaced, repaired): the old verdict no
+    # longer describes what is on disk, so the new copy gets a fresh chance.
+    clear_unplayable(raw)
+    return False
+
+
+def next_playable_index(queue: List[str], start: int,
+                        step: int = 1) -> Optional[int]:
+    """First index at or after `start` in walk order whose file may play.
+
+    Returns None when every candidate has already failed. The walk is bounded
+    by the queue length, so it terminates even when the whole queue is dead.
+    """
+    if not queue:
+        return None
+    n = len(queue)
+    start = int(start or 0)
+    for offset in range(n):
+        idx = (start + offset * step) % n
+        if not is_unplayable(queue[idx]):
+            return idx
+    return None
+
+
+def unplayable_count(queue: Optional[List[str]] = None) -> int:
+    """How many entries of the queue have already failed to decode.
+
+    Bounded to the queue so the count describes this library, not every path
+    this process happens to remember from a previous mode.
+    """
+    try:
+        candidates = queue if queue is not None else build_stream_queue_cached()
+    except Exception:
+        return 0
+    return sum(1 for path in candidates if is_unplayable(path))
+
+
 def current_stream_file(cached: bool = False) -> Tuple[str, Dict[str, Any]]:
     """Return the file the phone should currently be streaming.
 
     `cached` is for the polling endpoints: they must answer instantly even
     while a large library scan runs, so they read the last good queue.
+
+    A file the browser has already told us it cannot decode is skipped here,
+    not only in the control action that recorded it. That keeps every consumer
+    (status, EQ, playlist, a late poll) on the same surviving file, so a phone
+    can never be handed the same dead URL twice.
     """
     queue = build_stream_queue_cached() if cached else build_stream_queue()
     state = load_stream_session()
@@ -2424,13 +3194,40 @@ def current_stream_file(cached: bool = False) -> Tuple[str, Dict[str, Any]]:
             # show a frozen 00:00:00 for the whole mix.
             state["started_at"] = time.time() if state.get("playing") else 0.0
         state["path"] = queue[idx]
+    # Step past any file this process has been told is undecodable. The walk is
+    # bounded by the queue length so a queue of nothing but failures settles on
+    # the last candidate instead of spinning.
+    if is_unplayable(state["path"]):
+        replacement = next_playable_index(queue, idx)
+        if replacement is None:
+            # Nothing in the queue has been proven playable. Still return a
+            # real path rather than "" so the dashboard can name the failure
+            # and offer a retry, instead of pretending the library is empty.
+            return state["path"], state
+        idx = replacement
+        state["index"] = idx
+        state["path"] = queue[idx]
+        state["position_sec"] = 0.0
+        state["duration_sec"] = 0.0
+        state["started_at"] = time.time() if state.get("playing") else 0.0
     return queue[idx], state
 
 
-def get_eq_status() -> Dict[str, Any]:
+def _follow_stream(follow: str) -> bool:
+    """True when this request belongs to the page's own stream, not the desk.
+
+    A browser that has engaged audio is a player in its own right. Its polls
+    must keep naming the file that browser is hearing, even while MP Audio
+    Player is also running on the workstation.
+    """
+    return str(follow or "").strip().lower() in ("stream", "web", "phone")
+
+
+def get_eq_status(follow: str = "") -> Dict[str, Any]:
     # The host player is the authority on what is on air, so the visualizer and
     # the progress bar must read its clock, not the phone-facing stream cursor.
-    host = host_player_payload()
+    # An engaged web player opts out: its clock is the stream session.
+    host = None if _follow_stream(follow) else host_player_payload()
     if host is not None:
         return {
             "state": host["state"],
@@ -2440,6 +3237,7 @@ def get_eq_status() -> Dict[str, Any]:
             "duration_sec": host["duration_sec"],
             "progress_pct": host["progress_pct"],
             "volume": host["volume"],
+            "muted": bool(host.get("muted", False)),
             "pitch_percent": host["pitch_percent"],
             "shuffle": host["shuffle"],
             "repeat": host["repeat"],
@@ -2460,7 +3258,8 @@ def get_eq_status() -> Dict[str, Any]:
         "duration_sec": round(dur, 2),
         "progress_pct": pct,
         "volume": int(state.get("volume", 100)),
-        "pitch_percent": 0,
+        "muted": bool(state.get("muted", False)),
+        "pitch_percent": clamp_pitch(state.get("pitch_percent", 0)),
         "shuffle": bool(state.get("shuffle", False)),
         "repeat": str(state.get("repeat", "all")),
         "levels": [0.0] * 24,
@@ -2577,6 +3376,33 @@ def is_pid_alive(pid: Any) -> bool:
         return False
 
 
+def _recv_ipc_json(sock: socket.socket, limit: int = 1000000) -> Optional[Dict[str, Any]]:
+    """Read one JSON object, including a reply that arrives in several packets.
+
+    The player writes the reply and closes. A single recv() often returns only
+    the first segment, and json.loads on that fragment fails. The companion
+    then behaves as if no player exists, so the transport buttons edit an
+    unused session while the mix the listener hears does not move.
+    """
+    chunks: List[bytes] = []
+    total = 0
+    while total < limit:
+        try:
+            raw = sock.recv(65536)
+        except socket.timeout:
+            break
+        if not raw:
+            break
+        chunks.append(raw)
+        total += len(raw)
+        try:
+            response = json.loads(b"".join(chunks).decode("utf-8", errors="ignore"))
+        except ValueError:
+            continue
+        return response if isinstance(response, dict) else None
+    return None
+
+
 def query_player_ipc(timeout: float = 0.35) -> Optional[Dict[str, Any]]:
     """Live status over the player's socket. None when it is not answering."""
     socket_path, port_file, _state, _pid = _player_paths()
@@ -2598,15 +3424,13 @@ def query_player_ipc(timeout: float = 0.35) -> Optional[Dict[str, Any]]:
             )
             sock.settimeout(timeout)
         sock.sendall(json.dumps({"cmd": "status"}).encode("utf-8"))
-        raw = sock.recv(200000)
-        if raw:
-            response = json.loads(raw.decode("utf-8", errors="ignore"))
-            if isinstance(response, dict):
-                data = response.get("data")
-                if response.get("status") == "ok" and isinstance(data, dict):
-                    return data
-                if "path" in response:
-                    return response
+        response = _recv_ipc_json(sock)
+        if response:
+            data = response.get("data")
+            if response.get("status") == "ok" and isinstance(data, dict):
+                return data
+            if "path" in response:
+                return response
     except Exception:
         return None
     finally:
@@ -2676,18 +3500,16 @@ def send_player_command(cmd: str, **kwargs: Any) -> bool:
     try:
         if has_unix:
             sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            sock.settimeout(0.5)
+            sock.settimeout(1.5)
             sock.connect(str(socket_path))
         else:
             sock = socket.create_connection(
-                ("127.0.0.1", int(port_file.read_text().strip())), 0.5
+                ("127.0.0.1", int(port_file.read_text().strip())), 1.5
             )
-            sock.settimeout(0.5)
+            sock.settimeout(1.5)
         sock.sendall(json.dumps({"cmd": cmd, **kwargs}).encode("utf-8"))
-        raw = sock.recv(4096)
-        if raw:
-            response = json.loads(raw.decode("utf-8", errors="ignore"))
-            return response.get("status") == "ok"
+        response = _recv_ipc_json(sock)
+        return bool(response) and response.get("status") == "ok"
     except Exception:
         return False
     finally:
@@ -2750,6 +3572,7 @@ def host_player_payload() -> Optional[Dict[str, Any]]:
         "sample_rate": f"{round(sample_rate / 1000.0, 1)} kHz" if sample_rate else "",
         "channels": "Stereo" if channels == 2 else ("Mono" if channels == 1 else f"{channels} Ch"),
         "volume": int(data.get("volume", 100) or 0),
+        "muted": bool(data.get("muted", False)),
         "pitch_percent": int(data.get("pitch_percent", 0) or 0),
         "pitch_factor": float(data.get("pitch_factor", 1.0) or 1.0),
         "shuffle": bool(data.get("shuffle", False)),
@@ -2767,13 +3590,15 @@ def host_player_payload() -> Optional[Dict[str, Any]]:
     }
 
 
-def get_playback_status(cli_theme: Optional[str] = None) -> Dict[str, Any]:
+def get_playback_status(cli_theme: Optional[str] = None, follow: str = "") -> Dict[str, Any]:
     active_theme = get_theme_palette(cli_theme)
 
     # The running host player is the authority on what is on air. The stream
     # session below is only the phone-facing queue cursor used when nothing is
-    # playing on this machine at all.
-    host = host_player_payload()
+    # playing on this machine at all. `follow=stream` is the engaged web
+    # player asking for its own cursor so a desk player cannot replace the
+    # mix the browser is in the middle of.
+    host = None if _follow_stream(follow) else host_player_payload()
     if host is not None:
         host["mode_label"] = MODE_LABELS.get(str(host.get("mode", "")), "Library")
         host["library_fallback"] = bool(_queue_source_state.get("fallback"))
@@ -2825,8 +3650,9 @@ def get_playback_status(cli_theme: Optional[str] = None) -> Dict[str, Any]:
         "sample_rate": "",
         "channels": "Stereo",
         "volume": int(state.get("volume", 100)),
-        "pitch_percent": 0,
-        "pitch_factor": 1.0,
+        "muted": bool(state.get("muted", False)),
+        "pitch_percent": clamp_pitch(state.get("pitch_percent", 0)),
+        "pitch_factor": round(pitch_factor_for(state.get("pitch_percent", 0)), 3),
         "shuffle": bool(state.get("shuffle", False)),
         "repeat": str(state.get("repeat", "all")),
         "levels": [0.0] * 24,
@@ -2840,6 +3666,11 @@ def get_playback_status(cli_theme: Optional[str] = None) -> Dict[str, Any]:
         "mode_label": MODE_LABELS.get(get_library_mode(), "Library"),
         "library_fallback": bool(_queue_source_state.get("fallback")),
         "library_detail": _queue_source_state.get("detail", ""),
+        # True once every candidate in the queue has been proven undecodable.
+        # The dashboard uses it to show one clear "nothing in this playlist can
+        # play" message instead of retrying dead URLs forever.
+        "playback_exhausted": bool(state.get("playback_exhausted")),
+        "unplayable_count": unplayable_count(queue),
         "theme": active_theme,
     }
 
@@ -2848,36 +3679,138 @@ MINI_PLAYLIST_SIZE = 5
 # Five rows are visible on a phone; the extra entries are what the list scrolls
 # through, so a long mix queue is browsable without loading the whole library.
 MINI_PLAYLIST_WINDOW = 20
+# A search can match far more than the idle scrollback. Forty rows still fit
+# in the same five-row scroller, and probing every hit on a 51k music library
+# is what would make the box feel dead.
+PLAYLIST_SEARCH_WINDOW = 40
+# Same character class the desk player's `/` filter folds away, so "stream-of"
+# and "stream of" describe the same track.
+_PLAYLIST_SEARCH_CLEAN_RE = re.compile(r"[^a-z0-9]+")
+# id(queue tuple) -> cleaned path text. Rebuilt only when that tuple changes.
+_playlist_search_cache: Dict[str, Any] = {"id": None, "texts": ()}
 
 
-def get_mini_playlist(limit: Optional[int] = None) -> Dict[str, Any]:
+def _playlist_query_words(query: str) -> List[str]:
+    """Words of a playlist search, folded the same way as the track text."""
+    folded = _PLAYLIST_SEARCH_CLEAN_RE.sub(" ", (query or "").lower())
+    return folded.split()[:12]
+
+
+def _playlist_search_texts(queue: List[str]) -> Tuple[str, ...]:
+    """Lower-cased path text for every queue entry, built once per playlist.
+
+    The music queue is tens of thousands of paths. Cleaning it on each
+    keystroke is what would stall the playlist poll, so the blobs stay until
+    the queue tuple itself is replaced.
+    """
+    source: Optional[Tuple[str, ...]] = None
+    cached = _queue_cache if isinstance(_queue_cache, dict) else None
+    if cached and cached.get("mode") == get_library_mode():
+        files = cached.get("files")
+        if isinstance(files, tuple) and len(files) == len(queue):
+            source = files
+    if source is None:
+        source = tuple(queue)
+    if (_playlist_search_cache.get("id") == id(source)
+            and len(_playlist_search_cache.get("texts") or ()) == len(source)):
+        return _playlist_search_cache["texts"]
+    texts = tuple(
+        _PLAYLIST_SEARCH_CLEAN_RE.sub(" ", path.lower()) for path in source
+    )
+    _playlist_search_cache["id"] = id(source)
+    _playlist_search_cache["texts"] = texts
+    return texts
+
+
+def filter_playlist_indices(queue: List[str], query: str) -> List[int]:
+    """Queue indices whose path contains every word of `query`.
+
+    An empty query matches nothing here: the caller keeps the unfiltered
+    window. Every word has to appear, which is how the desk player's live
+    playlist filter works, so a search for two words cannot combine one track's
+    artist with another track's title.
+    """
+    words = _playlist_query_words(query)
+    if not words or not queue:
+        return []
+    texts = _playlist_search_texts(queue)
+    return [
+        i for i, text in enumerate(texts)
+        if all(word in text for word in words)
+    ]
+
+
+def _mini_playlist_item(path: str, index: int, current: bool, include_duration: bool) -> Dict[str, Any]:
+    """One playlist row. Duration is optional because a search page must not
+    stat every hit on a network library just to draw the list."""
+    title, artist, _album = clean_track_title("", path, {})
+    item: Dict[str, Any] = {
+        "index": index,
+        "title": title,
+        "artist": artist,
+        "file": path,
+        "current": current,
+        # Already proven undecodable on a device. The row stays visible (so
+        # the listener can see what was skipped) but is greyed out.
+        "unplayable": is_unplayable(path),
+    }
+    if include_duration:
+        duration = probe_duration(path)
+        item["duration"] = format_seconds(duration)
+        item["duration_sec"] = round(duration, 2)
+    else:
+        item["duration"] = ""
+        item["duration_sec"] = 0.0
+    return item
+
+
+def get_mini_playlist(limit: Optional[int] = None, follow: str = "", query: str = "") -> Dict[str, Any]:
     """A short window of the stream queue: the current track plus the next ones.
 
     The dashboard renders `show` rows inside a scrollable box and the server
     sends up to `limit` (default MINI_PLAYLIST_WINDOW) entries, so five tracks
     are visible at once and the rest can be scrolled. `total` is the full queue
     length and is what the dashboard shows as the track count.
+
+    `query` filters that same queue. The rows that come back are the matches,
+    still addressed by their original queue index so a tap plays that file
+    rather than whatever now sits in the filtered slot.
     """
     queue = build_stream_queue_cached()
     mode = get_library_mode()
     show = MINI_PLAYLIST_SIZE
+    # A box full of punctuation still counts as a search: folding it away and
+    # then showing the whole library looks like the filter was ignored.
+    raw_query = " ".join((query or "").split())[:80]
+    words = _playlist_query_words(raw_query)
+    normalized = " ".join(words)
+    searching = bool(raw_query)
     if not queue:
         return {
             "items": [],
             "total": 0,
+            "matched": 0,
+            "query": normalized or raw_query,
             "show": show,
             "current_index": -1,
             "mode": mode,
             "mode_label": MODE_LABELS.get(mode, "Library"),
             "library_fallback": bool(_queue_source_state.get("fallback")),
             "library_detail": _queue_source_state.get("detail", ""),
+            "playback_exhausted": False,
+            "unplayable_count": 0,
             "modes": [{"id": mid, "label": label} for mid, label in MODE_LABELS.items()],
         }
 
     try:
-        window = int(limit) if limit is not None else MINI_PLAYLIST_WINDOW
+        # A search uses a longer page than the idle "up next" scrollback, so a
+        # short query still has room to list what it found.
+        default_window = PLAYLIST_SEARCH_WINDOW if searching else MINI_PLAYLIST_WINDOW
+        window = int(limit) if limit is not None else default_window
     except (TypeError, ValueError):
-        window = MINI_PLAYLIST_WINDOW
+        window = PLAYLIST_SEARCH_WINDOW if searching else MINI_PLAYLIST_WINDOW
+    # The endpoint sends the whole scrollback, while the dashboard renders
+    # `show` (5) at a time. Truncation at the end of the queue is handled below.
     window = max(1, window)
 
     state = load_stream_session()
@@ -2889,41 +3822,51 @@ def get_mini_playlist(limit: Optional[int] = None) -> Dict[str, Any]:
     # so the highlighted row must be that same file. Showing the stream
     # session's cursor instead is what made the playlist disagree with the
     # title above it.
-    host = host_player_payload()
+    host = None if _follow_stream(follow) else host_player_payload()
     if host and host.get("active_file"):
         host_file = str(host["active_file"])
         if host_file in queue:
             idx = queue.index(host_file)
     idx = max(0, min(idx, len(queue) - 1))
+    # A row that the device has already failed on must not be the highlighted
+    # "now playing" row: the title above the list names a file the phone cannot
+    # decode, and tapping it would only reproduce the error. Advance the window
+    # to the same surviving file the status endpoint reports.
+    if is_unplayable(queue[idx]):
+        playable = next_playable_index(queue, idx)
+        if playable is not None:
+            idx = playable
 
     items: List[Dict[str, Any]] = []
-    # Stop at the end of the queue instead of wrapping: a repeating window
-    # looks broken once it is scrollable.
-    for offset in range(min(window, len(queue))):
-        i = (idx + offset)
-        if i >= len(queue):
-            break
-        path = queue[i]
-        title, artist, album = clean_track_title("", path, {})
-        duration = probe_duration(path)
-        items.append({
-            "index": i,
-            "title": title,
-            "artist": artist,
-            "file": path,
-            "current": i == idx,
-            "duration": format_seconds(duration),
-            "duration_sec": round(duration, 2),
-        })
+    matched = len(queue)
+    if searching:
+        # The filtered rows keep the queue's own index. Playing "the third
+        # search hit" has to load that file, not queue slot 2.
+        matched_indices = filter_playlist_indices(queue, normalized) if normalized else []
+        matched = len(matched_indices)
+        for i in matched_indices[:window]:
+            items.append(_mini_playlist_item(queue[i], i, i == idx, i == idx))
+    else:
+        # Stop at the end of the queue instead of wrapping: a repeating window
+        # looks broken once it is scrollable.
+        for offset in range(min(window, len(queue))):
+            i = idx + offset
+            if i >= len(queue):
+                break
+            items.append(_mini_playlist_item(queue[i], i, i == idx, True))
     return {
         "items": items,
         "total": len(queue),
+        "matched": matched,
+        "query": normalized or (raw_query if searching else ""),
         "show": show,
         "current_index": idx,
         "mode": mode,
         "mode_label": MODE_LABELS.get(mode, "Library"),
         "library_fallback": bool(_queue_source_state.get("fallback")),
         "library_detail": _queue_source_state.get("detail", ""),
+        "playback_exhausted": bool(state.get("playback_exhausted")),
+        "unplayable_count": unplayable_count(queue),
         "modes": [{"id": mid, "label": label} for mid, label in MODE_LABELS.items()],
     }
 
@@ -3003,18 +3946,115 @@ def play_random_track() -> Dict[str, Any]:
     )
 
 
+def _control_targets_stream(params: Dict[str, List[str]]) -> bool:
+    """True when the engaged web player, not the desk, should move."""
+    try:
+        raw = str((params.get("target") or [""])[0] or "")
+    except Exception:
+        raw = ""
+    return raw.strip().lower() in ("stream", "web", "phone")
+
+
+def _flag_param(params: Dict[str, List[str]], name: str) -> bool:
+    """True when a control query flag is on (1 / true / yes / on)."""
+    try:
+        raw = str((params.get(name) or ["0"])[0] or "").strip().lower()
+    except Exception:
+        return False
+    return raw in ("1", "true", "yes", "on")
+
+
+def _adopt_host_into_session(params: Dict[str, List[str]]) -> bool:
+    """Point the web stream at the mix the desk is playing right now.
+
+    Engage starts the browser on the host's file. The session has to name
+    that same file before the page follows its own cursor, or the next poll
+    swaps in a stale path and the audio jumps or stops.
+    """
+    host, _source = host_player_status()
+    path = str((host or {}).get("path") or "")
+    if not path:
+        return True
+    try:
+        position = float((params.get("position") or [host.get("position_sec", 0.0)])[0])
+    except (TypeError, ValueError, IndexError, AttributeError):
+        position = float((host or {}).get("position_sec") or 0.0)
+    if position != position or position in (float("inf"), float("-inf")):
+        position = 0.0
+    queue = build_stream_queue()
+    with _stream_lock:
+        state = load_stream_session()
+        if path in queue:
+            state["index"] = queue.index(path)
+        state["path"] = path
+        state["position_sec"] = max(0.0, position)
+        try:
+            state["duration_sec"] = float((host or {}).get("duration_sec") or 0.0)
+        except (TypeError, ValueError):
+            state["duration_sec"] = 0.0
+        state["playing"] = True
+        state["started_at"] = time.time()
+        state["playback_exhausted"] = False
+        # Engage should hear the desk's pitch and level, not snap back to
+        # the session defaults.
+        state["pitch_percent"] = clamp_pitch((host or {}).get("pitch_percent", 0))
+        try:
+            state["volume"] = max(0, min(100, int((host or {}).get("volume", 100) or 0)))
+        except (TypeError, ValueError):
+            state["volume"] = int(state.get("volume", 100) or 100)
+        state["muted"] = bool((host or {}).get("muted", False))
+        save_stream_session(state)
+    return True
+
+
 def control_player(action: str, params: Optional[Dict[str, List[str]]] = None) -> bool:
     """Drive playback. The running host player owns the audio, so a live one is
-    forwarded to it; otherwise the browser performs the playback of its stream."""
+    forwarded to it; otherwise the browser performs the playback of its stream.
+
+    `target=stream` is the engaged web player. Those taps must move the stream
+    the browser is hearing, not the desk player in the room.
+    """
     params = params or {}
     if action in ("random", "play_random", "play_random_track"):
         return bool(play_random_track().get("success"))
 
-    # A running MP Audio Player is what the dashboard is reporting, so the
-    # transport buttons must act on that player. Without this the title would
-    # follow the host while every tap silently edited the unused stream session.
+    # A rescan drops the cached queue and rebuilds it from what is on disk now.
+    # Without this the dashboard kept serving a stale list after a mix was
+    # added or a drive was mounted.
+    if action in ("refresh", "rescan", "reload"):
+        invalidate_queue_cache()
+        # A rescan is the operator's "look again" gesture, so it also forgives
+        # files this process had written off: a repaired or re-exported mix must
+        # become a candidate again. The signature check in is_unplayable() would
+        # catch a changed file on its own, but clearing makes the intent
+        # explicit and covers an in-place repair that kept mtime and size.
+        clear_unplayable()
+        # The exhausted flag is the other half of that verdict: leaving it set
+        # would make the dashboard keep the "nothing in this playlist plays"
+        # card up after the operator has just asked it to look again, so the
+        # retry would appear to be refused. Clearing both together is what makes
+        # rescan a genuine fresh start.
+        with _stream_lock:
+            state = load_stream_session()
+            if state.get("playback_exhausted"):
+                state["playback_exhausted"] = False
+                save_stream_session(state)
+        try:
+            build_stream_queue(force=True)
+        except Exception:
+            return False
+        return True
+
+    if action == "adopt_host":
+        return _adopt_host_into_session(params)
+
+    # A running MP Audio Player is what an unengaged dashboard is reporting, so
+    # those transport buttons must act on that player. Without this the title
+    # would follow the host while every tap silently edited the unused stream
+    # session. An engaged web player sends target=stream and is handled below,
+    # because forwarding those taps to the desk left the browser mix untouched.
     host, _source = host_player_status()
-    if host is not None:
+    if host is not None and not _control_targets_stream(params):
         if action in ("play", "resume"):
             return send_player_command("play")
         if action in ("pause",):
@@ -3079,6 +4119,12 @@ def control_player(action: str, params: Optional[Dict[str, List[str]]] = None) -
             # The host player advances itself; a phone reporting the end of a
             # file it streamed must not move the host's queue.
             return True
+        if action == "track_failed":
+            # A media error on the phone says nothing about the host's own
+            # queue, but it does say the shared file is undecodable. Record it
+            # so the next phone skips it, then let the desk player keep going.
+            mark_unplayable(str((params.get("path") or [""])[0] or ""))
+            return True
         if action == "report_position":
             # The host's own clock is authoritative, so a phone clock report is
             # irrelevant and must never be written over it.
@@ -3112,6 +4158,11 @@ def control_player(action: str, params: Optional[Dict[str, List[str]]] = None) -
 
         pos = clamp_position(state, stream_position(state))
         duration = float(state.get("duration_sec", 0.0) or 0.0) or probe_duration(state["path"])
+        # Persist the length we just learned. Without it `clamp_position` inside
+        # `seek_to` still saw duration 0 and a "seek +30" on the very first tap
+        # ran past the end of the mix instead of stopping at it.
+        if duration and not state.get("duration_sec"):
+            state["duration_sec"] = float(duration)
 
         def seek_to(target: float) -> None:
             state["position_sec"] = clamp_position(state, target)
@@ -3121,20 +4172,38 @@ def control_player(action: str, params: Optional[Dict[str, List[str]]] = None) -
             n = len(queue)
             if n <= 0:
                 return
+            current = int(state.get("index", 0) or 0)
             # Shuffle must actually shuffle. This used to be a plain +1 walk, so
             # the flag only changed the badge: enabling shuffle still played the
             # queue in order. Pick a random entry instead, never repeating the
             # one already playing.
-            if state.get("shuffle") and n > 1:
-                current = str(state.get("path", "") or "")
+            # Previous stays a real step backward. Shuffling it picked a
+            # random mix, so the button looked dead: the listener asked for
+            # the track before this one and got something else, or the same
+            # one again when the random draw lost the race with the poll.
+            if state.get("shuffle") and n > 1 and step > 0:
+                saved_path = str(state.get("path", "") or "")
                 try:
-                    avoid = queue.index(current) if current in queue else int(state.get("index", 0) or 0)
+                    avoid = queue.index(saved_path) if saved_path in queue else current
                 except ValueError:
-                    avoid = int(state.get("index", 0) or 0)
-                choices = [i for i in range(n) if i != avoid]
+                    avoid = current
+                # A file the device already failed on is not a candidate, so a
+                # shuffle cannot keep landing on the one dead mix in the queue.
+                choices = [i for i in range(n) if i != avoid and not is_unplayable(queue[i])]
+                if not choices:
+                    choices = [i for i in range(n) if i != avoid]
                 state["index"] = random.choice(choices) if choices else 0
             else:
-                state["index"] = (int(state.get("index", 0)) + step) % n
+                # Walk in `step` order and honour the unplayable ledger: this is
+                # what makes "next" (and an automatic advance) skip a damaged
+                # mix instead of handing the same dead URL back to the phone.
+                target = next_playable_index(queue, (current + step) % n, 1 if step > 0 else -1)
+                if target is None:
+                    # Nothing in the queue is known-good; fall back to the plain
+                    # walk so a dead library still reports a concrete file and
+                    # the dashboard can name the failure.
+                    target = (current + step) % n
+                state["index"] = target
             state["path"] = queue[state["index"]]
             state["position_sec"] = 0.0
             state["started_at"] = time.time() if state.get("playing") else 0.0
@@ -3143,7 +4212,14 @@ def control_player(action: str, params: Optional[Dict[str, List[str]]] = None) -
         if action in ("play", "resume"):
             state["playing"] = True
             state["started_at"] = time.time()
-        elif action in ("pause", "play-pause", "toggle"):
+        elif action == "pause":
+            # Pause means pause. Treating it as a toggle started the mix again
+            # when the page and the session had drifted apart, so the Stop
+            # tap appeared to do nothing (or the opposite of what was asked).
+            state["playing"] = False
+            state["position_sec"] = pos
+            state["started_at"] = 0.0
+        elif action in ("play-pause", "toggle"):
             if state.get("playing"):
                 state["playing"] = False
                 state["position_sec"] = pos
@@ -3165,7 +4241,15 @@ def control_player(action: str, params: Optional[Dict[str, List[str]]] = None) -
             state["index"] = target
             state["path"] = queue[target]
             state["position_sec"] = 0.0
-            state["started_at"] = time.time() if state.get("playing") else 0.0
+            # A playlist tap, including one on a search hit, is a request to
+            # hear that track. Without this a paused session only moved the
+            # cursor and the phone stayed silent on the old file.
+            if _flag_param(params, "play"):
+                state["playing"] = True
+                state["started_at"] = time.time()
+                state["playback_exhausted"] = False
+            else:
+                state["started_at"] = time.time() if state.get("playing") else 0.0
             state["duration_sec"] = probe_duration(state["path"])
         elif action == "seek_forward":
             seek_to(pos + 30.0)
@@ -3197,18 +4281,80 @@ def control_player(action: str, params: Optional[Dict[str, List[str]]] = None) -
             state["repeat"] = order[(order.index(cur) + 1) % len(order)] if cur in order else "all"
         elif action == "vol_up":
             state["volume"] = min(100, int(state.get("volume", 100)) + 5)
+            state["muted"] = False
         elif action == "vol_down":
             state["volume"] = max(0, int(state.get("volume", 100)) - 5)
+            state["muted"] = False
         elif action == "set_volume":
             state["volume"] = max(0, min(100, int(params.get("volume", [100])[0])))
+            state["muted"] = False
         elif action == "mute":
-            state["volume"] = 0
+            # Toggle. Zeroing `volume` left nothing to restore, so the next
+            # tap could not unmute.
+            state["muted"] = not bool(state.get("muted"))
+        elif action == "pitch_up":
+            try:
+                step = int((params.get("step") or ["1"])[0])
+            except (TypeError, ValueError, IndexError):
+                step = 1
+            _set_stream_pitch(state, int(state.get("pitch_percent", 0) or 0) + step)
+        elif action == "pitch_down":
+            try:
+                step = int((params.get("step") or ["1"])[0])
+            except (TypeError, ValueError, IndexError):
+                step = 1
+            _set_stream_pitch(state, int(state.get("pitch_percent", 0) or 0) - step)
+        elif action == "reset_pitch":
+            _set_stream_pitch(state, 0)
+        elif action == "set_pitch":
+            try:
+                target = int((params.get("percent") or ["0"])[0])
+            except (TypeError, ValueError, IndexError):
+                target = 0
+            _set_stream_pitch(state, target)
         elif action == "track_ended":
             # The phone finished the file: advance and keep the elapsed clock honest.
             switch(1)
             state["duration_sec"] = probe_duration(state["path"])
             state["playing"] = True
             state["started_at"] = time.time()
+        elif action == "track_failed":
+            # The device could not decode the file it was handed (a media error,
+            # not a normal end). Two things have to happen:
+            #   1. remember the exact copy that failed, so no poll, phone or
+            #      shuffle can serve it again;
+            #   2. advance to the next candidate, so the listener keeps hearing
+            #      music instead of staring at an error card.
+            # `path` may name the file explicitly, because the phone's poll can
+            # be one step behind the file that actually errored. When it is
+            # absent the current cursor is what failed.
+            failed_path = str((params.get("path") or [""])[0] or state.get("path", ""))
+            mark_unplayable(failed_path)
+            # Resolve the failing entry to its position in the current queue; a
+            # path that is no longer in the queue (deleted, renamed) simply lets
+            # the walk start from the cursor.
+            try:
+                failed_index = queue.index(failed_path)
+            except ValueError:
+                failed_index = int(state.get("index", 0) or 0)
+            state["index"] = failed_index
+            state["path"] = queue[failed_index] if queue else ""
+            remaining = next_playable_index(queue, (failed_index + 1) % len(queue)) \
+                if queue else None
+            if remaining is None:
+                # Every single candidate has now failed. Stop cleanly and let the
+                # dashboard say so; do not spin on a queue that cannot play.
+                state["playing"] = False
+                state["position_sec"] = 0.0
+                state["started_at"] = 0.0
+                state["playback_exhausted"] = True
+            else:
+                state["index"] = remaining
+                state["path"] = queue[remaining]
+                state["position_sec"] = 0.0
+                state["duration_sec"] = probe_duration(state["path"])
+                state["started_at"] = time.time() if state.get("playing") else 0.0
+                state["playback_exhausted"] = False
         else:
             return False
 
@@ -3226,10 +4372,12 @@ def render_launch_pad_html() -> str:
         if not suite_control.is_supported():
             return ""
         apps = suite_control.app_definitions()
+        tty_mode = bool(suite_control.tty_mode_active())
     except Exception:
         return ""
 
     buttons = []
+    disabled_attr = " disabled" if tty_mode else ""
     for app in apps:
         role = html.escape(str(app["id"]), quote=True)
         label = html.escape(str(app["label"]))
@@ -3237,118 +4385,170 @@ def render_launch_pad_html() -> str:
         buttons.append(
             f'<button type="button" class="launch-btn" data-app="{role}" '
             f'data-label="{label}" onclick="launchApp(\'{role}\')" '
-            f'aria-pressed="false" title="Launch {label}">'
+            f'aria-pressed="false" title="Launch {label}"{disabled_attr}>'
             f'<span class="launch-icon" aria-hidden="true">{icon}</span>'
             f'<span class="launch-label">{label}</span>'
             f'<span class="launch-state">Off</span>'
             f'</button>'
         )
+    visualizer_label = html.escape(str(suite_control.APP_LABELS.get(
+        suite_control.ROLE_VISUALIZER, "MP Visualizer")))
+    # The MP Visualizer control opens the same app as the visualizer shortcut,
+    # so a setup that did not install it does not get the button either.
+    try:
+        visualizer_installed = suite_control.ROLE_VISUALIZER in suite_control.installed_components()
+    except Exception:
+        visualizer_installed = True
+    disabled = disabled_attr
+    pad_class = "launchpad tty-disabled" if tty_mode else "launchpad"
+    tty_banner = (
+        '<div class="launchpad-tty" id="launchPadTty" role="status">'
+        '<strong>⌨ MP Mix Manager TTY Audio Mode</strong>'
+        '<span>These desktop launchers are disabled while the manager runs in '
+        'the text console. Return to the desktop to use them.</span>'
+        '</div>'
+        if tty_mode else
+        '<div class="launchpad-tty" id="launchPadTty" role="status" hidden></div>'
+    )
+    # MP Visualizer: one window, owned by this dashboard. Press to open, press
+    # again for fullscreen, press a third time to close it. A setup that did
+    # not install the visualizer does not get the button.
+    if visualizer_installed:
+        visualizer_button = (
+            '<button type="button" class="launch-btn launch-visualizer" id="launchVisualizer" '
+            'data-label="' + visualizer_label + '" onclick="launchVisualizer()" '
+            'aria-pressed="false" aria-live="polite" title="Open MP Visualizer on the computer"'
+            + disabled + '>'
+            '<span class="launch-icon" aria-hidden="true">🌌</span>'
+            '<span class="launch-label">MP Visualizer</span>'
+            '<span class="launch-state" id="launchVisualizerState">Off</span>'
+            '</button>'
+        )
+    else:
+        visualizer_button = ""
     return (
-        '<div class="launchpad" id="launchPad">'
+        f'<div class="{pad_class}" id="launchPad">'
         '<div class="launchpad-head">'
         '<span>🖥 Desktop Suite</span>'
         '<span id="launchPadTray" class="launch-state">Tray off</span>'
         '</div>'
+        + tty_banner +
         '<div class="launchpad-grid" id="launchPadGrid">'
         + "".join(buttons)
         + '<button type="button" class="launch-btn launch-close" id="launchCloseAll" '
-          'onclick="closeAllApps()" title="Close all four apps, keep the tray icon">'
+          'onclick="closeAllApps()" title="Close all four apps, keep the tray icon"'
+        + disabled + '>'
           '<span class="launch-icon" aria-hidden="true">⏻</span>'
           '<span class="launch-label">Close All</span>'
           '</button>'
         '</div>'
-        '<div class="launchpad-note" id="launchPadNote">'
+        + visualizer_button
+        + '<div class="launchpad-note" id="launchPadNote">'
         'Tap a button to open that app on the computer.'
         '</div>'
         '</div>'
     )
 
-
-# ------------------------------------------------------------------------------
 # DYNAMIC HTML TEMPLATE (SEAMLESS AUDIO STREAMING & SYNCED SEEKING)
 # ------------------------------------------------------------------------------
 def render_html_page(theme: Dict[str, Any]) -> str:
     t = theme
     launch_pad_html = render_launch_pad_html()
 
-    # Dynamic Liquid Glass [Rainbow Colours]: the body carries a slowly rotating
-    # hue while the glass cards breathe, so the whole dashboard cycles through
-    # the spectrum instead of sitting on one static accent colour.
+    # Dynamic Liquid Glass [Rainbow Colours]. The block is always emitted.
+    # Every rule is scoped to a body class, so another theme stays put until
+    # the menu selects this one. Emitting it only for the theme that was active
+    # at render time meant a menu switch added the class and then nothing moved
+    # until a full reload.
     #
-    # This block is always emitted, even when the page loads on another theme.
-    # Every rule is scoped to a body class, so it stays inert until the theme is
-    # selected. Previously it was only emitted when the rainbow theme was active
-    # at render time, which meant switching to it from the theme menu added the
-    # class but had no keyframes or rules to animate - the colours only started
-    # cycling after a full page reload.
+    # The colour itself is the custom property --rainbow-hue, written from a
+    # short timer (see syncRainbowDrive). iOS Safari does not animate
+    # `filter: hue-rotate` on a ::before, and a ::before with z-index -1 paints
+    # underneath <body>'s opaque background, so that layer never showed.
+    # Filtering <body> itself re-rasterises every glyph and is what used to
+    # freeze the dashboard. Accents, borders, buttons and the wash all read the
+    # one variable, so the chrome changes colour without a page-sized filter.
     rainbow_anim_css = """
-        @keyframes rainbowShift {
-            0% { background-position: 0% 50%; }
-            100% { background-position: 300% 50%; }
+        @property --rainbow-hue {
+            syntax: "<number>";
+            inherits: true;
+            initial-value: 272;
         }
         @keyframes dynamicRainbowHue {
-            0% { filter: hue-rotate(0deg) saturate(1.15); }
-            50% { filter: hue-rotate(180deg) saturate(1.35); }
-            100% { filter: hue-rotate(360deg) saturate(1.15); }
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
         }
         @keyframes dynamicRainbowBreath {
-            0%, 100% {
-                box-shadow: 0 14px 40px rgba(176, 88, 255, 0.45),
-                            inset 0 0 24px rgba(0, 242, 254, 0.16);
-                border-color: rgba(176, 88, 255, 0.45);
-            }
-            50% {
-                box-shadow: 0 18px 52px rgba(255, 45, 142, 0.55),
-                            inset 0 0 34px rgba(254, 225, 64, 0.22);
-                border-color: rgba(0, 242, 254, 0.60);
-            }
+            0%, 100% { opacity: 0.72; }
+            50% { opacity: 1; }
         }
-        /* The hue rotation belongs on a dedicated background layer, not on
-           <body>. Filtering the body re-rasterises every glyph and card on each
-           frame, which is the single most expensive thing iOS Safari does here
-           and a direct cause of the dashboard going unresponsive after a while.
-           A fixed pseudo-element keeps the cycling colours while the text stays
-           crisp and un-filtered. */
-        body.dynamic-rainbow-glass-active::before {
-            content: "";
+        /* isolation keeps the wash (z-index -1) above the body's own
+           background and below the dashboard. Without it the wash disappears
+           behind background-color. */
+        body.dynamic-rainbow-glass-active {
+            isolation: isolate;
+            --accent-primary: hsl(var(--rainbow-hue) 85% 64%);
+            --accent-secondary: hsl(calc(var(--rainbow-hue) + 150) 92% 60%);
+            --accent-tertiary: hsl(calc(var(--rainbow-hue) + 310) 88% 62%);
+            --accent-crimson: hsl(calc(var(--rainbow-hue) + 28) 95% 56%);
+            --card-border: hsl(var(--rainbow-hue) 80% 66% / 0.55);
+            --card-bg: hsl(var(--rainbow-hue) 42% 14% / 0.72);
+            --card-shadow: 0 14px 40px hsl(var(--rainbow-hue) 80% 42% / 0.38);
+            --badge-bg: hsl(var(--rainbow-hue) 80% 60% / 0.22);
+            --badge-color: hsl(calc(var(--rainbow-hue) + 150) 92% 62%);
+            --text-dim: hsl(calc(var(--rainbow-hue) + 40) 45% 78%);
+            --eq-bar: hsl(calc(var(--rainbow-hue) + 150) 92% 60%);
+            --eq-peak: hsl(calc(var(--rainbow-hue) + 310) 88% 62%);
+            --btn-gradient: linear-gradient(135deg,
+                hsl(var(--rainbow-hue) 85% 58%),
+                hsl(calc(var(--rainbow-hue) + 55) 90% 56%));
+            --btn-shadow: 0 4px 20px hsl(var(--rainbow-hue) 85% 52% / 0.55);
+            --header-gradient: linear-gradient(100deg,
+                hsl(var(--rainbow-hue) 88% 68%),
+                hsl(calc(var(--rainbow-hue) + 48) 92% 64%),
+                hsl(calc(var(--rainbow-hue) + 110) 90% 62%),
+                hsl(calc(var(--rainbow-hue) + 170) 88% 64%));
+            --progress-fill: linear-gradient(90deg,
+                hsl(var(--rainbow-hue) 85% 62%),
+                hsl(calc(var(--rainbow-hue) + 48) 90% 60%),
+                hsl(calc(var(--rainbow-hue) + 110) 92% 62%),
+                hsl(calc(var(--rainbow-hue) + 170) 88% 58%));
+        }
+        #rainbowWash {
+            display: none;
+        }
+        body.dynamic-rainbow-glass-active #rainbowWash {
+            display: block;
             position: fixed;
-            inset: 0;
+            /* Larger than the viewport so the rotation never flashes a corner. */
+            inset: -50%;
             z-index: -1;
             pointer-events: none;
-            background: radial-gradient(circle at 20% 15%, rgba(176, 88, 255, 0.30), transparent 55%),
-                        radial-gradient(circle at 80% 25%, rgba(0, 242, 254, 0.22), transparent 55%),
-                        radial-gradient(circle at 50% 90%, rgba(255, 45, 142, 0.26), transparent 60%);
-            animation: dynamicRainbowHue 24s linear infinite;
-            will-change: filter;
+            background:
+                radial-gradient(circle at 22% 18%, hsl(var(--rainbow-hue) 90% 62% / 0.62), transparent 52%),
+                radial-gradient(circle at 78% 16%, hsl(calc(var(--rainbow-hue) + 140) 95% 58% / 0.48), transparent 50%),
+                radial-gradient(circle at 48% 92%, hsl(calc(var(--rainbow-hue) + 280) 90% 58% / 0.55), transparent 55%);
+            animation: dynamicRainbowHue 24s linear infinite,
+                       dynamicRainbowBreath 6s ease-in-out infinite;
+            will-change: transform;
         }
-        body.dynamic-rainbow-glass-active .card {
-            animation: dynamicRainbowBreath 6s ease-in-out infinite;
+        body.dynamic-rainbow-glass-active .card,
+        body.dynamic-rainbow-glass-active .overlay-card {
             backdrop-filter: blur(18px) saturate(1.35);
             -webkit-backdrop-filter: blur(18px) saturate(1.35);
-            /* Keep the painter inside the card's own box so a border/shadow
-               animation cannot invalidate the whole page. */
-            contain: paint;
         }
-        body.dynamic-rainbow-glass-active .header h1 {
-            background: linear-gradient(90deg,
-                #b058ff, #ff2d8e, #fee140, #00f2fe, #b058ff);
-            background-size: 300% 100%;
-            -webkit-background-clip: text;
-            background-clip: text;
-            -webkit-text-fill-color: transparent;
-            animation: rainbowShift 12s linear infinite;
+        body.dynamic-rainbow-glass-active .overlay-card {
+            box-shadow: 0 16px 50px rgba(0, 0, 0, 0.9),
+                        0 0 30px hsl(var(--rainbow-hue) 85% 60% / 0.45);
         }
-        /* Animations cost battery and CPU on a phone that is only listening, so
-           they stop entirely while the tab is in the background. */
-        body.dynamic-rainbow-glass-frozen::before,
-        body.dynamic-rainbow-glass-frozen .card,
-        body.dynamic-rainbow-glass-frozen .header h1 {
-            animation: none !important;
+        /* Hidden tab: stop the drift. The hue timer stops with it. */
+        body.dynamic-rainbow-glass-frozen #rainbowWash {
+            animation-play-state: paused;
         }
+        /* Reduce Motion drops the moving blobs only. The slow hue change is
+           the theme, and it is a crossfade rather than motion. */
         @media (prefers-reduced-motion: reduce) {
-            body.dynamic-rainbow-glass-active::before,
-            body.dynamic-rainbow-glass-active .card,
-            body.dynamic-rainbow-glass-active .header h1 {
+            body.dynamic-rainbow-glass-active #rainbowWash {
                 animation: none;
             }
         }
@@ -3359,7 +4559,7 @@ def render_html_page(theme: Dict[str, Any]) -> str:
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no">
-    <title>MP Liquid Player (Web) — DJ Booth Remote</title>
+    <title>MP Audio Player (Web) — DJ Booth Remote</title>
     <style>
         :root {{
             --bg: {t['bg']};
@@ -3380,6 +4580,7 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             --badge-color: {t['badge_color']};
             --eq-bar: {t['eq_bar']};
             --eq-peak: {t['eq_peak']};
+            --rainbow-hue: 272;
         }}
         {rainbow_anim_css}
         * {{
@@ -3637,6 +4838,33 @@ def render_html_page(theme: Dict[str, Any]) -> str:
         @media (prefers-reduced-motion: reduce) {{
             .mode-switch button.pending:disabled {{ animation: none; }}
         }}
+        .mini-pl-search {{
+            display: block;
+        }}
+        .mini-pl-search input {{
+            width: 100%;
+            box-sizing: border-box;
+            appearance: none;
+            -webkit-appearance: none;
+            border: 1px solid var(--card-border);
+            background: rgba(255, 255, 255, 0.05);
+            color: var(--text-main);
+            font-family: inherit;
+            /* 16px keeps iOS from zooming the page when the box is focused. */
+            font-size: 16px;
+            font-weight: 600;
+            padding: 8px 12px;
+            border-radius: 10px;
+        }}
+        .mini-pl-search input::placeholder {{
+            color: var(--text-dim);
+            font-weight: 600;
+        }}
+        .mini-pl-search input:focus {{
+            outline: none;
+            border-color: var(--accent-secondary);
+            box-shadow: 0 0 0 1px var(--accent-secondary) inset;
+        }}
         .mini-pl-empty {{
             font-size: 0.75rem;
             color: var(--text-dim);
@@ -3668,6 +4896,16 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             background: var(--badge-bg);
             border-color: var(--badge-color);
             box-shadow: 0 0 0 1px var(--badge-color) inset;
+        }}
+        /* A row the device could not decode. It stays in the list so the
+           listener can see what was skipped, but it reads as unavailable
+           rather than as a normal "tap to play" row. */
+        .mini-pl-item.unplayable {{
+            opacity: 0.55;
+            border-style: dashed;
+        }}
+        .mini-pl-item.unplayable .mini-pl-num {{
+            color: #ffaa00;
         }}
         .mini-pl-num {{
             font-size: 0.68rem;
@@ -3846,6 +5084,20 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             font-size: 0.72rem;
             color: var(--text-dim);
         }}
+        /* iOS Safari will not start media that is display:none, or whose
+           ancestor is. The mix and the spoken reply stay in the render tree
+           (1px, transparent) so Engage and replies can actually play. */
+        .phone-audio {{
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            margin: 0;
+            padding: 0;
+            border: 0;
+            opacity: 0;
+            pointer-events: none;
+            overflow: hidden;
+        }}
         /* Stream Activation Modal */
         #streamOverlay {{
             display: none;
@@ -3858,15 +5110,20 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             z-index: 9999;
             flex-direction: column;
             align-items: center;
-            /* The engage button is the only way forward, so the card is pinned
-               to the middle of the free space. On very short screens it can
-               still scroll rather than hiding the button off screen. */
+            /* The engage button is the only way forward: the card is pinned to
+               the middle of the *visible* screen and the gate itself never
+               scrolls. Short screens get a smaller card through the media
+               queries below rather than a scrollbar that pushes the button
+               off the page. */
             justify-content: center;
-            padding: max(16px, env(safe-area-inset-top)) 16px
-                     max(16px, env(safe-area-inset-bottom));
+            padding: max(12px, env(safe-area-inset-top)) 12px
+                     max(12px, env(safe-area-inset-bottom));
             text-align: center;
-            overflow-y: auto;
-            -webkit-overflow-scrolling: touch;
+            overflow: hidden;
+            overscroll-behavior: none;
+            /* `manipulation` still kills the double-tap zoom, but `none` makes
+               iOS Safari drop the click on the Engage button entirely. */
+            touch-action: manipulation;
         }}
         #streamOverlay.show {{
             display: flex;
@@ -3878,12 +5135,20 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             padding: 28px 20px;
             max-width: 400px;
             width: 100%;
-            max-height: calc(100dvh - 32px);
-            overflow-y: auto;
-            margin: auto 0;
+            /* Never taller than the gate. Laid out as a column so the engage
+               button is a fixed row that is always on screen; only the copy
+               above it can shrink. No scrollbar anywhere. */
+            max-height: 100%;
+            box-sizing: border-box;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            overflow: hidden;
+            margin: 0;
             box-shadow: 0 16px 50px rgba(0, 0, 0, 0.9), 0 0 30px rgba(176, 88, 255, 0.3);
         }}
         .overlay-card h2 {{
+            flex: 0 0 auto;
             margin: 0 0 10px 0;
             font-size: 1.4rem;
             background: var(--header-gradient);
@@ -3892,6 +5157,9 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             font-weight: 900;
         }}
         .overlay-card p {{
+            flex: 0 1 auto;
+            min-height: 0;
+            overflow: hidden;
             font-size: 0.88rem;
             color: var(--text-dim);
             margin: 0 0 20px 0;
@@ -3901,6 +5169,10 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             color: #ffaa00;
             font-size: 0.82rem;
             margin: -8px 0 18px 0;
+        }}
+        .overlay-card .btn-activate-stream {{
+            /* The one control that must never leave the screen. */
+            flex: 0 0 auto;
         }}
         .btn-activate-stream {{
             background: var(--btn-gradient);
@@ -3916,31 +5188,168 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             text-transform: uppercase;
             letter-spacing: 1px;
         }}
+        /* Short viewports (landscape phones, split screens): shrink the card
+           instead of scrolling it, so the engage button stays centred and on
+           screen no matter how little height there is. These rules sit after
+           the base sizes on purpose: same specificity, so they must come last
+           to win. */
+        @media (max-height: 560px) {{
+            .overlay-card {{
+                padding: 16px 16px;
+            }}
+            .overlay-card h2 {{
+                margin-bottom: 6px;
+                font-size: 1.15rem;
+            }}
+            .overlay-card p {{
+                margin-bottom: 12px;
+                font-size: 0.78rem;
+            }}
+            .overlay-card p.stream-overlay-detail {{
+                margin: -4px 0 12px 0;
+            }}
+            .btn-activate-stream {{
+                padding: 12px 20px;
+                font-size: 0.92rem;
+            }}
+        }}
+        @media (max-height: 400px) {{
+            .overlay-card {{
+                padding: 10px 14px;
+            }}
+            .overlay-card h2 {{
+                font-size: 1rem;
+                margin-bottom: 4px;
+            }}
+            .overlay-card p {{
+                margin-bottom: 8px;
+                font-size: 0.74rem;
+            }}
+            .overlay-card p.stream-overlay-detail {{
+                margin: 0 0 8px 0;
+            }}
+            .btn-activate-stream {{
+                padding: 10px 16px;
+                font-size: 0.84rem;
+            }}
+        }}
+        .vis-block {{
+            width: 100%;
+            margin: 12px 0 16px 0;
+        }}
+        .vis-effects {{
+            display: flex;
+            gap: 6px;
+            margin-bottom: 6px;
+        }}
+        .vis-effect {{
+            flex: 1;
+            min-width: 0;
+            appearance: none;
+            -webkit-appearance: none;
+            border: 1px solid var(--card-border);
+            background: rgba(255, 255, 255, 0.05);
+            color: var(--text-dim);
+            border-radius: 8px;
+            padding: 6px 8px;
+            font-size: 0.68rem;
+            font-weight: 700;
+            letter-spacing: 0.3px;
+            text-transform: uppercase;
+            cursor: pointer;
+            touch-action: manipulation;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }}
+        .vis-effect.active {{
+            background: var(--badge-bg);
+            color: var(--text-main);
+            border-color: var(--accent-primary);
+        }}
         .visualizer-container {{
             width: 100%;
             height: 56px;
             display: flex;
-            align-items: flex-end;
+            align-items: stretch;
             justify-content: center;
             gap: 3px;
-            margin: 12px 0 16px 0;
+            margin: 0;
             padding: 4px 6px;
             background: rgba(0, 0, 0, 0.35);
             border-radius: 10px;
             border: 1px solid rgba(255, 255, 255, 0.06);
             position: relative;
+            cursor: pointer;
+            /* manipulation keeps the synthesised click on iOS. touch-action:none
+               swallows it, which is the same trap the Engage button hit. */
+            touch-action: manipulation;
+            -webkit-user-select: none;
+            user-select: none;
+            transition: height 0.18s ease;
+        }}
+        .visualizer-container:focus-visible {{
+            outline: 2px solid var(--accent-primary);
+            outline-offset: 2px;
+        }}
+        .visualizer-container.mode-spectrogram {{
+            height: 168px;
+            padding: 22px 6px 6px;
+        }}
+        .vis-caption {{
+            position: absolute;
+            left: 8px;
+            right: 8px;
+            top: 3px;
+            z-index: 2;
+            font-size: 0.62rem;
+            line-height: 1.2;
+            letter-spacing: 0.4px;
+            text-transform: uppercase;
+            color: var(--text-dim);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            pointer-events: none;
+            text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);
+        }}
+        .visualizer-container.mode-spectrogram .vis-caption {{
+            top: 4px;
+            color: var(--text-main);
+        }}
+        #visSpectrogram {{
+            display: none;
+            position: absolute;
+            left: 6px;
+            right: 6px;
+            top: 22px;
+            bottom: 6px;
+            width: calc(100% - 12px);
+            height: calc(100% - 28px);
+            border-radius: 6px;
+            /* The drawing must not take the tap. On iPhone a press on the
+               canvas never becomes a click, so the second press could not
+               return to the bars. */
+            pointer-events: none;
+        }}
+        .visualizer-container.mode-spectrogram #visSpectrogram {{
+            display: block;
         }}
         .v-col {{
             flex: 1;
             max-width: 14px;
-            height: 100%;
+            min-height: 0;
+            align-self: stretch;
             display: flex;
             align-items: flex-end;
             position: relative;
         }}
+        .visualizer-container.mode-spectrogram .v-col {{
+            display: none;
+        }}
         .v-bar {{
             width: 100%;
-            height: 4%;
+            height: 2px;
             background: linear-gradient(180deg, var(--eq-peak) 0%, var(--eq-bar) 28%, var(--accent-primary) 100%);
             border-radius: 2px 2px 0 0;
             position: relative;
@@ -3952,7 +5361,7 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             height: 2px;
             background: var(--eq-peak);
             border-radius: 1px;
-            bottom: 4%;
+            bottom: 2px;
             pointer-events: none;
         }}
         .progress-box {{
@@ -4050,6 +5459,18 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             border: none;
             flex-grow: 1;
             max-width: 180px;
+        }}
+        /* The transport button changes wording with playback, so it needs room
+           for the widest label and must not reflow the control row when it
+           flips between Play and Pause. */
+        #btnPlayPause {{
+            min-width: 132px;
+            white-space: nowrap;
+        }}
+        /* A playing mix keeps the accent glow; a paused one reads as the
+           standing-by control it is. */
+        #btnPlayPause.is-playing {{
+            box-shadow: var(--btn-shadow), 0 0 0 2px var(--badge-color) inset;
         }}
         .sec-controls {{
             display: flex;
@@ -4246,6 +5667,65 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             color: #fff;
             background: var(--accent-crimson);
             border-color: var(--accent-crimson);
+        }}
+        /* MP Visualizer: a full-width button under the grid, because it is one
+           window with three states rather than a member of the suite. */
+        .launch-visualizer {{
+            flex-direction: row;
+            gap: 8px;
+            width: 100%;
+            margin-top: 8px;
+            padding: 12px 10px;
+            font-size: 0.8rem;
+            color: var(--accent-secondary);
+            border-color: var(--accent-primary);
+        }}
+        .launch-visualizer .launch-label {{
+            flex: 1;
+            text-align: left;
+            white-space: normal;
+        }}
+        .launch-visualizer.running {{
+            color: #fff;
+        }}
+        .launch-visualizer.fullscreen {{
+            border-color: var(--badge-color);
+            box-shadow: inset 0 3px 8px rgba(0, 0, 0, 0.55),
+                        0 0 0 1px var(--badge-color) inset,
+                        0 0 18px -2px var(--accent-secondary);
+        }}
+        /* TTY Audio Mode: the desktop launchers cannot work from the text
+           console, so they are visibly disabled and the reason is spelled out. */
+        .launch-btn:disabled,
+        .launch-btn[disabled] {{
+            opacity: 0.4;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+            filter: grayscale(1);
+        }}
+        .launchpad-tty {{
+            display: block;
+            margin: 0 0 10px 0;
+            padding: 10px 12px;
+            border-radius: 12px;
+            border: 1px solid var(--accent-tertiary);
+            background: rgba(255, 45, 142, 0.12);
+            color: var(--text-main);
+            font-size: 0.72rem;
+            line-height: 1.45;
+            text-align: left;
+        }}
+        .launchpad-tty[hidden] {{
+            display: none;
+        }}
+        .launchpad-tty strong {{
+            display: block;
+            margin-bottom: 3px;
+            color: var(--accent-tertiary);
+            font-size: 0.74rem;
+            letter-spacing: 0.4px;
+            text-transform: uppercase;
         }}
         .launchpad-note {{
             margin-top: 8px;
@@ -4668,18 +6148,27 @@ def render_html_page(theme: Dict[str, Any]) -> str:
         }}
     </style>
 </head>
-<body>
+<body class="{'dynamic-rainbow-glass-active' if t.get('is_dynamic_rainbow') else ''}">
+    <!-- Hue wash for Dynamic Liquid Glass. Hidden until that theme is on.
+         A ::before cannot sit above the body's opaque background on iOS. -->
+    <div id="rainbowWash" aria-hidden="true"></div>
+    <!-- On <body>, not inside a tab panel: hiding a panel is display:none on
+         the ancestor, and iOS then refuses play() — the Engage tap looks dead. -->
+    <audio id="mobileAudioStream" class="phone-audio" playsinline webkit-playsinline preload="none"></audio>
+    <audio id="assistantSpeech" class="phone-audio" playsinline webkit-playsinline preload="none"></audio>
     <div id="restartNotice" class="restart-notice" role="status" aria-live="polite">
         <span class="restart-spinner" aria-hidden="true"></span>
-        <span id="restartNoticeText">MP Audio Web Companion has been restarted — reconnecting…</span>
+        <span id="restartNoticeText">MP Audio Player (Web) has been restarted — reconnecting…</span>
     </div>
     <!-- Stream Activation Modal to Satisfy Mobile Autoplay Policies -->
     <div id="streamOverlay" class="show">
         <div class="overlay-card">
-            <h2>🎧 MP Mix Stream</h2>
+            <h2>🎧 MP Audio Player (Web)</h2>
             <p>Tap below to engage mobile studio audio streaming and dashboard synchronization.</p>
             <p id="streamOverlayDetail" class="stream-overlay-detail" style="display: none;"></p>
-            <button class="btn-activate-stream" onclick="activateMobileStream()">Engage Audio Stream</button>
+            <button type="button" class="btn-activate-stream"
+                    ontouchend="activateMobileStream(event)"
+                    onclick="activateMobileStream(event)">Engage Audio Stream</button>
         </div>
     </div>
 
@@ -4689,7 +6178,7 @@ def render_html_page(theme: Dict[str, Any]) -> str:
         <button type="button" class="app-tab active" id="tabPlayer" role="tab"
                 aria-selected="true" aria-controls="panelPlayer"
                 onclick="switchAppTab('player')">
-            <span class="app-tab-icon" aria-hidden="true">🎧</span> MP Liquid Player
+            <span class="app-tab-icon" aria-hidden="true">🎧</span> MP Audio Player
         </button>
         <button type="button" class="app-tab" id="tabAssistant" role="tab"
                 aria-selected="false" aria-controls="panelAssistant"
@@ -4700,7 +6189,7 @@ def render_html_page(theme: Dict[str, Any]) -> str:
     </div>
 
     <div class="header">
-        <h1>MP LIQUID PLAYER (WEB) <span class="app-version">v{html.escape(VERSION)}</span></h1>
+        <h1>MP AUDIO PLAYER <span class="app-version">v{html.escape(VERSION)}</span></h1>
         <p>Studio & DJ Booth Mobile Web Companion</p>
         <div id="themeBadge" class="theme-pill">🎨 <span id="themeNameText">{html.escape(t['name'])}</span></div>
         <div class="theme-bar">
@@ -4721,9 +6210,6 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             <p>High-resolution FLAC/WAV streaming active</p>
         </div>
 
-        <!-- HTML5 Audio Streaming Element -->
-        <audio id="mobileAudioStream" preload="auto" style="display: none;"></audio>
-
         <div class="badges-row">
             <div id="playBadge" class="badge">STANDBY</div>
             <div id="shuffleBadge" class="badge badge-shuffle" onclick="sendAction('shuffle')">🔀 SHUFFLE OFF</div>
@@ -4740,9 +6226,28 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             </div>
         </div>
 
-        <!-- 24-Bar Audio Visualizer -->
-        <div class="visualizer-container" id="visContainer">
-            {"".join(f'<div class="v-col"><div class="v-bar" id="vb{i}"></div><div class="v-peak" id="vp{i}"></div></div>' for i in range(24))}
+        <!-- Two effects only: the bars, and Stream of Frequency. -->
+        <div class="vis-block">
+            <div class="vis-effects" role="group" aria-label="Equaliser effects">
+                <button type="button" class="vis-effect active" id="vizEffectBars"
+                        aria-pressed="true"
+                        ontouchend="selectVisualizerMode(event, 'bars')"
+                        onclick="selectVisualizerMode(event, 'bars')">Equaliser</button>
+                <button type="button" class="vis-effect" id="vizEffectSpectro"
+                        aria-pressed="false"
+                        title="Stream of Frequency (Dynamic Spectrogram)"
+                        ontouchend="selectVisualizerMode(event, 'spectrogram')"
+                        onclick="selectVisualizerMode(event, 'spectrogram')">Stream of Frequency</button>
+            </div>
+            <div class="visualizer-container" id="visContainer" role="button" tabindex="0"
+                 aria-pressed="false"
+                 aria-label="Equaliser. Press to show Stream of Frequency, Dynamic Spectrogram."
+                 ontouchend="toggleVisualizerMode(event)"
+                 onclick="toggleVisualizerMode(event)">
+                <div class="vis-caption" id="visCaption">Equaliser</div>
+                {"".join(f'<div class="v-col"><div class="v-bar" id="vb{i}"></div><div class="v-peak" id="vp{i}"></div></div>' for i in range(24))}
+                <canvas id="visSpectrogram" aria-hidden="true"></canvas>
+            </div>
         </div>
 
         <!-- Progress & Time -->
@@ -4758,11 +6263,12 @@ def render_html_page(theme: Dict[str, Any]) -> str:
 
         <!-- Primary Controls -->
         <div class="controls-row">
-            <button class="btn-sub" onclick="sendAction('seek_backward')">⏪ 30s</button>
+            <button class="btn-sub" onclick="skipBy(-30)">⏪ 30s</button>
             <button onclick="sendAction('previous')">⏮</button>
-            <button class="btn-main" id="btnPlayPause" onclick="handlePlayPauseClick()">⏯ Play</button>
+            <button class="btn-main" id="btnPlayPause" onclick="handlePlayPauseClick()"
+                    aria-label="Paused - tap to play">▶ Play</button>
             <button onclick="sendAction('next')">⏭</button>
-            <button class="btn-sub" onclick="sendAction('seek_forward')">30s ⏩</button>
+            <button class="btn-sub" onclick="skipBy(30)">30s ⏩</button>
         </div>
 
         <!-- Mode Controls -->
@@ -4778,16 +6284,16 @@ def render_html_page(theme: Dict[str, Any]) -> str:
         <!-- Secondary Controls -->
         <div class="sec-controls">
             <div class="control-group">
-                <button class="btn-mini" onclick="sendAction('vol_down')">🔉 -</button>
+                <button class="btn-mini" onclick="bumpVolume(-5); sendAction('vol_down')">🔉 -</button>
                 <span class="control-pill" id="volPill">Vol: 85%</span>
-                <button class="btn-mini" onclick="sendAction('vol_up')">+ 🔊</button>
-                <button class="btn-mini" onclick="sendAction('mute')">🔇</button>
+                <button class="btn-mini" onclick="bumpVolume(5); sendAction('vol_up')">+ 🔊</button>
+                <button class="btn-mini" onclick="toggleStreamMute(); sendAction('mute')">🔇</button>
             </div>
             <div class="control-group">
-                <button class="btn-mini" onclick="sendAction('pitch_down')">[-]</button>
+                <button class="btn-mini" onclick="bumpPitch(-1); sendAction('pitch_down')">[-]</button>
                 <span class="control-pill" id="pitchPill">Pitch: 0%</span>
-                <button class="btn-mini" onclick="sendAction('pitch_up')">[+]</button>
-                <button class="btn-mini" onclick="sendAction('reset_pitch')">0</button>
+                <button class="btn-mini" onclick="bumpPitch(1); sendAction('pitch_up')">[+]</button>
+                <button class="btn-mini" onclick="applyStreamPitch(0); sendAction('reset_pitch')">0</button>
             </div>
         </div>
         <!-- Mini Playlist: the current track plus the next four, scrollable -->
@@ -4801,6 +6307,14 @@ def render_html_page(theme: Dict[str, Any]) -> str:
                 <button type="button" data-mode="MUSIC" onclick="switchLibraryMode('MUSIC')">Music</button>
                 <button type="button" data-mode="FAVORITES" onclick="switchLibraryMode('FAVORITES')">Favourites</button>
             </div>
+            <label class="mini-pl-search" for="miniPlSearch">
+                <input id="miniPlSearch" type="search" inputmode="search" enterkeyhint="search"
+                       placeholder="Search this playlist"
+                       aria-label="Search tracks in the current playlist"
+                       autocomplete="off" autocapitalize="off" spellcheck="false"
+                       oninput="onPlaylistSearchInput()"
+                       onsearch="onPlaylistSearchInput()">
+            </label>
             <div id="miniPlNote"></div>
             <div id="miniPlItems"></div>
         </div>
@@ -4865,7 +6379,6 @@ def render_html_page(theme: Dict[str, Any]) -> str:
                     <textarea id="chatPrompt" rows="2"
                               placeholder="Ask MP Harmony anything… (/voice switches the voice)"
                               aria-label="Message MP Harmony Agent"></textarea>
-                    <audio id="assistantSpeech" playsinline preload="auto" style="display: none;"></audio>
                     <div class="chat-buttons">
                         <button type="button" class="btn-send" id="chatSendBtn"
                                 onclick="sendAssistantPrompt()">Send</button>
@@ -4887,6 +6400,40 @@ def render_html_page(theme: Dict[str, Any]) -> str:
     </div>
 
     <script>
+        // The server requires this header on every state-changing request
+        // (CSRF defence: a cross-origin form cannot set a custom header
+        // without a preflight). Wrap fetch once here so every POST the
+        // dashboard makes carries it. Without this the server answered
+        // "missing_csrf_header" and every control tap (transport, launch pad,
+        // assistant stop) was silently refused.
+        const MP_CSRF_HEADER = '{sec.REQUIRED_HEADER}';
+        const mpNativeFetch = window.fetch.bind(window);
+        window.fetch = function (input, init) {{
+            const options = Object.assign({{}}, init || {{}});
+            const method = String(options.method || 'GET').toUpperCase();
+            if (method !== 'GET' && method !== 'HEAD') {{
+                const headers = new Headers(options.headers || {{}});
+                if (!headers.has(MP_CSRF_HEADER)) headers.set(MP_CSRF_HEADER, '1');
+                options.headers = headers;
+            }}
+            return mpNativeFetch(input, options);
+        }};
+
+        // Older versions required an access token in the URL. The companion no
+        // longer has one, but a bookmark saved back then still carries a dead
+        // value in its query string. Strip it so it is not kept in history or
+        // sent onward. `replaceState` avoids a reload, which would cost the
+        // user their audio-unlock gesture.
+        (function stripStaleTokenFromAddressBar() {{
+            try {{
+                const url = new URL(window.location.href);
+                if (!url.searchParams.has('token') && !url.searchParams.has('access_token')) return;
+                url.searchParams.delete('token');
+                url.searchParams.delete('access_token');
+                window.history.replaceState(null, '', url.pathname + url.search + url.hash);
+            }} catch (e) {{}}
+        }})();
+
         let currentThemeId = "{t['id']}";
         let currentDurationSec = 0;
         let lastLoadedMix = "";
@@ -4902,6 +6449,24 @@ def render_html_page(theme: Dict[str, Any]) -> str:
         // its final frame and end the instant play() is called.
         let lastServerResume = 0.0;
         let audioStreamEngaged = false;
+        // Set only by the Play/Stop button. A stall, a track change and a
+        // reconnect must keep going unless the listener asked them to stop.
+        let listenerPaused = false;
+        // After Engage, polls follow this page's stream instead of the desk.
+        let followStream = false;
+        // DJ pitch the browser is actually playing, in percent. The pill and
+        // the <audio> element both read this so a tap is audible immediately.
+        let currentPitchPercent = 0;
+        // The level the phone is actually playing, and whether mute is on.
+        // iOS ignores assignments to audio.volume, so these drive a GainNode.
+        let currentVolumePercent = 100;
+        let streamMuted = false;
+        let mixGain = null;
+        let adoptInFlight = false;
+        let pendingTransport = null;
+        let networkResumeAttempts = 0;
+        let networkResumePending = false;
+        let networkResumeTimer = 0;
         // Restart detection. The server reports a fresh instance id on every
         // launch; a change means the companion was stopped and started again.
         let serverInstance = "";
@@ -4920,6 +6485,24 @@ def render_html_page(theme: Dict[str, Any]) -> str:
         let mediaRecoveryAttempts = 0;
         let mediaRecoveryFile = "";
         const MEDIA_RECOVERY_LIMIT = 2;
+        // Auto-skip state. A media error means either "the service went away"
+        // (recoverable by re-attaching) or "this file will never decode"
+        // (only recoverable by moving on). These track the latter: which files
+        // have been written off on this phone, and how many skips have happened
+        // in a row. The run stops at the queue length, so a playlist in which
+        // nothing works produces one message instead of an endless loop.
+        let unplayableFiles = new Set();
+        let consecutiveSkips = 0;
+        let skipRunStartAt = 0;
+        let exhaustedNoticeShown = false;
+        // Size of the current library queue, from the last status poll. It is
+        // the bound on automatic skipping: a run may try every entry once, no
+        // more, so a library where nothing decodes settles instead of looping.
+        let queueLength = 0;
+        // The host's own tally of files it has been told cannot be decoded. A
+        // phone that has just loaded the page has seen no failures itself, so
+        // this is what makes the "nothing plays" message count correctly.
+        let serverUnplayableCount = 0;
 
         // ---------------------------------------------------------------------
         // Top tabs: MP Liquid Player <-> MP Assistant.
@@ -5163,18 +6746,16 @@ def render_html_page(theme: Dict[str, Any]) -> str:
         function duckMixForSpeech() {{
             const mix = document.getElementById('mobileAudioStream');
             if (!mix || mix.paused || mix.ended) return;
-            if (duckedMixVolume === null) duckedMixVolume = mix.volume;
-            try {{
-                mix.volume = Math.max(0.08, duckedMixVolume * 0.25);
-            }} catch (e) {{}}
+            if (streamMuted || mixLoudness() <= 0) return;
+            if (duckedMixVolume === null) duckedMixVolume = mixLoudness();
+            setMixLoudness(Math.max(0.08, duckedMixVolume * 0.25));
         }}
 
         function restoreMixAfterSpeech() {{
-            const mix = document.getElementById('mobileAudioStream');
-            if (mix && duckedMixVolume !== null) {{
-                try {{ mix.volume = duckedMixVolume; }} catch (e) {{}}
-            }}
+            if (duckedMixVolume === null) return;
+            const level = duckedMixVolume;
             duckedMixVolume = null;
+            setMixLoudness(level);
         }}
 
         function speakText(text, bubble) {{
@@ -5253,19 +6834,71 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             }});
         }}
 
-        // A 100 ms silent WAV played inside the user's tap unlocks the element
-        // for the reply that arrives seconds later.
-        const SILENT_WAV = 'data:audio/wav;base64,UklGRkQDAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YSADAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==';
+        // A silent WAV played inside the user's tap unlocks the element for the
+        // reply that arrives seconds later.
+        //
+        // It is built as a `blob:` URL rather than a `data:` one because the
+        // page's own Content-Security-Policy allows `media-src 'self' blob:`
+        // and nothing else. A `data:` clip is blocked by that policy, the
+        // element reports MEDIA_ERR_SRC_NOT_SUPPORTED, and the media error
+        // handler then blames the real mix for it. `blob:` is same-origin-ish
+        // from the policy's point of view and plays normally.
+        let silentWavUrl = "";
+
+        function silentWavBlobUrl() {{
+            if (silentWavUrl) return silentWavUrl;
+            try {{
+                // 0.2 s of silence: 48 kHz, 16-bit, mono.
+                const frames = 9600;
+                const bytes = new Uint8Array(44 + frames * 2);
+                const view = new DataView(bytes.buffer);
+                const write = (offset, text) => {{
+                    for (let i = 0; i < text.length; i++) bytes[offset + i] = text.charCodeAt(i);
+                }};
+                write(0, 'RIFF');
+                view.setUint32(4, 36 + frames * 2, true);
+                write(8, 'WAVEfmt ');
+                view.setUint32(16, 16, true);
+                view.setUint16(20, 1, true);       // PCM
+                view.setUint16(22, 1, true);       // mono
+                view.setUint32(24, 48000, true);
+                view.setUint32(28, 96000, true);
+                view.setUint16(32, 2, true);
+                view.setUint16(34, 16, true);
+                write(36, 'data');
+                view.setUint32(40, frames * 2, true);
+                silentWavUrl = URL.createObjectURL(new Blob([bytes], {{ type: 'audio/wav' }}));
+            }} catch (e) {{
+                silentWavUrl = "";
+            }}
+            return silentWavUrl;
+        }}
+
+        // Mark the element as busy, so its `error` handler knows the source it
+        // failed on was the throwaway unlock clip and not the listener's mix.
+        function beginUnlock(audio) {{
+            audio.__unlocking = true;
+            audio.__unlockSrc = silentWavBlobUrl();
+            return audio.__unlockSrc;
+        }}
+
+        function endUnlock(audio) {{
+            audio.__unlocking = false;
+        }}
 
         function unlockSpeechElement() {{
             const audio = speechElement();
             if (!audio || audio.__unlocked) return;
             try {{
+                const src = beginUnlock(audio);
+                if (!src) return;
                 audio.__unlocked = true;
-                audio.__unlockSrc = SILENT_WAV;
-                audio.src = SILENT_WAV;
-                audio.play().catch(() => {{}});
-            }} catch (e) {{}}
+                audio.src = src;
+                const p = audio.play();
+                if (p && p.catch) p.catch(() => {{ endUnlock(audio); }});
+            }} catch (e) {{
+                endUnlock(audio);
+            }}
         }}
 
         function assistantHistory() {{
@@ -5411,6 +7044,63 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             return Boolean(audioEl && !audioEl.paused && !audioEl.ended);
         }}
 
+        // The transport button names the next action, from the playback that
+        // is really happening. Playing reads "Pause"; paused or stopped reads
+        // "Play".
+        //
+        // It used to be painted from the server's `state`, which is not the
+        // same thing: a phone interruption, a headphone unplug or a locked
+        // screen pauses the <audio> element without telling the companion, so
+        // the poll kept answering "playing" and the button stayed on "Pause"
+        // while the room was silent. Driving the label from media events
+        // makes it flip on the tap itself, and keeps the host-player case
+        // working, where the phone element is idle and only the host knows.
+        function paintPlayPauseButton(playing) {{
+            const btn = document.getElementById('btnPlayPause');
+            if (!btn) return;
+            if (playing) {{
+                btn.innerText = '⏸ Pause';
+                btn.classList.add('is-playing');
+                btn.setAttribute('aria-label', 'Playing - tap to pause');
+            }} else {{
+                btn.innerText = '▶ Play';
+                btn.classList.remove('is-playing');
+                btn.setAttribute('aria-label', 'Paused - tap to play');
+            }}
+        }}
+
+        // True when this page, not the desktop player, is what the listener hears.
+        //
+        // Once Engage (or desktop autoplay) has started the element, Play,
+        // Stop, Next, Previous and the 30s skips belong to that element. A
+        // live desk player used to steal every one of those taps, so the room
+        // changed — or nothing did — while the browser mix kept going. The
+        // desk is the remote-control target only while this page is still silent.
+        function phoneOwnsPlayback() {{
+            if (audioStreamEngaged && activeAudioFile) return true;
+            return !hostPlayerActive && Boolean(activeAudioFile);
+        }}
+
+        // Newest `state` the daemon reported. Media events repaint from this
+        // while a desktop player owns the audio, so a phone-side `pause` on the
+        // idle mirror element cannot flip the icon away from the real mix.
+        let lastServerState = 'stopped';
+
+        function syncPlayPauseButton(serverState) {{
+            if (serverState !== undefined) lastServerState = String(serverState || '').toLowerCase();
+            if (hostPlayerActive && !audioStreamEngaged) {{
+                paintPlayPauseButton(lastServerState === 'playing');
+                return;
+            }}
+            // Hearing audio again means the reconnect worked. A later stall
+            // gets a fresh budget instead of the leftover count from the drop.
+            if (audioElIsPlaying()) {{
+                networkResumeAttempts = 0;
+                networkResumePending = false;
+            }}
+            paintPlayPauseButton(audioElIsPlaying());
+        }}
+
         // The host's clock is only a fallback: it cannot hear the mix and it
         // free-runs while the service sits idle. Once the phone is actually
         // playing, send it the true position every few seconds so a later
@@ -5418,14 +7108,34 @@ def render_html_page(theme: Dict[str, Any]) -> str:
         // point near the end of the file.
         let lastPositionReportAt = 0;
 
+        // How long the element has sat on the same timestamp while it claims
+        // to be playing. A stalled read from the archive looks like this
+        // before the browser finally raises a media error and goes silent.
+        let lastAdvanceAt = 0;
+        let lastAdvanceTime = -1;
+
         function reportPlaybackPosition() {{
             const audioEl = document.getElementById('mobileAudioStream');
             if (!audioEl || !audioStreamEngaged || !audioElIsPlaying()) return;
             if (!isFinite(audioEl.currentTime) || audioEl.currentTime <= 0) return;
             const now = performance.now();
+            if (Math.abs(audioEl.currentTime - lastAdvanceTime) > 0.2) {{
+                lastAdvanceTime = audioEl.currentTime;
+                lastAdvanceAt = now;
+            }} else if (audioEl.readyState < 3 && lastAdvanceAt
+                        && (now - lastAdvanceAt) > 8000) {{
+                // Not paused, not buffered, and the clock has not moved.
+                // Reconnect the same mix instead of waiting for the element
+                // to error out and stay stopped.
+                lastAdvanceAt = now;
+                resumeAfterNetworkDrop();
+            }}
             if (now - lastPositionReportAt < 4000) return;
             lastPositionReportAt = now;
-            fetch('/api/control?action=report_position&position=' +
+            // target=stream: a desk player must not swallow the browser's
+            // clock. Without it the session stays at 0 and the next seek
+            // lands at the start of the mix.
+            fetch('/api/control?action=report_position&target=stream&position=' +
                   encodeURIComponent(audioEl.currentTime.toFixed(1)), {{ method: 'POST' }})
                 .catch(() => {{}});
         }}
@@ -5433,7 +7143,107 @@ def render_html_page(theme: Dict[str, Any]) -> str:
         // Seek the phone's element only once per request and clear the guard
         // when the element reports it actually moved. Without this the 100 ms
         // poll can re-issue the same seek while the previous one is settling.
-        function seekAudioTo(pos, fromResume) {{
+        // A seek requested before the stream has a timeline (metadata not yet
+        // loaded) is parked here and applied once the duration is known.
+        // Stacking matters: two taps of +30 s before load must land at +60 s,
+        // not each start again from a currentTime of 0.
+        let pendingSeek = null;
+
+        document.addEventListener('DOMContentLoaded', function () {{
+            const audioEl = document.getElementById('mobileAudioStream');
+            if (audioEl) {{
+                audioEl.addEventListener('loadedmetadata', applyPendingSeek);
+            }}
+        }});
+
+        function applyPendingSeek() {{
+            if (pendingSeek === null) return;
+            const audioEl = document.getElementById('mobileAudioStream');
+            if (!audioEl) return;
+            const dur = Number(audioEl.duration);
+            if (!isFinite(dur) || dur <= 0) return;
+            let target = pendingSeek;
+            pendingSeek = null;
+            if (target < 0) target = 0;
+            if (target > dur) target = dur - 0.25;
+            seekAudioTo(target);
+        }}
+
+        function seekAudioTo(pos) {{
+            seekAudioToWithResume(pos, false);
+        }}
+
+        // `duration` is the honest length once the browser has probed the
+        // file, but a stream it has not finished measuring reports Infinity.
+        // Relying on duration alone sent those skips down the "no timeline
+        // yet" path forever, so the buttons moved nothing while the mix
+        // played. The seekable range is the fallback.
+        function audioTimelineEnd(audioEl) {{
+            const dur = Number(audioEl && audioEl.duration);
+            if (isFinite(dur) && dur > 0) return dur;
+            try {{
+                if (audioEl && audioEl.seekable && audioEl.seekable.length) {{
+                    const end = Number(audioEl.seekable.end(audioEl.seekable.length - 1));
+                    if (isFinite(end) && end > 0) return end;
+                }}
+            }} catch (e) {{}}
+            return 0;
+        }}
+
+        function skipBy(delta) {{
+            clearHostAlign();
+            const audioEl = document.getElementById('mobileAudioStream');
+            const dur = audioTimelineEnd(audioEl);
+            const configured = dur > 0;
+            let target = null;
+            if (!configured) {{
+                // No timeline yet: stack on the parked offset so two quick
+                // presses add up, then land it once metadata arrives.
+                let base;
+                if (pendingSeek === null) {{
+                    base = Number(audioEl && audioEl.currentTime || 0);
+                }} else if (pendingSeek !== null) {{
+                    base = pendingSeek;
+                }}
+                pendingSeek = Math.max(0, base + delta);
+                applyPendingSeek();
+                // A mix that is already audible can be moved before the
+                // browser admits a duration. Parking the offset and waiting
+                // for metadata left the 30s buttons silent for the whole file.
+                if (phoneOwnsPlayback() && audioEl && isFinite(audioEl.currentTime)) {{
+                    try {{ audioEl.currentTime = pendingSeek; }} catch (e) {{}}
+                }}
+            }} else {{
+                target = Number(audioEl && audioEl.currentTime || 0) + delta;
+                if (target < 0) target = 0;
+                if (dur > 0 && target > dur) target = dur - 0.25;
+            }}
+            if (target !== null) {{
+                if (phoneOwnsPlayback()) {{
+                    seekAudioTo(target);
+                }} else if (audioEl && audioEl.readyState > 0) {{
+                    // The desktop player owns the sound, so this only keeps the
+                    // idle phone element aligned for the opt-in listen. Moving
+                    // it is still correct; it is just not what is audible.
+                    try {{ audioEl.currentTime = target; }} catch (e) {{}}
+                }}
+            }}
+            // Always tell the server as well. The engaged page sends the
+            // absolute position: a relative +30 against a session clock that
+            // is still at 0 jumps the mix back to the start. A silent mirror
+            // still sends the relative seek, which is what moves the desk.
+            if (phoneOwnsPlayback()) {{
+                const told = target !== null ? target : pendingSeek;
+                sendAction('seek_to', {{ position: Number(told || 0).toFixed(1) }});
+            }} else {{
+                sendAction(delta > 0 ? 'seek_forward' : 'seek_backward');
+            }}
+        }}
+
+        // Two-argument form kept internal; the single documented entry point
+        // is seekAudioTo(pos). Resume callers pass `true` through the helper
+        // below so a stale server position can never silence the player.
+        function seekAudioToWithResume(pos, fromResume) {{
             const audioEl = document.getElementById('mobileAudioStream');
             if (!audioEl || !isFinite(pos) || pos < 0) return;
             // A resume that lands on the last frames ends the media the moment
@@ -5460,15 +7270,50 @@ def render_html_page(theme: Dict[str, Any]) -> str:
         }}
 
         window.addEventListener('DOMContentLoaded', () => {{
-            if (currentThemeId === 'dynamic_rainbow_liquid_glass') {{
-                document.body.classList.add('dynamic-rainbow-glass-active');
-            }}
+            syncRainbowDrive();
             // The gate is shown in the initial markup, before any script runs.
             // Apply the no-scroll state now so the first paint is already
             // locked and the engage button is centred.
             renderStreamOverlay();
+            const vis = document.getElementById('visContainer');
+            if (vis) {{
+                vis.addEventListener('keydown', (ev) => {{
+                    if (ev.key === 'Enter' || ev.key === ' ') toggleVisualizerMode(ev);
+                }});
+            }}
+            try {{
+                if (localStorage.getItem('mpVizMode') === 'spectrogram') {{
+                    applyVisualizerMode('spectrogram');
+                }}
+            }} catch (e) {{}}
             const audioEl = document.getElementById('mobileAudioStream');
             if (audioEl) {{
+                // The icon follows the media element, not the poll. These fire
+                // on the tap itself, so the button never sits on the wrong
+                // glyph for up to two seconds while the status request lands.
+                audioEl.addEventListener('play', () => syncPlayPauseButton());
+                audioEl.addEventListener('pause', () => syncPlayPauseButton());
+                audioEl.addEventListener('playing', () => syncPlayPauseButton());
+                audioEl.addEventListener('play', () => {{
+                    if (audioCtx && audioCtx.state === 'suspended') {{
+                        try {{ audioCtx.resume(); }} catch (e) {{}}
+                    }}
+                }});
+                audioEl.addEventListener('playing', () => {{
+                    if (audioCtx) ensureAudioGraph();
+                    // The first playing event often still sits at 0: the seek
+                    // was requested before the stream could move. Land on the
+                    // desk player's position, then stop correcting.
+                    if (!hostAlignTarget || hostAlignTries >= 5) return;
+                    if (!isFinite(audioEl.currentTime)) return;
+                    if (Math.abs(audioEl.currentTime - hostAlignTarget) <= 1.5) {{
+                        hostAlignTarget = 0;
+                        return;
+                    }}
+                    hostAlignTries += 1;
+                    try {{ audioEl.currentTime = hostAlignTarget; }} catch (e) {{}}
+                }});
+                audioEl.addEventListener('ended', () => syncPlayPauseButton());
                 audioEl.addEventListener('seeked', () => {{ audioSeekInFlight = false; }});
                 // The phone decides when a mix ends, so tell the server which
                 // file to serve next instead of waiting for a local player.
@@ -5485,41 +7330,49 @@ def render_html_page(theme: Dict[str, Any]) -> str:
                     sendAction('track_ended');
                 }});
                 // The tray stopped the service while this mix was playing, OR
-                // the browser cannot decode the file the queue handed it. The
-                // URL may be dead, so re-attach once to the fresh instance
-                // instead of leaving a silent player behind.
+                // the browser cannot decode the file the queue handed it.
                 //
-                // The attempt counter is the important part: a track that is
-                // genuinely unplayable (a header-only WAV, a truncated
-                // conversion) fails the same way every time, and an unbounded
-                // "reconnect" is what produced the permanently flickering
-                // screen and the restart banner that never cleared. Two
-                // attempts are enough to ride out a real service restart.
+                // These are two different problems and they used to share one
+                // handler, which is why a damaged file produced the "companion
+                // has been restarted" banner and a re-attach to the same dead
+                // URL. Now:
+                //
+                //   * `MEDIA_ERR_SRC_NOT_SUPPORTED`/`MEDIA_ERR_DECODE` from a
+                //     source that never produced a single `playing` event means
+                //     this file cannot be decoded here, so the phone reports it
+                //     to the host (`track_failed`) and the queue advances to the
+                //     next mix - repeatedly, until something plays or the queue
+                //     is exhausted.
+                //   * anything else is a dropped connection (the archive
+                //     stalled, the browser aborted a seek). Resume the same
+                //     mix. Tearing the element down here is what made the page
+                //     go silent and stay silent: the poll reloaded the file
+                //     and left it paused.
                 audioEl.addEventListener('error', () => {{
-                    if (!activeAudioFile) return;
-                    const now = performance.now();
-                    const sameFile = (mediaRecoveryFile === activeAudioFile);
-                    if (mediaRecoveryUsed && (now - lastMediaErrorAt) < 5000) return;
-                    if (sameFile && mediaRecoveryAttempts >= MEDIA_RECOVERY_LIMIT) {{
-                        // Stop retrying and say what is actually wrong.
-                        mediaRecoveryUsed = true;
-                        lastMediaErrorAt = now;
-                        const label = activeAudioFile.split('/').pop() || activeAudioFile;
-                        showStreamOverlay(
-                            'This mix cannot be played on this device (' + label + '). ' +
-                            'It is empty or damaged on the computer — pick another mix ' +
-                            'or re-export it.');
+                    // The element is still holding the throwaway silence clip
+                    // (its `src` is replaced with the real stream immediately
+                    // after). That error says nothing about the listener's mix,
+                    // so treating it as one writes off a perfectly good track
+                    // - the tap then looks dead. Drop it and let the engage
+                    // proceed.
+                    if (audioEl.__unlocking || (audioEl.src || '').indexOf('blob:') === 0) {{
+                        endUnlock(audioEl);
                         return;
                     }}
-                    if (!sameFile) {{
-                        mediaRecoveryFile = activeAudioFile;
-                        mediaRecoveryAttempts = 0;
+                    if (!activeAudioFile) return;
+                    const code = audioEl.error ? audioEl.error.code : 0;
+                    // A seek or a src swap aborts the previous fetch. That is
+                    // not a drop, and reconnecting here would throw away the
+                    // 30s skip the listener just made.
+                    if (code === 1 /* MEDIA_ERR_ABORTED */) return;
+                    const decodeFailure =
+                        code === 3 /* MEDIA_ERR_DECODE */ ||
+                        code === 4 /* MEDIA_ERR_SRC_NOT_SUPPORTED */;
+                    if (decodeFailure || unplayableFiles.has(activeAudioFile)) {{
+                        handleUnplayableMix(activeAudioFile);
+                        return;
                     }}
-                    mediaRecoveryAttempts += 1;
-                    mediaRecoveryUsed = true;
-                    lastMediaErrorAt = now;
-                    showRestartNotice('MP Audio Web Companion has been restarted — reconnecting…');
-                    reattachToRestartedServer();
+                    resumeAfterNetworkDrop();
                 }});
             }}
             loadThemeList();
@@ -5565,7 +7418,53 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             r.style.setProperty('--badge-color', th.badge_color);
             r.style.setProperty('--eq-bar', th.eq_bar);
             r.style.setProperty('--eq-peak', th.eq_peak);
-            document.body.classList.toggle('dynamic-rainbow-glass-active', th.id === 'dynamic_rainbow_liquid_glass');
+            syncRainbowDrive();
+        }}
+
+        // One hue for the whole theme, stepped 10 times a second. A CSS
+        // filter animation never became visible on iOS Safari: it lived on a
+        // ::before that paints under the opaque page background, and WebKit
+        // drops filter animations on that layer. Writing the variable updates
+        // the borders, buttons and wash that the phone actually draws.
+        // Hidden tabs stop the timer; a visible page never does.
+        let rainbowTimer = 0;
+
+        function rainbowShouldRun() {{
+            return currentThemeId === 'dynamic_rainbow_liquid_glass'
+                && !document.hidden
+                && !document.body.classList.contains('dynamic-rainbow-glass-frozen');
+        }}
+
+        function tickRainbow() {{
+            if (!rainbowShouldRun()) {{
+                stopRainbowDrive();
+                return;
+            }}
+            // 272 is the theme's home violet, so the first frame does not
+            // jump to red. A full turn takes the same 24s as the wash spin.
+            const hue = (272 + (performance.now() / 24000) * 360) % 360;
+            document.documentElement.style.setProperty('--rainbow-hue', hue.toFixed(1));
+        }}
+
+        function stopRainbowDrive() {{
+            if (!rainbowTimer) return;
+            clearInterval(rainbowTimer);
+            rainbowTimer = 0;
+        }}
+
+        function syncRainbowDrive() {{
+            document.body.classList.toggle(
+                'dynamic-rainbow-glass-active',
+                currentThemeId === 'dynamic_rainbow_liquid_glass'
+            );
+            if (rainbowShouldRun()) {{
+                if (!rainbowTimer) {{
+                    tickRainbow();
+                    rainbowTimer = setInterval(tickRainbow, 100);
+                }}
+            }} else {{
+                stopRainbowDrive();
+            }}
         }}
 
         async function loadThemeList() {{
@@ -5649,6 +7548,9 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             if (!wrap) return;
             const items = (data && data.items) || [];
             const total = Number(data && data.total) || 0;
+            const matched = (data && data.matched !== undefined && data.matched !== null)
+                ? Number(data.matched) : total;
+            const query = (data && data.query) ? String(data.query) : '';
             const show = Math.max(1, Number(data && data.show) || 5);
             // Music asked for but the archive is being streamed instead: the
             // rows below are mixes, so they must not be presented as tracks
@@ -5657,19 +7559,30 @@ def render_html_page(theme: Dict[str, Any]) -> str:
 
             const countEl = document.getElementById('miniPlCount');
             if (countEl) {{
-                // Track count for the whole selected library, not just the
-                // rows that fit on a phone screen.
-                countEl.innerText = total + (total === 1 ? ' track' : ' tracks') +
-                    (fellBack ? ' (from Mix Archive)' : '');
-                countEl.title = Math.min(items.length, show) + ' shown of ' + total +
-                                ' in this library · scroll for more';
+                if (query) {{
+                    // The badge counts matches in this playlist, not the whole
+                    // library, so a search that found three tracks says so.
+                    const noun = matched === 1 ? ' match' : ' matches';
+                    countEl.innerText = (matched > items.length)
+                        ? (items.length + ' of ' + matched + noun)
+                        : (matched + noun);
+                    countEl.title = items.length + ' shown of ' + matched +
+                        ' matches in ' + total + ' tracks';
+                }} else {{
+                    // Track count for the whole selected library, not just the
+                    // rows that fit on a phone screen.
+                    countEl.innerText = total + (total === 1 ? ' track' : ' tracks') +
+                        (fellBack ? ' (from Mix Archive)' : '');
+                    countEl.title = Math.min(items.length, show) + ' shown of ' + total +
+                                    ' in this library · scroll for more';
+                }}
             }}
 
             const titleEl = document.getElementById('miniPlTitle');
             if (titleEl) {{
                 const label = fellBack ? 'Mix Archive (Music unavailable)'
                                        : ((data && data.mode_label) || 'Library');
-                titleEl.innerText = '🎵 Up Next · ' + label;
+                titleEl.innerText = (query ? '🔍 Search · ' : '🎵 Up Next · ') + label;
             }}
 
             // The offline notice sits above the list, so five rows always fit.
@@ -5691,28 +7604,36 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             }}
 
             // Keep the scroll position across the 15-second refresh instead of
-            // snapping back to the top while the user is browsing.
-            const scrollTop = wrap.scrollTop;
+            // snapping back to the top while the user is browsing. A new
+            // search string starts at the first match.
+            const queryChanged = query !== renderedPlaylistQuery;
+            renderedPlaylistQuery = query;
+            const scrollTop = queryChanged ? 0 : wrap.scrollTop;
             wrap.innerHTML = '';
 
             if (!items.length) {{
                 const empty = document.createElement('div');
                 empty.className = 'mini-pl-empty';
-                empty.innerText = (data && data.mode === 'FAVORITES')
-                    ? 'No favourites yet — press H in the player to add one'
-                    : 'No audio found in this library';
+                if (query) {{
+                    empty.innerText = 'No tracks match "' + query + '"';
+                }} else {{
+                    empty.innerText = (data && data.mode === 'FAVORITES')
+                        ? 'No favourites yet — press H in the player to add one'
+                        : 'No audio found in this library';
+                }}
                 wrap.appendChild(empty);
                 return;
             }}
 
             items.forEach((item, i) => {{
                 const row = document.createElement('div');
-                row.className = 'mini-pl-item' + (item.current ? ' current' : '');
-                row.onclick = () => sendAction('select_index', {{ index: item.index }});
+                row.className = 'mini-pl-item' + (item.current ? ' current' : '') +
+                    (item.unplayable ? ' unplayable' : '');
+                row.onclick = () => playPlaylistTrack(item.index, item.file);
 
                 const num = document.createElement('div');
                 num.className = 'mini-pl-num';
-                num.innerText = item.current ? '▶' : String(i + 1);
+                num.innerText = item.current ? '▶' : (item.unplayable ? '⚠' : String(i + 1));
 
                 const body = document.createElement('div');
                 body.className = 'mini-pl-body';
@@ -5721,7 +7642,9 @@ def render_html_page(theme: Dict[str, Any]) -> str:
                 title.innerText = item.title || 'Untitled Track';
                 const dur = document.createElement('div');
                 dur.className = 'mini-pl-dur';
-                dur.innerText = (item.artist || '') + (item.duration ? ' • ' + item.duration : '');
+                dur.innerText = item.unplayable
+                    ? 'Cannot be played on this device — skipped'
+                    : (item.artist || '') + (item.duration ? ' • ' + item.duration : '');
                 body.appendChild(title);
                 body.appendChild(dur);
 
@@ -5783,10 +7706,52 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             }}
         }}
 
+        // The search box is the filter. The poll keeps sending whatever is
+        // typed so a library switch or a 15-second refresh does not put the
+        // unfiltered queue back over the matches.
+        let playlistSearchTimer = 0;
+        let playlistFetchToken = 0;
+        let renderedPlaylistQuery = '';
+
+        function currentPlaylistQuery() {{
+            const box = document.getElementById('miniPlSearch');
+            return box ? String(box.value || '') : '';
+        }}
+
+        function onPlaylistSearchInput() {{
+            clearTimeout(playlistSearchTimer);
+            playlistSearchTimer = setTimeout(fetchMiniPlaylist, 160);
+        }}
+
+        // A row tap plays that queue entry. Search hits carry the original
+        // index, so the file that matched is the file that starts, not the
+        // first row of the filtered list.
+        function playPlaylistTrack(index, file) {{
+            if (phoneOwnsPlayback()) listenerPaused = false;
+            const audioEl = document.getElementById('mobileAudioStream');
+            const sameFile = Boolean(file && activeAudioFile === file);
+            // The status poll only reloads the element when the file changes.
+            // Tapping the track that is already selected, while it is paused,
+            // has to start it inside this tap or iOS will refuse the later play().
+            if (sameFile && audioStreamEngaged && audioEl && (audioEl.paused || audioEl.ended)) {{
+                applyStreamPitch(currentPitchPercent);
+                const started = audioEl.play();
+                if (started && started.catch) started.catch(() => {{}});
+            }}
+            sendAction('select_index', {{ index: index, play: '1' }});
+        }}
+
         async function fetchMiniPlaylist() {{
+            const token = ++playlistFetchToken;
+            const q = currentPlaylistQuery().trim();
             try {{
-                const res = await fetch('/api/playlist');
+                let path = '/api/playlist';
+                if (q) path += '?q=' + encodeURIComponent(q);
+                const res = await fetch(apiUrl(path));
                 const data = await res.json();
+                // A slower reply for an older string must not overwrite the
+                // matches for the string that is in the box now.
+                if (token !== playlistFetchToken) return;
                 renderMiniPlaylist(data);
                 // A tap already picked the new mode; the poll must not paint the
                 // old one back while that switch is still in flight.
@@ -5805,9 +7770,81 @@ def render_html_page(theme: Dict[str, Any]) -> str:
         // the overlay up and the first touch starts the same stream.
         let lastEngageAt = 0;
 
+        // The listener started this page's own audio. Later polls and taps
+        // follow that stream. While a desk player is also on air, copy its
+        // file into the session first so the switch does not jump mixes.
+        function noteStreamEngaged() {{
+            audioStreamEngaged = true;
+            networkResumeAttempts = 0;
+            networkResumePending = false;
+            if (!hostPlayerActive) {{
+                followStream = true;
+                return;
+            }}
+            if (adoptInFlight) return;
+            adoptInFlight = true;
+            fetch('/api/control?action=adopt_host&target=stream', {{ method: 'POST' }})
+                .finally(() => {{
+                    adoptInFlight = false;
+                    followStream = true;
+                    const queued = pendingTransport;
+                    pendingTransport = null;
+                    const done = fetchStatus().catch(() => {{}});
+                    if (queued) {{
+                        Promise.resolve(done).finally(() => sendAction(queued.act, queued.params || {{}}));
+                    }}
+                }});
+        }}
+
+        // A stalled or reset connection. Put the same mix back on the element
+        // at the position it had reached, and play it again. A decode error
+        // does not come here: that file really cannot be played.
+        function resumeAfterNetworkDrop() {{
+            if (listenerPaused || !audioStreamEngaged || !activeAudioFile) return;
+            if (networkResumePending) return;
+            if (networkResumeAttempts >= 5) {{
+                showStreamOverlay('The audio stream dropped. Tap Engage Audio Stream to start it again.');
+                return;
+            }}
+            networkResumePending = true;
+            networkResumeAttempts += 1;
+            const audioEl = document.getElementById('mobileAudioStream');
+            const file = activeAudioFile;
+            let resumeAt = 0;
+            try {{
+                if (audioEl && isFinite(audioEl.currentTime)) resumeAt = audioEl.currentTime;
+            }} catch (e) {{}}
+            const attempt = networkResumeAttempts;
+            clearTimeout(networkResumeTimer);
+            networkResumeTimer = setTimeout(() => {{
+                networkResumePending = false;
+                if (listenerPaused || activeAudioFile !== file) return;
+                const el = document.getElementById('mobileAudioStream');
+                if (!el) return;
+                // `r` is ignored by the server. It keeps the browser from
+                // reusing the connection that just died.
+                el.src = '/api/stream?file=' + encodeURIComponent(file) + '&r=' + attempt;
+                audioStreamConfigured = true;
+                const once = function () {{
+                    el.removeEventListener('loadedmetadata', once);
+                    if (resumeAt > 1) {{
+                        try {{ el.currentTime = resumeAt; }} catch (err) {{}}
+                    }}
+                    applyStreamPitch(currentPitchPercent);
+                    const started = el.play();
+                    if (started && started.catch) started.catch(() => {{}});
+                }};
+                el.addEventListener('loadedmetadata', once);
+                try {{ el.load(); }} catch (e) {{}}
+            }}, 350 * attempt);
+        }}
+
         function engageStreamFromServer(resumePos) {{
             const audioEl = document.getElementById('mobileAudioStream');
             if (!audioEl) return;
+            // In the Engage tap this still runs on the gesture's turn, which
+            // is the only moment iOS will resume the audio graph.
+            ensureAudioGraph();
             if (!activeAudioFile) {{
                 // /api/stream?file= would 404 here, which is indistinguishable
                 // from a dead button on the phone. Explain the real cause.
@@ -5815,22 +7852,59 @@ def render_html_page(theme: Dict[str, Any]) -> str:
                     'No audio is queued on the host. Start a mix in MP Audio Player, then tap again.');
                 return;
             }}
-            if (activeAudioFile && !audioStreamConfigured) {{
-                audioEl.src = '/api/stream?file=' + encodeURIComponent(activeAudioFile);
+            const streamUrl = '/api/stream?file=' + encodeURIComponent(activeAudioFile);
+            const current = audioEl.currentSrc || audioEl.src || '';
+            let alreadyPointed = false;
+            try {{
+                alreadyPointed = current.indexOf('/api/stream') !== -1
+                    && decodeURIComponent(current).indexOf(activeAudioFile) !== -1;
+            }} catch (e) {{
+                alreadyPointed = false;
+            }}
+            // A source installed by the status poll is not a user gesture.
+            // iOS will not start that element from a later play() once the
+            // poll's load was refused, so the tap binds the source itself.
+            const mustBind = !alreadyPointed || audioEl.error || !audioStreamConfigured;
+            lastEngageAt = performance.now();
+            // Where this stream starts. A desk player that is already in the
+            // mix wins over the saved resume point, and the seek runs even
+            // when the element was already pointed at the file: that earlier
+            // load captured a stale offset (or 0) and play() then continued
+            // from there. After this snap the browser owns playback.
+            let startAt = Number(resumePos);
+            if (hostPlayerActive) {{
+                const live = liveHostPosition();
+                if (live > 0.5) startAt = live;
+            }}
+            if (isFinite(startAt) && startAt > 0.5) {{
+                alignPlaybackTo(startAt, hostPlayerActive);
+            }}
+            if (mustBind) {{
+                if (audioEl.__unlocking) endUnlock(audioEl);
+                audioEl.src = streamUrl;
                 audioStreamConfigured = true;
             }}
-            lastEngageAt = performance.now();
-            // One-time alignment with the saved stream position; the browser
-            // then owns playback. Never re-sync from here.
-            const startAt = Number(resumePos);
-            if (isFinite(startAt) && startAt > 0) {{
-                audioEl.addEventListener('loadedmetadata', function once() {{
-                    audioEl.removeEventListener('loadedmetadata', once);
-                    seekAudioTo(startAt, true);
-                }});
+            // A new src can put the rate back to 1. Set it again before play
+            // so the first moment of audio is already at the chosen pitch.
+            applyStreamPitch(currentPitchPercent);
+            let pending;
+            try {{
+                pending = audioEl.play();
+            }} catch (err) {{
+                const why = (err && (err.message || err.name))
+                    ? ((err.name ? err.name + ': ' : '') + (err.message || 'playback was blocked'))
+                    : 'This phone blocked playback. Tap again.';
+                noteTapExplanation(why);
+                showStreamOverlay(streamUnavailableReason || why);
+                return;
             }}
-            audioEl.play().then(() => {{
-                audioStreamEngaged = true;
+            if (!pending || !pending.then) {{
+                noteStreamEngaged();
+                hideStreamOverlay();
+                return;
+            }}
+            pending.then(() => {{
+                noteStreamEngaged();
                 // Playback really started, so the file is good: clear the
                 // recovery budget for it and drop any leftover error notice.
                 // The guard is the duration: a header-only file can resolve
@@ -5840,12 +7914,109 @@ def render_html_page(theme: Dict[str, Any]) -> str:
                     mediaRecoveryAttempts = 0;
                     mediaRecoveryUsed = false;
                     mediaRecoveryFile = activeAudioFile || "";
+                    // A mix that really started means the skip run is over: the
+                    // next damaged file should get a fresh budget, not inherit
+                    // the tail of the previous burst.
+                    consecutiveSkips = 0;
+                    skipRunStartAt = 0;
+                    exhaustedNoticeShown = false;
                 }}
                 hideRestartNotice();
                 hideStreamOverlay();
-            }}).catch(() => {{
-                showStreamOverlay(streamUnavailableReason);
+            }}).catch((err) => {{
+                const why = (err && (err.message || err.name))
+                    ? ((err.name ? err.name + ': ' : '') + (err.message || 'playback was blocked'))
+                    : 'This phone blocked playback. Tap again.';
+                noteTapExplanation(why);
+                showStreamOverlay(streamUnavailableReason || why);
             }});
+        }}
+
+        // After a skip the element is in an error/ended state, so it does not
+        // report itself as "playing" even though the listener expects the next
+        // mix to start on its own. This flag carries that intent across the
+        // status poll that names the replacement file.
+        let skipResumePending = false;
+
+        // The mix the queue handed this phone cannot be decoded here. Rather
+        // than stopping on an error card, write the file off on this device,
+        // tell the host (so no other device is served it either) and walk on to
+        // the next mix. The walk is bounded, because "keep trying forever" is
+        // just the flicker loop with extra steps: once every candidate has been
+        // tried in one run, the listener gets a single clear message.
+        function handleUnplayableMix(file) {{
+            if (!file) return;
+            const label = file.split('/').pop() || file;
+            const alreadyKnown = unplayableFiles.has(file);
+            const now = performance.now();
+            if (!skipRunStartAt || (now - skipRunStartAt) > 60000) {{
+                // A new run: the last burst of failures was long enough ago that
+                // this is a fresh problem, so the budget starts over.
+                skipRunStartAt = now;
+                consecutiveSkips = 0;
+                exhaustedNoticeShown = false;
+            }}
+            if (alreadyKnown) {{
+                // The same file errored again (a second `error` event, or a
+                // stale poll naming it). It must not cost a second slot in the
+                // run budget, otherwise a single file that fires twice looks
+                // like two dead mixes and the queue gives up one entry early.
+                // Still tell the host, so a server that has not advanced yet
+                // does advance now.
+                mediaRecoveryUsed = true;
+                lastMediaErrorAt = now;
+                sendAction('track_failed', {{ path: file }});
+                skipResumePending = true;
+                fetchStatus().catch(() => {{}});
+                return;
+            }}
+            unplayableFiles.add(file);
+            consecutiveSkips += 1;
+            mediaRecoveryUsed = true;
+            lastMediaErrorAt = now;
+            mediaRecoveryFile = file;
+            // Tell the host which exact file failed. The server records it, so
+            // the next poll hands out a different file even if this page is
+            // closed and reopened.
+            sendAction('track_failed', {{ path: file }});
+            // The queue length is what bounds the run: once this phone has
+            // written off as many files as the library holds, there is nothing
+            // left to try. `queueLength` comes from the last status poll.
+            const total = Number(queueLength) || 0;
+            if (total > 0 && consecutiveSkips >= total) {{
+                // Every entry in this library has now failed on this device.
+                showPlaybackExhaustedNotice();
+                return;
+            }}
+            showRestartNotice('“' + label + '” cannot be played — skipping to the next mix…');
+            // The action above advanced the server cursor; the next status poll
+            // re-points the element at the new file and resumes it because this
+            // flag says the listener still wants sound.
+            skipResumePending = true;
+            fetchStatus().catch(() => {{
+                skipResumePending = false;
+            }});
+        }}
+
+        // No mix in the playlist can be decoded on this device. This is the one
+        // case that stops automatic skipping: continuing would mean probing the
+        // whole library again on every poll, which is exactly the behaviour the
+        // old reconnect handler was fixed to avoid.
+        function showPlaybackExhaustedNotice(detail) {{
+            if (exhaustedNoticeShown) return;
+            exhaustedNoticeShown = true;
+            // A page loaded afresh has not seen any failures itself, so the
+            // host's count is the truthful one there. Whichever is larger is the
+            // number this playlist has actually lost.
+            const count = Math.max(unplayableFiles.size, Number(serverUnplayableCount) || 0);
+            showStreamOverlay(detail ||
+                'None of the mixes in this playlist can be played on this device. ' +
+                (count > 0
+                    ? count + ' ' + (count === 1 ? 'mix was' : 'mixes were') +
+                      ' tried and each one is empty or damaged on the computer. '
+                    : '') +
+                'Re-export the mixes (or choose another library), then tap ' +
+                '“Engage Audio Stream” to try again.');
         }}
 
         // A resume point on the final frame makes play() resolve and then end
@@ -5870,9 +8041,10 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             }}
             if (quickEndRestarts >= 2) {{
                 // Two immediate ends is not a bad seek, it is an unplayable
-                // file. Move on instead of restarting it again.
+                // file. Report it the same way a decode error is reported, so
+                // the queue moves on instead of restarting it again.
                 quickEndRestarts = 0;
-                sendAction('track_ended');
+                handleUnplayableMix(activeAudioFile);
                 return;
             }}
             quickEndRestarts += 1;
@@ -5890,6 +8062,16 @@ def render_html_page(theme: Dict[str, Any]) -> str:
         // the tab bar and the assistant could never be reached before the
         // first successful play().
         let streamOverlayWanted = true;
+        // The last thing a tap told the listener, and when. The 2 s status poll
+        // must not paint its generic waiting text over a specific answer the
+        // tap just produced.
+        let lastTapExplanation = "";
+        let lastTapExplanationAt = 0;
+
+        function noteTapExplanation(text) {{
+            lastTapExplanation = text || "";
+            lastTapExplanationAt = performance.now();
+        }}
 
         function renderStreamOverlay() {{
             const overlay = document.getElementById('streamOverlay');
@@ -5917,15 +8099,32 @@ def render_html_page(theme: Dict[str, Any]) -> str:
 
         // The overlay is the first thing a phone sees, so it explains the host
         // state on its own instead of waiting for a tap that would go nowhere.
+        //
+        // The tap's own answer outranks the background poll. A rescan that
+        // found nothing writes a specific explanation ("The host still has no
+        // mixes in the archive…"), and this used to replace it with the generic
+        // "Waiting for the host to queue a mix…" on the next 2 s poll - so the
+        // listener saw the message they had just earned blink away and the
+        // button look dead. While a recent tap is being explained, the poll
+        // leaves the note alone.
+        const TAP_EXPLANATION_HOLD_MS = 8000;
+
         function syncStreamOverlayDetail() {{
             if (!streamOverlayWanted) return;
             if (activeAudioFile) return;
+            if (lastTapExplanation && (performance.now() - lastTapExplanationAt) < TAP_EXPLANATION_HOLD_MS) {{
+                return;
+            }}
             showStreamOverlay(streamUnavailableReason ||
                 'Waiting for the host to queue a mix…');
         }}
 
         function hideStreamOverlay() {{
             streamOverlayWanted = false;
+            // Playback started, so whatever a tap explained is settled. The
+            // hold must not keep a stale message over a gate that is now open.
+            lastTapExplanation = "";
+            lastTapExplanationAt = 0;
             renderStreamOverlay();
             const banner = document.getElementById('mobileAudioBanner');
             if (banner) banner.style.display = 'block';
@@ -5937,11 +8136,94 @@ def render_html_page(theme: Dict[str, Any]) -> str:
         // stream, or two devices render the mix out of step with each other.
         let hostPlayerActive = false;
         let hostPlayerFile = "";
+        // The desk player's clock at the last status poll, and when that poll
+        // landed. Opening the page and pressing Engage minutes later has to
+        // seek to where the desk is now, not to the position captured when
+        // the element was first pointed at the file.
+        let lastHostPositionSec = 0;
+        let lastHostPositionAt = 0;
+        // A load-time snap to the desk. Cleared once the element lands there,
+        // or as soon as the listener seeks for themselves.
+        let hostAlignTarget = 0;
+        let hostAlignTries = 0;
+
+        function liveHostPosition() {{
+            const base = Number(lastHostPositionSec);
+            if (!isFinite(base) || base <= 0) return 0;
+            if (lastServerState !== 'playing') return base;
+            const elapsed = (performance.now() - lastHostPositionAt) / 1000;
+            if (!isFinite(elapsed) || elapsed < 0 || elapsed > 20) return base;
+            return base + elapsed;
+        }}
+
+        function clearHostAlign() {{
+            hostAlignTarget = 0;
+            hostAlignTries = 0;
+        }}
+
+        // Put the element on `pos`. A host snap does not use the "near the
+        // end, start over" rule: the desk is actually at that moment, including
+        // the last part of a long mix. Retries live on the `playing` event
+        // because a seek issued before the browser has a timeline is ignored
+        // and the mix then starts at 0.
+        function alignPlaybackTo(pos, fromHost) {{
+            const audioEl = document.getElementById('mobileAudioStream');
+            if (!audioEl || !isFinite(pos) || pos <= 0.5) return;
+            if (fromHost) {{
+                hostAlignTarget = pos;
+                hostAlignTries = 0;
+            }}
+            const apply = function () {{
+                if (fromHost) {{
+                    try {{
+                        audioSeekInFlight = true;
+                        audioEl.currentTime = hostAlignTarget || pos;
+                        setTimeout(() => {{ audioSeekInFlight = false; }}, 1500);
+                    }} catch (e) {{
+                        audioSeekInFlight = false;
+                    }}
+                }} else {{
+                    seekAudioToWithResume(pos, true);
+                }}
+            }};
+            // Always wait for the next load as well. Engage often replaces
+            // src after this call, and the duration already on the element
+            // belongs to the previous file (or the silent unlock clip). A
+            // seek against that timeline is discarded when the new source
+            // starts, which left the stream at 0 while the desk was midway
+            // through the mix.
+            const once = function () {{
+                audioEl.removeEventListener('loadedmetadata', once);
+                audioEl.removeEventListener('loadeddata', once);
+                audioEl.removeEventListener('canplay', once);
+                apply();
+            }};
+            audioEl.addEventListener('loadedmetadata', once);
+            audioEl.addEventListener('loadeddata', once);
+            audioEl.addEventListener('canplay', once);
+            if (audioTimelineEnd(audioEl) > 0) apply();
+        }}
+
+        // iPhone and iPad only allow audible play() inside the tap that
+        // called it. A play() from the status poll is rejected, and that
+        // rejection is what made Engage look dead: the gate never moved.
+        function needsPlaybackGesture() {{
+            const ua = navigator.userAgent || '';
+            if (/iPhone|iPad|iPod/i.test(ua)) return true;
+            // iPadOS 13+ reports itself as a Mac.
+            if (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1) return true;
+            return false;
+        }}
 
         // Called once the dashboard knows which file the server is streaming.
         function maybeAutoStartStream() {{
             if (streamAutoStarted) return;
             if (!activeAudioFile) return;
+            if (needsPlaybackGesture()) {{
+                // Leave the gate up. Playing here is outside a tap, so iOS
+                // refuses it and the later Engage play() then fails too.
+                return;
+            }}
             // A live host player is the source of truth and is already making
             // sound where it should. Auto-engaging here would start a second,
             // unsynchronised copy on the phone.
@@ -5958,48 +8240,656 @@ def render_html_page(theme: Dict[str, Any]) -> str:
         function syncHostPlayerFile() {{
             const audioEl = document.getElementById('mobileAudioStream');
             if (!audioEl || !activeAudioFile) return;
+            if (needsPlaybackGesture() && !audioStreamEngaged) {{
+                // Remember the file so a later poll does not load() the
+                // element out from under the tap. The tap binds src itself.
+                hostPlayerFile = activeAudioFile;
+                return;
+            }}
             if (hostPlayerFile === activeAudioFile && audioStreamConfigured) return;
             hostPlayerFile = activeAudioFile;
             audioEl.src = '/api/stream?file=' + encodeURIComponent(activeAudioFile);
             audioStreamConfigured = true;
-            const resumeAt = Number(lastServerResume) || 0;
-            if (resumeAt > 0) {{
-                audioEl.addEventListener('loadedmetadata', function once() {{
-                    audioEl.removeEventListener('loadedmetadata', once);
-                    seekAudioTo(resumeAt, true);
-                }});
+            const resumeAt = hostPlayerActive
+                ? (liveHostPosition() || Number(lastServerResume) || 0)
+                : (Number(lastServerResume) || 0);
+            if (resumeAt > 0.5) {{
+                alignPlaybackTo(resumeAt, hostPlayerActive);
             }}
             audioEl.load();
         }}
 
+        // touchend and click both arrive for one tap. The first call is the
+        // gesture that iOS will approve; the second must not restart the mix.
+        let lastEngageTapAt = 0;
+
         function activateMobileStream() {{
+            const now = (typeof performance !== 'undefined') ? performance.now() : Date.now();
+            if (now - lastEngageTapAt < 700) return;
+            lastEngageTapAt = now;
+            // Resume before any later await. A context created after the fetch
+            // stays suspended on iPhone and the equaliser (and the mix, once
+            // it is routed through that context) never starts.
+            unlockAudioContext();
+            // A tap must always produce an answer. The old handler returned
+            // silently when the host had no queue, so on a phone with an empty
+            // archive the button looked broken: no sound, no message, no
+            // spinner. Ask the host to re-scan first, then explain the state
+            // that is left. Say so before any await, so a slow host is not a
+            // button that appears to do nothing.
+            noteTapExplanation('Starting the stream on this phone…');
+            showStreamOverlay('Starting the stream on this phone…');
+            if (!activeAudioFile) {{
+                rescanForEngage();
+                return;
+            }}
             engageStreamFromServer(lastServerResume);
+        }}
+
+        // The unlock must happen inside the tap, before any await: iOS only
+        // grants playback to a play() that runs in the gesture's own task.
+        // The older code awaited a fetch first, so the later play() was
+        // rejected and the mix stayed silent with the overlay still up.
+        let engageRescanToken = 0;
+
+        // A silent play() in the tap's own task marks the element as
+        // gesture-approved. Safari keeps that approval for the element while
+        // the page is alive, so the real play() after the rescan fetch still
+        // works even though it runs a second later.
+        //
+        // The clip is a `blob:` URL, not a `data:` one, because the page's
+        // Content-Security-Policy allows only `media-src 'self' blob:`. The old
+        // `data:` connection is refused by the policy, so `src` fails with
+        // MEDIA_ERR_SRC_NOT_SUPPORTED before any sound is possible. That error
+        // arrives while the element is still pointed at the unlock clip, and
+        // the media-error handler cannot tell it apart from a genuine decode
+        // failure of the listener's mix - which is the "Engage Audio Stream
+        // does nothing" report: the tap silently writes off the mix it was
+        // about to play.
+        function unlockStreamElement() {{
+            const audioEl = document.getElementById('mobileAudioStream');
+            if (!audioEl || audioEl.__unlocked) return false;
+            ensureAudioGraph();
+            const src = beginUnlock(audioEl);
+            if (!src) return false;
+            try {{
+                audioEl.__unlocked = true;
+                audioEl.src = src;
+                const p = audioEl.play();
+                if (p && p.catch) p.catch(() => {{ endUnlock(audioEl); }});
+            }} catch (e) {{
+                endUnlock(audioEl);
+            }}
+            return true;
+        }}
+
+        function rescanForEngage() {{
+            const token = ++engageRescanToken;
+            unlockStreamElement();
+            const scanning = streamUnavailableReason ||
+                'No mix is queued on the host yet — asking it to rescan the archive…';
+            noteTapExplanation(scanning);
+            showStreamOverlay(scanning);
+            // The element now holds the silent unlock source; the queue build
+            // below re-points it at /api/stream.
+            audioStreamConfigured = false;
+            // Retrying after the "nothing in this playlist plays" message is a
+            // deliberate fresh start: forget the files this phone wrote off and
+            // reset the skip run, so repaired mixes get another chance.
+            unplayableFiles.clear();
+            consecutiveSkips = 0;
+            skipRunStartAt = 0;
+            exhaustedNoticeShown = false;
+            fetch('/api/control?action=rescan', {{ method: 'POST' }})
+                .then(r => r.json())
+                .then(() => fetchStatus())
+                .then(() => {{
+                    if (token !== engageRescanToken) return;
+                    if (!activeAudioFile) {{
+                        const empty = streamUnavailableReason ||
+                            'The host still has no mixes in the archive. Add a mix ' +
+                            'or choose another library on the host, then tap again.';
+                        noteTapExplanation(empty);
+                        showStreamOverlay(empty);
+                        return;
+                    }}
+                    engageStreamFromServer(lastServerResume);
+                }})
+                .catch(() => {{
+                    if (token !== engageRescanToken) return;
+                    const offline = streamUnavailableReason ||
+                        'Could not reach the host to rescan the archive.';
+                    noteTapExplanation(offline);
+                    showStreamOverlay(offline);
+                }});
         }}
 
         function handlePlayPauseClick() {{
             const audioEl = document.getElementById('mobileAudioStream');
-            if (audioEl) {{
-                if (!audioEl.paused) {{
-                    audioEl.pause();
-                }} else if (!activeAudioFile) {{
-                    showStreamOverlay(streamUnavailableReason ||
-                        'No audio is queued on the host. Start a mix in MP Audio Player, then tap again.');
-                    return;
-                }} else {{
-                    audioEl.play().catch(e => {{
-                        showStreamOverlay(streamUnavailableReason);
-                    }});
-                }}
+            // While this page has not started its own stream, a desktop player
+            // on air owns the sound, so the tap has to be forwarded there.
+            // Toggling only the idle phone element left the room silent and
+            // the button disagreeing with the mix.
+            if (!phoneOwnsPlayback()) {{
+                sendAction('play-pause');
+                return;
             }}
-            sendAction('play-pause');
+            unlockAudioContext();
+            ensureAudioGraph();
+            if (!audioEl || !activeAudioFile) {{
+                showStreamOverlay(streamUnavailableReason ||
+                    'No audio is queued on the host. Start a mix in MP Audio Player, then tap again.');
+                return;
+            }}
+            // Send play or pause, not a toggle. The session flag and the
+            // element used to be flipped independently, so one tap undid the
+            // other and the button looked dead.
+            if (!audioEl.paused && !audioEl.ended) {{
+                listenerPaused = true;
+                audioEl.pause();
+                sendAction('pause');
+                return;
+            }}
+            listenerPaused = false;
+            applyStreamPitch(currentPitchPercent);
+            let pending;
+            try {{
+                pending = audioEl.play();
+            }} catch (e) {{
+                showStreamOverlay(streamUnavailableReason ||
+                    'This browser blocked playback. Tap Engage Audio Stream.');
+                return;
+            }}
+            sendAction('play');
+            if (pending && pending.then) {{
+                pending.then(() => noteStreamEngaged()).catch(() => {{
+                    showStreamOverlay(streamUnavailableReason ||
+                        'This browser blocked playback. Tap Engage Audio Stream.');
+                }});
+            }} else {{
+                noteStreamEngaged();
+            }}
         }}
 
-        // Visualizer 60 FPS Physics
+        // Visualizer. The bars and the spectrogram both read the phone's
+        // <audio> element. The server answers /api/eq with 24 zeros for a
+        // phone stream — it cannot hear the element — and a sine wave drawn
+        // in place of that does not follow the mix.
         const BANDS = 24;
         const currentLevels = new Float32Array(BANDS).fill(0.04);
         const targetLevels = new Float32Array(BANDS).fill(0.04);
         const currentPeaks = new Float32Array(BANDS).fill(0.04);
         const peakVels = new Float32Array(BANDS).fill(0.0);
+        const barEls = new Array(BANDS);
+        const peakEls = new Array(BANDS);
+        let vizMode = 'bars';
+        let audioCtx = null;
+        let audioGraph = null;
+        let freqBins = null;
+        let timeBins = null;
+        let spectroBacking = null;
+        let spectroShiftAcc = 0;
+        let captureSilenceFrames = 0;
+        let captureSawSignal = false;
+
+        function phoneIsAudible() {{
+            const audioEl = document.getElementById('mobileAudioStream');
+            return Boolean(
+                audioEl && audioStreamConfigured && !audioEl.paused && !audioEl.ended
+            );
+        }}
+
+        function cacheBarEls() {{
+            if (barEls[0]) return;
+            for (let i = 0; i < BANDS; i++) {{
+                barEls[i] = document.getElementById('vb' + i);
+                peakEls[i] = document.getElementById('vp' + i);
+            }}
+        }}
+
+        // Create and resume the context inside the tap. iOS will not start
+        // one that was only constructed from a timer, and a suspended context
+        // silences the element once it is routed through Web Audio.
+        function unlockAudioContext() {{
+            const Ctx = window.AudioContext || window.webkitAudioContext;
+            if (!Ctx) return null;
+            if (!audioCtx) {{
+                try {{
+                    try {{ audioCtx = new Ctx({{ latencyHint: 'playback' }}); }}
+                    catch (e) {{ audioCtx = new Ctx(); }}
+                }} catch (e) {{
+                    return null;
+                }}
+            }}
+            if (audioCtx.state === 'suspended') {{
+                try {{ audioCtx.resume(); }} catch (e) {{}}
+            }}
+            return audioCtx;
+        }}
+
+        function attachSpectrumPull(ctx, analyser) {{
+            // WebKit drops AnalyserNode data when nothing pulls the graph.
+            // The audible connection does that for the element source. This
+            // muted processor does it for a capture-stream source, which must
+            // not be wired to the speakers or the mix plays twice.
+            try {{
+                const pull = ctx.createScriptProcessor(2048, 1, 1);
+                const mute = ctx.createGain();
+                mute.gain.value = 0;
+                pull.onaudioprocess = function (ev) {{
+                    const out = ev.outputBuffer.getChannelData(0);
+                    for (let i = 0; i < out.length; i++) out[i] = 0;
+                }};
+                analyser.connect(pull);
+                pull.connect(mute);
+                mute.connect(ctx.destination);
+            }} catch (e) {{}}
+        }}
+
+        function ensureAudioGraph() {{
+            const audioEl = document.getElementById('mobileAudioStream');
+            const ctx = unlockAudioContext();
+            if (!audioEl || !ctx) return null;
+            if (audioGraph && audioGraph.analyser) {{
+                if (ctx.state === 'suspended') {{
+                    try {{ ctx.resume(); }} catch (e) {{}}
+                }}
+                return audioGraph;
+            }}
+            if (audioGraph && audioGraph.failed) return null;
+            const analyser = ctx.createAnalyser();
+            analyser.fftSize = 2048;
+            analyser.smoothingTimeConstant = 0.62;
+            analyser.minDecibels = -90;
+            analyser.maxDecibels = -20;
+            let source = null;
+            let mode = '';
+            const captureFn = audioEl.captureStream || audioEl.webkitCaptureStream;
+            if (captureFn) {{
+                try {{
+                    const stream = captureFn.call(audioEl);
+                    const tracks = stream && stream.getAudioTracks ? stream.getAudioTracks() : [];
+                    if (tracks && tracks.length) {{
+                        source = ctx.createMediaStreamSource(stream);
+                        mode = 'capture';
+                    }}
+                }} catch (e) {{
+                    source = null;
+                }}
+            }}
+            try {{
+                if (source) {{
+                    source.connect(analyser);
+                }} else {{
+                    // Progressive FLAC/WAV, and every iPhone. Routing the
+                    // element through the context is what lets the analyser
+                    // see it, and the gain node is the only level Safari will
+                    // honour. Connect the destination in this same turn or
+                    // the mix goes silent.
+                    source = ctx.createMediaElementSource(audioEl);
+                    mode = 'element';
+                    mixGain = ctx.createGain();
+                    mixGain.gain.value = mixLoudness();
+                    source.connect(analyser);
+                    analyser.connect(mixGain);
+                    mixGain.connect(ctx.destination);
+                }}
+            }} catch (e) {{
+                // An element with no source yet can refuse the node. Remember
+                // the failure only once a real stream is loaded, so the
+                // playing event still gets a chance to connect it.
+                const src = audioEl.currentSrc || audioEl.src || '';
+                if (src.indexOf('/api/stream') !== -1) audioGraph = {{ failed: true }};
+                return null;
+            }}
+            attachSpectrumPull(ctx, analyser);
+            freqBins = new Uint8Array(analyser.frequencyBinCount);
+            timeBins = new Uint8Array(analyser.fftSize);
+            audioGraph = {{ analyser: analyser, source: source, mode: mode, gain: mixGain }};
+            captureSilenceFrames = 0;
+            captureSawSignal = false;
+            return audioGraph;
+        }}
+
+        // iPhone's captureStream() can hand back a silent track while the
+        // element itself is loud. After a short run of silence, route the
+        // element through the context so the analyser can see the mix.
+        function promoteCaptureToElement() {{
+            if (!audioCtx || !audioGraph || audioGraph.mode !== 'capture') return;
+            const audioEl = document.getElementById('mobileAudioStream');
+            if (!audioEl) return;
+            try {{ if (audioGraph.source) audioGraph.source.disconnect(); }} catch (e) {{}}
+            try {{
+                const analyser = audioCtx.createAnalyser();
+                analyser.fftSize = 2048;
+                analyser.smoothingTimeConstant = 0.62;
+                analyser.minDecibels = -90;
+                analyser.maxDecibels = -20;
+                const source = audioCtx.createMediaElementSource(audioEl);
+                mixGain = audioCtx.createGain();
+                mixGain.gain.value = mixLoudness();
+                source.connect(analyser);
+                analyser.connect(mixGain);
+                mixGain.connect(audioCtx.destination);
+                attachSpectrumPull(audioCtx, analyser);
+                freqBins = new Uint8Array(analyser.frequencyBinCount);
+                timeBins = new Uint8Array(analyser.fftSize);
+                audioGraph = {{ analyser: analyser, source: source, mode: 'element', gain: mixGain }};
+                captureSilenceFrames = 0;
+                captureSawSignal = false;
+            }} catch (e) {{
+                audioGraph = {{ failed: true, mode: 'element' }};
+            }}
+        }}
+
+        function speakersFollowGain() {{
+            return Boolean(mixGain && audioGraph && audioGraph.mode === 'element');
+        }}
+
+        function mixLoudness() {{
+            if (streamMuted) return 0;
+            return Math.max(0, Math.min(1, currentVolumePercent / 100));
+        }}
+
+        function setMixLoudness(level) {{
+            const audioEl = document.getElementById('mobileAudioStream');
+            const gain = Math.max(0, Math.min(1, Number(level) || 0));
+            if (speakersFollowGain()) {{
+                // Chrome applies element.volume on top of the gain node, so
+                // the element stays at unity and the node carries the level.
+                // iOS ignores element.volume entirely. element.muted would
+                // also silence the source node and ignore the gain.
+                try {{
+                    if (audioEl) {{
+                        audioEl.muted = false;
+                        audioEl.volume = 1;
+                    }}
+                }} catch (e) {{}}
+                try {{ mixGain.gain.value = gain; }} catch (e) {{}}
+                return;
+            }}
+            if (!audioEl) return;
+            try {{ audioEl.muted = gain <= 0; }} catch (e) {{}}
+            try {{ audioEl.volume = gain; }} catch (e) {{}}
+        }}
+
+        function ensureAudibleGain() {{
+            // A poll must not construct the context. iOS leaves that one
+            // suspended, and routing the element through it silences the mix.
+            if (speakersFollowGain()) return mixGain;
+            if (!audioCtx) return null;
+            if (!audioGraph || !audioGraph.analyser) ensureAudioGraph();
+            if (audioGraph && audioGraph.mode === 'capture') promoteCaptureToElement();
+            return speakersFollowGain() ? mixGain : null;
+        }}
+
+        function applyStreamVolume(percent, muted) {{
+            const p = Math.max(0, Math.min(100, Math.round(Number(percent) || 0)));
+            currentVolumePercent = p;
+            if (muted !== undefined && muted !== null) streamMuted = Boolean(muted);
+            const pill = document.getElementById('volPill');
+            if (pill) pill.innerText = streamMuted ? 'Vol: MUTED' : ('Vol: ' + p + '%');
+            // iPhone Safari ignores audio.volume. Once the element is the
+            // graph source, the gain node is what the speaker follows.
+            if ((audioCtx && needsPlaybackGesture()) || speakersFollowGain()) ensureAudibleGain();
+            setMixLoudness(mixLoudness());
+        }}
+
+        function bumpVolume(delta) {{
+            unlockAudioContext();
+            applyStreamVolume(currentVolumePercent + Number(delta || 0), false);
+        }}
+
+        function toggleStreamMute() {{
+            unlockAudioContext();
+            applyStreamVolume(currentVolumePercent, !streamMuted);
+        }}
+
+        function bandsFromFrequency(freq) {{
+            const rate = (audioCtx && audioCtx.sampleRate) || 48000;
+            const nyquist = rate / 2;
+            const binHz = nyquist / freq.length;
+            const minHz = 32;
+            const maxHz = Math.min(16000, nyquist * 0.96);
+            for (let i = 0; i < BANDS; i++) {{
+                const f0 = minHz * Math.pow(maxHz / minHz, i / BANDS);
+                const f1 = minHz * Math.pow(maxHz / minHz, (i + 1) / BANDS);
+                let b0 = Math.max(0, Math.floor(f0 / binHz));
+                let b1 = Math.min(freq.length, Math.max(b0 + 1, Math.ceil(f1 / binHz)));
+                let sum = 0;
+                let peak = 0;
+                let n = 0;
+                for (let b = b0; b < b1; b++) {{
+                    const v = freq[b];
+                    sum += v;
+                    if (v > peak) peak = v;
+                    n++;
+                }}
+                const mean = n ? sum / n : 0;
+                const norm = (0.65 * peak + 0.35 * mean) / 255;
+                targetLevels[i] = Math.max(0.04, Math.min(0.98, Math.pow(norm, 0.7)));
+            }}
+        }}
+
+        function bandsFromWaveform(time) {{
+            const rate = (audioCtx && audioCtx.sampleRate) || 48000;
+            const N = Math.min(512, time.length);
+            const offset = time.length - N;
+            const minHz = 40;
+            const maxHz = Math.min(14000, rate * 0.45);
+            for (let i = 0; i < BANDS; i++) {{
+                const hz = minHz * Math.pow(maxHz / minHz, (i + 0.5) / BANDS);
+                const coeff = 2 * Math.cos((2 * Math.PI * hz) / rate);
+                let s1 = 0;
+                let s2 = 0;
+                for (let n = 0; n < N; n++) {{
+                    const x = (time[offset + n] - 128) / 128;
+                    const s0 = x + coeff * s1 - s2;
+                    s2 = s1;
+                    s1 = s0;
+                }}
+                const power = s1 * s1 + s2 * s2 - coeff * s1 * s2;
+                const mag = Math.sqrt(Math.max(0, power)) / N;
+                targetLevels[i] = Math.max(0.04, Math.min(0.98, mag * 3.4));
+            }}
+        }}
+
+        function sampleLiveSpectrum() {{
+            // The context is created in the tap. Finishing a missing graph
+            // here is safe after that. Building a brand-new context from this
+            // frame leaves it suspended on iPhone, and the mix goes silent
+            // once the element is routed through it.
+            if (audioCtx && !(audioGraph && audioGraph.analyser)) ensureAudioGraph();
+            const graph = audioGraph;
+            if (!graph || !graph.analyser) return false;
+            if (audioCtx && audioCtx.state === 'suspended') {{
+                try {{ audioCtx.resume(); }} catch (e) {{}}
+                return false;
+            }}
+            const analyser = graph.analyser;
+            if (!freqBins || freqBins.length !== analyser.frequencyBinCount) {{
+                freqBins = new Uint8Array(analyser.frequencyBinCount);
+            }}
+            analyser.getByteFrequencyData(freqBins);
+            let peak = 0;
+            for (let i = 0; i < freqBins.length; i += 8) {{
+                if (freqBins[i] > peak) peak = freqBins[i];
+            }}
+            if (peak >= 2) {{
+                captureSilenceFrames = 0;
+                captureSawSignal = true;
+                bandsFromFrequency(freqBins);
+                return true;
+            }}
+            if (!timeBins || timeBins.length !== analyser.fftSize) {{
+                timeBins = new Uint8Array(analyser.fftSize);
+            }}
+            analyser.getByteTimeDomainData(timeBins);
+            let energy = 0;
+            for (let i = 0; i < timeBins.length; i += 4) {{
+                const d = timeBins[i] - 128;
+                energy += d * d;
+            }}
+            if (energy < 12) {{
+                for (let i = 0; i < BANDS; i++) targetLevels[i] = 0.04;
+                // Only a capture graph that has never seen the mix. A later
+                // quiet passage must not tear the audio path down.
+                if (!captureSawSignal && audioGraph && audioGraph.mode === 'capture' && phoneIsAudible()) {{
+                    captureSilenceFrames += 1;
+                    if (captureSilenceFrames === 90) promoteCaptureToElement();
+                }}
+                return false;
+            }}
+            captureSilenceFrames = 0;
+            captureSawSignal = true;
+            bandsFromWaveform(timeBins);
+            return true;
+        }}
+
+        function energyAt(u) {{
+            const clamped = Math.max(0, Math.min(1, u));
+            if (freqBins && freqBins.length && audioCtx) {{
+                const rate = audioCtx.sampleRate || 48000;
+                const nyquist = rate / 2;
+                const minHz = 32;
+                const maxHz = Math.min(16000, nyquist * 0.96);
+                const hz = minHz * Math.pow(maxHz / minHz, clamped);
+                const bin = Math.max(0, Math.min(freqBins.length - 1, Math.round(hz / (nyquist / freqBins.length))));
+                let sum = 0;
+                let n = 0;
+                for (let b = bin - 1; b <= bin + 1; b++) {{
+                    if (b < 0 || b >= freqBins.length) continue;
+                    sum += freqBins[b];
+                    n++;
+                }}
+                const norm = n ? (sum / n) / 255 : 0;
+                return Math.max(0, Math.min(1, Math.pow(norm, 0.72)));
+            }}
+            const idx = Math.max(0, Math.min(BANDS - 1, Math.round(clamped * (BANDS - 1))));
+            return targetLevels[idx] || 0;
+        }}
+
+        function paintSpectrogramFrame() {{
+            if (vizMode !== 'spectrogram' || !phoneIsAudible()) return;
+            const canvas = document.getElementById('visSpectrogram');
+            if (!canvas) return;
+            const dpr = Math.min(window.devicePixelRatio || 1, 2);
+            const w = Math.max(1, Math.floor(canvas.clientWidth * dpr));
+            const h = Math.max(1, Math.floor(canvas.clientHeight * dpr));
+            if (w < 2 || h < 2) return;
+            if (Math.abs(canvas.width - w) > 1 || Math.abs(canvas.height - h) > 1) {{
+                canvas.width = w;
+                canvas.height = h;
+                spectroBacking = null;
+            }}
+            const ctx = canvas.getContext('2d');
+            if (!ctx) return;
+            spectroShiftAcc += dpr;
+            const shift = Math.floor(spectroShiftAcc);
+            if (shift < 1) return;
+            spectroShiftAcc -= shift;
+            if (!spectroBacking) spectroBacking = document.createElement('canvas');
+            if (spectroBacking.width !== w || spectroBacking.height !== h) {{
+                spectroBacking.width = w;
+                spectroBacking.height = h;
+            }}
+            const bctx = spectroBacking.getContext('2d');
+            if (!bctx) return;
+            bctx.clearRect(0, 0, w, h);
+            bctx.drawImage(canvas, -shift, 0);
+            bctx.clearRect(w - shift, 0, shift, h);
+            const now = performance.now() / 1000;
+            for (let y = 0; y < h; y++) {{
+                const u = 1 - (y + 0.5) / h;
+                const energy = energyAt(u);
+                if (energy < 0.05) continue;
+                const hue = (now * 40 + u * 220) % 360;
+                const light = 22 + energy * 58;
+                const alpha = Math.min(1, 0.28 + energy * 0.85);
+                bctx.fillStyle = 'hsla(' + hue.toFixed(1) + ',' +
+                    (62 + energy * 35).toFixed(0) + '%,' +
+                    light.toFixed(0) + '%,' + alpha.toFixed(3) + ')';
+                bctx.fillRect(w - shift, y, shift, 1);
+                if (energy > 0.84) {{
+                    bctx.fillStyle = 'rgba(255,255,255,' +
+                        Math.min(0.95, (energy - 0.84) * 5).toFixed(3) + ')';
+                    bctx.fillRect(w - shift, y, Math.max(1, shift - 1), 1);
+                }}
+            }}
+            ctx.clearRect(0, 0, w, h);
+            ctx.drawImage(spectroBacking, 0, 0);
+        }}
+
+        function applyVisualizerMode(mode) {{
+            vizMode = mode === 'spectrogram' ? 'spectrogram' : 'bars';
+            const spectro = vizMode === 'spectrogram';
+            const box = document.getElementById('visContainer');
+            const caption = document.getElementById('visCaption');
+            const canvas = document.getElementById('visSpectrogram');
+            if (box) {{
+                box.classList.toggle('mode-spectrogram', spectro);
+                box.setAttribute('aria-pressed', spectro ? 'true' : 'false');
+                box.setAttribute('aria-label', spectro
+                    ? 'Stream of Frequency, Dynamic Spectrogram. Press to show the equaliser.'
+                    : 'Equaliser. Press to show Stream of Frequency, Dynamic Spectrogram.');
+            }}
+            if (caption) {{
+                caption.textContent = spectro
+                    ? 'Stream of Frequency (Dynamic Spectrogram)'
+                    : 'Equaliser';
+            }}
+            const barsBtn = document.getElementById('vizEffectBars');
+            const spectroBtn = document.getElementById('vizEffectSpectro');
+            if (barsBtn) {{
+                barsBtn.classList.toggle('active', !spectro);
+                barsBtn.setAttribute('aria-pressed', spectro ? 'false' : 'true');
+            }}
+            if (spectroBtn) {{
+                spectroBtn.classList.toggle('active', spectro);
+                spectroBtn.setAttribute('aria-pressed', spectro ? 'true' : 'false');
+            }}
+            if (canvas) {{
+                canvas.setAttribute('aria-hidden', spectro ? 'false' : 'true');
+                if (spectro) {{
+                    spectroBacking = null;
+                    const c = canvas.getContext('2d');
+                    if (c) c.clearRect(0, 0, canvas.width, canvas.height);
+                }}
+            }}
+            try {{ localStorage.setItem('mpVizMode', vizMode); }} catch (e) {{}}
+        }}
+
+        let lastVizToggleAt = 0;
+
+        function toggleVisualizerMode(ev) {{
+            if (ev && ev.type === 'keydown' && ev.key !== 'Enter' && ev.key !== ' ') return;
+            if (ev && ev.key === ' ') ev.preventDefault();
+            // touchend and click both arrive for one tap. Counting both
+            // flipped the view and flipped it straight back.
+            if (ev && (ev.type === 'touchend' || ev.type === 'click')) {{
+                const now = (typeof performance !== 'undefined') ? performance.now() : Date.now();
+                if (now - lastVizToggleAt < 450) return;
+                lastVizToggleAt = now;
+            }}
+            // A press on the drawing moves between the only two effects.
+            applyVisualizerMode(vizMode === 'spectrogram' ? 'bars' : 'spectrogram');
+        }}
+
+        // Finger or mouse. Any other name is ignored, so a third effect
+        // cannot be selected.
+        function selectVisualizerMode(ev, mode) {{
+            if (ev) {{
+                if (ev.stopPropagation) ev.stopPropagation();
+                if (ev.type === 'touchend' && ev.cancelable) ev.preventDefault();
+            }}
+            if (ev && (ev.type === 'touchend' || ev.type === 'click')) {{
+                const now = (typeof performance !== 'undefined') ? performance.now() : Date.now();
+                if (now - lastVizToggleAt < 450) return;
+                lastVizToggleAt = now;
+            }}
+            if (mode !== 'bars' && mode !== 'spectrogram') return;
+            applyVisualizerMode(mode);
+        }}
 
         function animLoop() {{
             const attack = 0.52;
@@ -6014,22 +8904,28 @@ def render_html_page(theme: Dict[str, Any]) -> str:
                 return;
             }}
 
-            // Synthesise the spectrum here, once per frame, instead of asking
-            // the server for it 10 times a second. The bars follow the phone's
-            // own audio element, which the host cannot observe.
-            if (isPlayerActive) {{
-                const t = performance.now() / 1000;
-                for (let i = 0; i < BANDS; i++) {{
-                    const base = 0.30 + 0.22 * Math.sin(t * 1.7 + i * 0.55);
-                    const wobble = 0.14 * Math.sin(t * 3.1 + i * 1.15);
-                    const tilt = 1.0 - (i / BANDS) * 0.55;
-                    targetLevels[i] = Math.max(0.05, Math.min(0.95, (base + wobble) * tilt));
-                }}
+            // The element is the clock. Waiting for the two-second poll left
+            // the bars up after a pause and flat while the mix was playing.
+            if (phoneIsAudible()) {{
+                isPlayerActive = true;
+                sampleLiveSpectrum();
+            }} else if (audioStreamEngaged) {{
+                isPlayerActive = false;
             }}
 
+            if (vizMode === 'spectrogram') paintSpectrogramFrame();
+
+            cacheBarEls();
+            const box = document.getElementById('visContainer');
+            const span = barEls[0] && barEls[0].parentElement
+                ? barEls[0].parentElement.clientHeight
+                : (box ? Math.max(8, box.clientHeight - 8) : 48);
+            // Pixels, not percentages. On iPhone a percentage height inside
+            // this flex row does not resolve, so the bars stayed at their
+            // initial size while the mix played.
             for (let i = 0; i < BANDS; i++) {{
-                const bar = document.getElementById('vb' + i);
-                const peakEl = document.getElementById('vp' + i);
+                const bar = barEls[i];
+                const peakEl = peakEls[i];
                 if (!bar) continue;
 
                 if (isPlayerActive) {{
@@ -6051,17 +8947,18 @@ def render_html_page(theme: Dict[str, Any]) -> str:
                     currentPeaks[i] = Math.max(0.04, currentPeaks[i] * 0.82);
                 }}
 
-                const barPct = Math.min(100, Math.max(4, Math.round(currentLevels[i] * 100)));
-                const peakPct = Math.min(98, Math.max(barPct, Math.round(currentPeaks[i] * 100)));
-
-                bar.style.height = barPct + '%';
-                if (peakEl) peakEl.style.bottom = peakPct + '%';
+                if (vizMode !== 'bars') continue;
+                const barPx = Math.max(2, Math.round(currentLevels[i] * span));
+                const peakPx = Math.max(barPx, Math.round(currentPeaks[i] * span));
+                bar.style.height = barPx + 'px';
+                if (peakEl) peakEl.style.bottom = Math.max(0, peakPx - 2) + 'px';
             }}
             requestAnimationFrame(animLoop);
         }}
         requestAnimationFrame(animLoop);
 
         async function seekClick(e) {{
+            clearHostAlign();
             if (!currentDurationSec || currentDurationSec <= 0) return;
             const rect = e.currentTarget.getBoundingClientRect();
             const clickX = e.clientX - rect.left;
@@ -6097,6 +8994,28 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             if (btn) btn.classList.toggle('active', Boolean(repMode && repMode !== 'off'));
         }}
 
+        // DJ pitch, matching the desk player: percent moves speed and pitch
+        // together. Browsers default preservesPitch to true, which holds the
+        // tone still while only the speed changes, so the buttons sound dead.
+        function applyStreamPitch(percent) {{
+            const p = Math.max(-20, Math.min(20, Math.round(Number(percent) || 0)));
+            currentPitchPercent = p;
+            const pill = document.getElementById('pitchPill');
+            if (pill) pill.innerText = 'Pitch: ' + (p > 0 ? '+' : '') + p + '%';
+            const audioEl = document.getElementById('mobileAudioStream');
+            if (!audioEl) return;
+            try {{
+                audioEl.preservesPitch = false;
+                audioEl.mozPreservesPitch = false;
+                audioEl.webkitPreservesPitch = false;
+                audioEl.playbackRate = 1 + (p / 100);
+            }} catch (e) {{}}
+        }}
+
+        function bumpPitch(delta) {{
+            applyStreamPitch(currentPitchPercent + Number(delta || 0));
+        }}
+
         function formatClock(seconds) {{
             const total = Math.max(0, Math.floor(Number(seconds) || 0));
             const h = Math.floor(total / 3600);
@@ -6121,22 +9040,25 @@ def render_html_page(theme: Dict[str, Any]) -> str:
 
         async function fetchEq() {{
             try {{
-                const res = await fetch('/api/eq');
+                const res = await fetch(apiUrl('/api/eq'));
                 if (!res.ok) throw new Error('eq ' + res.status);
                 const data = await res.json();
                 // The phone is the only audio output, so the visualizer follows
                 // its element. The server cannot observe audio itself.
-                isPlayerActive = audioElIsPlaying();
-
-                if (data.levels && data.levels.length) {{
-                    for (let i = 0; i < BANDS && i < data.levels.length; i++) {{
-                        targetLevels[i] = isPlayerActive ? Math.max(0.04, Math.min(1.0, data.levels[i])) : 0.04;
-                    }}
-                }}
-                // The spectrum is synthesised locally by animLoop(). There is no
-                // local audio analysis to fetch - the phone owns playback - so
-                // polling the server for it would only add load.
                 const audioEl = document.getElementById('mobileAudioStream');
+                // Zeros from the server are not a quiet mix. While this phone
+                // is the player they used to overwrite the live spectrum on
+                // every poll, which is why the equaliser sat still on iPhone.
+                if (!phoneIsAudible()) {{
+                    isPlayerActive = audioElIsPlaying();
+                    if (data.levels && data.levels.length) {{
+                        for (let i = 0; i < BANDS && i < data.levels.length; i++) {{
+                            targetLevels[i] = isPlayerActive ? Math.max(0.04, Math.min(1.0, data.levels[i])) : 0.04;
+                        }}
+                    }}
+                }} else {{
+                    isPlayerActive = true;
+                }}
                 // While mirroring a live host player, the phone element is
                 // idle until the listener opts in, so its clock would sit at
                 // zero and contradict the title. Follow the host clock instead
@@ -6168,19 +9090,10 @@ def render_html_page(theme: Dict[str, Any]) -> str:
                     // playback in a repeating fragment.
                     lastServerPos = Number(data.position_sec);
                 }}
-                if (data.volume !== undefined) {{
-                    document.getElementById('volPill').innerText = 'Vol: ' + data.volume + '%';
-                    const audioEl = document.getElementById('mobileAudioStream');
-                    // Do not fight the assistant's temporary duck while speech
-                    // is playing; the user's level is restored afterwards.
-                    if (audioEl && duckedMixVolume === null) {{
-                        audioEl.volume = Math.max(0, Math.min(1, data.volume / 100.0));
-                    }}
+                if (data.volume !== undefined && duckedMixVolume === null) {{
+                    applyStreamVolume(data.volume, data.muted);
                 }}
-                if (data.pitch_percent !== undefined) {{
-                    const p = data.pitch_percent;
-                    document.getElementById('pitchPill').innerText = 'Pitch: ' + (p > 0 ? '+' : '') + p + '%';
-                }}
+                if (data.pitch_percent !== undefined) applyStreamPitch(data.pitch_percent);
                 updateShuffleUI(Boolean(data.shuffle));
                 if (data.repeat) updateRepeatUI(data.repeat);
             }} catch (e) {{
@@ -6194,9 +9107,13 @@ def render_html_page(theme: Dict[str, Any]) -> str:
         // Empty when the stream is fine.
         function streamUnavailableDetail(data) {{
             const state = (data && data.autoplay) || {{}};
-            if (state.status === 'disabled') {{
-                return 'Streaming is disabled on the host (WEB_COMPANION_AUTOPLAY).';
-            }}
+            // `disabled` only means the host did not *arm the stream by itself*
+            // at boot (WEB_COMPANION_AUTOPLAY=off). The queue is still built and
+            // /api/stream still serves it, so a phone that taps Engage plays
+            // normally. Reporting it as "streaming is disabled" put a red
+            // failure banner over a working stream, which reads as "the button
+            // does not work" even when it just started the mix.
+            if (state.status === 'disabled') return '';
             // "ready" means the queue resolved; a library note such as
             // "Music library offline - streaming Mix Archive" is informational
             // then, not a reason the tap would fail.
@@ -6219,7 +9136,11 @@ def render_html_page(theme: Dict[str, Any]) -> str:
                 ready: '🎧 Stream ready — tap to listen',
                 playing: '🎧 Stream ready — tap to listen',
                 empty_playlist: '⏹ No mixes found in the archive',
-                disabled: '⏹ Streaming disabled',
+                // Not a fault: the host simply did not start the queue on its
+                // own. The queue is still built and /api/stream still serves it,
+                // so a tap on Engage plays normally. Painting a failure banner
+                // over a working player is what made the button look broken.
+                disabled: '🎧 Stream ready — tap to listen',
                 player_unavailable: '⚠ Stream source unavailable',
                 player_unreachable: '⚠ Stream source unreachable',
                 playback_unverified: '⚠ Stream not confirmed',
@@ -6228,12 +9149,14 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             // A phone has no hover, so the cause must be on screen, not only in
             // the tooltip: "No mixes found" is wrong when the reason is a macOS
             // privacy block on the archive volume.
-            if (state.detail && state.status !== 'ready' && state.status !== 'playing') {{
+            if (state.detail && state.status !== 'ready' && state.status !== 'playing'
+                    && state.status !== 'disabled') {{
                 el.innerText += ' — ' + state.detail;
             }}
             el.className = 'autoplay-notice ' + (
-                (state.status === 'ready' || state.status === 'playing') ? 'ok' :
-                (state.status === 'empty_playlist' || state.status === 'disabled') ? '' : 'warn'
+                (state.status === 'ready' || state.status === 'playing'
+                    || state.status === 'disabled') ? 'ok' :
+                (state.status === 'empty_playlist') ? '' : 'warn'
             );
             el.style.display = 'block';
             if (state.detail) el.title = state.detail;
@@ -6264,7 +9187,7 @@ def render_html_page(theme: Dict[str, Any]) -> str:
 
         function noteServerGone() {{
             if (restartNoticeShown) return;
-            showRestartNotice('MP Audio Web Companion is restarting — reconnecting…');
+            showRestartNotice('MP Audio Player (Web) is restarting — reconnecting…');
         }}
 
         function reloadForFreshInstance() {{
@@ -6279,6 +9202,10 @@ def render_html_page(theme: Dict[str, Any]) -> str:
         // tap, which is exactly what they do not need mid-set.
         function reattachToRestartedServer() {{
             const audioEl = document.getElementById('mobileAudioStream');
+            // The element is about to be paused on purpose. Remember that the
+            // listener still wants sound, or the poll reloads the mix and
+            // leaves it stopped. That is the drop that does not come back.
+            window.__resumeAfterReattach = audioStreamEngaged && !listenerPaused;
             audioStreamConfigured = false;
             streamAutoStarted = false;
             activeAudioFile = "";
@@ -6290,6 +9217,10 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             // successful play (or a track change) resets it.
             mediaRecoveryUsed = false;
             lastMediaErrorAt = 0;
+            // A restart is not a skip: the element was torn down on purpose, so
+            // there is no "resume the next mix" intent to carry across polls.
+            // The files this phone wrote off stay written off.
+            skipResumePending = false;
             if (audioEl) {{
                 try {{
                     audioEl.pause();
@@ -6306,7 +9237,7 @@ def render_html_page(theme: Dict[str, Any]) -> str:
 
         async function fetchStatus() {{
             try {{
-                const res = await fetch('/api/status');
+                const res = await fetch(apiUrl('/api/status'));
                 const data = await res.json();
                 statusFailureCount = 0;
 
@@ -6318,7 +9249,7 @@ def render_html_page(theme: Dict[str, Any]) -> str:
                 if (data.instance) {{
                     if (serverInstance && data.instance !== serverInstance) {{
                         serverInstance = data.instance;
-                        showRestartNotice('MP Audio Web Companion has been restarted — reconnecting…');
+                        showRestartNotice('MP Audio Player (Web) has been restarted — reconnecting…');
                         reattachToRestartedServer();
                         setTimeout(() => hideRestartNotice(), 4000);
                         return;
@@ -6338,16 +9269,40 @@ def render_html_page(theme: Dict[str, Any]) -> str:
                     badge.style.background = 'var(--badge-bg)';
                     badge.style.color = 'var(--badge-color)';
                     badge.style.borderColor = 'var(--badge-color)';
-                    document.getElementById('btnPlayPause').innerText = '⏸ Pause';
                 }} else {{
                     badge.style.background = 'rgba(255, 170, 0, 0.15)';
                     badge.style.color = '#ffaa00';
                     badge.style.borderColor = '#ffaa00';
-                    document.getElementById('btnPlayPause').innerText = '⏯ Play';
                 }}
+                // The badge reports the daemon; the transport button reports
+                // what will happen when it is tapped. Those differ on a phone
+                // whose element was paused by the OS, so the button is derived
+                // from media events and only falls back to the daemon state
+                // when the desktop player owns the audio. It is painted once
+                // host ownership is known, further down.
+                lastServerState = state;
 
                 document.getElementById('sourceBadge').innerText = (data.player || "None").toUpperCase();
+                if (data.volume !== undefined && duckedMixVolume === null) {{
+                    applyStreamVolume(data.volume, data.muted);
+                }}
+                if (data.pitch_percent !== undefined) applyStreamPitch(data.pitch_percent);
                 currentDurationSec = data.duration_sec || 0;
+                // What bounds the auto-skip run, and the host's own verdict that
+                // every entry has already failed (e.g. another phone proved it,
+                // or this page was reloaded mid-run).
+                queueLength = Number(data.queue_len) || queueLength;
+                serverUnplayableCount = Number(data.unplayable_count) || 0;
+                if (data.playback_exhausted) {{
+                    showPlaybackExhaustedNotice();
+                }} else if (exhaustedNoticeShown) {{
+                    // The host found something playable again (a rescan, a
+                    // repaired file); forget the old verdict so the next failure
+                    // can start a fresh run.
+                    exhaustedNoticeShown = false;
+                    consecutiveSkips = 0;
+                    skipRunStartAt = 0;
+                }}
                 updateAutoplayNotice(data.autoplay);
                 streamUnavailableReason = streamUnavailableDetail(data);
                 syncStreamOverlayDetail();
@@ -6356,12 +9311,37 @@ def render_html_page(theme: Dict[str, Any]) -> str:
                 // Mirror its file for an opt-in listen, but never autoplay.
                 const wasHostActive = hostPlayerActive;
                 hostPlayerActive = Boolean(data.host_player);
-                if (!hostPlayerActive && wasHostActive) {{
-                    hostPlayerFile = "";
+                if (hostPlayerActive) {{
+                    lastHostPositionSec = Number(data.position_sec) || 0;
+                    lastHostPositionAt = performance.now();
+                }} else {{
+                    lastHostPositionSec = 0;
+                    if (wasHostActive) hostPlayerFile = "";
                 }}
 
                 if (data.active_file && activeAudioFile !== data.active_file) {{
-                    const wasPlaying = audioStreamEngaged && audioElIsPlaying();
+                    // A mix that just ran to its end still counts as "was
+                    // playing": the element has already flipped to ended, so
+                    // audioElIsPlaying() is false by the time the server names
+                    // the next file. Without the `ended` term the queue
+                    // advanced but the new mix sat paused, which read as the
+                    // +30 button stopping the music at the end of a track.
+                    const prevEl = document.getElementById('mobileAudioStream');
+                    const wasPlaying = audioStreamEngaged &&
+                        (audioElIsPlaying() || Boolean(prevEl && prevEl.ended));
+                    // A skip is also a reason to keep playing: the listener did
+                    // not press pause, the file simply failed. Without this the
+                    // replacement mix loaded paused and the skip looked like a
+                    // stop.
+                    const resumeAfterSkip = skipResumePending && !hostPlayerActive;
+                    skipResumePending = false;
+                    // A reconnect clears the element before this poll, so
+                    // "was playing" is already false. The flag remembers that
+                    // the listener had not pressed Stop.
+                    const resumeAfterReattach = Boolean(window.__resumeAfterReattach);
+                    window.__resumeAfterReattach = false;
+                    const keepListening = audioStreamEngaged && !listenerPaused
+                        && (!hostPlayerActive || followStream);
                     activeAudioFile = data.active_file;
                     audioStreamConfigured = false;
                     lastServerPos = -1.0;
@@ -6378,27 +9358,42 @@ def render_html_page(theme: Dict[str, Any]) -> str:
                         quickEndFile = "";
                         quickEndRestarts = 0;
                     }}
+                    // A file this phone has already written off must never be
+                    // loaded again, even if the server names it (a stale cache,
+                    // or a rescan that has not happened yet).
+                    if (unplayableFiles.has(activeAudioFile)) {{
+                        sendAction('track_failed', {{ path: activeAudioFile }});
+                    }}
                     const audioEl = document.getElementById('mobileAudioStream');
-                    if (audioEl) {{
+                    const continueOnPhone = wasPlaying || resumeAfterSkip || resumeAfterReattach || keepListening;
+                    // On an iPhone the first load has to happen inside the
+                    // Engage tap. Pointing the element at the file here starts
+                    // a load outside any gesture, and the tap's play() is then
+                    // rejected.
+                    if (audioEl && (!needsPlaybackGesture() || continueOnPhone)) {{
                         audioEl.src = '/api/stream?file=' + encodeURIComponent(data.active_file);
                         audioStreamConfigured = true;
                         // A track change is followed by the same rule as the
                         // first engage: resume only from a safe point, never
                         // from the tail of a file that ran unattended.
-                        const resumeAt = Number(data.resume_sec) || 0;
-                        if (resumeAt > 0) {{
-                            // Wait for metadata before seeking, otherwise the
+                        const resumeAt = hostPlayerActive
+                            ? (Number(data.position_sec) || Number(data.resume_sec) || 0)
+                            : (Number(data.resume_sec) || 0);
+                        if (resumeAt > 0.5) {{
+                            // Wait for a timeline before seeking, otherwise the
                             // assignment is discarded by the new source load.
-                            audioEl.addEventListener('loadedmetadata', function once() {{
-                                audioEl.removeEventListener('loadedmetadata', once);
-                                seekAudioTo(resumeAt, true);
-                            }});
+                            // A live desk player uses its real position, not
+                            // the resume point that turns the tail of a file
+                            // into 0.
+                            alignPlaybackTo(resumeAt, hostPlayerActive);
                         }}
                         audioEl.load();
-                        // Keep playing across a server-side track change, but
-                        // only when the phone is the one playing. With a live
-                        // host player the phone stays silent unless engaged.
-                        if (wasPlaying && !hostPlayerActive) {{
+                        applyStreamPitch(currentPitchPercent);
+                        // Keep playing across a track change and a reconnect.
+                        // Stop is the only thing that leaves the new mix
+                        // paused. A desk player that this page has not engaged
+                        // stays silent: keepListening is false until Engage.
+                        if (wasPlaying || resumeAfterSkip || resumeAfterReattach || keepListening) {{
                             audioEl.play().catch(() => {{}});
                         }}
                     }}
@@ -6408,6 +9403,8 @@ def render_html_page(theme: Dict[str, Any]) -> str:
                     lastServerResume = Number(data.resume_sec) || 0;
                 }}
                 if (hostPlayerActive) syncHostPlayerFile();
+                // Host ownership is settled now, so the icon can be trusted.
+                syncPlayPauseButton(state);
                 // First status poll: pull the stream without waiting for a tap,
                 // unless the host player is the one on air.
                 maybeAutoStartStream();
@@ -6447,7 +9444,28 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             }}
         }}
 
+        function apiUrl(path) {{
+            if (!followStream) return path;
+            return path + (path.indexOf('?') === -1 ? '?' : '&') + 'follow=stream';
+        }}
+
         async function sendAction(act, params = {{}}) {{
+            // The first transport tap can land while Engage is still copying
+            // the desk's file into the session. Hold it and run it after, or
+            // that copy writes the old file back over the tap.
+            if (adoptInFlight && act !== 'adopt_host') {{
+                pendingTransport = {{ act: act, params: params }};
+                return;
+            }}
+            // Next and previous are a request to hear that mix, including
+            // when the page was sitting on Stop. Leaving listenerPaused set
+            // loaded the new file and kept it silent.
+            if ((act === 'next' || act === 'previous' || act === 'prev') && phoneOwnsPlayback()) {{
+                listenerPaused = false;
+            }}
+            if (phoneOwnsPlayback() && !params.target) {{
+                params = Object.assign({{ target: 'stream' }}, params);
+            }}
             let url = '/api/control?action=' + encodeURIComponent(act);
             for (const [k, v] of Object.entries(params)) {{
                 url += '&' + encodeURIComponent(k) + '=' + encodeURIComponent(v);
@@ -6463,7 +9481,74 @@ def render_html_page(theme: Dict[str, Any]) -> str:
         // ---------------------------------------------------------------------
         // Desktop launch pad (Linux only). A running app keeps its button
         // pressed down; an app that is not running sits in the raised state.
+        //
+        // MP Visualizer is different: it owns exactly one window, so its
+        // button walks through Off -> Windowed -> Fullscreen -> Off and always
+        // reflects what the host reports, not how many times it was tapped.
+        // In TTY Audio Mode every desktop launcher is disabled and the panel
+        // says why.
         // ---------------------------------------------------------------------
+        let launchPadTtyMode = false;
+
+        function paintTtyMode(ttyMode) {{
+            launchPadTtyMode = Boolean(ttyMode);
+            const pad = document.getElementById('launchPad');
+            const banner = document.getElementById('launchPadTty');
+            if (pad) pad.classList.toggle('tty-disabled', launchPadTtyMode);
+            if (banner) {{
+                if (launchPadTtyMode) {{
+                    banner.hidden = false;
+                    if (!banner.dataset.filled) {{
+                        banner.innerHTML = '';
+                        const title = document.createElement('strong');
+                        title.textContent = '⌨ MP Mix Manager TTY Audio Mode';
+                        const body = document.createElement('span');
+                        body.textContent = 'These desktop launchers are disabled while '
+                            + 'the manager runs in the text console. Return to the '
+                            + 'desktop to use them.';
+                        banner.appendChild(title);
+                        banner.appendChild(body);
+                        banner.dataset.filled = '1';
+                    }}
+                }} else {{
+                    banner.hidden = true;
+                }}
+            }}
+            document.querySelectorAll('#launchPad .launch-btn').forEach(btn => {{
+                if (launchPadTtyMode) {{
+                    btn.disabled = true;
+                    btn.setAttribute('aria-disabled', 'true');
+                }} else {{
+                    btn.disabled = false;
+                    btn.removeAttribute('aria-disabled');
+                }}
+            }});
+        }}
+
+        function paintVisualizer(data) {{
+            const btn = document.getElementById('launchVisualizer');
+            if (!btn) return;
+            const state = (data && data.visualizer) || {{}};
+            const running = Boolean(state.running);
+            const fullscreen = Boolean(state.fullscreen);
+            const pending = Boolean(state.pending);
+            btn.classList.toggle('running', running);
+            btn.classList.toggle('fullscreen', running && fullscreen);
+            btn.setAttribute('aria-pressed', running ? 'true' : 'false');
+            const label = document.getElementById('launchVisualizerState');
+            if (label) {{
+                label.innerText = !running ? 'Off'
+                    : (pending ? 'Opening…' : (fullscreen ? 'Fullscreen' : 'Windowed'));
+            }}
+            btn.title = !running
+                ? 'Open MP Visualizer on the computer'
+                : (pending
+                    ? 'MP Visualizer is starting up'
+                    : (fullscreen
+                        ? 'MP Visualizer is fullscreen — press to close it'
+                        : 'MP Visualizer is open — press for fullscreen'));
+        }}
+
         function paintLaunchPad(data) {{
             if (!data || !data.supported) return;
             const buttons = document.querySelectorAll('#launchPadGrid .launch-btn[data-app]');
@@ -6480,6 +9565,8 @@ def render_html_page(theme: Dict[str, Any]) -> str:
                 tray.innerText = data.tray_running ? 'Tray on' : 'Tray off';
                 tray.classList.toggle('ok', Boolean(data.tray_running));
             }}
+            paintVisualizer(data);
+            paintTtyMode(data.tty_mode);
         }}
 
         async function fetchLaunchPad() {{
@@ -6505,6 +9592,10 @@ def render_html_page(theme: Dict[str, Any]) -> str:
         }}
 
         async function launchApp(role) {{
+            if (launchPadTtyMode) {{
+                launchPadNote('TTY Audio Mode is active — desktop launchers are disabled.', false);
+                return;
+            }}
             const btn = document.querySelector('#launchPadGrid .launch-btn[data-app="' + role + '"]');
             if (!btn || btn.classList.contains('busy')) return;
             btn.classList.add('busy');
@@ -6515,6 +9606,9 @@ def render_html_page(theme: Dict[str, Any]) -> str:
                 if (data && data.success) {{
                     const verb = data.action === 'launch' ? 'Launched' : 'Brought forward';
                     launchPadNote(verb + ' ' + (data.label || btn.dataset.label || role) + ' on the computer.', true);
+                }} else if (data && data.action === 'tty_mode') {{
+                    paintTtyMode(true);
+                    launchPadNote('TTY Audio Mode is active — desktop launchers are disabled.', false);
                 }} else {{
                     launchPadNote('Could not open ' + (btn.dataset.label || role) + '.', false);
                 }}
@@ -6528,7 +9622,52 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             }}
         }}
 
+        async function launchVisualizer() {{
+            if (launchPadTtyMode) {{
+                launchPadNote('TTY Audio Mode is active — the MP Visualizer button is disabled.', false);
+                return;
+            }}
+            const btn = document.getElementById('launchVisualizer');
+            if (!btn || btn.classList.contains('busy')) return;
+            const wasRunning = btn.classList.contains('running');
+            const wasFullscreen = btn.classList.contains('fullscreen');
+            btn.classList.add('busy');
+            launchPadNote(wasFullscreen ? 'Closing MP Visualizer…'
+                : (wasRunning ? 'Taking MP Visualizer fullscreen…' : 'Opening MP Visualizer…'), false);
+            try {{
+                const res = await fetch('/api/launchpad/visualizer', {{ method: 'POST' }});
+                const data = await res.json();
+                if (data && data.success) {{
+                    if (data.action === 'launch') {{
+                        launchPadNote('MP Visualizer opened on the computer.', true);
+                    }} else if (data.action === 'fullscreen') {{
+                        launchPadNote('MP Visualizer is fullscreen. Press again to close it.', true);
+                    }} else if (data.action === 'already_running') {{
+                        launchPadNote('MP Visualizer is starting up…', false);
+                    }} else {{
+                        launchPadNote('MP Visualizer closed.', true);
+                    }}
+                }} else if (data && data.action === 'tty_mode') {{
+                    paintTtyMode(true);
+                    launchPadNote('TTY Audio Mode is active — the MP Visualizer button is disabled.', false);
+                }} else {{
+                    launchPadNote((data && data.detail) || 'Could not control the MP Visualizer.', false);
+                }}
+            }} catch (e) {{
+                launchPadNote('Could not reach the computer.', false);
+            }} finally {{
+                btn.classList.remove('busy');
+                setTimeout(fetchLaunchPad, 800);
+                setTimeout(fetchLaunchPad, 2500);
+                setTimeout(fetchLaunchPad, 5000);
+            }}
+        }}
+
         async function closeAllApps() {{
+            if (launchPadTtyMode) {{
+                launchPadNote('TTY Audio Mode is active — desktop launchers are disabled.', false);
+                return;
+            }}
             const btn = document.getElementById('launchCloseAll');
             if (!btn || btn.classList.contains('busy')) return;
             btn.classList.add('busy');
@@ -6541,8 +9680,15 @@ def render_html_page(theme: Dict[str, Any]) -> str:
                     const b = document.querySelector('#launchPadGrid .launch-btn[data-app="' + r + '"]');
                     return b ? b.dataset.label : r;
                 }});
-                if (data && data.success) {{
+                if (data && data.action === 'closing') {{
+                    // The host answers before the exit movie finishes. The
+                    // launch pad poll turns the buttons off as each app goes.
+                    launchPadNote('Closing the desktop suite — the tray icon stays up.', true);
+                }} else if (data && data.success) {{
                     launchPadNote('All MP apps closed. Tray icon stays up.', true);
+                }} else if (data && data.action === 'tty_mode') {{
+                    paintTtyMode(true);
+                    launchPadNote('TTY Audio Mode is active — desktop launchers are disabled.', false);
                 }} else if (names.length) {{
                     launchPadNote('Still open: ' + names.join(', '), false);
                 }} else {{
@@ -6554,6 +9700,7 @@ def render_html_page(theme: Dict[str, Any]) -> str:
                 btn.classList.remove('busy');
                 setTimeout(fetchLaunchPad, 600);
                 setTimeout(fetchLaunchPad, 2500);
+                setTimeout(fetchLaunchPad, 6000);
             }}
         }}
 
@@ -6622,6 +9769,7 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             // Stop the theme's CSS animations too: on iOS they keep the GPU and
             // the compositor busy for a tab nobody is looking at.
             document.body.classList.toggle('dynamic-rainbow-glass-frozen', paused);
+            syncRainbowDrive();
             if (paused) {{
                 stopPolls();
             }} else {{
@@ -6636,11 +9784,18 @@ def render_html_page(theme: Dict[str, Any]) -> str:
         document.addEventListener('visibilitychange', () => {{
             setPollingPaused(document.hidden);
         }});
-        window.addEventListener('pagehide', () => setPollingPaused(true));
-        window.addEventListener('pageshow', (e) => {{
-            if (e.persisted) setPollingPaused(false);
+        // iOS Safari fires pagehide while the document is still on screen
+        // (bfcache snapshot, audio session). Freezing there, and only
+        // unfreezing when pageshow says the page was restored, left the
+        // rainbow sitting on one colour for the whole visit.
+        window.addEventListener('pagehide', () => {{
+            if (document.hidden) setPollingPaused(true);
+        }});
+        window.addEventListener('pageshow', () => {{
+            if (!document.hidden) setPollingPaused(false);
         }});
 
+        syncRainbowDrive();
         startPolls();
         fetchEq();
         fetchStatus();
@@ -6665,12 +9820,87 @@ class CompanionHandler(http.server.BaseHTTPRequestHandler):
     # closed connection, which is the correct outcome.
     timeout = 30
 
+    # HTTP/1.1 so the dashboard's several polls per second reuse one connection
+    # instead of opening a fresh socket each time and filling TIME_WAIT.
+    protocol_version = "HTTP/1.1"
+
+    # Headers collected during a request (Set-Cookie, etc.), appended by
+    # end_headers so every response path gets them without touching each
+    # handler. Reset per request in handle_one_request: this handler is threaded
+    # and keep-alive reuses the instance, so a class-level list would be shared
+    # between concurrent requests.
+    _extra_headers: List[Tuple[str, str]] = []
+
+    def handle_one_request(self):
+        # A response path may queue headers before any response exists, so the
+        # list must be per-request and must survive send_response().
+        self._extra_headers = []
+        return super().handle_one_request()
+
+    def end_headers(self):
+        try:
+            for name, value in sec.security_headers():
+                self.send_header(name, value)
+            for name, value in self._extra_headers:
+                self.send_header(name, value)
+        finally:
+            self._extra_headers = []
+        super().end_headers()
+
+    # ------------------------------------------------------------------
+    # ACCESS CONTROL
+    # ------------------------------------------------------------------
+    def _client_allowed(self) -> bool:
+        """Refuse a peer outside WEB_COMPANION_ALLOW_CIDR (empty = allow all)."""
+        if sec.is_allowed_client(self.client_address, COMPANION_CIDRS):
+            return True
+        self._send_plain(403, "This device is not on the companion allowlist.")
+        return False
+
+    def _request_allowed(self) -> bool:
+        """The one gate every request passes through.
+
+        There is no password: a device that can reach this port is allowed,
+        unless the operator narrowed it with WEB_COMPANION_ALLOW_CIDR. That
+        opt-in list is the way to restrict a machine on a network you do not
+        control; on a home/studio LAN the dashboard simply opens.
+
+        CSRF is a separate check on mutating methods (`_require_mutation`),
+        because a plain GET must stay open for the dashboard itself.
+        """
+        return self._client_allowed()
+
+    def _send_plain(self, code: int, message: str) -> None:
+        body = json.dumps({"error": message}).encode("utf-8")
+        try:
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            self.close_connection = True
+
+    def _require_mutation(self) -> bool:
+        """CSRF gate for a state-changing POST."""
+        problem = sec.validate_mutation(self.headers)
+        if not problem:
+            return True
+        self._send_plain(403, f"Request refused: {problem}.")
+        return False
+
     def do_HEAD(self):
         url = urllib.parse.urlparse(self.path)
+        parsed_query = urllib.parse.parse_qs(url.query)
+        # HEAD answers the same route table as GET, so it passes the same
+        # allowlist gate rather than being a way around it.
+        if not self._request_allowed():
+            return
         if url.path in ("/", "/index.html"):
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+            self.send_header("Content-Length", "0")
             self.end_headers()
         elif url.path in ("/api/status", "/api/theme", "/api/eq", "/api/autoplay",
                           "/api/themes", "/api/set_theme", "/api/playlist", "/api/mode",
@@ -6680,82 +9910,63 @@ class CompanionHandler(http.server.BaseHTTPRequestHandler):
                           "/api/assistant/abort"):
             self.send_response(200)
             self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Access-Control-Allow-Origin", "*")
+            # HTTP/1.1 keep-alive needs a framing header even on HEAD; without
+            # one the client waits for an EOF that never arrives.
+            self.send_header("Content-Length", "0")
             self.end_headers()
         else:
             self.send_response(404)
+            self.send_header("Content-Length", "0")
             self.end_headers()
 
     def do_GET(self):
         url = urllib.parse.urlparse(self.path)
         parsed_query = urllib.parse.parse_qs(url.query)
 
+        if not self._request_allowed():
+            return
+
         if url.path in ("/", "/index.html"):
             current_theme = get_theme_palette(CLI_THEME)
             html_content = render_html_page(current_theme)
+            body = html_content.encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+            self.send_header("Content-Length", str(len(body)))
             self.end_headers()
-            self.wfile.write(html_content.encode("utf-8"))
+            self.wfile.write(body)
         elif url.path == "/api/eq":
-            eq_data = get_eq_status()
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
-            self.wfile.write(json.dumps(eq_data).encode("utf-8"))
+            follow = parsed_query.get("follow", [""])[0]
+            self._send_json(200, get_eq_status(follow))
         elif url.path == "/api/status":
-            status = get_playback_status(CLI_THEME)
+            follow = parsed_query.get("follow", [""])[0]
+            status = get_playback_status(CLI_THEME, follow)
             status["autoplay"] = autoplay_state()
             status["instance"] = INSTANCE_ID
             announcement = current_announcement()
             if announcement:
                 status["announcement"] = announcement["message"]
                 status["announcement_at"] = announcement["at"]
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
-            self.wfile.write(json.dumps(status).encode("utf-8"))
+            self._send_json(200, status)
         elif url.path == "/api/autoplay":
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
-            self.wfile.write(json.dumps(autoplay_state()).encode("utf-8"))
+            self._send_json(200, autoplay_state())
         elif url.path == "/api/theme":
-            theme = get_theme_palette(CLI_THEME)
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
-            self.wfile.write(json.dumps(theme).encode("utf-8"))
+            self._send_json(200, get_theme_palette(CLI_THEME))
         elif url.path == "/api/themes":
-            payload = {
+            self._send_json(200, {
                 "current": get_current_theme_id(CLI_THEME),
                 "themes": available_themes(),
-            }
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
-            self.wfile.write(json.dumps(payload).encode("utf-8"))
+            })
         elif url.path == "/api/set_theme":
             requested = parsed_query.get("theme", [""])[0]
             chosen = set_web_theme(requested) if requested else None
             success = chosen is not None
-            payload = {
+            self._send_json(200 if success else 400, {
                 "success": success,
                 "theme": chosen or get_current_theme_id(CLI_THEME),
                 "palette": get_theme_palette(CLI_THEME) if success else {},
-            }
-            self.send_response(200 if success else 400)
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Cache-Control", "no-store")
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
-            self.wfile.write(json.dumps(payload).encode("utf-8"))
+            })
         elif url.path == "/api/mode":
             requested = parsed_query.get("mode", [""])[0]
             chosen = set_library_mode(requested) if requested else None
@@ -6767,73 +9978,39 @@ class CompanionHandler(http.server.BaseHTTPRequestHandler):
                 "library_fallback": bool(_queue_source_state.get("fallback")),
                 "library_detail": _queue_source_state.get("detail", ""),
             }
-            self.send_response(200 if chosen else 400)
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Cache-Control", "no-store")
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
-            self.wfile.write(json.dumps(payload).encode("utf-8"))
+            self._send_json(200 if chosen else 400, payload)
         elif url.path == "/api/playlist":
-            payload = get_mini_playlist()
+            follow = parsed_query.get("follow", [""])[0]
+            # `q` is the playlist search box. The filter runs on the current
+            # library only, and the rows keep the queue index a tap plays.
+            raw_query = parsed_query.get("q", [""])[0]
+            payload = get_mini_playlist(follow=follow, query=raw_query)
             payload["shuffle"] = bool(load_stream_session().get("shuffle", False))
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Cache-Control", "no-store")
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
-            self.wfile.write(json.dumps(payload).encode("utf-8"))
+            self._send_json(200, payload)
         elif url.path == "/api/play-random":
             payload = play_random_track()
-            status = 200 if payload.get("success") else 409
-            self.send_response(status)
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Cache-Control", "no-store")
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
-            self.wfile.write(json.dumps(payload).encode("utf-8"))
+            self._send_json(200 if payload.get("success") else 409, payload)
         elif url.path == "/api/launchpad":
-            payload = launch_pad_status()
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Cache-Control", "no-store")
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
-            self.wfile.write(json.dumps(payload).encode("utf-8"))
+            self._send_json(200, launch_pad_status())
         elif url.path == "/api/announce":
             # The tray posts here just before it stops the service; a dashboard
             # polling this endpoint can show the notice even if /api/status is
             # already unreachable.
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Cache-Control", "no-store")
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
-            self.wfile.write(json.dumps(
-                {"announcement": current_announcement()}
-            ).encode("utf-8"))
+            self._send_json(200, {"announcement": current_announcement()})
         elif url.path == "/api/assistant/status":
-            payload = harmony_status(force="1" in parsed_query.get("force", ["0"]))
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Cache-Control", "no-store")
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
-            self.wfile.write(json.dumps(payload).encode("utf-8"))
+            self._send_json(
+                200,
+                harmony_status(force="1" in parsed_query.get("force", ["0"])),
+            )
         elif url.path == "/api/assistant/voices":
             current = harmony_status().get("voice", HARMONY_DEFAULT_VOICE)
-            payload = {
+            self._send_json(200, {
                 "current": current,
                 "current_label": harmony_voice_label(current),
                 "default": HARMONY_DEFAULT_VOICE,
                 "voice_speed": harmony_voice_speed(),
                 "voices": [{"id": vid, "label": label} for vid, label in HARMONY_VOICES.items()],
-            }
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Cache-Control", "no-store")
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
-            self.wfile.write(json.dumps(payload).encode("utf-8"))
+            })
         elif url.path == "/api/assistant/speech":
             # GET form for simple links and tests; the dashboard itself POSTs,
             # because a long reply does not fit comfortably in a URL.
@@ -6847,21 +10024,31 @@ class CompanionHandler(http.server.BaseHTTPRequestHandler):
             self._send_assistant_speech(raw_text, voice, speed)
         elif url.path == "/api/assistant/start":
             payload = start_harmony_agent()
-            self.send_response(200 if payload.get("success") else 501)
+            self._send_json(200 if payload.get("success") else 501, payload)
+        elif url.path == "/healthz":
+            payload = {"ok": True, "service": "mp-web-companion", "version": VERSION}
+            body = json.dumps(payload).encode("utf-8")
+            self.send_response(200)
             self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Cache-Control", "no-store")
-            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Content-Length", str(len(body)))
             self.end_headers()
-            self.wfile.write(json.dumps(payload).encode("utf-8"))
+            self.wfile.write(body)
         elif url.path == "/api/stream":
-            file_path = parsed_query.get("file", [""])[0]
-            if file_path and os.path.isfile(file_path):
-                self._serve_audio_stream(file_path)
+            # Containment: the value arrives from the network, so resolve it,
+            # require it to live inside a configured library root, and require
+            # an audio suffix. Missing and forbidden answer identically so the
+            # status code cannot be used to probe the filesystem.
+            requested = parsed_query.get("file", [""])[0]
+            safe_path = sec.safe_stream_path(requested, stream_roots())
+            if safe_path is not None:
+                self._serve_audio_stream(str(safe_path))
                 return
             self.send_response(404)
+            self.send_header("Content-Length", "0")
             self.end_headers()
         else:
             self.send_response(404)
+            self.send_header("Content-Length", "0")
             self.end_headers()
 
     # --------------------------------------------------------------------------
@@ -6884,18 +10071,10 @@ class CompanionHandler(http.server.BaseHTTPRequestHandler):
             # restarted" and retried forever. A 404 is unambiguous: the page
             # stops and can explain that this mix is empty on the computer.
             if not is_streamable_file(file_path):
-                self.send_response(404)
-                self.send_header("Content-Type", "application/json; charset=utf-8")
-                self.send_header("Cache-Control", "no-store")
-                self.send_header("Access-Control-Allow-Origin", "*")
-                self.end_headers()
-                try:
-                    self.wfile.write(json.dumps({
-                        "error": "no_audio_frames",
-                        "detail": "The mix file has no playable audio.",
-                    }).encode("utf-8"))
-                except (BrokenPipeError, ConnectionResetError):
-                    self.close_connection = True
+                self._send_json(404, {
+                    "error": "no_audio_frames",
+                    "detail": "The mix file has no playable audio.",
+                })
                 return
 
             file_size = os.path.getsize(file_path)
@@ -6921,7 +10100,6 @@ class CompanionHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("Content-Type", content_type)
             self.send_header("Accept-Ranges", "bytes")
             self.send_header("Cache-Control", "no-store")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
 
             with open(file_path, "rb") as f:
@@ -6975,7 +10153,13 @@ class CompanionHandler(http.server.BaseHTTPRequestHandler):
 
         if start >= file_size:
             return None, 0
-        return start, min(end, file_size - 1)
+        end = min(end, file_size - 1)
+        # RFC 7233: a range whose last byte precedes its first is unsatisfiable.
+        # Without this, `bytes=100-50` produced `Content-Length: -49`, which is
+        # an invalid header: the phone read nothing and the player errored.
+        if end < start:
+            return None, 0
+        return start, end
 
     def _read_json_body(self, limit: int = 65536) -> Dict[str, Any]:
         try:
@@ -7005,7 +10189,6 @@ class CompanionHandler(http.server.BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
-        self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         try:
@@ -7032,12 +10215,19 @@ class CompanionHandler(http.server.BaseHTTPRequestHandler):
         self.send_header("Content-Type", "audio/wav")
         self.send_header("Content-Length", str(len(audio)))
         self.send_header("Cache-Control", "no-store")
-        self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
         try:
             self.wfile.write(audio)
         except (BrokenPipeError, ConnectionResetError):
             self.close_connection = True
+
+    # A hung agent used to pin a companion worker for half an hour. The phone
+    # gives up long before that, so the relay is bounded and emits a heartbeat
+    # the dashboard can use to tell "thinking" from "connection died".
+    ASSISTANT_TIMEOUT = 180.0
+    ASSISTANT_HEARTBEAT = 10.0
+    ASSISTANT_MAX_MESSAGES = 24
+    ASSISTANT_MAX_CONTENT = 16384
 
     def _stream_assistant_sse(self, payload: Dict[str, Any]) -> None:
         """Relay the agent's token stream as SSE to the dashboard.
@@ -7046,12 +10236,18 @@ class CompanionHandler(http.server.BaseHTTPRequestHandler):
         verbatim, so the page can render tokens as they arrive and the whole
         reply is concatenated at the end for speech.
         """
-        session_id = "web-companion"
+        # A per-browser session id keeps two phones from overwriting each
+        # other's conversation. It is derived from the token the client
+        # already presents, so no extra state is needed; the header is
+        # preferred because the agent keys on X-Session-Id.
+        session_id = (
+            (self.headers.get("X-MP-Session") or "").strip()
+            or "web-companion"
+        )[:64]
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
         self.send_header("Cache-Control", "no-cache")
         self.send_header("Connection", "close")
-        self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
 
         def emit(obj: Any) -> bool:
@@ -7084,7 +10280,11 @@ class CompanionHandler(http.server.BaseHTTPRequestHandler):
 
         body = {
             "model": payload.get("model") or "mp-harmony-agent",
-            "messages": payload.get("messages") or [],
+            # Sanitise the client-supplied conversation. A client that injects
+            # a `system` role can rewrite the agent's instructions, which is a
+            # prompt-injection route into its shell tools; oversized bodies are
+            # a cheap way to exhaust the worker pool.
+            "messages": sanitize_agent_messages(payload.get("messages")),
             "stream": True,
         }
         request = urllib.request.Request(
@@ -7094,7 +10294,9 @@ class CompanionHandler(http.server.BaseHTTPRequestHandler):
             method="POST",
         )
         try:
-            response = urllib.request.urlopen(request, timeout=1800.0)
+            response = urllib.request.urlopen(
+                request, timeout=self.ASSISTANT_TIMEOUT
+            )
         except (urllib.error.URLError, OSError) as exc:
             emit({"object": "mp.assistant.error",
                   "message": f"The MP Harmony Agent is not reachable: {exc}"})
@@ -7133,6 +10335,13 @@ class CompanionHandler(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self):
         url = urllib.parse.urlparse(self.path)
+        parsed_query = urllib.parse.parse_qs(url.query)
+
+        if not self._request_allowed():
+            return
+        if not self._require_mutation():
+            return
+
         if url.path == "/api/assistant/chat":
             payload = self._read_json_body()
             messages = payload.get("messages") or []
@@ -7194,11 +10403,7 @@ class CompanionHandler(http.server.BaseHTTPRequestHandler):
             params = urllib.parse.parse_qs(url.query)
             action = params.get("action", [""])[0]
             success = control_player(action, params)
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
-            self.wfile.write(json.dumps({"success": success, "action": action}).encode("utf-8"))
+            self._send_json(200, {"success": success, "action": action})
         elif url.path == "/api/announce":
             message = ANNOUNCE_MESSAGE_DEFAULT
             try:
@@ -7214,31 +10419,31 @@ class CompanionHandler(http.server.BaseHTTPRequestHandler):
                 except (ValueError, UnicodeDecodeError, OSError):
                     pass
             queued = set_announcement(message)
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Cache-Control", "no-store")
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
-            self.wfile.write(json.dumps(
-                {"success": queued is not None, "announcement": queued}
-            ).encode("utf-8"))
-        elif url.path in ("/api/launchpad/launch", "/api/launchpad/close"):
+            self._send_json(200, {
+                "success": queued is not None, "announcement": queued,
+            })
+        elif url.path in ("/api/launchpad/launch", "/api/launchpad/close",
+                          "/api/launchpad/visualizer"):
             params = urllib.parse.parse_qs(url.query)
             if url.path.endswith("/close"):
-                payload = launch_pad_close_all()
+                # Answer at once and sweep in the background: the tray plays a
+                # 40-second exit movie before it stops anything, and the phone
+                # must not sit on that. The next status poll confirms.
+                payload = launch_pad_close_all(wait=False)
+            elif url.path.endswith("/visualizer"):
+                # One window, three states: open, fullscreen, close. The host
+                # decides from the published state, so a tap that races the
+                # window's own mode change still does the right thing.
+                payload = launch_pad_visualizer()
             else:
                 payload = launch_pad_action(params.get("app", [""])[0])
             status = 200 if payload.get("success") else 400
-            if payload.get("action") == "unsupported":
-                status = 501
-            self.send_response(status)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Cache-Control", "no-store")
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
-            self.wfile.write(json.dumps(payload).encode("utf-8"))
+            if payload.get("action") in ("unsupported", "tty_mode"):
+                status = 501 if payload.get("action") == "unsupported" else 409
+            self._send_json(status, payload)
         else:
             self.send_response(404)
+            self.send_header("Content-Length", "0")
             self.end_headers()
 
     def log_message(self, format, *args):
@@ -7307,9 +10512,37 @@ class CompanionServer(http.server.ThreadingHTTPServer):
         super().handle_error(request, client_address)
 
 
+def _make_console_utf8_safe() -> None:
+    """Never let a decorative character kill the server at startup.
+
+    Windows consoles default to cp1252, and the banner uses emoji. Printing one
+    raised UnicodeEncodeError before the socket was ever bound, so the companion
+    exited immediately on Windows while the installer still reported success
+    (it only checked that a process had been spawned). Reconfiguring stdout and
+    stderr to UTF-8 with a replacement fallback keeps the banner when the
+    console can render it and degrades to '?' when it cannot.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError, OSError):
+            # A redirected or exotic stream: nothing to reconfigure.
+            continue
+
+
 def main():
-    global CLI_THEME
-    default_host = os.environ.get("WEB_COMPANION_HOST", "0.0.0.0")
+    _make_console_utf8_safe()
+    global CLI_THEME, COMPANION_CIDRS
+    # Restore the cached "has audio frames" verdicts before the first scan so a
+    # restart does not reopen every multi-GB mix over CIFS.
+    _load_frame_probe_cache()
+    # Restore the mixes devices have already proved undecodable, so a restart
+    # does not hand the same dead URL to the next listener.
+    _load_unplayable()
+    # Loopback by default: LAN exposure is an explicit opt-in, because the
+    # library and the playback controls are personal. `WEB_COMPANION_HOST=0.0.0.0`
+    # (or `--host 0.0.0.0`) restores the old behaviour.
+    default_host = sec.default_host()
     default_port = int(os.environ.get("WEB_COMPANION_PORT", str(PORT)))
 
     parser = argparse.ArgumentParser(description="MP Mix Manager Mobile Web Companion")
@@ -7318,7 +10551,24 @@ def main():
     parser.add_argument("--theme", "-t", type=str, default=None)
     parser.add_argument("--stream-status", action="store_true",
                         help="Print the resolved stream queue as JSON and exit")
+    parser.add_argument("--allow-cidr", type=str, default="",
+                        help="Comma-separated CIDRs allowed to connect")
+    # Kept so an existing unit file, script or bookmark with these flags still
+    # starts instead of dying with "unrecognized arguments". Both were removed
+    # with token auth: there is no token to print or rotate and no auth to
+    # disable.
+    parser.add_argument("--print-token", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--rotate-token", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--no-auth", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
+
+    cidr_config = args.allow_cidr or _config_value("WEB_COMPANION_ALLOW_CIDR", "")
+    COMPANION_CIDRS = sec.parse_cidr_list(cidr_config)
+
+    if args.print_token:
+        print("This companion has no access token; open its URL directly.",
+              file=sys.stderr)
+        return 0
 
     if args.stream_status:
         playlist = scan_playlist_files()
@@ -7331,10 +10581,21 @@ def main():
         }, indent=2))
         return 0
 
+    # `WEB_COMPANION_ENABLED=false` was documented but never read, so setting
+    # it did nothing. Honour it now, but only when the operator did not pass an
+    # explicit flag, so a command-line start always wins.
+    if not _env_flag("WEB_COMPANION_ENABLED", True):
+        print("MP Web Companion is disabled (WEB_COMPANION_ENABLED=false).")
+        return 0
+
     CLI_THEME = args.theme
     active_theme = get_theme_palette(CLI_THEME)
     lan_ip = get_local_ip()
     host_display = lan_ip if args.host in ("0.0.0.0", "", "::") else args.host
+
+    def _access_url(host: str) -> str:
+        """The address a phone opens. No token, no query string."""
+        return f"http://{host}:{args.port}/"
 
     server_address = (args.host, args.port)
     try:
@@ -7344,11 +10605,16 @@ def main():
             print(f"\n======================================================================")
             print(f"  🌌 MP MIX ARCHIVE MANAGER — MOBILE WEB COMPANION (ACTIVE)")
             print(f"======================================================================")
-            print(f"  • Local Machine:  http://localhost:{args.port}")
-            print(f"  • Phone / Tablet: http://{host_display}:{args.port}")
+            print(f"  • Local Machine:  {_access_url('localhost')}")
+            print(f"  • Phone / Tablet: {_access_url(host_display)}")
             print(f"======================================================================\n")
             return 0
         raise
+
+    # Fill the queue cache before the first phone polls, so the initial request
+    # does not pay the whole scan on a request thread. Cheap on a warm frame
+    # cache; a one-off cost on the first run after a reboot.
+    start_prewarm_worker()
 
     # Arm the stream at startup so the phone begins playing on its own. This
     # only catalogs files and marks the session active; no local device opens.
@@ -7359,10 +10625,18 @@ def main():
     print(f"======================================================================")
     print(f"  • Active Theme:   {active_theme['name']} ({active_theme['id']})")
     print(f"  • Library Mode:   {MODE_LABELS.get(get_library_mode(), 'Library')}")
-    print(f"  • Local Machine:  http://localhost:{args.port}")
-    print(f"  • Phone / Tablet: http://{host_display}:{args.port}")
+    print(f"  • Local Machine:  {_access_url('localhost')}")
+    print(f"  • Phone / Tablet: {_access_url(host_display)}")
     print(f"  • Audio Output:   STREAM ONLY (no local device)")
     print(f"  • Autoplay:       {'ON' if _env_flag('WEB_COMPANION_AUTOPLAY', True) else 'OFF'}")
+    if COMPANION_CIDRS:
+        print(f"  • Allowed CIDRs:  {', '.join(str(n) for n in COMPANION_CIDRS)}")
+    else:
+        print("  • Access:         open to this network (no password)")
+    if not sec.is_loopback_bind(args.host):
+        print("  ⚠  Listening on a network interface: any device that can reach")
+        print("     this port can control playback. Set WEB_COMPANION_ALLOW_CIDR")
+        print("     to restrict it if this network is not trusted.")
     print(f"======================================================================\n")
 
     def _report_stream_queue() -> None:

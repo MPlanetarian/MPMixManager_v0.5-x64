@@ -133,7 +133,8 @@ def js_code(prim_name, sec_name, mgr_ancestors, mgr_pid, parent_pid, expect_stra
   if(numScreens>1&&primScreen&&secScreen) {{
     var pArea=workspace.clientArea(0,primScreen,workspace.currentDesktop);
     var sArea=workspace.clientArea(0,secScreen,workspace.currentDesktop);
-    if(mgrWin) {{ workspace.sendClientToScreen(mgrWin,primScreen); workspace.raiseWindow(mgrWin); }}
+    // The manager is deliberately left where it is: it is the window the
+    // user is typing into, and moving or raising it steals the keystroke.
     if(tlWin) {{ tlWin.minimized=true; }}
     if(expectStraw&&!strawWin) {{ console.warn("MIX_ALIGN_RUN:"+runToken+" DONE:0 WAIT:player"); return; }}
     if(expectCover&&!coverWin) {{ console.warn("MIX_ALIGN_RUN:"+runToken+" DONE:0 WAIT:cover"); return; }}
@@ -162,7 +163,7 @@ def js_code(prim_name, sec_name, mgr_ancestors, mgr_pid, parent_pid, expect_stra
     var screen=(refWin&&refWin.output)?refWin.output:(primScreen||workspace.activeScreen);
     var sArea=workspace.clientArea(0,screen,workspace.currentDesktop);
     var sX=Math.floor(sArea.x), sY=Math.floor(sArea.y), sW=Math.floor(sArea.width), sH=Math.floor(sArea.height);
-    if(mgrWin) {{ workspace.sendClientToScreen(mgrWin,screen); workspace.raiseWindow(mgrWin); }}
+    // The manager is deliberately left where it is (see above).
     var targetH=Math.min(760,Math.max(500,Math.floor(sH*0.65)));
     var coverW=coverWin?Math.min(targetH,Math.floor(sW*0.38)):0, tlW=tlWin?Math.min(960,Math.max(680,Math.floor(sW*0.44))):0;
     if(coverWin) {{ coverWin.fullScreen=false; if(coverWin.setMaximize) coverWin.setMaximize(false,false); workspace.sendClientToScreen(coverWin,screen); coverWin.keepAbove=true; coverWin.frameGeometry={{x:sX+10,y:sY+10,width:Math.floor((sW-40)/2),height:targetH}}; workspace.raiseWindow(coverWin); }}
@@ -173,20 +174,21 @@ def js_code(prim_name, sec_name, mgr_ancestors, mgr_pid, parent_pid, expect_stra
 }})();'''
 
 def align_x11(mgr_pid=0):
+    """Confirm the X11 desktop is reachable, without touching the manager.
+
+    This used to `wmctrl -a` the manager window, which activates it. The
+    alignment helper runs in the background while the user is typing into that
+    window, so activating it moved focus away from whatever field they were in
+    (and, on a multi-monitor desktop, could pull it to the wrong screen). The
+    manager is the reference point for the layout, never a thing to reposition
+    or raise, so nothing here may act on it.
+    """
     try:
-        wm_out = subprocess.check_output(['wmctrl', '-l', '-p', '-G'], text=True, errors='ignore')
-        mgr_win = None
-        for line in wm_out.splitlines():
-            parts = line.split(maxsplit=8)
-            if len(parts) >= 9:
-                wid, pid_str, title = parts[0], parts[2], parts[8].lower()
-                if (mgr_pid > 0 and pid_str.isdigit() and int(pid_str) == mgr_pid) or 'mix archive manager' in title:
-                    mgr_win = wid; break
-        if mgr_win:
-            subprocess.run(['wmctrl', '-i', '-a', mgr_win], check=False)
-            return True
-    except Exception: pass
-    return False
+        # A cheap liveness probe: if wmctrl can list windows, X11 is usable.
+        subprocess.check_output(['wmctrl', '-l'], text=True, errors='ignore')
+        return True
+    except Exception:
+        return False
 
 if __name__ == '__main__':
     main()

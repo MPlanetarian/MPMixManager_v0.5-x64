@@ -89,6 +89,8 @@ SPECS: List[Dict[str, Any]] = [
         "required": False,
         "purpose": "metaflac tagging and native FLAC stream checks",
         "pkgs": {
+            "rpm-ostree": ["flac"],
+
             "dnf": ["flac"],
             "apt": ["flac"],
             "pacman": ["flac"],
@@ -104,6 +106,8 @@ SPECS: List[Dict[str, Any]] = [
         "required": False,
         "purpose": "Spectrograms and high-resolution signal processing",
         "pkgs": {
+            "rpm-ostree": ["sox"],
+
             "dnf": ["sox"],
             "apt": ["sox"],
             "pacman": ["sox"],
@@ -118,6 +122,8 @@ SPECS: List[Dict[str, Any]] = [
         "required": False,
         "purpose": "Google Drive / cloud backup synchronisation",
         "pkgs": {
+            "rpm-ostree": ["rclone"],
+
             "dnf": ["rclone"],
             "apt": ["rclone"],
             "pacman": ["rclone"],
@@ -133,6 +139,8 @@ SPECS: List[Dict[str, Any]] = [
         "required": False,
         "purpose": "JSON parsing for cliamp status and inspection",
         "pkgs": {
+            "rpm-ostree": ["jq"],
+
             "dnf": ["jq"],
             "apt": ["jq"],
             "pacman": ["jq"],
@@ -143,26 +151,13 @@ SPECS: List[Dict[str, Any]] = [
         },
     },
     {
-        "id": "yt-dlp",
-        "kind": "binary",
-        "required": False,
-        "purpose": "YouTube channel downloads (menu 22)",
-        "pkgs": {
-            "dnf": ["yt-dlp"],
-            "apt": ["yt-dlp"],
-            "pacman": ["yt-dlp"],
-            "brew": ["yt-dlp"],
-            "pkg": ["yt-dlp"],
-            "winget": ["yt-dlp.yt-dlp"],
-        },
-        "pip": "yt-dlp",
-    },
-    {
         "id": "wmctrl",
         "kind": "binary",
         "required": False,
         "purpose": "Close other desktop windows safely (menu 31)",
         "pkgs": {
+            "rpm-ostree": ["wmctrl"],
+
             "dnf": ["wmctrl"],
             "apt": ["wmctrl"],
             "pacman": ["wmctrl"],
@@ -216,6 +211,8 @@ SPECS: List[Dict[str, Any]] = [
         "required": True,
         "purpose": "OpenGL renderer for MP Liquid Player and the visualizer",
         "pkgs": {
+            "brew": ["python-opengl"],
+
             "dnf": ["python3-pyopengl"],
             "apt": ["python3-opengl"],
             "pacman": ["python-opengl"],
@@ -224,6 +221,27 @@ SPECS: List[Dict[str, Any]] = [
             "rpm-ostree": ["python3-pyopengl"],
         },
         "pip": "PyOpenGL",
+    },
+    {
+        # GLFW creates the X11 window and the OpenGL context for MP Gui, the
+        # Liquid Player, and the MP Visualizer. It is loaded through ctypes, so
+        # Python cannot import-test it; the binary probe covers it instead.
+        "id": "GLFW",
+        "kind": "binary",
+        "binary": "libglfw.so.3",
+        "required": True,
+        "purpose": "OpenGL window and context for MP Gui, MP Liquid Player and the Visualizer",
+        "pkgs": {
+            "dnf": ["glfw"],
+            "apt": ["libglfw3"],
+            "pacman": ["glfw"],
+            "zypper": ["glfw-devel"],
+            "brew": ["glfw"],
+            "pkg": ["glfw"],
+            "rpm-ostree": ["glfw"],
+        },
+        "pip": "glfw",
+        "note": "system package preferred; pip wheel is a fallback on headless images",
     },
     {
         "id": "sounddevice",
@@ -249,6 +267,8 @@ SPECS: List[Dict[str, Any]] = [
         "required": True,
         "purpose": "Shortcut icons, cover art, on-screen text rendering",
         "pkgs": {
+            "brew": ["pillow"],
+
             "dnf": ["python3-pillow"],
             "apt": ["python3-pil"],
             "pacman": ["python-pillow"],
@@ -265,6 +285,8 @@ SPECS: List[Dict[str, Any]] = [
         "required": False,
         "purpose": "Exact mix durations in the Web Companion and player",
         "pkgs": {
+            "zypper": ["python3-soundfile", "libsndfile1"],
+
             "dnf": ["python3-soundfile", "libsndfile"],
             "apt": ["python3-soundfile", "libsndfile1"],
             "pacman": ["python-soundfile", "libsndfile"],
@@ -281,6 +303,8 @@ SPECS: List[Dict[str, Any]] = [
         "required": False,
         "purpose": "Process and transfer monitors (menu 26)",
         "pkgs": {
+            "zypper": ["python3-psutil"],
+
             "dnf": ["python3-psutil"],
             "apt": ["python3-psutil"],
             "pacman": ["python-psutil"],
@@ -297,6 +321,8 @@ SPECS: List[Dict[str, Any]] = [
         "required": False,
         "purpose": "Colourised output in the monitor scripts",
         "pkgs": {
+            "zypper": ["python3-rich"],
+
             "dnf": ["python3-rich"],
             "apt": ["python3-rich"],
             "pacman": ["python-rich"],
@@ -312,6 +338,8 @@ SPECS: List[Dict[str, Any]] = [
         "required": False,
         "purpose": "PDF reports and the printed manual",
         "pkgs": {
+            "zypper": ["python3-reportlab"],
+
             "dnf": ["python3-reportlab"],
             "apt": ["python3-reportlab"],
             "pacman": ["python-reportlab"],
@@ -327,6 +355,8 @@ SPECS: List[Dict[str, Any]] = [
         "required": False,
         "purpose": "Charts inside the generated reports",
         "pkgs": {
+            "zypper": ["python3-matplotlib"],
+
             "dnf": ["python3-matplotlib"],
             "apt": ["python3-matplotlib"],
             "pacman": ["python-matplotlib"],
@@ -357,6 +387,8 @@ SPECS: List[Dict[str, Any]] = [
         "required": False,
         "purpose": "Metadata tagging when metaflac is absent",
         "pkgs": {
+            "zypper": ["python3-mutagen"],
+
             "dnf": ["python3-mutagen"],
             "apt": ["python3-mutagen"],
             "pacman": ["python-mutagen"],
@@ -571,6 +603,186 @@ def which_binary(name: str) -> str:
     return ""
 
 
+def which_library(name: str) -> str:
+    """Locate a shared library that Python loads through ctypes.
+
+    A ctypes-loaded library never appears on PATH and cannot be import-tested,
+    so `which_binary` misses it. Check the loader cache first, then the
+    multiarch and vendor directories used by Debian, Fedora, Arch, Homebrew and
+    the macOS frameworks.
+
+    macOS needs its own names: the Linux spec says `libglfw.so.3`, but Homebrew
+    ships `libglfw.3.dylib` (and `libglfw.dylib` as the symlink) and never a
+    `.so`. Probing the Linux name on a Mac reported GLFW missing even though
+    `brew list glfw` was satisfied, which failed the install on a machine that
+    was already correct.
+    """
+    if host_os() == "windows":
+        return _which_windows_library(name)
+    if host_os() == "macos":
+        return _which_dylib(name)
+    cache = "/sbin/ldconfig"
+    if not os.path.exists(cache):
+        cache = shutil.which("ldconfig") or ""
+    if cache:
+        try:
+            proc = subprocess.run([cache, "-p"], capture_output=True, text=True, timeout=15)
+            for line in (proc.stdout or "").splitlines():
+                if name in line and "=>" in line:
+                    return line.rsplit("=>", 1)[1].strip()
+        except (OSError, subprocess.SubprocessError):
+            pass
+    multiarch = platform.machine()
+    for directory in (
+        "/usr/lib",
+        "/usr/lib64",
+        "/usr/local/lib",
+        f"/usr/lib/{multiarch}-linux-gnu",
+        f"/usr/lib/{multiarch}-linux-musl",
+        "/lib",
+        "/lib64",
+        f"/lib/{multiarch}-linux-gnu",
+        os.path.join(os.path.expanduser("~"), ".local", "lib"),
+    ):
+        candidate = os.path.join(directory, name)
+        if os.path.isfile(candidate):
+            return candidate
+    return ""
+
+
+def _which_windows_library(name: str) -> str:
+    """Find a Windows DLL by any of its reasonable filenames.
+
+    The GLFW spec names `libglfw.so.3`, which is the Linux spelling. On Windows
+    the PyPI `glfw` package ships `glfw3.dll` inside its own package directory
+    and there is no `glfw.dll` on PATH, so probing the Linux name reported GLFW
+    missing on a machine where `glfw.init()` already returned 1.
+    """
+    # "libglfw.so.3" and "libglfw.3.dylib" both mean the library "glfw",
+    # version 3. Strip an optional extension, then an optional trailing version,
+    # in either order, then the Windows-breaking "lib" prefix.
+    stem = name
+    version = ""
+    for extension in (".dll", ".dylib", ".so"):
+        if stem.endswith(extension):
+            stem = stem[: -len(extension)]
+            break
+        marker = extension + "."
+        if marker in stem:
+            head, _, tail = stem.partition(marker)
+            if tail.isdigit():
+                stem, version = head, tail
+            break
+    head, _, tail = stem.rpartition(".")
+    if head and tail.isdigit():
+        stem, version = head, tail
+    if stem.lower().startswith("lib"):
+        stem = stem[3:]
+    candidates = [name]
+    for candidate in (
+        f"{stem}.dll",
+        f"{stem}{version}.dll" if version else "",
+        f"lib{stem}.dll",
+        f"lib{stem}{version}.dll" if version else "",
+        stem,
+        f"lib{stem}",
+    ):
+        if candidate and candidate not in candidates:
+            candidates.append(candidate)
+    for candidate in candidates:
+        located = which_binary(candidate)
+        if located:
+            return located
+    # A Python package can carry its own DLL; `import glfw` then works with no
+    # system copy at all, which is the normal Windows install.
+    for directories in _windows_package_dirs():
+        for candidate in candidates:
+            path = os.path.join(directories, candidate)
+            if os.path.isfile(path):
+                return path
+    return ""
+
+
+def _windows_package_dirs() -> List[str]:
+    """site-packages folders where a package ships its own DLLs."""
+    found: List[str] = []
+    local = os.environ.get("LOCALAPPDATA", "")
+    program_files = os.environ.get("ProgramFiles", r"C:\Program Files")
+    for base in (
+        os.path.join(local, "Programs", "Python"),
+        program_files,
+        os.path.join(program_files, "Python"),
+        os.path.join(os.environ.get("PROGRAMDATA", r"C:\ProgramData"), "anaconda3"),
+    ):
+        if not base or not os.path.isdir(base):
+            continue
+        try:
+            for entry in os.listdir(base):
+                if not entry.lower().startswith("python"):
+                    continue
+                site = os.path.join(base, entry, "Lib", "site-packages")
+                if os.path.isdir(site):
+                    found.append(os.path.join(site, "glfw"))
+                    found.append(site)
+        except OSError:
+            continue
+    return [d for d in found if os.path.isdir(d)]
+
+
+def _dylib_names(name: str) -> List[str]:
+    """Every filename a dylib can have, from a Linux or a macOS spelling."""
+    names: List[str] = []
+
+    def add(value: str) -> None:
+        if value and value not in names:
+            names.append(value)
+
+    add(name)
+    # Split "libglfw.so.3" / "libglfw.3.dylib" into a stem and a version.
+    stem = name
+    version = ""
+    for suffix in (".dylib", ".so"):
+        if stem.endswith(suffix):
+            stem = stem[: -len(suffix)]
+            break
+    rest = stem.rsplit(".", 1)
+    if len(rest) == 2 and rest[1].isdigit():
+        stem, version = rest
+    # The stem must not keep a ".so" that was already consumed above.
+    stem = stem[:-3] if stem.endswith(".so") else stem
+    # libglfw -> libglfw.dylib, libglfw.3.dylib, libglfw.3.5.dylib
+    add(f"{stem}.dylib")
+    if version:
+        add(f"{stem}.{version}.dylib")
+        add(f"{stem}.{version}")
+    # libglfw.so.3 -> libglfw.so.3 / libglfw.so
+    add(f"{stem}.so")
+    if version:
+        add(f"{stem}.so.{version}")
+    add(stem)
+    return names
+
+
+def _which_dylib(name: str) -> str:
+    """Find a macOS dylib by any of its reasonable filenames."""
+    directories = [
+        "/opt/homebrew/lib",
+        "/usr/local/lib",
+        "/opt/local/lib",
+        "/usr/lib",
+        os.path.join(os.path.expanduser("~"), ".local", "lib"),
+    ]
+    for candidate_name in _dylib_names(name):
+        located = which_binary(candidate_name)
+        if located:
+            return located
+        for directory in directories:
+            candidate = os.path.join(directory, candidate_name)
+            if os.path.isfile(candidate):
+                return candidate
+    return ""
+
+
 def _works(path: str, minimum: Tuple[int, int] = (3, 8)) -> bool:
     if not path or not os.path.exists(path):
         return False
@@ -588,19 +800,46 @@ def _works(path: str, minimum: Tuple[int, int] = (3, 8)) -> bool:
 # One interpreter start answers every module question. Starting python once per
 # module cost about a second and a half on a cold cache; this is the hot path of
 # the installer, so it is batched.
+#
+# Two tiers, because `find_spec` alone lies:
+#   * optional modules are checked with find_spec, which does not execute them.
+#     Importing ultralytics pulls in PyTorch and took over two seconds, and an
+#     optional feature that is present but broken must not fail an install.
+#   * required modules are actually imported. A wheel can be found by find_spec
+#     and still be unusable: numpy 2.x never sets a pre-2.0 x86-64-v2 baseline,
+#     so on a Core 2 Duo `import numpy` dies with "your machine doesn't support
+#     X86_V2" while find_spec happily reports it installed. The installer then
+#     claimed 8/8 present and the player crashed on launch. Only a real import
+#     can tell the difference.
 PROBE_CODE = r"""
-import importlib.util, json, sys
+import importlib, importlib.util, json, sys
 
 modules = json.loads(sys.argv[1])
 typelibs = json.loads(sys.argv[2])
 out = {}
-# find_spec does not execute the module, so probing stays fast even for
-# optional heavy packages (ultralytics pulls in torch, ~2 s just to import) and
-# a module that raises at import time is still reported as installed.
-for name in modules:
+for item in modules:
+    if isinstance(item, str):
+        name, mode = item, "optional"
+    else:
+        name, mode = item[0], item[1]
     try:
-        out[name] = importlib.util.find_spec(name) is not None
+        spec = importlib.util.find_spec(name)
     except BaseException:
+        spec = None
+    if spec is None:
+        out[name] = False
+        continue
+    if mode != "required":
+        # Not executed on purpose: keeps heavy optional packages cheap.
+        out[name] = True
+        continue
+    try:
+        importlib.import_module(name)
+        out[name] = True
+    except BaseException:
+        # Found but unimportable: a broken build, a missing shared library or a
+        # CPU baseline this machine cannot run. Treat it as missing so the
+        # installer installs the distro package instead of declaring success.
         out[name] = False
 try:
     import gi
@@ -618,13 +857,24 @@ print(json.dumps(out))
 """
 
 
-def probe_modules(python: str, modules: Sequence[str], typelibs: Sequence[Tuple[str, str]]) -> Dict[str, bool]:
-    """Import every module and typelib once, in one interpreter."""
+def probe_modules(
+    python: str,
+    modules: Sequence[str],
+    typelibs: Sequence[Tuple[str, str]],
+    required: Sequence[str] = (),
+) -> Dict[str, bool]:
+    """Import every module and typelib once, in one interpreter.
+
+    Modules named in *required* are really imported; the rest are only checked
+    for a spec, so a slow optional package never delays the probe.
+    """
     if not python:
         return {}
+    wanted = set(required)
+    payload = [[name, "required" if name in wanted else "optional"] for name in modules]
     try:
         proc = subprocess.run(
-            [python, "-c", PROBE_CODE, json.dumps(list(modules)), json.dumps([list(t) for t in typelibs])],
+            [python, "-c", PROBE_CODE, json.dumps(payload), json.dumps([list(t) for t in typelibs])],
             capture_output=True,
             text=True,
             timeout=120,
@@ -647,7 +897,7 @@ def _module_state(python: str, module: str, namespace: str = "", version: str = 
     if namespace:
         state = probe_modules(python, [], [(namespace, version)])
         return "ok" if state.get(namespace) else "missing"
-    state = probe_modules(python, [module], [])
+    state = probe_modules(python, [module], [], required=[module])
     return "ok" if state.get(module) else "missing"
 
 
@@ -728,16 +978,21 @@ def _applies(spec: Dict[str, Any]) -> bool:
 def probe(python: str, include_optional: bool = True) -> List[Dict[str, Any]]:
     results: List[Dict[str, Any]] = []
     modules: List[str] = []
+    required_modules: List[str] = []
     typelibs: List[Tuple[str, str]] = []
     for spec in SPECS:
         if not _applies(spec):
             continue
         if spec["kind"] == "module" and spec.get("module") not in modules:
             modules.append(spec["module"])
+            # Hard dependencies are really imported: a wheel can be present and
+            # still unusable (numpy on a pre-AVX CPU). See PROBE_CODE.
+            if spec.get("required"):
+                required_modules.append(spec["module"])
         elif spec["kind"] == "typelib":
             typelibs.append((spec["namespace"], spec["version"]))
 
-    state = probe_modules(python, modules, typelibs)
+    state = probe_modules(python, modules, typelibs, required=required_modules)
 
     for spec in SPECS:
         if not _applies(spec):
@@ -750,7 +1005,12 @@ def probe(python: str, include_optional: bool = True) -> List[Dict[str, Any]]:
             "note": spec.get("note", ""),
         }
         if spec["kind"] == "binary":
-            found = which_binary(spec["id"])
+            # A `binary` key names a shared object that Python loads through
+            # ctypes (GLFW). Those never appear on PATH and cannot be
+            # import-tested, so the loader cache is searched instead.
+            probe_name = spec.get("binary") or spec["id"]
+            finder = which_library if spec.get("binary") else which_binary
+            found = finder(probe_name)
             entry["found"] = bool(found)
             entry["path"] = found or ""
         elif spec["kind"] == "typelib":
@@ -860,7 +1120,12 @@ def install_command(manager: str, packages: Sequence[str]) -> List[str]:
     if manager == "zypper":
         return ["zypper", "--non-interactive", "install", *packages]
     if manager == "brew":
-        return ["brew", "install", *packages]
+        # `which_binary` deliberately searches /opt/homebrew/bin because a bare
+        # SSH session has a minimal PATH. Returning the bare word "brew" threw
+        # that away: the command was built as ["brew", "install", ...] and the
+        # probe already knew the real path, so a Mac install failed with
+        # FileNotFoundError: 'brew' on a machine where brew was installed.
+        return [which_binary("brew") or "brew", "install", *packages]
     if manager == "pkg":
         return ["pkg", "install", "-y", *packages]
     if manager == "rpm-ostree":
@@ -974,7 +1239,62 @@ def install_modules(
     if rc != 0:
         notes.extend(tail_lines(output, rc))
         return False, notes, target_python
+
+    # A wheel can install cleanly and still be unusable on this CPU. numpy 2.x
+    # is built for an x86-64-v2 baseline, so on a Core 2 Duo it installs, then
+    # every import raises "your machine doesn't support X86_V2". Report that as
+    # a failure so the caller can try the distro build, which is compiled for
+    # the distribution's own baseline and does run.
+    broken = _unimportable(target_python, [t["module"] for t in pip_targets if t.get("module")])
+    if broken:
+        notes.append("installed but not importable on this CPU: " + ", ".join(broken))
+        return False, notes, target_python
     return True, notes, target_python
+
+
+def _unimportable(python: str, modules: Sequence[str]) -> List[str]:
+    """Modules that are installed yet raise when imported."""
+    if not python or not modules:
+        return []
+    state = probe_modules(python, list(modules), [], required=list(modules))
+    return [name for name in modules if not state.get(name)]
+
+
+def install_distro_modules(
+    targets: Sequence[Dict[str, Any]],
+    manager: str,
+    dry_run: bool,
+    interactive: bool,
+    python: str,
+) -> Tuple[bool, List[str]]:
+    """Replace pip copies with the distribution's build of the same module.
+
+    Used only after pip produced something that cannot be imported. The pip
+    copy must be removed first, because it sits earlier on sys.path than the
+    distro site-packages and would keep shadowing it inside the venv.
+    """
+    if not manager or manager == "brew":
+        return False, ["no distribution package manager to fall back to"]
+    notes: List[str] = []
+    for entry in targets:
+        pip_name = _pip_name(entry)
+        if pip_name and python and not dry_run:
+            # Best effort: a module that was never installed is fine here.
+            run([python, "-m", "pip", "uninstall", "-y", "--quiet", pip_name], dry_run=False)
+    ok, extra = install_binaries(targets, manager, dry_run, interactive)
+    if not ok:
+        notes.extend(extra)
+        return False, notes
+    # rpm-ostree --apply-live may still need a moment before the files appear.
+    if not dry_run and python:
+        broken = _unimportable(python, [t["module"] for t in targets if t.get("module")])
+        if broken:
+            notes.append(
+                "the distribution package is installed but a new login is required "
+                "before it is visible: " + ", ".join(broken)
+            )
+            return False, notes
+    return True, notes
 
 
 def tail_lines(output: str, rc: int, count: int = 6) -> List[str]:
@@ -1121,6 +1441,19 @@ def main(argv: Optional[List[str]] = None) -> int:
                     still_failing.extend(r["id"] for r in modules)
                     for note in notes:
                         print(f"  {DIM}{note}{NC}")
+                    # pip can install a wheel this CPU cannot run (numpy's
+                    # x86-64-v2 baseline on a Core 2 Duo). The distribution
+                    # builds for its own baseline, so try that before giving up.
+                    retry = [r for r in modules if r["id"] not in installed]
+                    if retry and manager and manager != "brew":
+                        print(f"  {DIM}trying the distribution build: {manager}{NC}")
+                        ok2, notes2 = install_distro_modules(
+                            retry, manager, args.dry_run, args.yes, python
+                        )
+                        if ok2:
+                            installed.extend(r["id"] for r in retry)
+                        for note in notes2:
+                            print(f"  {DIM}{note}{NC}")
 
         results = probe(python)
         # Anything still absent after the install path ran is a real failure.

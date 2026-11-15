@@ -162,14 +162,18 @@ class TestTraktorHistoryRangeExtraction(unittest.TestCase):
 
 class TestTracklistSuiteMenuIntegration(unittest.TestCase):
     def test_option13_menu_has_option8_and_mp_player_label(self):
-        """Verifies Option 13 presents Option 8 for Traktor history range and Option 2 labeled MP Audio Player."""
-        piped_input = "13\n0\n36\n"
+        """Verifies the Tracklist suite (option 14) presents option 8 for the Traktor
+        history range and option 2 labelled MP Audio Player."""
+        piped_input = "14\n0\n38\n"
+        env = dict(os.environ, TERM="xterm-256color", LINES="35", COLUMNS="110",
+                   ENABLE_BREATHING_CURSOR="0", MP_HEADER_CLI_MODE="off")
         res = subprocess.run(
             ["bash", str(MANAGER_SCRIPT)],
             input=piped_input,
             capture_output=True,
             text=True,
-            timeout=8,
+            timeout=20,
+            env=env,
         )
         self.assertEqual(res.returncode, 0)
         self.assertIn("Search for Mix & Auto-Play with Live Tracklist View", res.stdout)

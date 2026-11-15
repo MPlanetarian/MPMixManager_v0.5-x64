@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import ctypes
+
+_CALLBACK = getattr(ctypes, "WINFUNCTYPE", ctypes.CFUNCTYPE)
 import sys
 
 TITLE_PREFIX = "MP Mix Manager (Liquid Glass"
@@ -14,7 +16,7 @@ def focus_title(prefix: str = TITLE_PREFIX) -> bool:
     user32 = ctypes.windll.user32
     found: list[int] = []
 
-    @ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+    @_CALLBACK(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
     def _enum(hwnd, _lparam):
         if not user32.IsWindowVisible(hwnd):
             return True

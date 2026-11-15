@@ -93,119 +93,24 @@ DISCRETE_GPU = 2
 ROOT = Path(__file__).resolve().parent.parent
 SHADER_DIR = ROOT / "shaders"
 
-THEME_COLORS = {
-    "stream_of_frequency": ((0, 242, 255), (76, 217, 123), (245, 237, 106)),
-    "dreamworlds_ultra": ((166, 77, 255), (247, 37, 133), (0, 229, 255)),
-    "dynamic_rainbow_liquid_glass": ((176, 88, 255), (255, 45, 142), (0, 242, 254)),
-    "dreamworlds_liquid": ((0, 245, 255), (199, 125, 255), (72, 149, 239)),
-    "cosmic_supernova": ((224, 86, 253), (0, 245, 212), (76, 201, 240)),
-    "dreamworlds_neon": ((0, 229, 255), (247, 37, 133), (102, 102, 255)),
-    "retro_studio": ((241, 196, 15), (230, 126, 34), (243, 156, 18)),
-    "cyber_neon": ((76, 201, 240), (255, 0, 85), (153, 153, 255)),
-    "phosphor": ((57, 255, 20), (166, 255, 0), (0, 255, 102)),
-    "ice_cold": ((0, 229, 255), (136, 192, 208), (129, 161, 193)),
-    "retro_terminal": ((230, 230, 230), (180, 180, 180), (255, 255, 255)),
-    "cosmic_dreamworlds_radioactive": ((57, 255, 20), (0, 245, 212), (166, 77, 255)),
-    "cosmic_dreamworlds": ((232, 13, 104), (0, 245, 212), (176, 88, 255)),
-    "orbital_void_reflux": ((0, 240, 255), (157, 78, 221), (255, 0, 127)),
-    "sensorium_interface": ((0, 245, 255), (240, 168, 216), (184, 72, 196)),
-    "retro_linux_memories": ((45, 45, 45), (21, 83, 158), (26, 30, 33)),
-    "into_darkness_void_out": ((0, 0, 0), (0, 0, 0), (0, 0, 0)),
-    "solarized": ((220, 50, 47), (38, 139, 210), (181, 137, 0)),
-    "tokyo": ((247, 118, 142), (122, 162, 247), (187, 154, 247)),
-    "monokai": ((249, 38, 114), (166, 226, 46), (102, 217, 239)),
-    "emerald": ((46, 204, 113), (26, 188, 156), (0, 168, 132)),
-}
-THEME_ALIASES = {
-    "sensorium_interface": "sensorium_interface",
-    "sensorium_interface_(liquid_glass_skin)": "sensorium_interface",
-    "sensorium interface (liquid glass skin)": "sensorium_interface",
-    "sensorium interface": "sensorium_interface",
-    "sensorium": "sensorium_interface",
-    "earth_flipper": "sensorium_interface",
-    "earth flipper": "sensorium_interface",
-    "stream_of_frequency": "stream_of_frequency",
-    "stream_of_frequency_theme": "stream_of_frequency",
-    "stream of frequency": "stream_of_frequency",
-    "stream-of-frequency": "stream_of_frequency",
-    "stream": "stream_of_frequency",
-    "frequency": "stream_of_frequency",
-    "sof": "stream_of_frequency",
-    "frequency_stream": "stream_of_frequency",
-    "cosmic_dreamworlds": "cosmic_dreamworlds",
-    "cosmic_dreamworlds_(liquid_glass_skin)": "cosmic_dreamworlds",
-    "cosmic dreamworlds (liquid glass skin)": "cosmic_dreamworlds",
-    "cosmic dreamworlds": "cosmic_dreamworlds",
-    "cosmic_dreamworld": "cosmic_dreamworlds",
-    "cosmic dreamworld": "cosmic_dreamworlds",
-    "cosmic_dream": "cosmic_dreamworlds",
-    "cosmic dream": "cosmic_dreamworlds",
-    "cosmic_dreamworlds_radioactive": "cosmic_dreamworlds_radioactive",
-    "cosmic_dreamworlds_radioactive_(liquid_glass_skin)": "cosmic_dreamworlds_radioactive",
-    "cosmic dreamworlds radioactive (liquid glass skin)": "cosmic_dreamworlds_radioactive",
-    "cosmic dreamworlds radioactive": "cosmic_dreamworlds_radioactive",
-    "cosmic_radioactive": "cosmic_dreamworlds_radioactive",
-    "radioactive": "cosmic_dreamworlds_radioactive",
-    "orbital_void_reflux": "orbital_void_reflux",
-    "orbital_void_reflux_(liquid_glass_skin)": "orbital_void_reflux",
-    "orbital void reflux (liquid glass skin)": "orbital_void_reflux",
-    "orbital void reflux": "orbital_void_reflux",
-    "orbital_void": "orbital_void_reflux",
-    "void_reflux": "orbital_void_reflux",
-    "orbital": "orbital_void_reflux",
-    "dreamworlds": "dreamworlds_ultra",
-    "default": "dreamworlds_ultra",
-    "mplanetarian": "dreamworlds_ultra",
-    "dynamic_rainbow_liquid_glass": "dynamic_rainbow_liquid_glass",
-    "dynamic_liquid_glass_rainbow": "dynamic_rainbow_liquid_glass",
-    "dynamic_rainbow": "dynamic_rainbow_liquid_glass",
-    "rainbow_liquid_glass": "dynamic_rainbow_liquid_glass",
-    "rainbow": "dynamic_rainbow_liquid_glass",
-    "dynamic_liquid_glass": "dynamic_rainbow_liquid_glass",
-    "dynamic_liquid_glass_[rainbow_colours]_(new)": "dynamic_rainbow_liquid_glass",
-    "dynamic_liquid_glass_[rainbow_colours]": "dynamic_rainbow_liquid_glass",
-    "dynamic liquid glass [rainbow colours] (new)": "dynamic_rainbow_liquid_glass",
-    "dynamic liquid glass [rainbow colours]": "dynamic_rainbow_liquid_glass",
-    "mp_dreamworlds_liquid_transparency": "dreamworlds_liquid",
-    "dreamworlds_liquid_transparency": "dreamworlds_liquid",
-    "liquid_transparency": "dreamworlds_liquid",
-    "liquid": "dreamworlds_liquid",
-    "glass": "dreamworlds_liquid",
-    "liquid_glass": "dreamworlds_liquid",
-    "cosmic": "cosmic_supernova",
-    "supernova": "cosmic_supernova",
-    "cyberpunk": "cyber_neon",
-    "cyber": "cyber_neon",
-    "matrix": "phosphor",
-    "nord": "ice_cold",
-    "dracula": "dreamworlds_neon",
-    "gruvbox": "retro_studio",
-    "unix_terminal": "retro_terminal",
-    "terminal": "retro_terminal",
-    "classic": "retro_terminal",
-    "retro_linux_memories": "retro_linux_memories",
-    "into_darkness_void_out": "into_darkness_void_out",
-    "into darkness (void out)": "into_darkness_void_out",
-    "into darkness": "into_darkness_void_out",
-    "void out": "into_darkness_void_out",
-    "retro_linux": "retro_linux_memories",
-    "linux_memories": "retro_linux_memories",
-    "retro-linux-memories": "retro_linux_memories",
-    "retro-linux": "retro_linux_memories",
-    "retro linux memories": "retro_linux_memories",
-    "retro linux": "retro_linux_memories",
-    "veracrypt": "retro_linux_memories",
-    "retrolinux": "retro_linux_memories",
-    "linux": "retro_linux_memories",
-    "solarized": "solarized",
-    "tokyo": "tokyo", "tokyo_night": "tokyo", "tokyo night": "tokyo",
-    "monokai": "monokai",
-    "emerald": "emerald", "emerald_isle": "emerald",
-    "charcoal_vault": "retro_linux_memories", "charcoal": "retro_linux_memories",
-    "charcoal vault": "retro_linux_memories", "vault": "retro_linux_memories",
-    "dark_vault": "retro_linux_memories", "veracrypt_dark": "retro_linux_memories",
-    "charcoal vault (veracrypt dark)": "retro_linux_memories",
-}
+# Theme colours and aliases live in one shared module. The three renderers
+# used to carry separate copies, and their alias maps drifted: `cosmic
+# dreamworlds` worked on Vulkan but silently fell back on the default OpenGL
+# backend. Import the single table instead.
+try:
+    from mp_theme_palette import (
+        THEME_COLORS,
+        THEME_ALIASES,
+        normalize_theme_name,
+        theme_colors,
+    )
+except ImportError:  # imported as scripts.liquid_glass_*
+    from scripts.mp_theme_palette import (  # type: ignore
+        THEME_COLORS,
+        THEME_ALIASES,
+        normalize_theme_name,
+        theme_colors,
+    )
 
 
 def select_nvidia_device(devices):
@@ -228,8 +133,8 @@ def select_nvidia_device(devices):
 
 
 def theme_rgb(name):
-    key = THEME_ALIASES.get(str(name or "").strip().lower(), str(name or "").strip().lower())
-    return THEME_COLORS.get(key, THEME_COLORS["dreamworlds_ultra"])
+    """Colours for a theme name or label, resolved by the shared table."""
+    return theme_colors(name)
 
 
 def get_dynamic_theme_state(theme_name, base_opacity=1.0, current_time=None):
@@ -1115,14 +1020,20 @@ class LiquidGlassRenderer:
         self.panels = tuple(rects)
 
     def window_size(self):
+        if getattr(self, "_cur_size", None) is not None:
+            return self._cur_size
         w, h = c_int(), c_int()
         self._glfw.glfwGetWindowSize(self._window, byref(w), byref(h))
-        return int(w.value), int(h.value)
+        self._cur_size = (int(w.value), int(h.value))
+        return self._cur_size
 
     def framebuffer_size(self):
+        if getattr(self, "_cur_fb_size", None) is not None:
+            return self._cur_fb_size
         w, h = c_int(), c_int()
         self._glfw.glfwGetFramebufferSize(self._window, byref(w), byref(h))
-        return max(1, int(w.value)), max(1, int(h.value))
+        self._cur_fb_size = (max(1, int(w.value)), max(1, int(h.value)))
+        return self._cur_fb_size
 
     def window_pos(self):
         if getattr(self, "_cur_pos", None) is not None:
@@ -1139,6 +1050,7 @@ class LiquidGlassRenderer:
         self._glfw.glfwSetWindowPos(self._window, pos[0], pos[1])
 
     def set_window_size(self, w, h):
+        self._cur_size = (int(w), int(h))
         self._glfw.glfwSetWindowSize(self._window, int(w), int(h))
         self._resize = True
 
@@ -1202,14 +1114,19 @@ class LiquidGlassRenderer:
         return None
 
     def x11_window(self):
-        if is_windows() or not hasattr(self._glfw, "glfwGetX11Window"):
+        # `_glfw` only exists once the window is created. draw() calls this
+        # before the platform check used to run, so a partially initialised
+        # renderer raised AttributeError instead of reporting "no X11 window".
+        glfw = getattr(self, "_glfw", None)
+        if glfw is None or is_windows() or not hasattr(glfw, "glfwGetX11Window"):
             return 0
-        return int(self._glfw.glfwGetX11Window(self._window))
+        return int(glfw.glfwGetX11Window(self._window))
 
     def x11_display(self):
-        if is_windows() or not hasattr(self._glfw, "glfwGetX11Display"):
+        glfw = getattr(self, "_glfw", None)
+        if glfw is None or is_windows() or not hasattr(glfw, "glfwGetX11Display"):
             return None
-        return self._glfw.glfwGetX11Display(self._window)
+        return glfw.glfwGetX11Display(self._window)
 
     def poll(self):
         self._glfw.glfwPollEvents()
@@ -1241,12 +1158,7 @@ class LiquidGlassRenderer:
                 return self._render(capture, visualizer=visualizer)
         self.sync_player_visualizer_opacity(False)
         colors, effective_opacity, factor = get_dynamic_theme_state(theme_name, opacity)
-        win = self.x11_window() if hasattr(self, "x11_window") else None
-        if factor != 1.0 and win:
-            target_op = int(self.clear_opacity * factor * 1000)
-            if getattr(self, "_last_dyn_opacity", None) != target_op:
-                self._last_dyn_opacity = target_op
-                self._set_opacity(win, self.clear_opacity * factor)
+        self.apply_clear_opacity(factor)
         self._write_ubo(colors, effective_opacity)
         return self._render(capture)
 
@@ -1626,6 +1538,37 @@ class LiquidGlassRenderer:
         value = int(max(0.0, min(1.0, float(opacity))) * 0xFFFFFFFF)
         self._change_cardinal(window, self._x_atom("_NET_WM_WINDOW_OPACITY"), [value])
 
+    def apply_clear_opacity(self, factor=1.0):
+        """Publish ``clear_opacity * factor`` to the window, once per change.
+
+        The OpenGL host shares this contract. The write used to be guarded by
+        ``factor != 1.0``, so a static theme (every one without the rainbow
+        oscillation) never republished the property and the transparency slider
+        only moved its thumb while the window kept the startup opacity.
+        """
+        try:
+            base = float(self.clear_opacity)
+            factor = float(factor)
+        except (TypeError, ValueError):
+            return False
+        target_op = int(base * factor * 1000)
+        if getattr(self, "_last_dyn_opacity", None) == target_op:
+            return False
+        self._last_dyn_opacity = target_op
+        win = self.x11_window() if hasattr(self, "x11_window") else 0
+        if win:
+            self._set_opacity(win, base * factor)
+            return True
+        if (
+            self._window
+            and hasattr(getattr(self, "_glfw", None), "glfwSetWindowOpacity")
+        ):
+            self._glfw.glfwSetWindowOpacity(
+                self._window, c_float(max(0.0, min(1.0, base * factor)))
+            )
+            return True
+        return False
+
     def _apply_desktop_glass(self):
         """Blur the desktop behind the pane and fade it to clear glass."""
         if is_windows():
@@ -1863,6 +1806,9 @@ class LiquidGlassRenderer:
         g.glfwSetFramebufferSizeCallback.restype = c_void_p
         g.glfwSetWindowPosCallback.argtypes = [c_void_p, c_void_p]
         g.glfwSetWindowPosCallback.restype = c_void_p
+        if hasattr(g, "glfwSetWindowSizeCallback"):
+            g.glfwSetWindowSizeCallback.argtypes = [c_void_p, c_void_p]
+            g.glfwSetWindowSizeCallback.restype = c_void_p
 
     def _bind_loader(self):
         v = self._vulkan
@@ -1897,6 +1843,7 @@ class LiquidGlassRenderer:
         origin_x, origin_y = window_launch_origin(72, 64)
         g.glfwSetWindowPos(window, origin_x, origin_y)
         self._cur_pos = (origin_x, origin_y)
+        self._cur_size = (int(self.width), int(self.height))
         self._resize = False
         return window
 
@@ -1905,10 +1852,16 @@ class LiquidGlassRenderer:
         self._on_cursor = CFUNCTYPE(None, c_void_p, c_double, c_double)(self._cursor)
         self._on_fb = CFUNCTYPE(None, c_void_p, c_int, c_int)(self._framebuffer)
         self._on_pos = CFUNCTYPE(None, c_void_p, c_int, c_int)(self._pos_callback)
+        self._on_size = CFUNCTYPE(None, c_void_p, c_int, c_int)(self._size_callback)
         self._glfw.glfwSetMouseButtonCallback(self._window, ctypes.cast(self._on_mouse, c_void_p))
         self._glfw.glfwSetCursorPosCallback(self._window, ctypes.cast(self._on_cursor, c_void_p))
         self._glfw.glfwSetFramebufferSizeCallback(self._window, ctypes.cast(self._on_fb, c_void_p))
         self._glfw.glfwSetWindowPosCallback(self._window, ctypes.cast(self._on_pos, c_void_p))
+        if hasattr(self._glfw, "glfwSetWindowSizeCallback"):
+            self._glfw.glfwSetWindowSizeCallback(self._window, ctypes.cast(self._on_size, c_void_p))
+
+    def _size_callback(self, _window, w, h):
+        self._cur_size = (int(w), int(h))
 
     def _pos_callback(self, _window, x, y):
         self._cur_pos = (int(x), int(y))
@@ -1923,6 +1876,7 @@ class LiquidGlassRenderer:
         self.cursor = (float(x), float(y))
 
     def _framebuffer(self, _window, _w, _h):
+        self._cur_fb_size = (max(1, int(_w)), max(1, int(_h)))
         self._resize = True
 
     def _create_instance(self):
@@ -2559,15 +2513,15 @@ class LiquidGlassRenderer:
         scale = fw / max(ww, 1)
         margin = self.bezel_px * scale
         radius = self.radius_px * scale
-        mx, my = self.cursor
+        mx, my = getattr(self, "cursor", (0.0, 0.0))
         ubo = GlassUBO()
-        ubo.res[:] = (float(fw), float(fh), float(time.monotonic() - self._start), fw / max(fh, 1))
+        ubo.res[:] = (float(fw), float(fh), float(time.monotonic() - getattr(self, "_start", time.monotonic())), fw / max(fh, 1))
         a, b, c = (_rgb01(colors[0]), _rgb01(colors[1]), _rgb01(colors[2]))
         ubo.themeA[:] = (a[0], a[1], a[2], max(0.0, min(1.0, mx / max(ww, 1))))
         ubo.themeB[:] = (b[0], b[1], b[2], max(0.0, min(1.0, my / max(wh, 1))))
         ubo.themeC[:] = (c[0], c[1], c[2], float(opacity))
-        ubo.bezel[:] = (float(margin), float(radius), 1.0 if self.premultiplied else 0.0, 1.0)
-        for slot, rect in zip((ubo.panel0, ubo.panel1), self.panels):
+        ubo.bezel[:] = (float(margin), float(radius), 1.0 if getattr(self, "premultiplied", True) else 0.0, 1.0)
+        for slot, rect in zip((ubo.panel0, ubo.panel1), getattr(self, "panels", [])):
             x, y, w, h = rect
             slot[:] = (x * scale, y * scale, w * scale, h * scale)
         ctypes.memmove(self._ubo_ptr, byref(ubo), ctypes.sizeof(ubo))

@@ -104,7 +104,7 @@ What began on September 13, 2026, as a collection of scattered shell utilities a
 - **Primary Request**: Integrate live Traktor Pro monitoring, create a borderless floating tracklist HUD on Bazzite Linux, align cover art and tracklist side-by-side, probe live sound card latency on startup, and add weather conditions.
 - **Engineering Accomplished**:
   1. **Traktor Pro Live Monitor & Audio Recorder Control (`traktor_monitor.py` / `.sh`, Option 48)**:
-     - Merged Traktor monitoring engine from remote macOS workstation (`192.168.1.138`) into core repo.
+     - Merged Traktor monitoring engine from remote macOS workstation (`192.0.2.20`) into core repo.
      - Built comprehensive Windows 10/11 support (`Traktor.exe`, `Traktor Pro 3.exe`, `Traktor Pro 4.exe` detection, `msvcrt` hotkey handling, PowerShell CIM queries, and `WScript.Shell` recording toggle automation).
      - Linux `/proc/$pid/fd` live file growth tracking and macOS AppleScript menu clicking.
   2. **Technical Audio Specification Inspector (`inspect_playing_audio.py` / `.sh`, Option 28)**:
@@ -200,9 +200,9 @@ What began on September 13, 2026, as a collection of scattered shell utilities a
 - **Primary Request**: Add support for running DeepSeek Harness (`dsh-mobile`) from within the manager and via KDE Connect / Desktop shortcuts.
 - **Engineering Accomplished**:
   1. **Engine Controller (`scripts/dsh_mobile.sh` & `dsh_mobile.sh`)**:
-     - Manages `pnpm dsh web --trusted-host 192.168.1.11:3080 --trusted-host 192.168.1.11 --no-open` in `/var/home/mplanetarian/beszel-hub/deepseek-harness`.
+     - Manages `pnpm dsh web --trusted-host 192.0.2.11:3080 --trusted-host 192.0.2.11 --no-open` in `/var/home/mplanetarian/beszel-hub/deepseek-harness`.
      - Supports terminal window launch (Konsole tab) or background daemon mode (`/tmp/dsh-mobile.log`).
-     - Fast status inspection: process status, PID, local URL (`http://localhost:3080`), LAN mobile URL (`http://192.168.1.11:3080`), port 3080 listening status, and git commit.
+     - Fast status inspection: process status, PID, local URL (`http://localhost:3080`), LAN mobile URL (`http://192.0.2.11:3080`), port 3080 listening status, and git commit.
      - One-click browser dispatch and log viewer.
   2. **Manager Integration**:
      - Added **Option 59** in Section 6: `Manage DeepSeek Harness Server (dsh-mobile - Start, Stop, Mobile Web UI :3080)`.
@@ -219,13 +219,13 @@ What began on September 13, 2026, as a collection of scattered shell utilities a
 ### Phase 8: iPhone LAN Connectivity Resolution for DeepSeek Harness (2026-09-17 20:00 – Current)
 
 #### Session 8: Socket Binding Diagnosis & Systemd LAN Bridge
-- **Primary Request**: "I can't access DeepSeek Harness from my iPhone the url I am using is http://192.168.1.11:3080/?token=..."
+- **Primary Request**: "I can't access DeepSeek Harness from my iPhone the url I am using is http://192.0.2.11:3080/?token=..."
 - **Engineering Accomplished**:
   1. **Root Cause Analysis**:
      - Diagnosed that DeepSeek Harness (`dsh web`) enforces a security restriction in `packages/bundle/web-app/src/startup.ts`:
        `if (options.host === '0.0.0.0') program.error(...)`
      - As a result, the Node.js HTTP server was bound **strictly to loopback `127.0.0.1:3080`**.
-     - Although `--trusted-host 192.168.1.11:3080` authorized the HTTP `Host` header, no socket was listening on the physical network interface `192.168.1.11:3080`.
+     - Although `--trusted-host 192.0.2.11:3080` authorized the HTTP `Host` header, no socket was listening on the physical network interface `192.0.2.11:3080`.
      - The Linux kernel immediately rejected incoming TCP connections from the iPhone with `RST` (Connection Refused).
   2. **Persistent Systemd LAN Bridge (`dsh-mobile-bridge.service`)**:
      - Built a standalone socket forwarder script [`~/.local/bin/dsh-mobile-bridge.sh`](file:///home/mplanetarian/.local/bin/dsh-mobile-bridge.sh) utilizing `socat`:
@@ -234,12 +234,12 @@ What began on September 13, 2026, as a collection of scattered shell utilities a
        exec socat TCP-LISTEN:3080,bind="${LAN_IP}",reuseaddr,fork TCP:127.0.0.1:3080
        ```
      - Configured, enabled, and started persistent systemd user service [`~/.config/systemd/user/dsh-mobile-bridge.service`](file:///home/mplanetarian/.config/systemd/user/dsh-mobile-bridge.service).
-     - Verified that `192.168.1.11:3080` forwards bidirectional HTTP, WebSockets, and chunked SSE streams to `127.0.0.1:3080`.
+     - Verified that `192.0.2.11:3080` forwards bidirectional HTTP, WebSockets, and chunked SSE streams to `127.0.0.1:3080`.
   3. **Script Synchronization**:
      - Updated [`scripts/dsh_mobile.sh`](file:///var/home/mplanetarian/MP_Mix_Manager_v0.3/scripts/dsh_mobile.sh) and [`kc_launch_dsh_mobile.sh`](file:///home/mplanetarian/KDE_CONNECT_CMDS/kc_launch_dsh_mobile.sh) with `ensure_lan_bridge` so starting DeepSeek Harness guarantees the bridge is running.
      - Updated process detection in `is_dsh_running` and `get_dsh_pids` to target `127.0.0.1:3080` and Node PIDs, avoiding conflicts with `socat`.
   4. **End-to-End Validation**:
-     - Verified with `curl -i "http://192.168.1.11:3080/?token=..."` that the server responds with `HTTP/1.1 303 See Other`, issues cookie `dsh-auth-...`, and delivers `index.html` (HTTP 200 OK) directly to Safari on iOS.
+     - Verified with `curl -i "http://192.0.2.11:3080/?token=..."` that the server responds with `HTTP/1.1 303 See Other`, issues cookie `dsh-auth-...`, and delivers `index.html` (HTTP 200 OK) directly to Safari on iOS.
 
 ---
 
@@ -384,7 +384,7 @@ What began on September 13, 2026, as a collection of scattered shell utilities a
 | [`scripts/generate_spek.sh`](file:///home/mplanetarian/MP_Mix_Manager_v0.3/scripts/generate_spek.sh) | Bash | Acoustic spectrogram generator (Spek, Sonic Visualiser, SoX) |
 | [`scripts/get_weather.sh`](file:///home/mplanetarian/MP_Mix_Manager_v0.3/scripts/get_weather.sh) | Bash | Meteorological weather probe with 20-minute local TTL cache |
 | [`scripts/view_tracklist_console.sh`](file:///home/mplanetarian/MP_Mix_Manager_v0.3/scripts/view_tracklist_console.sh) | Bash | Frameless console tracklist HUD viewer |
-| [`~/.local/bin/dsh-mobile-bridge.sh`](file:///home/mplanetarian/.local/bin/dsh-mobile-bridge.sh) | Bash | `socat` LAN socket forwarder: `192.168.1.11:3080` → `127.0.0.1:3080` |
+| [`~/.local/bin/dsh-mobile-bridge.sh`](file:///home/mplanetarian/.local/bin/dsh-mobile-bridge.sh) | Bash | `socat` LAN socket forwarder: `192.0.2.11:3080` → `127.0.0.1:3080` |
 | [`~/.config/systemd/user/dsh-mobile-bridge.service`](file:///home/mplanetarian/.config/systemd/user/dsh-mobile-bridge.service) | Systemd | Persistent user service running the DeepSeek Harness bridge |
 
 ---
@@ -397,7 +397,7 @@ What began on September 13, 2026, as a collection of scattered shell utilities a
   - Secondary archive storage configured at: `/run/media/mplanetarian/DATA/MIX_ARCHIVE2/FLAC_CONVERTED_OUTPUTS/`.
   - Allow user configuration of multiple mix archive storage locations under Option 13 (alongside the Main Mix Archive Folder).
   - Update all other scripts across the manager suite to discover, aggregate, inspect, and process mixes across all configured locations.
-  - Commit all changes to Git and update remote Mac workstation (`192.168.1.138`).
+  - Commit all changes to Git and update remote Mac workstation (`192.0.2.20`).
 - **Engineering Accomplished**:
   1. **Configurable Multi-Storage Architecture (`config.env` & `config.env.example`)**:
      - Introduced `EXTRA_MIX_ARCHIVE_DIRS` array supporting arbitrary secondary, tertiary, and external drive mountpoints.

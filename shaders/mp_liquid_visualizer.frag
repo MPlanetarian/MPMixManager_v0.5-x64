@@ -21,6 +21,7 @@ layout(set = 0, binding = 0) uniform VisualizerUBO {
     vec4 bands2;  // 4 spectrum bands (8..11)
     vec4 bands3;  // 4 spectrum bands (12..15)
     vec4 preset;  // x: preset_id (0 = Cosmic Dreamworlds (Liquid)), y: pitch_factor, z: dyn_range, w: seed
+    vec4 stream;  // x: stream_id (0 horizontal river, 1 vertical), y: PID phase, z: PID heat, w: PID serial
 } u;
 
 layout(set = 0, binding = 1) uniform sampler2D uCoverTex;
@@ -398,687 +399,235 @@ vec3 chromaticStormPalette(float t, vec2 uvHint) {
     return mix(procCol, coverSample, 0.52);
 }
 
-// Ellipsoid SDF (teardrop hulls and furnace lobes)
-float sdEllipsoidC(vec3 p, vec3 r) {
-    float k0 = length(p / r);
-    float k1 = length(p / (r * r));
-    return k0 * (k0 - 1.0) / max(k1, 0.0001);
-}
-
-// A thin tapered fin blade grown along +X, broad in X-Y and thin in Z.
-// This is the signature silhouette of the late BIFURCATION vessels.
-float sdFinBlade(vec3 p, float len, float halfThick, float halfChord, float taper) {
-    float u = clamp(p.x / max(len, 0.0001), 0.0, 1.0);
-    float w = mix(1.0, taper, u);
-    float dChord = abs(p.y) - halfChord * w;
-    float dThick = abs(p.z) - halfThick * w;
-    return max(max(dChord, dThick), max(-p.x, p.x - len));
-}
-
-// Smooth metaball union for fusing vessel lobes
-float sminC(float a, float b, float k) {
-    float h = clamp(0.5 + 0.5 * (b - a) / max(k, 0.0001), 0.0, 1.0);
-    return mix(b, a, h) - k * h * (1.0 - h);
-}
-
 // =============================================================================
-// DREAMWORLDS (CHROMATIC STORM) — Shared scene kit
-// The inspiration frames show elongated teardrop vehicles built from stacked
-// chrome fins, split open to reveal a molten furnace core, with a dense swarm
-// of black beads and fine wire trails trailing behind them across a pale void.
-// Twelve sequences explore that vocabulary and morph continuously.
+// DREAMWORLDS (CHROMATIC STORM)
+// Six sequences, each a few spheres, capsules and rings. The crossfade
+// evaluates only the two that are on screen. Hulls stay round: a box cut out
+// of the old vessel read as a square window inside the ship.
+// One full pass takes about 80 seconds.
 // =============================================================================
+const float CS_CYCLE_RATE = 0.012;
 
-// Dense bead swarm trailing behind a vessel. Shared by every sequence; the
-// hull, plume and furnace stay sequence-specific.
-float csBeadTrail(vec3 p, float t, float spread, float lengthScale) {
-    float d = 1e5;
-    for (int i = 0; i < 16; i++) {
-        float fi = float(i);
-        vec3 h = hash33(vec3(fi * 1.7, fi * 3.1, fi * 0.9));
-        float along = -0.6 - lengthScale * (0.35 + 1.55 * h.x) - 0.25 * sin(t * 0.35 + fi);
-        float ang = h.y * TAU + t * (0.05 + 0.04 * h.z);
-        float rad = spread * (0.20 + 0.95 * h.z);
-        vec3 c = vec3(
-            along,
-            cos(ang) * rad,
-            sin(ang) * rad
-        );
-        float sz = 0.008 + 0.020 * h.z + 0.006 * u.audio1.y;
-        float bead = sdSphere(p - c, sz);
-        // A third of the beads are punctured rings, as in the video
-        if (h.x > 0.66) bead = max(bead, -sdSphere(p - c, sz * 0.55));
-        d = min(d, bead);
-    }
-    return d;
+vec3 csFrame(vec3 p, float t) {
+    vec3 w = p - vec3(0.07 * sin(t * 0.05), 0.05 * cos(t * 0.046), 0.0);
+    w.xz *= rot2(t * 0.048 + u.audio2.y * 0.04);
+    w.yz *= rot2(0.08 * sin(t * 0.04));
+    return w;
 }
 
-// Fine graphite wire trails looping behind the vessel
-float csWireTrail(vec3 p, float t) {
-    float d = 1e5;
-    for (int i = 0; i < 2; i++) {
-        float fi = float(i);
-        vec3 prev = vec3(0.0);
-        for (int s = 0; s <= 26; s++) {
-            float su = float(s) / 26.0;
-            vec3 c = vec3(
-                -0.5 - su * 2.35,
-                0.46 * sin(su * 5.2 + fi * 2.0 + t * 0.22) * (0.35 + su),
-                0.42 * cos(su * 3.4 + fi * 1.3 - t * 0.18) * (0.35 + su)
-            );
-            if (s > 0) d = min(d, sdCapsule(p, prev, c, 0.0038));
-            prev = c;
-        }
-    }
-    return d;
+// A rounded hull: a capsule body fused into a nose sphere.
+float csHull(vec3 p, float len, float girth) {
+    float dBody = sdCapsule(p, vec3(len * 0.15, 0.0, 0.0), vec3(-len * 0.75, 0.0, 0.0), girth);
+    float dNose = sdSphere(p - vec3(len * 0.55, 0.0, 0.0), girth * 0.85);
+    return smin(dBody, dNose, 0.16);
 }
 
 // -----------------------------------------------------------------------------
-// SEQUENCE 1 — "FURNACE HULL"
-// The hero vessel: a teardrop chrome shell split along its flank, with molten
-// furnace light pouring out of the seam. This is the quiet anchor of the set.
+// 1 — CLAMSHELL
+// Two round shells with a furnace heart in the curved slot between them.
 // -----------------------------------------------------------------------------
-vec2 csSeqFurnaceHull(vec3 p) {
+vec2 csSeqClamshell(vec3 p) {
     float t = (u.preset.w > 0.001) ? u.preset.w : u.res.z;
-    float subBass = u.audio0.x, bass = u.audio0.y, mid = u.audio0.w;
-    float treble = u.audio1.y, beat = u.audio2.x;
-    float bassPhase = u.audio2.y, midPhase = u.audio2.z;
-
-    vec3 w = p - vec3(0.10 * sin(t * 0.05), 0.08 * cos(t * 0.06), 0.0);
-    w.xz *= rot2(t * 0.06 + bassPhase * 0.03);
-    w.yz *= rot2(0.14 * sin(t * 0.04));
-
-    // Teardrop hull: a stretched ellipsoid with a tapered nose
-    float dHull = sdEllipsoidC(w, vec3(1.42 + 0.10 * subBass, 0.46 + 0.05 * bass, 0.50 + 0.04 * mid));
-    // Carve the furnace seam out of the flank so the core shows through
-    vec3 seam = w;
-    seam.xy *= rot2(0.16 + 0.05 * sin(t * 0.18));
-    float dSeam = sdBox(seam - vec3(0.05, 0.0, 0.0), vec3(0.92 + 0.10 * bass, 0.30, 0.62));
-    dHull = max(dHull, -dSeam);
-
-    // Molten furnace core, pulsing with the beat (Material 2)
-    float dFurnace = sdEllipsoidC(w, vec3(0.86 + 0.10 * subBass, 0.26 + 0.05 * beat, 0.30));
-    dFurnace += 0.020 * (0.4 + bass) * sin(w.x * 8.0 + t * 1.2) * sin(w.z * 7.0 - t * 0.9);
-
-    // Layered chrome fins stacked along the spine (Material 4)
-    float dFins = 1e5;
-    for (int i = 0; i < 7; i++) {
-        float fi = float(i);
-        float a = fi * 0.62 - 1.86;
-        vec3 b = w;
-        b.xy *= rot2(a);
-        b.x -= 0.16 + 0.10 * hash11(fi * 3.1);
-        float len = 1.05 + 0.55 * hash11(fi * 2.2) + 0.16 * treble;
-        b.yz *= rot2(0.28 * sin(fi * 1.7 + t * 0.3));
-        dFins = min(dFins, sdFinBlade(b, len, 0.012 + 0.006 * hash11(fi * 7.1), 0.13 + 0.09 * hash11(fi * 5.3), 0.16));
-    }
-
-    vec2 res = vec2(dHull, 1.0);
-    if (dFins < res.x)    res = vec2(dFins, 4.0);
-    if (dFurnace < res.x) res = vec2(dFurnace, 2.0);
-    return res;
-}
-
-// -----------------------------------------------------------------------------
-// SEQUENCE 2 — "FIN CASCADE"
-// The vessel disassembles into a cascading procession of chrome fins, like a
-// wing opening feather by feather along the direction of travel.
-// -----------------------------------------------------------------------------
-vec2 csSeqFinCascade(vec3 p) {
-    float t = (u.preset.w > 0.001) ? u.preset.w : u.res.z;
-    float subBass = u.audio0.x, bass = u.audio0.y, mid = u.audio0.w;
-    float treble = u.audio1.y, beat = u.audio2.x;
-    float bassPhase = u.audio2.y, highPhase = u.audio2.w;
-
-    vec3 w = p - vec3(0.06 * sin(t * 0.06), 0.05 * cos(t * 0.05), 0.0);
-    w.xz *= rot2(t * 0.075);
-
-    float dFins = 1e5;
-    for (int i = 0; i < 14; i++) {
-        float fi = float(i);
-        // Fins march back along the hull and fan wider as they recede
-        float along = 0.85 - fi * 0.155;
-        float open = 0.22 + 0.32 * sin(t * 0.55 + fi * 0.42) + 0.16 * beat;
-        vec3 b = w;
-        b.x -= along;
-        b.xy *= rot2(open * (0.5 + 0.5 * hash11(fi * 2.1)));
-        b.yz *= rot2(0.55 * sin(fi * 1.3 + t * 0.28) + 0.2 * mid);
-        float len = 0.85 + 0.55 * hash11(fi * 4.7) + 0.18 * treble;
-        dFins = min(dFins, sdFinBlade(b, len, 0.012 + 0.006 * hash11(fi * 3.3), 0.17 + 0.13 * hash11(fi * 6.1), 0.14));
-    }
-
-    // Slim spine running through the fin array
-    float dSpine = sdCapsule(w, vec3(1.10, 0.0, 0.0), vec3(-1.30, 0.0, 0.0), 0.115 + 0.030 * subBass);
-    dSpine += 0.014 * (0.4 + bass) * sin(w.x * 9.0 - t * 1.1 + highPhase * 0.3);
-
-    vec2 res = vec2(dSpine, 1.0);
-    if (dFins < res.x) res = vec2(dFins, 4.0);
-    return res;
-}
-
-// -----------------------------------------------------------------------------
-// SEQUENCE 3 — "SPLIT KEEL"
-// The vessel's belly opens into two long parallel keels, baring a bright
-// plasma channel between them, echoing the widest-open frames.
-// -----------------------------------------------------------------------------
-vec2 csSeqSplitKeel(vec3 p) {
-    float t = (u.preset.w > 0.001) ? u.preset.w : u.res.z;
-    float subBass = u.audio0.x, bass = u.audio0.y, mid = u.audio0.w;
-    float treble = u.audio1.y, beat = u.audio2.x;
-    float bassPhase = u.audio2.y;
-
-    vec3 w = p - vec3(0.07 * sin(t * 0.07), 0.06 * cos(t * 0.05), 0.0);
-    w.xy *= rot2(0.12 * sin(t * 0.045));
-
-    float gap = 0.26 + 0.18 * bass + 0.10 * beat + 0.05 * sin(t * 0.7);
-
-    // Two long keels, each built from a flat tapered blade plus a rib so the
-    // structure reads as machined metal rather than an elongated pod.
-    float dKeel = 1e5;
-    for (int i = 0; i < 2; i++) {
-        float sgn = float(i) * 2.0 - 1.0;
-        vec3 b = w - vec3(0.0, sgn * gap, 0.0);
-        b.xz *= rot2(sgn * 0.10 * sin(t * 0.3));
-        // Flat blade along X (broad in XY, thin in Z)
-        vec3 bb = b;
-        bb.x += 1.62;
-        float dBlade = sdFinBlade(bb, 3.24 + 0.16 * subBass, 0.030, 0.115 + 0.030 * bass, 0.30);
-        // Structural rib running the length of the keel
-        float dRib = sdCapsule(b, vec3(1.45, 0.0, 0.0), vec3(-1.45, 0.0, 0.0), 0.040);
-        dKeel = min(dKeel, min(dBlade, dRib));
-    }
-
-    // Bright plasma channel suspended between the keels (Material 2)
-    float dPlasma = sdCapsule(w, vec3(1.42, 0.0, 0.0), vec3(-1.42, 0.0, 0.0), 0.062 + 0.026 * beat);
-    dPlasma += 0.014 * (0.5 + bass) * sin(w.x * 12.0 - t * 1.6 + bassPhase * 0.4);
-
-    // Fins splaying off each keel
-    float dFins = 1e5;
-    for (int i = 0; i < 8; i++) {
-        float fi = float(i);
-        float sgn = mod(fi, 2.0) * 2.0 - 1.0;
-        vec3 b = w - vec3(0.0, sgn * (gap + 0.12), 0.0);
-        b.xy *= rot2(sgn * (0.55 + 0.25 * sin(t * 0.4 + fi)));
-        b.x -= 0.55 - fi * 0.14;
-        dFins = min(dFins, sdFinBlade(b, 0.70 + 0.30 * hash11(fi * 3.9), 0.009, 0.09 + 0.05 * hash11(fi * 2.3), 0.14));
-    }
-
-    vec2 res = vec2(dKeel, 4.0);
-    if (dFins < res.x)   res = vec2(dFins, 4.0);
-    if (dPlasma < res.x) res = vec2(dPlasma, 2.0);
-    return res;
-}
-
-// -----------------------------------------------------------------------------
-// SEQUENCE 4 — "BEAD SURGE"
-// The bead swarm takes over: hundreds of perforated spheres rushing past in a
-// dense river, with the vessel reduced to a silhouette deep inside it.
-// -----------------------------------------------------------------------------
-vec2 csSeqBeadSurge(vec3 p) {
-    float t = (u.preset.w > 0.001) ? u.preset.w : u.res.z;
-    float bass = u.audio0.y, mid = u.audio0.w;
-    float treble = u.audio1.y, beat = u.audio2.x;
-
-    vec3 w = p - vec3(0.10 * sin(t * 0.08), 0.08 * cos(t * 0.06), 0.0);
-    w.yz *= rot2(t * 0.10);
-
-    // Dense river of beads streaming down the X axis
-    float dBeads = 1e5;
-    for (int i = 0; i < 40; i++) {
-        float fi = float(i);
-        vec3 h = hash33(vec3(fi * 2.3, fi * 5.1, fi * 1.3));
-        // Beads flow continuously: the mod wraps each one back to the front
-        float flow = mod(h.x * 6.0 + t * (0.55 + 0.35 * h.y), 6.0) - 3.0;
-        float ang = h.z * TAU + t * 0.14;
-        float rad = 0.10 + 1.05 * h.y * h.z;
-        vec3 c = vec3(flow, cos(ang) * rad, sin(ang) * rad);
-        float sz = 0.012 + 0.034 * h.z + 0.014 * treble;
-        float bead = sdSphere(w - c, sz);
-        if (h.x > 0.55) bead = max(bead, -sdSphere(w - c, sz * 0.5));
-        dBeads = min(dBeads, bead);
-    }
-
-    // The vessel silhouette buried in the surge (dark hull material)
-    float dHull = sdEllipsoidC(w, vec3(1.15 + 0.06 * bass, 0.30 + 0.04 * mid, 0.34));
-    dHull = max(dHull, -sdBox(w - vec3(0.0, 0.0, 0.0), vec3(0.55, 0.16, 0.5)));
-
-    vec2 res = vec2(dHull, 1.0);
-    if (dBeads < res.x) res = vec2(dBeads, 5.0);
-    return res;
-}
-
-// -----------------------------------------------------------------------------
-// SEQUENCE 5 — "EMBER WAKE"
-// A slow, ember-lit vessel coasting with a long fiery wake streaking behind it.
-// -----------------------------------------------------------------------------
-vec2 csSeqEmberWake(vec3 p) {
-    float t = (u.preset.w > 0.001) ? u.preset.w : u.res.z;
-    float subBass = u.audio0.x, bass = u.audio0.y;
-    float treble = u.audio1.y, beat = u.audio2.x;
-    float bassPhase = u.audio2.y;
-
-    vec3 w = (p - vec3(0.05 * sin(t * 0.04), 0.04 * cos(t * 0.05), 0.0)) * 0.62;
-    w.xz *= rot2(t * 0.05);
-
-    // Compact hull at the head of the wake
-    float dHull = sdEllipsoidC(w, vec3(0.92 + 0.07 * subBass, 0.34 + 0.04 * bass, 0.38));
-    float dSeam = sdBox(w - vec3(0.10, 0.0, 0.0), vec3(0.55, 0.20, 0.50));
-    dHull = max(dHull, -dSeam);
-
-    // Molten core inside the seam
-    float dCore = sdEllipsoidC(w, vec3(0.52, 0.16 + 0.04 * beat, 0.22));
-    dCore += 0.016 * (0.4 + bass) * sin(w.x * 10.0 + t * 1.4);
-
-    // Long ember wake trailing backwards, breaking into ember lobes
-    float dWake = 1e5;
-    for (int i = 0; i < 14; i++) {
-        float fi = float(i);
-        float along = -0.80 - fi * 0.20;
-        float sway = 0.13 * sin(t * 0.55 + fi * 0.8 + bassPhase * 0.2);
-        vec3 c = vec3(along, sway * (0.3 + 0.07 * fi), 0.09 * cos(fi * 1.7 + t * 0.4));
-        float sz = (0.062 - fi * 0.0028) * (0.85 + 0.5 * hash11(fi * 3.7)) + 0.014 * treble;
-        dWake = min(dWake, sdEllipsoidC(w - c, vec3(sz * 2.4, sz, sz)));
-    }
-
-    // Fins along the hull
-    float dFins = 1e5;
-    for (int i = 0; i < 5; i++) {
-        float fi = float(i);
-        vec3 b = w;
-        b.xy *= rot2(fi * 0.8 - 1.6);
-        b.x -= 0.10;
-        dFins = min(dFins, sdFinBlade(b, 0.80 + 0.30 * hash11(fi * 2.9), 0.010, 0.11, 0.16));
-    }
-
-    vec2 res = vec2(dHull, 1.0);
-    if (dFins < res.x)  res = vec2(dFins, 4.0);
-    if (dWake < res.x)  res = vec2(dWake, 2.0);
-    if (dCore < res.x)  res = vec2(dCore, 3.0);
-    return res;
-}
-
-// -----------------------------------------------------------------------------
-// SEQUENCE 6 — "PLASMA COCOON"
-// The vessel wraps itself in a luminous plasma cocoon that tightens and
-// loosens with the music, the hull barely visible inside.
-// -----------------------------------------------------------------------------
-vec2 csSeqPlasmaCocoon(vec3 p) {
-    float t = (u.preset.w > 0.001) ? u.preset.w : u.res.z;
-    float subBass = u.audio0.x, bass = u.audio0.y, mid = u.audio0.w;
-    float treble = u.audio1.y, beat = u.audio2.x;
-    float midPhase = u.audio2.z;
-
-    vec3 w = p - vec3(0.08 * sin(t * 0.06), 0.06 * cos(t * 0.07), 0.0);
-    w.xz *= rot2(t * 0.055 + midPhase * 0.02);
-
-    // Inner hull (dark, material 1)
-    float dHull = sdEllipsoidC(w, vec3(1.10, 0.30, 0.34));
-
-    // Plasma cocoon: luminous orbital rings and tendrils wrapping the hull.
-    // A solid emissive shell would simply hide the vessel in an opaque
-    // raymarcher, so the cocoon is built from discrete glowing bands instead.
-    float breathe = 1.0 + 0.12 * sin(t * 0.75) + 0.07 * beat;
-    float dCocoon = 1e5;
-    for (int i = 0; i < 5; i++) {
-        float fi = float(i);
-        // Torus rings encircling the hull's long axis. sdTorus measures
-        // radius in p.xz and height in p.y, so swapping the axes puts the
-        // ring around X instead of Y.
-        vec3 b = w - vec3((fi - 2.0) * 0.44, 0.0, 0.0);
-        b.yz *= rot2(0.40 * sin(t * 0.35 + fi * 0.9) + 0.16 * bass);
-        vec3 q = vec3(b.z, b.x, b.y);
-        float majorR = (0.46 + 0.03 * fi) * breathe;
-        dCocoon = min(dCocoon, sdTorus(q, vec2(majorR, 0.014 + 0.006 * bass)));
-    }
-    // Longitudinal plasma tendrils lacing the bands together
-    for (int i = 0; i < 6; i++) {
-        float fi = float(i);
-        float a = fi * 1.0472 + t * 0.20;
-        vec3 top = vec3(1.02, cos(a) * 0.46 * breathe, sin(a) * 0.50 * breathe);
-        vec3 bot = vec3(-1.02, cos(a) * 0.46 * breathe, sin(a) * 0.50 * breathe);
-        dCocoon = min(dCocoon, sdCapsule(w, top, bot, 0.012 + 0.006 * bass));
-    }
-
-    // Fine plasma filaments lacing the cocoon
-    float dFil = 1e5;
-    for (int i = 0; i < 6; i++) {
-        float fi = float(i);
-        float a = fi * 1.0472 + t * 0.16;
-        vec3 top = vec3(1.15, cos(a) * 0.42, sin(a) * 0.44);
-        vec3 bot = vec3(-1.15, cos(a + 2.0) * 0.42, sin(a + 2.0) * 0.44);
-        dFil = min(dFil, sdCapsule(w, top, bot, 0.010 + 0.006 * treble));
-    }
-
-    vec2 res = vec2(dHull, 1.0);
-    if (dFil < res.x)    res = vec2(dFil, 4.0);
-    if (dCocoon < res.x) res = vec2(dCocoon, 2.0);
-    return res;
-}
-
-// -----------------------------------------------------------------------------
-// SEQUENCE 7 — "SPINE RING"
-// The hull reduces to a structural spine ringed by counter-rotating gyros of
-// chrome plate, the frame skeleton of the vessel.
-// -----------------------------------------------------------------------------
-vec2 csSeqSpineRing(vec3 p) {
-    float t = (u.preset.w > 0.001) ? u.preset.w : u.res.z;
-    float subBass = u.audio0.x, bass = u.audio0.y, mid = u.audio0.w;
-    float treble = u.audio1.y, beat = u.audio2.x;
-    float highPhase = u.audio2.w;
-
-    vec3 w = p - vec3(0.05 * sin(t * 0.05), 0.05 * cos(t * 0.04), 0.0);
-    w.xy *= rot2(0.16 * sin(t * 0.05));
-
-    // Central spine
-    float dSpine = sdCapsule(w, vec3(1.45, 0.0, 0.0), vec3(-1.45, 0.0, 0.0), 0.085 + 0.020 * subBass);
-
-    // Three counter-rotating plate gyros around the spine (Material 4)
-    float dGyros = 1e5;
-    for (int i = 0; i < 3; i++) {
-        float fi = float(i);
-        float a = fi * 1.0472;
-        vec3 b = w;
-        b.yz *= rot2(a + t * (0.22 + 0.08 * fi) + highPhase * 0.05);
-        float rad = 0.62 + fi * 0.16 + 0.06 * bass;
-        b.yz -= vec2(rad, 0.0);
-        b.xz *= rot2(t * (0.16 - 0.04 * fi));
-        float dPlate = sdFinBlade(b, 0.95 + 0.20 * hash11(fi * 3.1), 0.011, 0.15 + 0.05 * hash11(fi * 5.7), 0.20);
-        dGyros = min(dGyros, dPlate);
-    }
-
-    // Luminous rings threaded on the spine (Material 2)
-    float dRings = 1e5;
-    for (int i = 0; i < 4; i++) {
-        float fi = float(i);
-        vec3 b = w;
-        b.x -= -0.95 + fi * 0.63;
-        b.yz *= rot2(t * 0.10 + fi);
-        dRings = min(dRings, sdTorus(b, vec2(0.34 + 0.06 * sin(t * 0.5 + fi), 0.022 + 0.010 * beat)));
-    }
-
-    vec2 res = vec2(dSpine, 1.0);
-    if (dGyros < res.x) res = vec2(dGyros, 4.0);
-    if (dRings < res.x) res = vec2(dRings, 2.0);
-    return res;
-}
-
-// -----------------------------------------------------------------------------
-// SEQUENCE 8 — "SHARD BLOOM"
-// The hull shatters into a bloom of free-floating chrome shards that slowly
-// orbit a small surviving core.
-// -----------------------------------------------------------------------------
-vec2 csSeqShardBloom(vec3 p) {
-    float t = (u.preset.w > 0.001) ? u.preset.w : u.res.z;
-    float subBass = u.audio0.x, bass = u.audio0.y, mid = u.audio0.w;
-    float treble = u.audio1.y, beat = u.audio2.x;
-
-    vec3 w = p - vec3(0.07 * sin(t * 0.055), 0.05 * cos(t * 0.065), 0.0);
-    w.xz *= rot2(t * 0.07);
-
-    // Small dense core
-    float dCore = sdOctahedron(w, 0.42 + 0.08 * subBass + 0.05 * beat);
-
-    // 16 shards on independent orbits
-    float dShards = 1e5;
-    for (int i = 0; i < 16; i++) {
-        float fi = float(i);
-        vec3 h = hash33(vec3(fi * 3.3, fi * 1.9, fi * 4.7));
-        float ang = h.x * TAU + t * (0.10 + 0.06 * h.y);
-        float el = asin(clamp(h.y * 2.0 - 1.0, -1.0, 1.0));
-        float rad = 0.55 + 0.62 * h.z + 0.10 * bass;
-        vec3 c = vec3(cos(ang) * cos(el), sin(el), sin(ang) * cos(el)) * rad;
-        vec3 b = w - c;
-        b.xy *= rot2(ang * 1.5 + t * 0.3);
-        b.yz *= rot2(el + t * 0.22);
-        float len = 0.30 + 0.34 * h.z + 0.10 * treble;
-        dShards = min(dShards, sdFinBlade(b, len, 0.013, 0.075 + 0.055 * h.y, 0.18));
-    }
-
-    vec2 res = vec2(dCore, 2.0);
-    if (dShards < res.x) res = vec2(dShards, 4.0);
-    return res;
-}
-
-// -----------------------------------------------------------------------------
-// SEQUENCE 9 — "HULL STRATA"
-// The vessel is revealed as a stack of horizontal strata, each plate sliding
-// against its neighbours like geological layers in chrome.
-// -----------------------------------------------------------------------------
-vec2 csSeqHullStrata(vec3 p) {
-    float t = (u.preset.w > 0.001) ? u.preset.w : u.res.z;
-    float subBass = u.audio0.x, bass = u.audio0.y, mid = u.audio0.w;
-    float treble = u.audio1.y, beat = u.audio2.x;
-    float bassPhase = u.audio2.y;
-
-    vec3 w = p - vec3(0.06 * sin(t * 0.06), 0.05 * cos(t * 0.05), 0.0);
-    w.xz *= rot2(t * 0.065);
-
-    // Nine horizontal plates forming the hull silhouette
-    float dStrata = 1e5;
-    for (int i = 0; i < 9; i++) {
-        float fi = float(i);
-        float yy = (fi - 4.0) * 0.105;
-        // Each stratum is displaced sideways on its own phase
-        float slide = 0.20 * sin(t * 0.45 + fi * 0.7) + 0.10 * bassPhase * 0.1;
-        // Outer strata are shorter, giving a lens-shaped stack
-        float falloff = 1.0 - 0.055 * abs(fi - 4.0);
-        vec3 b = w - vec3(slide * 0.35, yy, 0.0);
-        float d = sdEllipsoidC(b, vec3((1.42 + 0.08 * subBass) * falloff, 0.048 + 0.012 * bass, 0.46 * falloff));
-        dStrata = min(dStrata, d);
-    }
-
-    // Glowing seam light escaping between the strata (Material 2)
-    float dGlow = sdEllipsoidC(w, vec3(1.05, 0.34 + 0.05 * beat, 0.30));
-    dGlow += 0.020 * (0.4 + bass) * sin(w.y * 30.0 + t * 2.0);
-
-    vec2 res = vec2(dStrata, 4.0);
-    if (dGlow < res.x) res = vec2(dGlow, 2.0);
-    return res;
-}
-
-// -----------------------------------------------------------------------------
-// SEQUENCE 10 — "TWIN VESSEL"
-// Two vessels fly in tight formation, mirroring each other with a shared
-// plasma tether strung between their noses.
-// -----------------------------------------------------------------------------
-vec2 csSeqTwinVessel(vec3 p) {
-    float t = (u.preset.w > 0.001) ? u.preset.w : u.res.z;
-    float subBass = u.audio0.x, bass = u.audio0.y, mid = u.audio0.w;
-    float treble = u.audio1.y, beat = u.audio2.x;
-    float bassPhase = u.audio2.y;
-
-    vec3 w = p - vec3(0.06 * sin(t * 0.05), 0.05 * cos(t * 0.06), 0.0);
-    w.xz *= rot2(t * 0.06);
-
-    float sep = 0.62 + 0.14 * sin(t * 0.5) + 0.10 * bass;
-
-    float dHulls = 1e5;
-    for (int i = 0; i < 2; i++) {
-        float sgn = float(i) * 2.0 - 1.0;
-        vec3 b = w - vec3(0.0, sgn * sep, 0.0);
-        b.xz *= rot2(sgn * 0.12 * sin(t * 0.35 + bassPhase * 0.1));
-        float d = sdEllipsoidC(b, vec3(1.28 + 0.07 * subBass, 0.24 + 0.03 * bass, 0.30));
-        // Open each hull's seam so the interior reads
-        d = max(d, -sdBox(b - vec3(0.08, 0.0, 0.0), vec3(0.70, 0.11, 0.46)));
-        dHulls = min(dHulls, d);
-    }
-
-    // Shared plasma tether between the two noses (Material 2)
-    float dTether = sdCapsule(w, vec3(0.30, sep, 0.0), vec3(0.30, -sep, 0.0), 0.030 + 0.014 * beat);
-    dTether += 0.014 * (0.4 + mid) * sin(w.y * 14.0 + t * 2.2);
-
-    // Fins sprouting outward on each hull
-    float dFins = 1e5;
-    for (int i = 0; i < 10; i++) {
-        float fi = float(i);
-        float sgn = mod(fi, 2.0) * 2.0 - 1.0;
-        vec3 b = w - vec3(0.0, sgn * sep, 0.0);
-        b.xy *= rot2(sgn * (0.65 + 0.25 * sin(t * 0.4 + fi)));
-        b.x -= 0.35 - mod(fi, 5.0) * 0.20;
-        dFins = min(dFins, sdFinBlade(b, 0.60 + 0.30 * hash11(fi * 3.1), 0.009, 0.09, 0.14));
-    }
-
-    vec2 res = vec2(dHulls, 1.0);
-    if (dFins < res.x)   res = vec2(dFins, 4.0);
-    if (dTether < res.x) res = vec2(dTether, 2.0);
-    return res;
-}
-
-// -----------------------------------------------------------------------------
-// SEQUENCE 11 — "NOZZLE FLARE"
-// A rear three-quarter view: the vessel's engine nozzle flares wide, venting a
-// brilliant cone of plasma and embers.
-// -----------------------------------------------------------------------------
-vec2 csSeqNozzleFlare(vec3 p) {
-    float t = (u.preset.w > 0.001) ? u.preset.w : u.res.z;
-    float subBass = u.audio0.x, bass = u.audio0.y, mid = u.audio0.w;
-    float treble = u.audio1.y, beat = u.audio2.x;
-    float bassPhase = u.audio2.y;
-
-    vec3 w = p - vec3(0.05 * sin(t * 0.05), 0.04 * cos(t * 0.05), 0.0);
-    w.yz *= rot2(t * 0.08);
-
-    // Short foreshortened hull body
-    float dHull = sdEllipsoidC(w - vec3(0.55, 0.0, 0.0), vec3(1.05 + 0.07 * subBass, 0.36 + 0.04 * bass, 0.40));
-
-    // Nozzle bell opening toward -X
-    vec3 b = w;
-    b.xz *= rot2(0.0);
-    float flare = 0.34 + 0.10 * beat + 0.06 * bass;
-    float dNozzle = sdCylinder(b - vec3(-0.55, 0.0, 0.0), vec2(flare, 0.34));
-
-    // Plasma cone venting out of the nozzle (Material 2)
-    float dCone = 1e5;
-    for (int i = 0; i < 8; i++) {
-        float fi = float(i);
-        float along = -0.95 - fi * 0.22;
-        float spread = 0.22 + fi * 0.085 + 0.06 * treble;
-        float ang = fi * 1.7 + t * 0.5;
-        vec3 c = vec3(along, cos(ang) * spread, sin(ang) * spread);
-        float sz = 0.15 - fi * 0.011 + 0.02 * beat;
-        dCone = min(dCone, sdEllipsoidC(w - c, vec3(sz * 1.7, sz, sz)));
-    }
-
-    // Nozzle fins around the bell
-    float dFins = 1e5;
-    for (int i = 0; i < 8; i++) {
-        float fi = float(i);
-        float a = fi * 0.7854 + t * 0.10;
-        vec3 f = w - vec3(-0.35, cos(a) * flare, sin(a) * flare);
-        f.yz *= rot2(-a);
-        f.xy *= rot2(0.55);
-        dFins = min(dFins, sdFinBlade(f, 0.55 + 0.20 * hash11(fi * 2.7), 0.010, 0.10, 0.16));
-    }
-
-    vec2 res = vec2(dHull, 1.0);
-    if (dNozzle < res.x) res = vec2(dNozzle, 4.0);
-    if (dFins < res.x)   res = vec2(dFins, 4.0);
-    if (dCone < res.x)   res = vec2(dCone, 2.0);
-    return res;
-}
-
-// -----------------------------------------------------------------------------
-// SEQUENCE 12 — "STORM COLLAPSE"
-// Everything converges: the vessel's fins and beads are drawn inward in a slow
-// implosion, the hull compressing into a single hot point.
-// -----------------------------------------------------------------------------
-vec2 csSeqStormCollapse(vec3 p) {
-    float t = (u.preset.w > 0.001) ? u.preset.w : u.res.z;
-    float subBass = u.audio0.x, bass = u.audio0.y, mid = u.audio0.w;
-    float treble = u.audio1.y, beat = u.audio2.x;
-    float highPhase = u.audio2.w;
-
-    // The whole scene breathes inward and outward
-    float collapse = 1.0 - 0.22 * (0.5 + 0.5 * sin(t * 0.42)) - 0.12 * beat;
-    vec3 w = (p - vec3(0.05 * sin(t * 0.06), 0.04 * cos(t * 0.05), 0.0)) / max(collapse, 0.45);
-    w.xz *= rot2(t * 0.09 + highPhase * 0.04);
-
-    // Compressed hull
-    float dHull = sdEllipsoidC(w, vec3(0.95 + 0.06 * subBass, 0.26 + 0.04 * bass, 0.32));
-
-    // Fins pulled inward, radiating around the compressed core
-    float dFins = 1e5;
-    for (int i = 0; i < 12; i++) {
-        float fi = float(i);
-        vec3 h = hash33(vec3(fi * 2.7, fi * 4.3, fi * 1.1));
-        float ang = h.x * TAU + t * (0.18 + 0.10 * h.y);
-        float el = asin(clamp(h.y * 2.0 - 1.0, -1.0, 1.0));
-        vec3 dir = vec3(cos(ang) * cos(el), sin(el), sin(ang) * cos(el));
-        vec3 c = dir * (0.55 + 0.55 * h.z);
-        vec3 b = w - c;
-        b.xy *= rot2(ang + t * 0.4);
-        b.xz *= rot2(el);
-        float len = 0.42 + 0.34 * h.z + 0.10 * treble;
-        dFins = min(dFins, sdFinBlade(b, len, 0.010, 0.075 + 0.04 * h.y, 0.16));
-    }
-
-    // Hot compressed core at the centre (Material 2)
-    float dCore = sdSphere(w, 0.22 + 0.07 * subBass + 0.05 * beat);
-    dCore += 0.014 * (0.5 + bass) * sin(w.x * 12.0 + t * 2.4);
-
-    vec2 res = vec2(dHull, 1.0);
-    if (dFins < res.x) res = vec2(dFins, 4.0);
+    float subBass = u.audio0.x, bass = u.audio0.y, beat = u.audio2.x;
+    vec3 w = csFrame(p, t);
+
+    // The shells sit close enough to read as one hull. The slot between them
+    // is a curved gap, and the furnace heart bulges through it.
+    float gap = 0.24 + 0.04 * sin(t * 0.70) + 0.05 * bass + 0.03 * beat;
+    vec3 shellA = vec3(0.50, 0.0, 0.0);
+    vec3 shellB = vec3(-0.72, 0.0, 0.0);
+    float girth = 0.17 + 0.02 * subBass;
+    float dTop = sdCapsule(w - vec3(0.0, gap, 0.0), shellA, shellB, girth);
+    float dBot = sdCapsule(w - vec3(0.0, -gap, 0.0), shellA, shellB, girth);
+    float dShip = smin(min(dTop, dBot), sdSphere(w - vec3(0.78, 0.0, 0.0), 0.24), 0.20);
+    float dCore = sdSphere(w - vec3(-0.05, 0.0, 0.0), 0.20 + 0.04 * subBass + 0.04 * beat);
+    dCore += 0.008 * (0.4 + bass) * sin(length(w) * 8.0 + t * 1.6);
+    float dStrut = min(
+        sdCapsule(w, vec3(-0.35, 0.12, 0.0), vec3(-1.15, 0.42, 0.12), 0.030),
+        sdCapsule(w, vec3(-0.35, -0.12, 0.0), vec3(-1.15, -0.42, 0.12), 0.030)
+    );
+
+    vec2 res = vec2(dShip, 1.0);
+    if (dStrut < res.x) res = vec2(dStrut, 4.0);
     if (dCore < res.x) res = vec2(dCore, 2.0);
     return res;
 }
 
-// Dispatch across the twelve CHROMATIC STORM sequences with weighted crossfades.
-// Each form is held long enough to read, then eases into the next, and the last
-// blend closes the loop back to the Furnace Hull with no visible pop.
+// -----------------------------------------------------------------------------
+// 2 — HELIX
+// A plasma coil screws along a dark spine.
+// -----------------------------------------------------------------------------
+vec2 csSeqHelix(vec3 p) {
+    float t = (u.preset.w > 0.001) ? u.preset.w : u.res.z;
+    float bass = u.audio0.y, treble = u.audio1.y, beat = u.audio2.x;
+    vec3 w = csFrame(p, t);
+
+    float dSpine = sdCapsule(w, vec3(1.00, 0.0, 0.0), vec3(-1.10, 0.0, 0.0), 0.055);
+    // Beads, not straight rods: a rod helix flattens into a square from the side.
+    float dHelix = 1e5;
+    for (int i = 0; i < 6; i++) {
+        float su = float(i) / 5.0;
+        float ang = su * TAU + t * (0.70 + 0.55 * treble);
+        float rad = 0.38 + 0.08 * bass;
+        vec3 c = vec3(mix(0.85, -0.95, su), cos(ang) * rad, sin(ang) * rad);
+        dHelix = min(dHelix, sdSphere(w - c, 0.075 + 0.015 * beat));
+    }
+    float dHead = sdSphere(w - vec3(1.05, 0.0, 0.0), 0.13 + 0.04 * beat);
+
+    vec2 res = vec2(dSpine, 1.0);
+    if (dHelix < res.x) res = vec2(dHelix, 2.0);
+    if (dHead < res.x) res = vec2(dHead, 2.0);
+    return res;
+}
+
+// -----------------------------------------------------------------------------
+// 3 — TWIN
+// Two smooth ships, separation breathing with the bass, noses linked.
+// -----------------------------------------------------------------------------
+vec2 csSeqTwin(vec3 p) {
+    float t = (u.preset.w > 0.001) ? u.preset.w : u.res.z;
+    float bass = u.audio0.y, beat = u.audio2.x;
+    vec3 w = csFrame(p, t);
+    float sep = 0.55 + 0.12 * sin(t * 0.55) + 0.10 * bass;
+
+    float dHull = 1e5;
+    float dLamp = 1e5;
+    for (int i = 0; i < 2; i++) {
+        float sgn = float(i) * 2.0 - 1.0;
+        vec3 b = w - vec3(0.0, sgn * sep, 0.0);
+        b.xz *= rot2(sgn * 0.12 * sin(t * 0.40));
+        dHull = min(dHull, csHull(b, 1.05, 0.13 + 0.02 * bass));
+        dLamp = min(dLamp, sdSphere(b - vec3(0.62, 0.0, 0.0), 0.06 + 0.025 * beat));
+    }
+    float dTether = sdCapsule(w, vec3(0.20, sep * 0.45, 0.0), vec3(0.20, -sep * 0.45, 0.0), 0.026 + 0.010 * beat);
+
+    vec2 res = vec2(dHull, 1.0);
+    if (dTether < res.x) res = vec2(dTether, 2.0);
+    if (dLamp < res.x) res = vec2(dLamp, 2.0);
+    return res;
+}
+
+// -----------------------------------------------------------------------------
+// 4 — GYRE
+// Three chrome rings spin on a spine around a hot crystal.
+// -----------------------------------------------------------------------------
+vec2 csSeqGyre(vec3 p) {
+    float t = (u.preset.w > 0.001) ? u.preset.w : u.res.z;
+    float bass = u.audio0.y, beat = u.audio2.x;
+    vec3 w = csFrame(p, t);
+
+    float dSpine = sdCapsule(w, vec3(1.05, 0.0, 0.0), vec3(-1.05, 0.0, 0.0), 0.05);
+    float dCore = sdSphere(w, 0.20 + 0.05 * beat);
+    float dRings = 1e5;
+    for (int i = 0; i < 3; i++) {
+        float fi = float(i);
+        vec3 b = w;
+        b.x -= (fi - 1.0) * 0.52;
+        float dir = (i == 1) ? -1.0 : 1.0;
+        b.yz *= rot2(t * (0.35 + 0.12 * fi) * dir);
+        dRings = min(dRings, sdTorus(b, vec2(0.40 + fi * 0.08 + 0.05 * bass, 0.016 + 0.005 * beat)));
+    }
+
+    vec2 res = vec2(dSpine, 1.0);
+    if (dRings < res.x) res = vec2(dRings, 4.0);
+    if (dCore < res.x) res = vec2(dCore, 2.0);
+    return res;
+}
+
+// -----------------------------------------------------------------------------
+// 5 — COMET
+// The head coasts forward and the ember wake streams out behind it.
+// -----------------------------------------------------------------------------
+vec2 csSeqComet(vec3 p) {
+    float t = (u.preset.w > 0.001) ? u.preset.w : u.res.z;
+    float bass = u.audio0.y, treble = u.audio1.y, beat = u.audio2.x;
+    vec3 w = csFrame(p, t);
+
+    float dHead = csHull(w - vec3(0.70, 0.0, 0.0), 0.70, 0.16 + 0.02 * bass);
+    float dWake = 1e5;
+    for (int i = 0; i < 4; i++) {
+        float fi = float(i);
+        float along = -0.10 - fi * 0.38 - 0.12 * sin(t * 0.90 + fi);
+        float sway = 0.12 * sin(t * 0.70 + fi * 1.3);
+        float sz = 0.12 - fi * 0.018 + 0.03 * treble;
+        vec3 c = vec3(along, sway, 0.08 * cos(fi + t * 0.55));
+        dWake = min(dWake, sdSphere(w - c, sz));
+    }
+
+    vec2 res = vec2(dHead, 1.0);
+    if (dWake < res.x) res = vec2(dWake, 3.0);
+    return res;
+}
+
+// -----------------------------------------------------------------------------
+// 6 — NOVA
+// A shock ring breathes outward and three spars ride the pulse.
+// -----------------------------------------------------------------------------
+vec2 csSeqNova(vec3 p) {
+    float t = (u.preset.w > 0.001) ? u.preset.w : u.res.z;
+    float bass = u.audio0.y, beat = u.audio2.x, subBass = u.audio0.x;
+    vec3 w = csFrame(p, t);
+
+    float pulse = 0.55 + 0.28 * sin(t * 0.80) + 0.16 * beat + 0.08 * bass;
+    float dCore = sdSphere(w, 0.16 + 0.06 * subBass + 0.04 * beat);
+    float dRing = sdTorus(w, vec2(abs(pulse) + 0.15, 0.020));
+    vec3 q = w;
+    q.xy *= rot2(t * 0.35);
+    float dRing2 = sdTorus(q, vec2(abs(pulse) * 0.70 + 0.20, 0.014));
+
+    float dSpar = 1e5;
+    for (int i = 0; i < 3; i++) {
+        float a = float(i) * 2.0943951 + t * 0.30;
+        float rad = 0.35 + abs(pulse) * 0.45;
+        vec3 tip = vec3(cos(a) * rad, 0.0, sin(a) * rad);
+        dSpar = min(dSpar, sdCapsule(w, tip * 0.25, tip, 0.028));
+    }
+
+    vec2 res = vec2(dCore, 2.0);
+    if (dRing < res.x) res = vec2(dRing, 4.0);
+    if (dRing2 < res.x) res = vec2(dRing2, 2.0);
+    if (dSpar < res.x) res = vec2(dSpar, 4.0);
+    return res;
+}
+
+// At most two weights are nonzero, so the other four scenes stay unevaluated.
 vec2 csMapSequences(vec3 p) {
     float t = (u.preset.w > 0.001) ? u.preset.w : u.res.z;
-    float cycle = fract(t * 0.0105);   // ~95 s for all twelve sequences
+    float cycle = fract(t * CS_CYCLE_RATE);
+    int seg = int(clamp(floor(cycle * 6.0), 0.0, 5.0));
+    float local = cycle * 6.0 - float(seg);
+    const float HOLD = 0.72;
 
-    // Twelve held states with eleven crossfades plus the closing blend.
-    // Each hold is 0.0680 long, each crossfade 0.0227.
-    float w[12];
-    for (int i = 0; i < 12; i++) w[i] = 0.0;
-
-    const float HOLD = 0.0680;
-    const float FADE = 0.0227;
-    const float SEG = HOLD + FADE;
-
-    int seg = int(clamp(floor(cycle / SEG), 0.0, 11.0));
-    float local = cycle - float(seg) * SEG;
+    float w[6];
+    for (int i = 0; i < 6; i++) w[i] = 0.0;
     if (local <= HOLD) {
         w[seg] = 1.0;
     } else {
-        float f = smoothstep(0.0, 1.0, (local - HOLD) / FADE);
+        float f = smoothstep(0.0, 1.0, (local - HOLD) / (1.0 - HOLD));
         w[seg] = 1.0 - f;
-        w[(seg + 1) % 12] = f;
+        w[(seg + 1) % 6] = f;
     }
 
-    vec2 seq[12];
-    seq[0]  = csSeqFurnaceHull(p);
-    seq[1]  = csSeqFinCascade(p);
-    seq[2]  = csSeqSplitKeel(p);
-    seq[3]  = csSeqBeadSurge(p);
-    seq[4]  = csSeqEmberWake(p);
-    seq[5]  = csSeqPlasmaCocoon(p);
-    seq[6]  = csSeqSpineRing(p);
-    seq[7]  = csSeqShardBloom(p);
-    seq[8]  = csSeqHullStrata(p);
-    seq[9]  = csSeqTwinVessel(p);
-    seq[10] = csSeqNozzleFlare(p);
-    seq[11] = csSeqStormCollapse(p);
+    vec2 seq[6];
+    for (int i = 0; i < 6; i++) seq[i] = vec2(0.0, 1.0);
+    if (w[0] > 0.0) seq[0] = csSeqClamshell(p);
+    if (w[1] > 0.0) seq[1] = csSeqHelix(p);
+    if (w[2] > 0.0) seq[2] = csSeqTwin(p);
+    if (w[3] > 0.0) seq[3] = csSeqGyre(p);
+    if (w[4] > 0.0) seq[4] = csSeqComet(p);
+    if (w[5] > 0.0) seq[5] = csSeqNova(p);
 
     float dMix = 0.0;
-    for (int i = 0; i < 12; i++) dMix += seq[i].x * w[i];
+    for (int i = 0; i < 6; i++) dMix += seq[i].x * w[i];
 
-    // Material of whichever contributing sequence is nearest at this point
     float mat = 1.0;
     float best = 1e9;
-    for (int i = 0; i < 12; i++) {
+    for (int i = 0; i < 6; i++) {
         if (w[i] > 0.02 && seq[i].x < best) { best = seq[i].x; mat = seq[i].y; }
     }
-
-    // The bead trail and wire tails accompany every sequence
-    float dTrail = csBeadTrail(p, t, 0.55, 1.0);
-    if (dTrail < dMix) { dMix = dTrail; mat = 5.0; }
-    float dWire = csWireTrail(p, t);
-    if (dWire < dMix) { dMix = dWire; mat = 6.0; }
     return vec2(dMix, mat);
 }
+
 
 // Beyond Dimensions Signature Palette
 // Inspired by Cotangent Dimensions cover & Defasten - Beyond Basel 2023
@@ -1209,8 +758,267 @@ vec3 streamOfFrequencyPalette(float t, vec2 uvHint) {
     return mix(procCol, coverSample, 0.46);
 }
 
+// ------------------------------------------------------------------------------
+// Stream of Frequency — Dynamic Waves
+//
+// Two rivers, one shader, both raymarched in 3D. The horizontal river is a
+// vault of twelve frequency ribbons that arcs through space and weaves through
+// depth; the vertical river is a cylinder of falling glyph columns. The
+// travelling front throws a burst of lit motes out of the river, and the PID
+// event vector drives them.
+//
+// The pair keeps its Stream of Frequency rainbow, but the colour now comes off
+// three-dimensional surfaces: a graphite glass body with an accent rim, and
+// self-luminous heads, rings and motes.
+// ------------------------------------------------------------------------------
+// The river fills 82% of the frame's short axis, so it never touches the edge.
+const float SOF_COVERAGE = 0.82;
+
+// Horizontal river: twelve ribbons stacked down the frame. At the preset's
+// 8.1-unit camera the 1.32 focal length shows a 3.07 half-height, so 82% of it
+// is the stack. The span runs past both side edges, so the river reads as
+// continuing out of frame rather than as a floating plank.
+const float SOF_STACK_HALF = SOF_COVERAGE * 3.07;             // half height of the stack
+const float SOF_RIVER_HALF = 4.60;                            // half span along X
+
+// Vertical river: a glyph cylinder orbiting at 6.05 units. The near wall sits
+// at 4.90, where the same focal length shows a 1.85 half-height, so it uses the
+// same 82%.
+const float SOF_RAIN_RADIUS = 1.15;                           // radius of the cylinder
+const float SOF_RAIN_HALF = SOF_COVERAGE * 1.85;              // half height of the cylinder
+
+// The arc that bends the river. Slow on purpose: the bands are drawn along a
+// long curve, so the phase must creep rather than wiggle per cell.
+float sofArcOffset(float along, float t) {
+    return sin(along * PI + t * 0.071) * 0.16;
+}
+
+float sofHash(float n) {
+    return fract(sin(n * 127.1) * 43758.5453);
+}
+
+// PID sparks: the stream event throws a burst of lit motes out of the
+// travelling front. They are real geometry, so the river occludes them and the
+// material pass lights them from the same key as everything else.
+float sofPidBursts(vec3 p) {
+    float heat = u.stream.z;
+    if (heat <= 0.001) {
+        return 1e5;
+    }
+    float vertical = (u.preset.x > 11.5) ? 1.0 : 0.0;
+    float front = clamp(u.stream.y, 0.0, 1.0);
+    float d = 1e5;
+    for (int i = 0; i < 8; i++) {
+        float fi = float(i);
+        vec3 h = hash33(vec3(fi * 2.7 + u.stream.w * 1.3, fi * 1.9, u.stream.w));
+        vec3 c;
+        if (vertical > 0.5) {
+            float ang = h.x * TAU;
+            float rad = SOF_RAIN_RADIUS * (1.0 + 0.55 * h.z);
+            c = vec3(cos(ang) * rad,
+                     mix(SOF_RAIN_HALF, -SOF_RAIN_HALF, front) + (h.y - 0.5) * 0.55,
+                     sin(ang) * rad);
+        } else {
+            c = vec3(mix(-SOF_RIVER_HALF, SOF_RIVER_HALF, front) + (h.x - 0.5) * 0.75,
+                     (h.y - 0.5) * 1.75,
+                     (h.z - 0.5) * 0.95);
+        }
+        d = min(d, sdSphere(p - c, 0.010 + 0.030 * h.z * heat));
+    }
+    return d;
+}
+
+// The Stream of Frequency spectrum as a pure hue ramp. The rivers are lit
+// geometry, so they deliberately do not sample the cover per fragment: that
+// reads as camouflage painted onto a tube. The rainbow is the preset's
+// identity, and it is baked into one ramp the geometry and the light share.
+// Written as successive mixes rather than a colour array: that form is the one
+// the GLSL, the OpenGL port and the Metal translator all accept unchanged.
+vec3 sofSpectrum(float s) {
+    float u = fract(s) * 5.0;
+    vec3 c = mix(vec3(0.122, 0.125, 0.376),  // Deep Stream Indigo (#1f2060)
+                 vec3(0.000, 0.949, 1.000),  // Electric Stream Cyan (#00f2ff)
+                 clamp(u, 0.0, 1.0));
+    c = mix(c, vec3(0.298, 0.851, 0.482),    // Frequency Emerald (#4cd97b)
+            clamp(u - 1.0, 0.0, 1.0));
+    c = mix(c, vec3(0.961, 0.929, 0.416),    // Solar Wave Gold (#f5ed6a)
+            clamp(u - 2.0, 0.0, 1.0));
+    c = mix(c, vec3(0.592, 0.310, 0.976),    // Electric Violet (#974ff9)
+            clamp(u - 3.0, 0.0, 1.0));
+    c = mix(c, vec3(0.941, 0.125, 0.125),    // Peak Crimson (#f02020)
+            clamp(u - 4.0, 0.0, 1.0));
+    return c;
+}
+
+// The river palette: the spectrum picked by position along the river, leaning
+// toward the preset's own accent (rose for the horizontal river, cyan for the
+// vertical one). Slow on purpose, so a ribbon reads as one hue rather than a
+// strobe.
+vec3 sofRiverPalette(float t, vec2 uvHint, float vertical) {
+    float s = t * 0.055 + uvHint.x * 0.26 + uvHint.y * 0.16;
+    vec3 rainbow = sofSpectrum(s);
+    vec3 tint = (vertical > 0.5) ? vec3(0.10, 0.85, 0.95) : vec3(0.98, 0.30, 0.75);
+    return mix(rainbow, tint, 0.24);
+}
+
+// Hue of the river surface at a world position. The horizontal river reads down
+// its own stack, so the twelve ribbons span the rainbow top to bottom; the
+// vertical one reads around the glyph cylinder. Both drift with time. Keying
+// the hue off world space is what stops the river reading as one flat colour
+// while still giving each ribbon a stable identity.
+vec3 sofSurfaceHue(vec3 p, float vertical) {
+    float t = u.res.z;
+    float s;
+    if (vertical > 0.5) {
+        float ang = atan(p.z, p.x) / TAU + 0.5;         // around the cylinder
+        s = ang + 0.10 * p.y + t * 0.045;
+    } else {
+        s = (p.y / (2.0 * SOF_STACK_HALF)) + 0.28          // down the stack
+            + 0.16 * p.x / (2.0 * SOF_RIVER_HALF)          // and along the span
+            + t * 0.035;
+    }
+    vec3 tint = (vertical > 0.5) ? vec3(0.10, 0.85, 0.95) : vec3(0.98, 0.30, 0.75);
+    return mix(sofSpectrum(s), tint, 0.22);
+}
+
+// Horizontal river: twelve frequency ribbons arched through space. The stack
+// sags on the shared arc, each ribbon bows through Z, and the whole vault is
+// bounded to the river's span along X.
+vec2 sofHorizontalRiver(vec3 p) {
+    float t = u.res.z;
+    float bass = u.audio0.y;
+    float beat = u.audio2.x;
+
+    float along = clamp(p.x / (2.0 * SOF_RIVER_HALF) + 0.5, 0.0, 1.0);
+    float arc = sofArcOffset(along, t) * 0.75;
+
+    // Perspective taper: the river runs away from the camera toward -X, so the
+    // far end converges to a smaller stack. This is what makes the twelve
+    // ribbons read as a corridor in depth instead of twelve parallel lines.
+    float taper = mix(0.38, 1.0, smoothstep(-SOF_RIVER_HALF, SOF_RIVER_HALF, p.x));
+    // A tapered SDF over-estimates by at most 1/taper, so the march step is
+    // scaled by it; the ribbons can then never be stepped through.
+    float stepScale = 0.86 * clamp(taper, 0.38, 1.0);
+
+    float dRibbon = 1e5;
+    for (int i = 0; i < 12; i++) {
+        float fi = float(i);
+        float bandVal = i < 4 ? u.bands0[i] : (i < 8 ? u.bands1[i - 4] : u.bands2[i - 8]);
+        float level = 0.55 + 0.45 * bandVal;
+
+        // Stacked down the vault, bowed by the shared arc and by a slow sag so
+        // the stack is not a bundle of straight pipes.
+        float centre = (fi - 5.5) * (SOF_STACK_HALF / 5.5) * taper + arc;
+        centre += 0.06 * sin(p.x * 1.7 + t * 0.55 + fi * 0.9);
+
+        // Depth: the ribbons weave toward and away from the camera, which is
+        // what separates the river from a painted stripe.
+        float depth = 0.50 * sin(p.x * 1.25 + t * 0.42 + fi * 0.55) * taper;
+
+        float radius = (0.042 + 0.028 * level + 0.010 * bass) * taper;
+        float d = length(vec2(p.y - centre, p.z - depth)) - radius;
+        d = max(d, abs(p.x) - SOF_RIVER_HALF);
+        dRibbon = min(dRibbon, d * stepScale);
+    }
+
+    // Guide rails: two thin tubes that frame the vault above and below and give
+    // the eye a second depth cue.
+    float dRail = 1e5;
+    for (int k = 0; k < 2; k++) {
+        float fk = float(k) * 2.0 - 1.0;
+        float centre = fk * (SOF_STACK_HALF + 0.26) * taper + arc;
+        float depth = 0.52 * fk * sin(p.x * 0.9 + t * 0.33) * taper;
+        float d = length(vec2(p.y - centre, p.z - depth)) - 0.020 * taper;
+        d = max(d, abs(p.x) - SOF_RIVER_HALF * 1.04);
+        dRail = min(dRail, d * stepScale);
+    }
+
+    // Travelling front: a hot bead running the river, with the PID burst around
+    // it while an event is live.
+    float head = fract(t * 0.115);
+    vec3 headPos = vec3(
+        mix(-SOF_RIVER_HALF, SOF_RIVER_HALF, head),
+        sofArcOffset(head, t) * 0.75,
+        0.10 * sin(t * 0.9)
+    );
+    float dHead = sdSphere(p - headPos, 0.072 + 0.030 * u.stream.z + 0.018 * beat);
+
+    vec2 res = vec2(dRibbon, 1.0);
+    if (dRail < res.x) res = vec2(dRail, 2.0);
+    if (dHead < res.x) res = vec2(dHead, 3.0);
+    float dMote = sofPidBursts(p);
+    if (dMote < res.x) res = vec2(dMote, 4.0);
+    return res;
+}
+
+// Vertical river: a cylinder of glyph columns falling top to bottom. Each
+// column repeats a tall thin glyph along its own fall speed, and three current
+// rings climb the cylinder on the beat.
+vec2 sofVerticalRiver(vec3 p) {
+    float t = u.res.z;
+    float bass = u.audio0.y;
+    float treble = u.audio1.y;
+    float beat = u.audio2.x;
+
+    float dColumn = 1e5;
+    float dGlyph = 1e5;
+
+    for (int i = 0; i < 12; i++) {
+        float fi = float(i);
+        float bandVal = i < 4 ? u.bands0[i] : (i < 8 ? u.bands1[i - 4] : u.bands2[i - 8]);
+        float level = 0.55 + 0.45 * bandVal;
+
+        float ang = (fi + 0.5) * (TAU / 12.0);
+        vec2 radial = vec2(cos(ang), sin(ang));
+        vec2 tang = vec2(-radial.y, radial.x);
+
+        // Column spine: a thin vertical tube on the cylinder wall.
+        float dRad = length(p.xz - radial * SOF_RAIN_RADIUS) - (0.035 + 0.018 * level);
+        float spine = max(dRad, abs(p.y) - SOF_RAIN_HALF);
+        dColumn = min(dColumn, spine);
+
+        // Falling glyphs. The frame's tangent/radial axes keep every block
+        // facing out of the cylinder, so the rain reads as a ring of glyphs
+        // rather than a flat curtain.
+        float speed = 0.55 + 0.42 * sofHash(fi * 3.7 + 1.0);
+        float period = 0.52;
+        float phase = sofHash(fi * 11.3) * period;
+        float yy = mod(p.y + t * speed + phase + 0.5 * period, period) - 0.5 * period;
+        vec3 local = vec3(dot(p.xz, tang), yy, dot(p.xz, radial) - SOF_RAIN_RADIUS);
+        vec3 glyphHalf = vec3(
+            0.055 + 0.030 * level,
+            0.115 + 0.085 * level,
+            0.022 + 0.014 * beat
+        );
+        float d = sdBox(local, glyphHalf);
+        dGlyph = min(dGlyph, max(d, abs(p.y) - SOF_RAIN_HALF));
+    }
+
+    // Current rings: three thin halos climbing the rain, widening on the beat.
+    float dRings = 1e5;
+    for (int k = 0; k < 3; k++) {
+        float fk = float(k);
+        float ry = mix(-SOF_RAIN_HALF, SOF_RAIN_HALF, fract(t * 0.09 + fk * 0.33));
+        vec3 q = p - vec3(0.0, ry, 0.0);
+        float d = sdTorus(q, vec2(SOF_RAIN_RADIUS + 0.07 + 0.05 * beat + 0.04 * bass,
+                                  0.014 + 0.010 * treble));
+        dRings = min(dRings, d);
+    }
+
+    vec2 res = vec2(dColumn, 1.0);
+    if (dRings < res.x) res = vec2(dRings, 2.0);
+    if (dGlyph < res.x) res = vec2(dGlyph, 5.0);
+    float dMote = sofPidBursts(p);
+    if (dMote < res.x) res = vec2(dMote, 4.0);
+    return res;
+}
+
 vec3 getPresetPalette(float t, vec2 uvHint) {
-    if (u.preset.x > 9.5) {
+    if (u.preset.x > 11.5) {
+        return sofRiverPalette(t, uvHint, 1.0);
+    } else if (u.preset.x > 10.5) {
+        return sofRiverPalette(t, uvHint, 0.0);
+    } else if (u.preset.x > 9.5) {
         return chromaticStormPalette(t, uvHint);
     } else if (u.preset.x > 8.5) {
         return resonantFluidDynamicsPalette(t, uvHint);
@@ -1257,25 +1065,27 @@ vec2 mapScene(vec3 p) {
     float midPhase = u.audio2.z;
     float highPhase = u.audio2.w;
 
-    if (u.preset.x > 9.5) {
+    if (u.preset.x > 10.5) {
+        // =========================================================================
+        // PRESETS 12 & 13: STREAM OF FREQUENCY — DYNAMIC WAVES
+        // Both are raymarched 3D rivers, not full-frame passes: the horizontal
+        // one is a vault of twelve frequency ribbons weaving through depth, the
+        // vertical one a cylinder of falling glyph columns. The PID event
+        // vector throws a burst of lit motes out of the travelling front.
+        // =========================================================================
+        return (u.preset.x > 11.5) ? sofVerticalRiver(p) : sofHorizontalRiver(p);
+    } else if (u.preset.x > 9.5) {
         // =========================================================================
         // PRESET 11: DREAMWORLDS (CHROMATIC STORM)
         // Inspired by MPlanetarian_Dreamworlds_Lockscreen.png and the late
         // vessel sequence of XI-N / MPlanetarian "BIFURCATION (2026)".
-        // Twelve animation sequences morph continuously:
-        //   1  FURNACE HULL   — split teardrop hull with a molten core
-        //   2  FIN CASCADE    — chrome fins fanning open along the hull
-        //   3  SPLIT KEEL     — twin keels baring a plasma channel
-        //   4  BEAD SURGE     — the bead swarm becomes the subject
-        //   5  EMBER WAKE     — vessel coasting on a long fiery wake
-        //   6  PLASMA COCOON  — luminous shell breathing around the hull
-        //   7  SPINE RING     — bare skeleton spine with plate gyros
-        //   8  SHARD BLOOM    — hull shattered into orbiting shards
-        //   9  HULL STRATA    — hull revealed as sliding horizontal layers
-        //  10  TWIN VESSEL    — mirrored pair with a plasma tether
-        //  11  NOZZLE FLARE   — rear view, engine venting a plasma cone
-        //  12  STORM COLLAPSE — everything implodes into a hot point
-        // Every sequence carries the video's bead swarm and wire tails.
+        // Six animation sequences crossfade, one pair at a time:
+        //   1  CLAMSHELL — two round shells around a furnace heart
+        //   2  HELIX     — a plasma coil screwing along a spine
+        //   3  TWIN      — two smooth ships linked at the nose
+        //   4  GYRE      — chrome rings spinning on a spine
+        //   5  COMET     — a ship head with a flowing ember wake
+        //   6  NOVA      — a shock ring breathing out from a hot point
         // =========================================================================
         return csMapSequences(p);
     } else if (u.preset.x > 8.5) {
@@ -2296,6 +2106,46 @@ vec3 renderCosmicBackground(vec3 rd, vec2 screenUv) {
     float bassPhase = u.audio2.y;
     float highPhase = u.audio2.w;
 
+    if (u.preset.x > 10.5) {
+        // --- PRESETS 12 & 13: STREAM OF FREQUENCY — DYNAMIC WAVES BACKGROUND ---
+        // A deep frequency void rather than the paper page the flat pass used:
+        // the rivers are lit geometry now, so they need something to be lit
+        // against. The cover's spectrum colours streak into vertical bands that
+        // rush along the river axis, and the beat lifts them.
+        float dynTime = (u.preset.w > 0.001) ? u.preset.w : t;
+        bool vertical = (u.preset.x > 11.5);
+
+        // Bounded ray projection so the field never smears at grazing angles.
+        vec2 p3d = rd.xy / max(abs(rd.z) + 0.30, 0.34);
+        p3d = clamp(p3d, -1.7, 1.7);
+
+        // The indigo depth of the Stream of Frequency palette, darkest at the
+        // frame edges so the rivers always read against their own colour.
+        float depthVig = smoothstep(1.55, 0.20, length(p3d));
+        vec3 voidCol = mix(vec3(0.012, 0.014, 0.048), vec3(0.055, 0.060, 0.150), depthVig * 0.72);
+
+        // Spectrum streaks: the horizontal river runs them along X, the vertical
+        // one along Y, matching the geometry they sit behind.
+        float axis = vertical ? p3d.y : p3d.x;
+        float cross = vertical ? p3d.x : p3d.y;
+        float bands = 0.5 + 0.5 * sin(cross * 9.0 + dynTime * 0.6);
+        vec3 streak = sofSpectrum(axis * 0.22 + 0.10 * cross + dynTime * 0.03);
+        vec3 streakTint = vertical ? vec3(0.10, 0.85, 0.95) : vec3(0.98, 0.30, 0.75);
+        streak = mix(streak, streakTint, 0.22);
+        float streakMask = pow(0.5 + 0.5 * sin(axis * 3.2 - dynTime * 0.55), 3.0);
+        vec3 bg = voidCol + streak * bands * streakMask * (0.085 + 0.085 * bass);
+
+        // Faint dust field: single pixels of pigment suspended in the void.
+        vec3 dustP = rd * 16.0;
+        dustP.xy += vec2(dynTime * 0.06, vertical ? -dynTime * 0.09 : 0.0);
+        float dust = pow(valueNoise3(dustP), 17.0) * (6.0 + 5.0 * treble);
+        bg += streak * dust * 0.55;
+
+        // PID heat brightens the whole field from behind the travelling front.
+        bg += vec3(0.090, 0.070, 0.190) * u.stream.z * (0.35 + 0.45 * bands);
+        return bg;
+    }
+
     if (u.preset.x > 9.5) {
         // --- PRESET 11: DREAMWORLDS (CHROMATIC STORM) BACKGROUND ---
         // The lockscreen artwork is the total environment: a pale studio void
@@ -2867,48 +2717,49 @@ void main() {
 
     // --- Dynamic Orbital 3D Camera ---
     // Smoothly glides around the scene and zooms on bass drops
-    bool isChromaticStorm = (u.preset.x > 9.5);
+    // CHROMATIC STORM is id 10 only. The Dynamic Waves pair (11, 12) sits above
+    // it, so a bare "> 9.5" would hand them the storm's per-sequence camera.
+    bool isChromaticStorm = (u.preset.x > 9.5 && u.preset.x < 10.5);
+
+    // The Dynamic Waves pair are long rivers, not centred vessels: the orbit is
+    // pulled back and the yaw kept shallow so the whole span stays in frame.
+    bool isSofWaves = (u.preset.x > 10.5);
+    bool isSofVertical = (u.preset.x > 11.5);
+
     float baseCamDist = isChromaticStorm ? 4.95 : ((u.preset.x > 8.5) ? 5.35 : ((u.preset.x > 7.5) ? 5.30 : ((u.preset.x > 6.5) ? 5.10 : ((u.preset.x > 5.5) ? 5.15 : ((u.preset.x > 3.5) ? 5.20 : ((u.preset.x > 2.5) ? 5.25 : ((u.preset.x > 1.5) ? 5.10 : 4.35)))))));
     float camDist = baseCamDist - 0.45 * bass - 0.22 * beat + 0.35 * sin(t * 0.19);
     float camYaw = t * 0.16 + 0.25 * sin(t * 0.11 + bassPhase * 0.08);
     float camPitch = 0.18 * sin(t * 0.14 + midPhase * 0.06);
 
+    if (isSofWaves) {
+        // Horizontal river: a slow three-quarter drift around the vault. The
+        // shallow yaw keeps all twelve ribbons sighted along X, and the pitch
+        // stays near the ribbon plane so the depth weave reads as perspective.
+        // Vertical river: a low orbit around the glyph cylinder.
+        if (isSofVertical) {
+            camDist = 6.05 - 0.30 * bass - 0.16 * beat + 0.12 * sin(t * 0.17);
+            camYaw = t * 0.115 + 0.55;
+            camPitch = 0.10 + 0.09 * sin(t * 0.13 + midPhase * 0.05);
+        } else {
+            camDist = 8.10 - 0.38 * bass - 0.20 * beat + 0.20 * sin(t * 0.15);
+            camYaw = 0.30 * sin(t * 0.085 + bassPhase * 0.04) + 0.22;
+            camPitch = 0.20 + 0.10 * sin(t * 0.11 + midPhase * 0.05);
+        }
+    }
+
     if (isChromaticStorm) {
-        // The reference shots orbit the vessel broadside and slightly below,
-        // with occasional slow three-quarter passes. Per-sequence framing keeps
-        // every form readable inside the square window.
-        float csCycle = fract(t * 0.0105);
-        const float CS_SEG = 0.0680 + 0.0227;
-        int csSeg = int(clamp(floor(csCycle / CS_SEG), 0.0, 11.0));
+        // The six forms share one bounding size. Each hold gets its own
+        // three-quarter yaw so a form is never seen straight down its nose.
+        // Twin and comet run longer, so those two sit further back.
+        // The pitch looks slightly down onto the clamshell slot.
+        float csCycle = fract(t * CS_CYCLE_RATE);
+        int csSeg = int(clamp(floor(csCycle * 6.0), 0.0, 5.0));
+        float wide = (csSeg == 2 || csSeg == 4) ? -0.40 : 0.0;
+        float yawBias = 0.70 + float(csSeg) * 0.62;
 
-        // wider shots for the formations that spread out or run long
-        float wide = 0.0;
-        if (csSeg == 1) wide = -0.55;  // fin cascade
-        if (csSeg == 2) wide = -0.75;  // split keel
-        if (csSeg == 3) wide = 0.55;   // bead surge (wide river)
-        if (csSeg == 4) wide = -0.15;  // ember wake
-        if (csSeg == 5) wide = -0.20;  // plasma cocoon
-        if (csSeg == 6) wide = -0.55;  // spine ring
-        if (csSeg == 7) wide = -0.40;  // shard bloom
-        if (csSeg == 8) wide = -0.30;  // hull strata
-        if (csSeg == 9) wide = 0.45;   // twin vessel
-        if (csSeg == 10) wide = 0.30;  // nozzle flare
-        if (csSeg == 11) wide = -0.85; // storm collapse
-
-        // A fixed per-sequence yaw offset guarantees each form is seen from a
-        // three-quarter angle. Without it the slow orbit can drift to a purely
-        // axial view and the vessels read as flat discs.
-        float yawBias = 0.0;
-        if (csSeg == 0) yawBias = 0.95;   // furnace hull
-        if (csSeg == 2) yawBias = 1.25;   // split keel
-        if (csSeg == 4) yawBias = 1.55;   // ember wake
-        if (csSeg == 9) yawBias = 1.15;   // twin vessel
-        if (csSeg == 10) yawBias = 2.30;  // nozzle flare (rear three-quarter)
-        if (csSeg == 11) yawBias = 0.85;  // storm collapse
-
-        camDist = 5.05 - 0.33 * bass - 0.16 * beat + 0.16 * sin(t * 0.11) + wide;
-        camYaw = t * 0.085 + 0.26 * sin(t * 0.05 + bassPhase * 0.05) + yawBias;
-        camPitch = 0.10 * sin(t * 0.065 + midPhase * 0.04) + 0.06 * sin(t * 0.021);
+        camDist = 5.15 - 0.28 * bass - 0.14 * beat + 0.12 * sin(t * 0.11) + wide;
+        camYaw = t * 0.07 + yawBias;
+        camPitch = 0.26 + 0.05 * sin(t * 0.05 + midPhase * 0.04);
     }
 
     vec3 ro = vec3(
@@ -2935,7 +2786,9 @@ void main() {
     vec3 col = bgCol;
 
     // --- Raymarching with Volumetric Glow Accumulation ---
-    float tMax = 10.5;
+    // The Dynamic Waves rivers run wider than a vessel, so their march needs a
+    // longer far plane; the other presets keep the original 10.5.
+    float tMax = isSofWaves ? 18.0 : 10.5;
     float dist = 0.0;
     float matId = 0.0;
     bool hit = false;
@@ -2949,17 +2802,36 @@ void main() {
 
         // Accumulate tight volumetric neon bloom near rings, tendrils/jets, and liquid orbs (no wide haze washout)
         float glowFactor = exp(-d * 9.0) / (1.0 + d * d * 110.0);
-        if (h.y == 2.0) {
-            // Planetary / Accretion rings emit intense luminescence
-            vec3 ringCol = getPresetPalette(length(p.xy) * 0.35 + t * 0.08, screenUv);
-            glowAccum += ringCol * glowFactor * (0.016 + 0.022 * beat);
-        } else if (h.y == 3.0) {
-            // Tendrils or axial void jets emit pulsing luminescence
-            vec3 tendrilCol = getPresetPalette(p.y * 0.4 - bassPhase * 0.15, screenUv);
-            glowAccum += tendrilCol * glowFactor * (0.012 + 0.018 * treble);
-        } else {
-            vec3 orbGlow = getPresetPalette(0.65 + 0.2 * sin(t * 0.2), screenUv);
-            glowAccum += orbGlow * glowFactor * 0.005;
+        // A palette lookup is not free: getPresetPalette samples the cover art
+        // three times. The bloom term falls off as exp(-9d), so past d~0.6 the
+        // per-step weight is under 4e-5, and 84 of them cannot shift an 8-bit
+        // channel by a whole step. Skipping the lookup there is invisible and
+        // is the single biggest saving inside the march loop.
+        if (glowFactor > 0.0006) {
+            if (isSofWaves) {
+                // The rivers glow from their own front and motes, never from
+                // the ribbon bodies, so the bloom traces the travelling light.
+                vec3 sofCol = sofSurfaceHue(p, isSofVertical ? 1.0 : 0.0);
+                if (h.y == 3.0) {
+                    glowAccum += mix(sofCol, vec3(1.0), 0.45) * glowFactor
+                        * (0.045 + 0.055 * u.stream.z + 0.020 * beat);
+                } else if (h.y == 4.0) {
+                    glowAccum += sofCol * glowFactor * (0.030 + 0.045 * u.stream.z);
+                } else {
+                    glowAccum += sofCol * glowFactor * (0.008 + 0.008 * beat);
+                }
+            } else if (h.y == 2.0) {
+                // Planetary / Accretion rings emit intense luminescence
+                vec3 ringCol = getPresetPalette(length(p.xy) * 0.35 + t * 0.08, screenUv);
+                glowAccum += ringCol * glowFactor * (0.016 + 0.022 * beat);
+            } else if (h.y == 3.0) {
+                // Tendrils or axial void jets emit pulsing luminescence
+                vec3 tendrilCol = getPresetPalette(p.y * 0.4 - bassPhase * 0.15, screenUv);
+                glowAccum += tendrilCol * glowFactor * (0.012 + 0.018 * treble);
+            } else {
+                vec3 orbGlow = getPresetPalette(0.65 + 0.2 * sin(t * 0.2), screenUv);
+                glowAccum += orbGlow * glowFactor * 0.005;
+            }
         }
 
         if (d < 0.0022) {
@@ -2987,7 +2859,58 @@ void main() {
         float diff2 = max(dot(n, lightDir2), 0.0);
         float fresnel = pow(clamp(1.0 - max(dot(n, v), 0.0), 0.0, 1.0), 3.0);
 
-        if (isChromaticStorm) {
+        if (isSofWaves) {
+            // =====================================================================
+            // DYNAMIC WAVES material set
+            //   1.0 Graphite glass ribbon body   (dark, with the accent on its rim)
+            //   2.0 Guide rail / current ring    (thin, self-lit on the beat)
+            //   3.0 Travelling front head        (white-hot emitter)
+            //   4.0 PID burst mote               (coloured spark)
+            //   5.0 Falling glyph block          (the vertical river's rain)
+            // =====================================================================
+            float specKey = pow(max(dot(reflect(-lightDir1, n), v), 0.0), 52.0);
+            float specRim = pow(max(dot(reflect(-lightDir2, n), v), 0.0), 22.0);
+            vec3 accent = sofSurfaceHue(p, isSofVertical ? 1.0 : 0.0);
+
+            if (matId == 3.0) {
+                // --- Travelling front: white-hot, blooming on the beat ---
+                float heat = clamp(pow(max(dot(n, v), 0.0), 1.3), 0.0, 1.0);
+                col = mix(accent, vec3(1.0, 0.98, 1.0), 0.55 + 0.35 * heat)
+                    * (1.05 + 0.85 * u.stream.z + 0.45 * beat)
+                    + accent * fresnel * 1.25;
+            } else if (matId == 2.0) {
+                // --- Guide rail / current ring: a lit filament, not a tube ---
+                col = accent * (0.42 + 0.55 * diff1) * (0.55 + 0.45 * ao)
+                    + accent * fresnel * (0.95 + 0.65 * u.stream.z)
+                    + vec3(1.0) * specKey * 0.55;
+            } else if (matId == 5.0) {
+                // --- Falling glyph: the rain. Lit from outside, with a bright
+                // leading face, so the blocks read as pigment rather than neon.
+                float facing = clamp(pow(max(dot(n, v), 0.0), 0.9), 0.0, 1.0);
+                col = accent * (0.30 + 0.72 * diff1) * (0.62 + 0.38 * ao)
+                    + accent * fresnel * (0.85 + 0.45 * treble)
+                    + vec3(1.0, 0.99, 1.0) * specKey * (0.85 + 0.35 * beat)
+                    + accent * facing * 0.20;
+            } else if (matId == 4.0) {
+                // --- PID mote: a spark with its own colour ---
+                float heat = clamp(pow(max(dot(n, v), 0.0), 1.1), 0.0, 1.0);
+                col = mix(accent * 1.35, vec3(1.0, 0.96, 1.0), heat * 0.75)
+                    * (1.15 + 1.10 * u.stream.z + 0.40 * beat);
+            } else {
+                // --- Ribbon / column body: dark glass with an accent rim ---
+                // It stays dark so the lit head and the motes carry the frame,
+                // and the rim is what makes each ribbon read as a tube in depth.
+                vec3 body = mix(vec3(0.055, 0.062, 0.105), accent, 0.46 + 0.22 * diff1);
+                vec3 rim = accent * (1.10 + 0.55 * u.stream.z);
+                col = body * (0.62 + 0.55 * diff1) * (0.62 + 0.38 * ao)
+                    + rim * fresnel * (1.25 + 0.55 * rms)
+                    + accent * specRim * 0.34
+                    + vec3(1.0, 0.99, 1.0) * specKey * (1.60 + 0.65 * beat);
+            }
+
+            float fogSof = smoothstep(tMax * 0.62, tMax, dist);
+            col = mix(col, bgCol, fogSof);
+        } else if (isChromaticStorm) {
             // =====================================================================
             // CHROMATIC STORM material set, resolved up front so the legacy
             // preset chain below is left completely untouched.

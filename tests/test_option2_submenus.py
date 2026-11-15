@@ -4,6 +4,8 @@ Unit and integration tests for Option 2 Submenus in Mix_Archive_Manager.sh and M
 Verifies keyboard navigation (Up/Down arrow keys + Enter to activate), direct hotkeys, and non-interactive fallback.
 """
 
+from __future__ import annotations
+
 import os
 import pty
 import re
@@ -66,16 +68,26 @@ def run_bash_pty(script_body: str, key_sequence = None, timeout: float = 3.0) ->
                     os.write(master, tok)
                     time.sleep(0.06)
 
+        # The child may pause between frames (a full-screen redraw is not
+        # instant), so keep reading while it is alive and only stop when it has
+        # exited or the deadline passes. Breaking on the first quiet interval
+        # truncated the output mid-menu.
         while time.time() - start_t < timeout:
-            r, _, _ = select.select([master], [], [], 0.2)
-            if not r:
-                break
-            try:
-                chunk = os.read(master, 1024)
+            r, _, _ = select.select([master], [], [], 0.1)
+            if r:
+                try:
+                    chunk = os.read(master, 4096)
+                except OSError:
+                    break
                 if not chunk:
                     break
                 out += chunk
-            except OSError:
+                continue
+            try:
+                done_pid, _st = os.waitpid(pid, os.WNOHANG)
+            except ChildProcessError:
+                break
+            if done_pid:
                 break
         try:
             _, status = os.waitpid(pid, os.WNOHANG)
@@ -170,7 +182,12 @@ class TestOption2Submenus(unittest.TestCase):
         self.assertIn("CHOSEN:wav", out)
 
     def test_choose_conversion_output_interactive_arrow_navigation(self):
-        """Verify choose_conversion_output navigates via Down arrow to select MP4 YouTube Video."""
+        """Verify choose_conversion_output navigates via Down arrow through the registry.
+
+        The picker is generated from the 21-format registry now, so the formats
+        are not at the old five fixed positions. WAV is the second row in both
+        orders, so one Down proves the arrow keys still drive the menu.
+        """
         cmd = f"""
         export MIX_ARCHIVE_DIR="{REPO_DIR}"
         source "{CONVERSION_SCRIPT}" || true
@@ -178,9 +195,23 @@ class TestOption2Submenus(unittest.TestCase):
         choose_conversion_output
         echo "OUTPUT_FORMAT:$OUTPUT_FORMAT"
         """
-        # Down 3 times (FLAC -> MP3 -> WAV -> MP4), then Enter
-        out, _ = run_bash_pty(cmd, key_sequence=[b"\x1b[B", b"\x1b[B", b"\x1b[B", b"\n"])
-        self.assertIn("OUTPUT_FORMAT:mp4", out)
+        # Registry order: FLAC, WAV, ... -- one Down reaches WAV.
+        out, _ = run_bash_pty(cmd, key_sequence=[b"\x1b[B", b"\n"], timeout=15.0)
+        self.assertIn("OUTPUT_FORMAT:wav", out)
+
+    def test_choose_conversion_output_offers_every_registry_format(self):
+        """The picker lists all 21 formats plus the batch-all row."""
+        cmd = f"""
+        export MIX_ARCHIVE_DIR="{REPO_DIR}"
+        source "{CONVERSION_SCRIPT}" || true
+        echo "READY"
+        choose_conversion_output
+        echo "OUTPUT_FORMAT:$OUTPUT_FORMAT"
+        """
+        out, _ = run_bash_pty(cmd, key_sequence=[b"\n"], timeout=15.0)
+        self.assertIn("Audio Output Formats Available", out)
+        self.assertIn("Convert to EVERY Format", out)
+        self.assertIn("OUTPUT_FORMAT:flac", out)
 
     def test_review_converted_tracklist_interactive_continue(self):
         """Verify review_converted_tracklist continues when selecting option 0."""

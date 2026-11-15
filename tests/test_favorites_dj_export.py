@@ -444,5 +444,312 @@ class FavoritesPlayerExportTests(unittest.TestCase):
         self.assertEqual(self.ui.traktor_playlist_name, "Set 1")
 
 
+class PreparationFolderTests(unittest.TestCase):
+    def setUp(self):
+        if not _ffmpeg():
+            self.skipTest("ffmpeg and ffprobe are required")
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.src = self.root / "src"
+        self.src.mkdir()
+        self.audio = self.src / "Airbase - Escape.flac"
+        _make_audio(self.audio, 440)
+        self.env = patch.dict(os.environ, {"MIX_ARCHIVE_CONFIGURED": "false", "MIX_ARCHIVE_DIR": ""}, clear=False)
+        self.env.start()
+
+    def tearDown(self):
+        self.env.stop()
+        self.tmp.cleanup()
+
+    def test_blank_folder_uses_the_preparation_name_under_the_given_path(self):
+        parent = self.root / "drops"
+        result = exporter.export_favorites(
+            [self.audio], destination=str(parent), folder_name="", preparation=True, when="2026-11-15"
+        )
+        self.assertTrue(result["ok"], result.get("errors"))
+        self.assertEqual(Path(result["dest"]).name, "DJ Set Mix Preparation Folder")
+        self.assertEqual(Path(result["dest"]).parent, parent)
+        self.assertTrue((Path(result["dest"]) / "Favorites.m3u").is_file())
+        self.assertIn("#EXTM3U", (Path(result["dest"]) / "Favorites.m3u").read_text(encoding="utf-8"))
+        text = Path(result["tracklist"]).read_text(encoding="utf-8")
+        self.assertIn("generate_favorites_tracklist", text)
+        self.assertTrue(self.audio.is_file())
+        self.assertGreater(result["elapsed_sec"], 0)
+        self.assertEqual(result["track_count"], 1)
+
+    def test_custom_folder_name_is_kept(self):
+        result = exporter.export_favorites(
+            [self.audio],
+            destination=str(self.root / "drops"),
+            folder_name="Night Bus",
+            preparation=True,
+        )
+        self.assertTrue(result["ok"], result.get("errors"))
+        self.assertEqual(Path(result["dest"]).name, "Night Bus")
+
+    def test_no_primary_archive_uses_the_dated_program_folder(self):
+        with patch.object(exporter, "APP_DIR", self.root / "program"):
+            result = exporter.export_favorites(
+                [self.audio], destination=None, folder_name="", preparation=True, when="2026-11-15"
+            )
+        self.assertTrue(result["ok"], result.get("errors"))
+        self.assertEqual(Path(result["dest"]).name, "FAVORITES_EXPORTED_2026-11-15")
+        self.assertEqual(Path(result["dest"]).parent, self.root / "program")
+        self.assertEqual(self.audio.stat().st_size, (Path(result["dest"]) / self.audio.name).stat().st_size)
+
+    def test_primary_archive_root_receives_the_default_folder(self):
+        archive = self.root / "archive"
+        archive.mkdir()
+        with patch.dict(os.environ, {"MIX_ARCHIVE_CONFIGURED": "true", "MIX_ARCHIVE_DIR": str(archive)}):
+            result = exporter.export_favorites(
+                [self.audio], destination=None, folder_name=None, preparation=True
+            )
+        self.assertTrue(result["ok"], result.get("errors"))
+        self.assertEqual(result["dest"], str(archive / "DJ Set Mix Preparation Folder"))
+
+    def test_the_same_destination_can_be_exported_again(self):
+        parent = self.root / "drops"
+        first = exporter.export_favorites(
+            [self.audio], destination=str(parent), folder_name="DJ Set Mix Preparation Folder", preparation=True
+        )
+        second = exporter.export_favorites(
+            [self.audio], destination=str(parent), folder_name="DJ Set Mix Preparation Folder", preparation=True
+        )
+        self.assertTrue(first["ok"] and second["ok"], (first, second))
+        self.assertEqual(first["dest"], second["dest"])
+        self.assertEqual(self.audio.stat().st_size, (Path(second["dest"]) / self.audio.name).stat().st_size)
+
+    def test_progress_log_names_the_deck_and_the_manager_tracklist(self):
+        log = []
+        result = exporter.export_favorites(
+            [self.audio],
+            destination=str(self.root / "drops"),
+            folder_name="",
+            preparation=True,
+            progress=log.append,
+        )
+        self.assertTrue(result["ok"], result.get("errors"))
+        text = "\n".join(log)
+        self.assertIn("DECK OPEN", text)
+        self.assertIn("delete=never", text)
+        self.assertIn("generate_favorites_tracklist", text)
+        self.assertIn("Favorites.m3u", text)
+
+
+class TraktorHistoryFavoritesTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.audio = self.root / "music" / "Airbase - Escape.flac"
+        self.audio.parent.mkdir()
+        self.audio.write_bytes(b"fLaC" + b"\x00" * 64)
+        self.other = self.root / "music" / "Kept.flac"
+        self.other.write_bytes(b"fLaC" + b"\x00" * 32)
+        parts = [part for part in self.audio.parent.as_posix().split("/") if part]
+        directory = "/:" + "/:".join(parts) + "/:"
+        entry = (
+            f'<ENTRY TITLE="Escape" ARTIST="Airbase">'
+            f'<LOCATION DIR="{directory}" FILE="{self.audio.name}" VOLUME=""/>'
+            f'<INFO KEY="8m" PLAYTIME="300"/>'
+            f"</ENTRY>"
+        )
+        self.collection = self.root / "collection.nml"
+        self.collection.write_text(
+            '<?xml version="1.0" encoding="UTF-8"?><NML VERSION="19">'
+            f'<COLLECTION ENTRIES="1">{entry}</COLLECTION>'
+            "<PLAYLISTS><NODE TYPE=\"FOLDER\" NAME=\"$ROOT\"><SUBNODES COUNT=\"0\"/>"
+            "</NODE></PLAYLISTS></NML>",
+            encoding="utf-8",
+        )
+        self.history_dir = self.root / "History"
+        self.history_dir.mkdir()
+        self.history = self.history_dir / "history_2026y11m15d_01h00m00s.nml"
+        self.history.write_text(
+            '<?xml version="1.0" encoding="UTF-8"?><NML VERSION="19">'
+            f'<COLLECTION ENTRIES="1">{entry}</COLLECTION>'
+            '<PLAYLISTS><NODE TYPE="PLAYLIST" NAME="HISTORY"><PLAYLIST ENTRIES="1" TYPE="LIST">'
+            f'<ENTRY><PRIMARYKEY TYPE="TRACK" KEY="{directory}{self.audio.name}"/></ENTRY>'
+            "</PLAYLIST></NODE></PLAYLISTS></NML>",
+            encoding="utf-8",
+        )
+        self.env = patch.dict(
+            os.environ,
+            {
+                "TRAKTOR_COLLECTION_PATH": str(self.collection),
+                "TRAKTOR_HISTORY_DIR": str(self.history_dir),
+                "TRAKTOR_ENABLED": "true",
+            },
+            clear=False,
+        )
+        self.env.start()
+
+    def tearDown(self):
+        self.env.stop()
+        self.tmp.cleanup()
+
+    def test_history_id_resolves_the_collection_path(self):
+        loaded = exporter.favorites_from_history(self.history.name)
+        self.assertTrue(loaded["ok"], loaded)
+        self.assertEqual(loaded["tracks"][0]["path"], str(self.audio))
+        self.assertTrue(self.audio.is_file())
+
+    def test_duplicate_traktor_playlist_name_is_rejected(self):
+        first = exporter.create_traktor_playlist([self.audio.name], "Fav Test", self.history.name)
+        self.assertTrue(first["ok"], first)
+        second = exporter.create_traktor_playlist([self.audio.name], "Fav Test", self.history.name)
+        self.assertFalse(second["ok"])
+        self.assertEqual(second["reason"], "duplicate_name")
+        root = ET.parse(self.collection).getroot()
+        nodes = [n for n in root.findall(".//PLAYLISTS//NODE") if n.attrib.get("TYPE") == "PLAYLIST"]
+        self.assertEqual(len(nodes), 1)
+
+
+class ExportTracksUiTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.store = player.FavoritesStore(Path(self.tmp.name) / "favorites.json")
+        self.ui = player.TerminalPlayerUI.__new__(player.TerminalPlayerUI)
+        self.ui.mode = "FAVORITES"
+        self.ui.folder_name = "ALL"
+        self.ui.keep_library = True
+        self.ui._user_library_mode = "FAVORITES"
+        self.ui.is_remote = False
+        self.ui.engine = MagicMock()
+        self.ui.engine.current_track = None
+        self.ui.engine.playlist = []
+        self.ui.engine.current_index = 0
+        self.ui.scanner = _Scanner([])
+        self.ui.export_mode = False
+        self.ui.eq_naming_mode = False
+        self.ui.search_mode = False
+        self.ui.search_query = ""
+        self.ui.selected_row = self.ui.scroll_offset = 0
+        self.ui.cached_status = {"mode": "FAVORITES"}
+        self.ui.notification_msg = ""
+        self.ui.notification_time = 0.0
+        self.ui.equalizer_hud_active = False
+        self.ui.inspector_hud_active = False
+        self.ui.ui_size_mode = "NORMAL"
+        self.ui._playlist_clear_armed = False
+        self.ui._inbuf = b""
+        self.ui.favorites = self.store
+        self.ui._ensure_favorites_decision_state()
+        self.ui._reset_click_targets()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_cli_and_liquid_show_export_tracks(self):
+        self.store.toggle(_track("Mix A.flac", "/mixes/a.flac"))
+        lines = []
+        self.ui._append_favorites_button(lines, 140, whole_row=True)
+        self.assertIn("Export Tracks", lines[0])
+        with patch.dict(os.environ, {"MP_LIQUID_GLASS": "1"}):
+            glass = []
+            self.ui._append_liquid_action_row(glass, 180)
+        self.assertIn("EXPORT TRACKS", glass[0])
+        self.assertGreater(self.ui._export_tracks_span[1], self.ui._export_tracks_span[0])
+
+    def test_export_tracks_is_absent_outside_the_favorites_playlist(self):
+        """The button belongs to Favorites only; Mix and Music must not show it."""
+        self.store.toggle(_track("Mix A.flac", "/mixes/a.flac"))
+        for mode in ("MIX_ARCHIVE", "MUSIC"):
+            self.ui.mode = mode
+            with patch.dict(os.environ, {"MP_LIQUID_GLASS": "1"}):
+                glass = []
+                self.ui._append_liquid_action_row(glass, 200)
+            self.assertNotIn("EXPORT TRACKS", glass[0], mode)
+            # No click target either, so a stale span cannot fire the export.
+            self.assertEqual(self.ui._export_tracks_row, 0, mode)
+            self.assertEqual(self.ui._export_tracks_span, (0, 0), mode)
+
+            cli = []
+            self.ui._append_favorites_button(cli, 200, whole_row=True)
+            self.assertNotIn("Export Tracks", cli[0], mode)
+
+    def test_export_is_refused_when_favorites_is_not_open(self):
+        """A stale click or Shift+J must not open the deck from another library."""
+        self.store.toggle(_track("Mix A.flac", "/mixes/a.flac"))
+        self.ui.mode = "MUSIC"
+        self.ui._favorites_export_begin()
+        self.assertEqual(self.ui.fav_export_mode, "")
+        self.assertIn("only available in the Favorites", self.ui.notification_msg)
+
+    def test_empty_folder_name_follows_the_destination(self):
+        self.store.toggle(_track("Mix A.flac", "/mixes/a.flac"))
+        self.ui.fav_export_mode = "dest_path"
+        self.ui.fav_export_kind = "local"
+        self.ui.fav_export_dest = "/tmp/drops"
+        self.ui._process_key(b"\r")
+        self.assertEqual(self.ui.fav_export_mode, "folder_name")
+        with patch.object(player.threading, "Thread") as thread:
+            thread.return_value.start.return_value = None
+            self.ui._process_key(b"\r")
+        self.assertEqual(self.ui.fav_export_mode, "progress")
+        self.assertEqual(self.ui.fav_export_folder, "")
+
+    def test_summary_can_export_again_and_rejects_a_used_traktor_name(self):
+        self.ui.fav_export_mode = "summary"
+        self.ui.fav_export_result = {"ok": True, "copied": [{}], "elapsed_sec": 1.25, "dest": "/tmp/set", "playlist_name": "Set"}
+        self.ui.fav_export_traktor_ready = True
+        self.ui._process_key(b"y")
+        self.assertEqual(self.ui.fav_export_mode, "choose")
+        self.ui.fav_export_mode = ""
+        self.ui.traktor_input_mode = "playlist_name"
+        self.ui.traktor_playlist_name = "Set"
+        self.ui._traktor_used_names = ["Set"]
+        self.ui._process_key(b"\r")
+        self.assertEqual(self.ui.traktor_input_mode, "playlist_name")
+        self.assertIn("another name", self.ui.notification_msg.lower())
+
+    def test_history_import_asks_to_add_or_start_new(self):
+        self.store.toggle(_track("Kept.flac", "/music/kept.flac"))
+        self.ui.fav_export_mode = "history_id"
+        self.ui.traktor_history_id = "history_2026"
+        self.ui._process_key(b"\r")
+        self.assertEqual(self.ui.fav_export_mode, "history_merge")
+        with patch.object(player.TerminalPlayerUI, "_fav_exporter_module") as module:
+            module.return_value.favorites_from_history.return_value = {
+                "ok": True,
+                "history": "history_2026.nml",
+                "missing": [],
+                "tracks": [_track("Air.flac", "/music/air.flac")],
+            }
+            module.return_value.primary_mix_archive.return_value = None
+            module.return_value.APP_DIR = Path("/tmp/mp")
+            self.ui._process_key(b"a")
+        self.assertEqual([row["path"] for row in self.store.tracks()], ["/music/kept.flac", "/music/air.flac"])
+        self.assertTrue(Path("/music/kept.flac"))
+        self.assertEqual(self.ui.fav_export_mode, "dest_path")
+
+    def test_history_import_can_start_a_new_favorites_playlist(self):
+        kept = self.root_audio = self.tmp.name
+        self.store.toggle(_track("Kept.flac", str(Path(kept) / "Kept.flac")))
+        Path(kept, "Kept.flac").write_bytes(b"fLaC")
+        self.ui.fav_export_mode = "history_merge"
+        self.ui.traktor_history_id = "history_2026"
+        with patch.object(player.TerminalPlayerUI, "_fav_exporter_module") as module:
+            module.return_value.favorites_from_history.return_value = {
+                "ok": True,
+                "history": "history_2026.nml",
+                "missing": [],
+                "tracks": [_track("Air.flac", str(Path(kept) / "Air.flac"))],
+            }
+            self.ui._process_key(b"n")
+        self.assertEqual([row["path"] for row in self.store.tracks()], [str(Path(kept) / "Air.flac")])
+        self.assertTrue(Path(kept, "Kept.flac").is_file())
+
+    def test_liquid_drag_reorders_favorites(self):
+        self.store.toggle(_track("First.flac", "/music/a.flac"))
+        self.store.toggle(_track("Second.flac", "/music/b.flac"))
+        self.ui.scanner = _Scanner(self.store.tracks())
+        self.ui._playlist_star_rows = {10: 0, 11: 1}
+        self.ui._playlist_star_col = 14
+        with patch.dict(os.environ, {"MP_LIQUID_GLASS": "1"}):
+            self.ui._process_key(b"\x1b[<0;30;10M")
+            self.ui._process_key(b"\x1b[<32;30;11M")
+        self.assertEqual([row["path"] for row in self.store.tracks()], ["/music/b.flac", "/music/a.flac"])
+
+
 if __name__ == "__main__":
     unittest.main()

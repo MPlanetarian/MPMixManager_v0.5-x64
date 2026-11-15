@@ -7,12 +7,68 @@ updates _TERM_LINES, _TERM_COLS, LINES, and COLUMNS, and automatically
 rescales box width and header dimensions.
 """
 
-import subprocess
-import unittest
+import fcntl
 import os
+import pty
+import re
+import select
+import struct
+import subprocess
+import termios
+import time
+import unittest
 
 SCRIPT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MANAGER_SH = os.path.join(SCRIPT_DIR, "Mix_Archive_Manager.sh")
+
+
+def _visible(raw: str) -> str:
+    raw = re.sub(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)", "", raw)
+    return re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", raw)
+
+
+def _run_menu_at(rows: int, cols: int, seconds: float = 20.0) -> str:
+    """Start the manager on a pty of the given size and return what it painted.
+
+    The first frames can be blank while the archive scan and the header settle,
+    so keep reading until the menu body and its status line have both arrived.
+    """
+    master, slave = pty.openpty()
+    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
+    env = dict(os.environ)
+    env["TERM"] = "xterm-256color"
+    env["MP_MANAGER_GAMEPAD"] = "0"
+    proc = subprocess.Popen(
+        ["bash", MANAGER_SH], stdin=slave, stdout=slave, stderr=slave,
+        env=env, cwd=SCRIPT_DIR, start_new_session=True,
+    )
+    os.close(slave)
+    chunks = []
+    deadline = time.time() + seconds
+    try:
+        while time.time() < deadline:
+            ready, _, _ = select.select([master], [], [], 0.2)
+            if not ready:
+                continue
+            try:
+                data = os.read(master, 65536)
+            except OSError:
+                break
+            if not data:
+                break
+            chunks.append(data)
+            painted = _visible(b"".join(chunks).decode("utf-8", "replace"))
+            if "MP Mix Archive Manager" in painted and "Selection:" in painted:
+                break
+    finally:
+        proc.kill()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            pass
+        os.close(master)
+    return _visible(b"".join(chunks).decode("utf-8", "replace"))
+
 
 class TestManagerResize(unittest.TestCase):
     def test_syntax_valid(self):
@@ -132,6 +188,35 @@ class TestManagerResize(unittest.TestCase):
         res = subprocess.run(["bash", "-c", bash_test], capture_output=True, text=True)
         self.assertEqual(res.returncode, 0, f"Zoom scaling test failed: {res.stderr}\nOutput: {res.stdout}")
         self.assertIn("ZOOM_SUCCESS", res.stdout)
+
+    def test_the_console_size_lock_is_gone(self):
+        """The 90 x 26 .. 157 x 44 guard was removed; nothing may reinstate it.
+
+        It blocked the menu behind a black screen whenever a resize or a font
+        zoom slipped past it, so the whole guard is gone rather than patched.
+        A plain resize still has to redraw, which is covered above.
+        """
+        with open(MANAGER_SH, "r", encoding="utf-8") as handle:
+            text = handle.read()
+        for dead in (
+            "mp_console_zoom_hold",
+            "mp_console_zoom_after_menu",
+            "mp_console_zoom_classify",
+            "mp_console_zoom_guard_active",
+            "_mp_zoom_guard_clamp_step",
+            "MP_CONSOLE_ZOOM",
+            "Oversized or Undersized",
+        ):
+            self.assertNotIn(dead, text, f"{dead} survived the guard removal")
+
+    def test_an_oversized_or_undersized_window_still_shows_the_menu(self):
+        """Sizes outside the old band must paint the menu, not a black warning."""
+        for rows, cols in ((80, 220), (12, 48)):
+            with self.subTest(rows=rows, cols=cols):
+                painted = _run_menu_at(rows, cols)
+                self.assertNotIn("Oversized or Undersized", painted)
+                self.assertIn("MP Mix Archive Manager", painted)
+                self.assertIn("Selection:", painted)
 
 if __name__ == "__main__":
     unittest.main()

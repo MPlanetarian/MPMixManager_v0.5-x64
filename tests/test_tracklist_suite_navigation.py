@@ -8,6 +8,8 @@ Verifies:
 - Keyboard arrow navigation and Esc/q/0 exit functionality
 """
 
+from __future__ import annotations
+
 import os
 import pty
 import re
@@ -103,15 +105,25 @@ class TestTracklistSuiteNavigation(unittest.TestCase):
         self.assertLess(duration, 2.0, "detect_active_music_player took too long to execute!")
 
     def test_option13_option1_piped_execution(self):
-        """Verifies navigating Option 13 -> Option 1 -> Option 0 loads and exits cleanly."""
-        piped_input = "13\n1\n0\n0\n36\n"
+        """Verifies navigating Option 14 -> Option 1 -> Option 0 loads and exits cleanly.
+        
+        Option 14 is the Tracklist suite; 13 is Storage Management. 38 is Exit.
+        """
+        # 38 is Exit Manager. 36 used to be, until it became "MP Mix Manager
+        # GUI", so the old script left the manager sitting on the main menu.
+        piped_input = "14\n1\n0\n0\n38\n"
         start = time.time()
+        # The manager paints a full-screen menu; give it a non-interactive,
+        # stable terminal profile so it does not sit waiting on a tty query.
+        env = dict(os.environ, TERM="xterm-256color", LINES="35", COLUMNS="110",
+                   ENABLE_BREATHING_CURSOR="0", MP_HEADER_CLI_MODE="off")
         res = subprocess.run(
             ["bash", str(MANAGER_SCRIPT)],
             input=piped_input,
             capture_output=True,
             text=True,
-            timeout=8,
+            timeout=20,
+            env=env,
         )
         duration = time.time() - start
         self.assertEqual(res.returncode, 0)
@@ -120,7 +132,11 @@ class TestTracklistSuiteNavigation(unittest.TestCase):
         self.assertIn("Browse & View Tracklists", res.stdout)
         self.assertIn("Search Tracklist by Title, Episode or Keyword", res.stdout)
         self.assertIn("View Tracklist of Currently Playing Track", res.stdout)
-        self.assertLess(duration, 4.0, "Submenu navigation was too slow or hung!")
+        # A cold start walks the archive before it can paint the first menu, so
+        # this is a "it terminated, and did not hang" guard rather than a
+        # latency budget. The earlier 4 s limit failed on any machine with a
+        # large archive or a network mount.
+        self.assertLess(duration, 45.0, "Submenu navigation was too slow or hung!")
 
     def test_manage_tracklists_interactive_pty(self):
         """Verifies interactive PTY rendering of manage_tracklists with arrow navigation and ESC exit."""

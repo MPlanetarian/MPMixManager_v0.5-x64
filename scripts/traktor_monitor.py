@@ -45,10 +45,6 @@ RECORDING_DIRS = [
     Path.home() / "Music/Traktor/Recordings",
     *(Path.home() / f"Documents/Native Instruments/Traktor {v}/Recordings" for v in ("3.11.1", "3", "Pro 3", "Pro 4")),
     Path.home() / "Documents/Native Instruments/Traktor 3.11.1",
-    Path("D:/MIX_ARCHIVE/CONVERTED_WAV_FILES"),
-    Path("D:/MIX_ARCHIVE"),
-    Path("/run/media/mplanetarian/WD BLACK B/MIX_ARCHIVE/CONVERTED_WAV_FILES"),
-    Path("/run/media/mplanetarian/WD BLACK B/MIX_ARCHIVE"),
 ]
 if os.environ.get("MIX_ARCHIVE_DIR"):
     _ea = Path(os.environ["MIX_ARCHIVE_DIR"])
@@ -67,8 +63,8 @@ RECORD_STOP_MENU_CANDIDATES: list[tuple[str, str]] = [
 ]
 
 THEMES: dict[str, tuple[str, str, str, str, str, str, str, str, str, str, str]] = {
-    "dreamworlds": ("MPlanetarian Dreamworlds [Default]", "Sweet Hot Pink, Electric Cyan, Amber Gold & Coral Red", "#f72585", "#00e5ff", "#ffaa00", "#845ec2", "#f0f3f6", "#7f8ba4", "#00f5d4", "#ed254e", "#ffaa00"),
-    "dreamworlds_ultra": ("Dreamworlds Ultra MP Mix Manager", "Hot Purple, Traffic Light RGB & Electric Green", "#a64dff", "#00ff00", "#ff9933", "#7928ca", "#d1d1e0", "#9999ff", "#00ff00", "#ff0000", "#ff9933"),
+    "dreamworlds": ("MPlanetarian Dreamworlds", "Sweet Hot Pink, Electric Cyan, Amber Gold & Coral Red", "#f72585", "#00e5ff", "#ffaa00", "#845ec2", "#f0f3f6", "#7f8ba4", "#00f5d4", "#ed254e", "#ffaa00"),
+    "dreamworlds_ultra": ("Dreamworlds Ultra MP Mix Manager [Default]", "Hot Purple, Traffic Light RGB & Electric Green", "#a64dff", "#00ff00", "#ff9933", "#554a6b", "#d8b4fe", "#9999ff", "#00ff00", "#ff0000", "#ff9933"),
     "cosmic_supernova": ("Cosmic Supernova [Special Edition]", "Aurora Aquamarine, Nebula Orchid, Solar Flare & Supernova Crimson", "#00f5d4", "#e056fd", "#fee440", "#5e60ce", "#e2e8f0", "#7c8ba1", "#00f5d4", "#ff3366", "#fee440"),
     "cyberpunk": ("Cyberpunk 2077", "Neon Hot Pink, Electric Cyan & High-Volt Yellow", "#ff0055", "#00ffff", "#ffff00", "#ff0055", "#e0ffff", "#708090", "#00ff9f", "#ff0055", "#ffff00"),
     "dracula": ("Dracula", "Vampiric Purple, Coral Pink, Cyan & Neon Green", "#bd93f9", "#8be9fd", "#ff79c6", "#6272a4", "#f8f8f2", "#6272a4", "#50fa7b", "#ff5555", "#f1fa8c"),
@@ -81,35 +77,15 @@ THEMES: dict[str, tuple[str, str, str, str, str, str, str, str, str, str, str]] 
     "emerald": ("Emerald Isle", "Deep Ocean, Spring Emerald, Mint & Rose", "#10b981", "#06b6d4", "#34d399", "#047857", "#ecfdf5", "#6ee7b7", "#10b981", "#f43f5e", "#fbbf24"),
     "classic": ("Classic Monochrome", "High-Contrast Monochrome / Standard ANSI", "#ffffff", "#cccccc", "#aaaaaa", "#777777", "#ffffff", "#666666", "#ffffff", "#ffffff", "#ffffff"),
     "retro_terminal": ("Old Style Unix Terminal Retro Mode (White on Black)", "Monochrome VT100: White Text Only on Black Background", "#ffffff", "#ffffff", "#ffffff", "#777777", "#ffffff", "#888888", "#ffffff", "#ffffff", "#ffffff"),
-    "cosmic_dreamworlds_radioactive": ("Cosmic Dreamworlds Radioactive (Liquid Glass Skin)", "Cover Wrapped Liquid Glass: Crystal Clear Water, Neon Radioactive & Cosmic Glow", "#39ff14", "#00f5d4", "#a64dff", "#39ff14", "#ffffff", "#a2e6b5", "#39ff14", "#ff0055", "#00f5d4"),
-    "cosmic_dreamworlds": ("Cosmic Dreamworlds (Liquid Glass Skin)", "Cover Wrapped Liquid Glass: Crystal Clear Water, Cosmic Magenta & Starlight Glow", "#e80d68", "#00f5d4", "#b058ff", "#e80d68", "#ffffff", "#fbcfe8", "#e80d68", "#ff007f", "#fee440"),
-    "orbital_void_reflux": ("Orbital Void Reflux (Liquid Glass Skin)", "Cover Wrapped Liquid Glass: Crystal Clear Water, Orbital Void Violet & Reflux Cyan", "#00f0ff", "#ff007f", "#9d4edd", "#00f0ff", "#ffffff", "#c8b6ff", "#00f0ff", "#ff007f", "#9d4edd"),
+    "sensorium": ("Sensorium", "Bright Tangerine, Acid Chartreuse & Electric Azure on a Light Coral Pane", "#5c2400", "#263d00", "#0b2f6b", "#7a3a3a", "#2b0a10", "#52242c", "#263d00", "#5e140f", "#4a3400"),
     "retro_linux_memories": ("Retro Linux Memories", "Classic Retro Linux GTK Dark Slate, VeraCrypt Blue Selection & Beveled Steel", "#15539e", "#5b86bb", "#f0ad4e", "#545453", "#ffffff", "#919190", "#5cb85c", "#d9534f", "#f0ad4e"),
 }
 
 THEME_ALIASES: dict[str, str] = {
-    "cosmic_dreamworlds": "cosmic_dreamworlds",
-    "cosmic_dreamworlds_(liquid_glass_skin)": "cosmic_dreamworlds",
-    "cosmic dreamworlds (liquid glass skin)": "cosmic_dreamworlds",
-    "cosmic dreamworlds": "cosmic_dreamworlds",
-    "cosmic_dream": "cosmic_dreamworlds",
-    "cosmic dream": "cosmic_dreamworlds",
-    "cosmic_dreamworld": "cosmic_dreamworlds",
-    "cosmic dreamworld": "cosmic_dreamworlds",
-    "cosmic_dreamworlds_radioactive": "cosmic_dreamworlds_radioactive",
-    "cosmic_dreamworlds_radioactive_(liquid_glass_skin)": "cosmic_dreamworlds_radioactive",
-    "cosmic dreamworlds radioactive (liquid glass skin)": "cosmic_dreamworlds_radioactive",
-    "cosmic dreamworlds radioactive": "cosmic_dreamworlds_radioactive",
-    "cosmic_radioactive": "cosmic_dreamworlds_radioactive",
-    "radioactive": "cosmic_dreamworlds_radioactive",
-    "orbital_void_reflux": "orbital_void_reflux",
-    "orbital_void_reflux_(liquid_glass_skin)": "orbital_void_reflux",
-    "orbital void reflux (liquid glass skin)": "orbital_void_reflux",
-    "orbital void reflux": "orbital_void_reflux",
-    "orbital_void": "orbital_void_reflux",
-    "void_reflux": "orbital_void_reflux",
-    "orbital": "orbital_void_reflux",
-    "default": "dreamworlds", "mplanetarian": "dreamworlds", "mplanetarian_dreamworlds": "dreamworlds",
+    "sensorium": "sensorium",
+    "sensorium_interface": "sensorium",
+    "sensorium interface": "sensorium",
+    "default": "dreamworlds_ultra", "mplanetarian": "dreamworlds", "mplanetarian_dreamworlds": "dreamworlds",
     "ultra": "dreamworlds_ultra", "dreamworlds ultra": "dreamworlds_ultra", "dreamworlds-ultra": "dreamworlds_ultra",
     "hotpurple": "dreamworlds_ultra", "trafficlight": "dreamworlds_ultra", "supernova": "cosmic_supernova",
     "cosmic": "cosmic_supernova", "cosmic supernova": "cosmic_supernova", "cosmic-supernova": "cosmic_supernova",
@@ -135,18 +111,18 @@ THEME_ALIASES: dict[str, str] = {
 class ThemeColors:
     def __init__(self, tid: str, enabled: bool = True):
         self.id = tid
-        row = THEMES.get(tid, THEMES["dreamworlds"])
+        row = THEMES.get(tid, THEMES.get("dreamworlds_ultra", THEMES["dreamworlds"]))
         self.name, self.desc = row[0], row[1]
         c = [f"\033[38;2;{int(x[1:3],16)};{int(x[3:5],16)};{int(x[5:7],16)}m" if enabled else "" for x in row[2:]]
         self.primary, self.secondary, self.accent, self.border, self.text, self.text_dim, self.green, self.red, self.yellow = c
         self.reset, self.bold, self.dim = ("\033[0m", "\033[1m", "\033[2m") if enabled else ("", "", "")
 
-_ACTIVE_THEME_ID = "dreamworlds"
+_ACTIVE_THEME_ID = "dreamworlds_ultra"
 
 def resolve_theme_id(name: Optional[str]) -> str:
-    if not name: return "dreamworlds"
+    if not name: return "dreamworlds_ultra"
     clean = name.strip().lower()
-    return clean if clean in THEMES else THEME_ALIASES.get(clean, next((k for k in THEMES if k in clean or clean in k), "dreamworlds"))
+    return clean if clean in THEMES else THEME_ALIASES.get(clean, next((k for k in THEMES if k in clean or clean in k), "dreamworlds_ultra"))
 
 def get_theme(theme_id: Optional[str] = None, no_color: bool = False) -> ThemeColors:
     tid = resolve_theme_id(theme_id or _ACTIVE_THEME_ID)
@@ -160,7 +136,7 @@ def load_saved_theme() -> str:
     try:
         return resolve_theme_id(THEME_CONFIG_FILE.read_text("utf-8").strip())
     except Exception:
-        return "dreamworlds"
+        return "dreamworlds_ultra"
 
 def save_active_theme(tid: str) -> bool:
     try:
@@ -214,7 +190,7 @@ class Snapshot:
     system_out: str = ""
     notes: list[str] = field(default_factory=list)
     last_action: str = ""
-    theme_id: str = "dreamworlds"
+    theme_id: str = "dreamworlds_ultra"
     theme_name: str = "MPlanetarian Dreamworlds"
 
 def run(cmd: list[str], timeout: float = 3.0) -> str:

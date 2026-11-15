@@ -4,13 +4,13 @@
 #Designed to flash up bright red with danger when loads are high and attention is needed.
 
 # Main background, empty for terminal default, need to be empty if you want transparent background
-theme[main_bg]="#000000"
+theme[main_bg]="#554a6b"
 
 # Main text color
-theme[main_fg]="#d1d1e0"
+theme[main_fg]="#d8b4fe"
 
 # Title color for boxes
-theme[title]="#d1d1e0"
+theme[title]="#d8b4fe"
 
 # Highlight color for keyboard shortcuts
 theme[hi_fg]="#9933ff"
@@ -19,7 +19,7 @@ theme[hi_fg]="#9933ff"
 theme[selected_bg]="#6666ff"
 
 # Foreground color of selected item in processes box
-theme[selected_fg]="#d1d1e0"
+theme[selected_fg]="#d8b4fe"
 
 # Color of inactive/disabled text
 theme[inactive_fg]="#9999ff"

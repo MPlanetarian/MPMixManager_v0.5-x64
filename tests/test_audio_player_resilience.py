@@ -214,5 +214,91 @@ class TestAudioPlayerResilience(unittest.TestCase):
             self.assertEqual(owner, 30)
 
 
+class TestCloseDuringReadIsSafe(unittest.TestCase):
+    """Closing a source must not free libsndfile's decoder under a live read().
+
+    ``_stop_feeder()`` calls ``source.close()`` as soon as the feeder thread is
+    *asked* to stop, and ``stop()`` only clears a flag. The thread can still be
+    inside ``sf.read()``, so ``sf.close()`` freed the FLAC decoder that
+    libsndfile was reading through. That is a SIGSEGV inside ``read_frame_``,
+    not a Python exception: the process dies with no traceback and no log line,
+    which is why it looked like the player "crashed" at random while a track was
+    being (re)loaded - including when a theme switch coincided with one.
+
+    The crash could not be caught from Python, so these tests assert the
+    contract instead: ``close()`` never shortens an in-flight read, the handle
+    is released exactly once, and a reader that was still busy closes it.
+    """
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.path = str(Path(self.temp_dir.name) / "mix.wav")
+        sf.write(self.path, np.zeros((44100, 2), dtype=np.float32), 44100)
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    def test_close_waits_for_an_in_flight_read(self):
+        source = SoundFileAudioSource(self.path)
+        handle = source.sf
+        self.assertIsNotNone(handle)
+
+        started, release = threading.Event(), threading.Event()
+
+        def slow_read(*_args, **_kwargs):
+            started.set()
+            release.wait(timeout=5.0)
+            return np.zeros((128, 2), dtype=np.float32)
+
+        with patch.object(handle, "read", side_effect=slow_read):
+            reader = threading.Thread(target=lambda: source.read(128), daemon=True)
+            reader.start()
+            self.assertTrue(started.wait(2.0), "the reader never entered read()")
+
+            closer = threading.Thread(target=source.close, daemon=True)
+            closer.start()
+            # While the read is still in flight close() must be waiting on the
+            # lock, not returning and freeing the decoder underneath it.
+            time.sleep(0.15)
+            self.assertTrue(closer.is_alive(),
+                            "close() returned while a read was still in flight")
+            self.assertIs(source.sf, handle,
+                          "close() dropped the handle out from under the reader")
+
+            release.set()
+            reader.join(timeout=5.0)
+            closer.join(timeout=5.0)
+
+        self.assertFalse(reader.is_alive())
+        self.assertFalse(closer.is_alive())
+        self.assertIsNone(source.sf, "the handle was not released after the read")
+
+    def test_a_closed_source_stops_reading_and_closes_the_handle(self):
+        source = SoundFileAudioSource(self.path)
+        source.close()
+        self.assertTrue(source._closed)
+        data = source.read(1024)
+        self.assertEqual(len(data), 0, "a closed source kept handing back audio")
+        self.assertIsNone(source.sf)
+
+    def test_read_then_close_then_read_does_not_reopen(self):
+        source = SoundFileAudioSource(self.path)
+        self.assertGreater(len(source.read(64)), 0)
+        source.close()
+        for _ in range(3):
+            self.assertEqual(len(source.read(64)), 0)
+        self.assertIsNone(source.sf, "close() was undone by a later read()")
+
+    def test_stop_feeder_then_close_is_idempotent(self):
+        source = SoundFileAudioSource(self.path)
+        handle = source.sf
+        with patch.object(handle, "close", wraps=handle.close) as close_spy:
+            source.close()
+            source.close()
+            source.close()
+            self.assertEqual(close_spy.call_count, 1,
+                             "the soundfile handle was closed more than once")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
 Traktor Kontrol S4 Hardware MIDI Controller Service for MP Mix Archive Manager & MP Audio Player
-Version 0.5.0 Stable (Sensorium)
+Version 0.5.3 Stable (Sensorium)
 
 Communicates with Native Instruments Traktor Kontrol S4 over Hardware ALSA MIDI Port (amidi / hw:0,0).
 Translates MIDI Mode signals (Pitch Faders, Buttons, Encoders, Volume Sliders) to MP Audio Player IPC commands.
 """
 
 from __future__ import annotations
-import os, sys, time, json, socket, subprocess, threading, signal, select, argparse
+import os, sys, time, json, socket, subprocess, threading, signal, select, argparse, platform, shutil
 from pathlib import Path
 from typing import Optional, Dict, Any, Tuple, List
 
@@ -26,6 +26,26 @@ PLAYER_STATE_FILE = CONFIG_DIR / "mp_player_state.json"
 
 DEFAULT_PORT = "hw:0,0"
 DEFAULT_DEVICE_NAME = "Traktor Kontrol S4"
+
+# FreeBSD has no ALSA: there is no /dev/snd tree, no `amidi`, and no
+# /proc/asound. MIDI arrives through the generic USB MIDI driver as
+# /dev/umidi<unit>.<port>. Without this flag the daemon spawned `amidi` and
+# died with FileNotFoundError as soon as it started.
+IS_FREEBSD = sys.platform.startswith("freebsd") or "FreeBSD" in platform.system()
+
+
+def freebsd_midi_devices() -> List[str]:
+    """Raw MIDI device paths on FreeBSD, newest unit first.
+
+    Returns an empty list on every other platform, so a caller can use it
+    unconditionally as a fallback without a platform branch of its own.
+    """
+    if not IS_FREEBSD:
+        return []
+    import glob
+    devices = sorted(glob.glob("/dev/umidi*.*"))
+    # Prefer the device whose unit matches the requested card, then anything.
+    return devices
 
 # ANSI Colors
 BOLD = "\033[1m"
@@ -179,6 +199,11 @@ class TraktorS4MidiController:
                 path = f"/dev/snd/midiC{card}D{dev}"
                 if os.path.exists(path):
                     return path
+        if IS_FREEBSD:
+            devices = freebsd_midi_devices()
+            if devices:
+                return devices[0]
+            return None
         if os.path.exists("/dev/snd/midiC0D0"):
             return "/dev/snd/midiC0D0"
         return None
@@ -559,6 +584,17 @@ class TraktorS4MidiController:
         """
         Fallback MIDI stream reader using 'amidi -p <port> --dump'.
         """
+        # `amidi` is an ALSA tool. It does not exist on FreeBSD or macOS, and a
+        # bare Popen died with FileNotFoundError the moment the daemon started.
+        # Stand by instead: the controls simply are not available until a device
+        # path can be opened, which is the same outcome without the traceback.
+        if not shutil.which("amidi"):
+            log("amidi is not installed; MIDI input is unavailable on this platform.")
+            self.update_state("standby", "amidi unavailable")
+            while self.running:
+                time.sleep(0.2)
+            return
+
         cmd = ["amidi", "-p", self.port, "--dump"]
         log(f"Starting amidi process: {' '.join(cmd)}")
         self.update_state("running", f"Listening via amidi on {self.port}")
@@ -723,7 +759,7 @@ def print_user_guide():
     # Fallback built-in guide
     print(f"""
 {BOLD}{MAGENTA}========================================================================{NC}
-{BOLD}{WHITE}   🎛️  TRAKTOR KONTROL S4 GETTING STARTED GUIDE (v0.5.0){NC}
+{BOLD}{WHITE}   🎛️  TRAKTOR KONTROL S4 GETTING STARTED GUIDE (v0.5.3){NC}
 {BOLD}{MAGENTA}========================================================================{NC}
 
 1. SWITCHING TO MIDI MODE ON THE S4:

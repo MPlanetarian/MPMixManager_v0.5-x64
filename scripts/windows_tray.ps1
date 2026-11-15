@@ -77,6 +77,27 @@ public static class MpWindowFocus {
 "@
 }
 
+function Get-MpInstalledComponents {
+    # The shared selection file is a single space-separated line of ids. When it
+    # is absent this is a full install, so every menu entry stays.
+    param([string]$InstallRoot)
+    $full = @("manager", "gui", "liquid", "visualizer")
+    $file = Join-Path $env:USERPROFILE ".config\mix-manager\installed_apps"
+    if (-not (Test-Path -LiteralPath $file)) { return $full }
+    try {
+        $text = (Get-Content -LiteralPath $file -ErrorAction Stop | Select-Object -First 1)
+    } catch {
+        return $full
+    }
+    if (-not $text -or -not $text.Trim()) { return $full }
+    $found = @()
+    foreach ($token in ($text.Trim() -split "\s+")) {
+        if ($token) { $found += $token }
+    }
+    if ($found.Count -eq 0) { return $full }
+    return $found
+}
+
 function Show-MpWindow {
     param([string]$TitlePart)
     $match = Get-Process | Where-Object {
@@ -182,27 +203,121 @@ function Show-MpLimitBalloon {
     Write-MpTrayLog "$label launch refused: $($script:maxCappedInstances) instances already open"
 }
 
+function Get-MpBash {
+    $candidates = @(
+        (Join-Path $env:ProgramFiles "Git\bin\bash.exe"),
+        (Join-Path ${env:ProgramFiles(x86)} "Git\bin\bash.exe"),
+        (Join-Path $env:LOCALAPPDATA "Programs\Git\bin\bash.exe"),
+        "C:\msys64\usr\bin\bash.exe"
+    )
+    foreach ($candidate in $candidates) {
+        if ($candidate -and (Test-Path -LiteralPath $candidate)) { return $candidate }
+    }
+    $found = Get-Command bash.exe -ErrorAction SilentlyContinue
+    if ($found -and ($found.Source -notlike "*WindowsApps*")) { return $found.Source }
+    return $null
+}
+
+function Get-MpBash {
+    $candidates = @(
+        (Join-Path $env:ProgramFiles "Git\bin\bash.exe"),
+        (Join-Path ${env:ProgramFiles(x86)} "Git\bin\bash.exe"),
+        (Join-Path $env:LOCALAPPDATA "Programs\Git\bin\bash.exe"),
+        "C:\msys64\usr\bin\bash.exe"
+    )
+    foreach ($candidate in $candidates) {
+        if ($candidate -and (Test-Path -LiteralPath $candidate)) { return $candidate }
+    }
+    $found = Get-Command bash.exe -ErrorAction SilentlyContinue
+    if ($found -and ($found.Source -notlike "*WindowsApps*")) { return $found.Source }
+    return $null
+}
+
+function Get-MpSuiteCloseFile {
+    return (Join-Path $env:USERPROFILE ".config\mix-manager\instances\suite.closing")
+}
+
+function Set-MpSuiteClosing {
+    # The windows being stopped read this file and stay silent, so the movie
+    # does not run twice for one close. It is the same marker the Python tray
+    # writes, and it expires on its own after a few minutes.
+    try {
+        $path = Get-MpSuiteCloseFile
+        $dir = Split-Path -Parent $path
+        if (-not (Test-Path -LiteralPath $dir)) {
+            New-Item -ItemType Directory -Path $dir -Force | Out-Null
+        }
+        [System.IO.File]::WriteAllText($path, "$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())`r`n")
+    } catch {
+    }
+}
+
+function Clear-MpSuiteClosing {
+    try {
+        $path = Get-MpSuiteCloseFile
+        if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue }
+    } catch {
+    }
+}
+
+function Show-MpExitVideo {
+    # Close MP Mix Manager kills every MP process, so the windows never reach
+    # the shutdown path that plays Exit_MP_Video.mp4 themselves. Play it here
+    # first, in the same borderless window, and only then stop the suite.
+    # --exit-force ignores the "last window" election: every window is about
+    # to be stopped, so the movie must play regardless of how many are open.
+    $bash = Get-MpBash
+    if (-not $bash) { return }
+    $script = Join-Path $Root "scripts\display_loader_video.sh"
+    if (-not (Test-Path -LiteralPath $script)) { return }
+    try {
+        Write-MpTrayLog "close-all: playing the exit video"
+        Set-MpSuiteClosing
+        & $bash $script --exit-force | Out-Null
+    } catch {
+        Write-MpTrayLog "close-all: exit video failed: $($_.Exception.Message)"
+    }
+}
+
 function Stop-MpSuite {
-    foreach ($row in @(Get-MpCommandLines)) {
-        $command = $row.CommandLine
-        $isMp = $false
-        foreach ($needle in @(
-            "Mix_Archive_Manager.sh",
-            "MP_Gui.sh",
-            "launch_mp_gui",
-            "MP_Audio_Player",
-            "MP_Liquid_Visualizer",
-            "mp_liquid_visualizer",
-            "launch_liquid_glass",
-            "launch-liquid-glass",
-            "launch_liquid_visualizer",
-            "manager.ps1"
-        )) {
-            if ($command -like "*$needle*") { $isMp = $true; break }
+    # Every pattern the tray knows about, so a Close All is complete even when
+    # one launcher names a script differently from another. The list matches
+    # SUITE_HELPER_SCRIPTS in scripts/mp_system_tray.py plus the role launchers.
+    $deadline = (Get-Date).AddSeconds(6)
+    while ($true) {
+        $found = $false
+        foreach ($row in @(Get-MpCommandLines)) {
+            $command = [string]$row.CommandLine
+            if ($command -like "*mp_system_tray*") { continue }
+            $isMp = $false
+            foreach ($needle in @(
+                "Mix_Archive_Manager.sh",
+                "mix-archive-manager",
+                "launch-manager",
+                "MP_Gui.sh",
+                "launch_mp_gui",
+                "launch-mp-gui",
+                "MP_Audio_Player",
+                "MP_Liquid_Visualizer",
+                "mp_liquid_visualizer",
+                "launch_liquid_glass",
+                "launch-liquid-glass",
+                "launch_liquid_visualizer",
+                "traktor_s4_midi",
+                "manager.ps1"
+            )) {
+                if ($command -like "*$needle*") { $isMp = $true; break }
+            }
+            if ($isMp) {
+                $found = $true
+                Stop-Process -Id $row.ProcessId -Force -ErrorAction SilentlyContinue
+            }
         }
-        if ($isMp) {
-            Stop-Process -Id $row.ProcessId -Force -ErrorAction SilentlyContinue
-        }
+        # Windows needs a beat before the process table reflects the kills; a
+        # second sweep catches a window that was still starting up.
+        if (-not $found) { break }
+        if ((Get-Date) -ge $deadline) { break }
+        Start-Sleep -Milliseconds 250
     }
 }
 
@@ -240,6 +355,13 @@ function Start-MpRole {
 $script:busyUntil = [datetime]::MinValue
 $script:absentSince = $null
 $script:closing = $false
+# Close-all runs in a background runspace so the tray's message loop keeps
+# running while the exit movie plays. These hold that worker and its result.
+$script:closeWorker = $null
+$script:closeState = $null
+$script:closeTimer = $null
+$script:closeItem = $null
+$script:closeItemText = ""
 
 function Register-MpLaunch {
     $script:busyUntil = (Get-Date).AddSeconds(20)
@@ -251,8 +373,74 @@ function Invoke-MpTrayAction {
     if ($script:closing) { return }
     if ($ActionId -eq "close") {
         $script:closing = $true
-        Stop-MpSuite
-        [System.Windows.Forms.Application]::Exit()
+        # The movie runs for about 40 seconds, then the suite is stopped. Doing
+        # that inline froze the tray's message loop for the whole minute: the
+        # menu stayed painted, the icon stopped answering, and Windows treats
+        # a blocked notification icon as hung. That is why Close All could look
+        # dead and leave every window open.
+        #
+        # The work now runs in a background runspace. It sets Done when the
+        # last MP process is gone; a UI timer watches that flag and then quits
+        # this process, so the icon stays live throughout.
+        $script:closeDone = $false
+        $script:closeError = ""
+        $script:closeItemText = "Closing MP Mix Manager..."
+        if ($script:closeItem) {
+            $script:closeItem.Enabled = $false
+            $script:closeItem.Text = $script:closeItemText
+        }
+        if ($script:closeTimer) { $script:closeTimer.Stop(); $script:closeTimer.Dispose() }
+        try {
+            $state = [hashtable]::Synchronized(@{
+                Root = $Root
+                Done = $false
+                Error = ""
+            })
+            $script:closeState = $state
+            $worker = [PowerShell]::Create()
+            $script:closeWorker = $worker
+            [void]$worker.AddScript({
+                param($State)
+                $ErrorActionPreference = "Continue"
+                try { Set-MpSuiteClosing } catch { }
+                try { Show-MpExitVideo } catch { }
+                try { Stop-MpSuite } catch { $State.Error = "$($_.Exception.Message)" }
+                # Re-check: the movie and the first sweep can race a window
+                # that is still starting up.
+                $deadline = (Get-Date).AddSeconds(6)
+                while ((Get-Date) -lt $deadline) {
+                    if (-not (Test-MpSuiteRunning)) { break }
+                    Start-Sleep -Milliseconds 250
+                    try { Stop-MpSuite } catch { }
+                }
+                try { Clear-MpSuiteClosing } catch { }
+                $State.Done = $true
+            }).AddArgument($state)
+            [void]$worker.BeginInvoke()
+        } catch {
+            Write-MpTrayLog "close-all worker failed: $($_.Exception.Message)"
+            # Without a worker, fall back to the inline path rather than never
+            # closing anything.
+            try { Show-MpExitVideo } catch { }
+            try { Stop-MpSuite } catch { }
+            try { Clear-MpSuiteClosing } catch { }
+            [System.Windows.Forms.Application]::Exit()
+            return
+        }
+        $script:closeTimer = New-Object System.Windows.Forms.Timer
+        $script:closeTimer.Interval = 250
+        $script:closeTimer.Add_Tick({
+            try {
+                if ($script:closeState -and -not $script:closeState.Done) { return }
+                $script:closeTimer.Stop()
+                if ($script:closeState -and $script:closeState.Error) {
+                    Write-MpTrayLog "close-all: $($script:closeState.Error)"
+                }
+            } finally {
+                [System.Windows.Forms.Application]::Exit()
+            }
+        })
+        $script:closeTimer.Start()
         return
     }
     $role = switch ($ActionId) {
@@ -555,17 +743,27 @@ try {
 
     $menu = New-Object System.Windows.Forms.ContextMenuStrip
     $entries = @(
-        @{ Id = "gui"; Label = "Launch MP Gui" },
-        @{ Id = "liquid"; Label = "Launch MP Liquid Player" },
-        @{ Id = "manager"; Label = "Launch MP Mix Manager" },
-        @{ Id = "close"; Label = "Close MP Mix Manager (Closes everything)" }
+        @{ Id = "gui"; Label = "Launch MP Gui"; Component = "gui" },
+        @{ Id = "liquid"; Label = "Launch MP Liquid Player"; Component = "liquid" },
+        @{ Id = "manager"; Label = "Launch MP Mix Manager"; Component = "manager" },
+        @{ Id = "close"; Label = "Close MP Mix Manager (Closes everything)"; Component = "" }
     )
+    $installed = Get-MpInstalledComponents -InstallRoot $Root
     foreach ($entry in $entries) {
         if ($entry.Id -eq "close") {
             [void]$menu.Items.Add("-")
+        } elseif ($entry.Component -and -not $installed.Contains($entry.Component)) {
+            # This setup did not install that app, so offering to launch it
+            # would only fail. Close All and the separators stay.
+            continue
         }
         $item = $menu.Items.Add([string]$entry.Label)
         $item.Add_Click((New-MpClickHandler -ActionId ([string]$entry.Id))) | Out-Null
+        if ($entry.Id -eq "close") {
+            # Keep a handle so the label can say "Closing..." and a second
+            # click cannot start a second movie.
+            $script:closeItem = $item
+        }
     }
     $notify.ContextMenuStrip = $menu
     $notify.Add_MouseUp({
@@ -613,6 +811,10 @@ try {
     Write-MpTrayLog "failed pid=$PID $($_.Exception.Message)"
     exit 1
 } finally {
+    if ($script:closeTimer) { $script:closeTimer.Stop(); $script:closeTimer.Dispose() }
+    if ($script:closeWorker) {
+        try { $script:closeWorker.Stop(); $script:closeWorker.Dispose() } catch { }
+    }
     if ($script:promoteTimer) { $script:promoteTimer.Stop(); $script:promoteTimer.Dispose() }
     if ($timer) { $timer.Stop(); $timer.Dispose() }
     if ($notify) {

@@ -133,7 +133,10 @@ class TestEnterVrMode(unittest.TestCase):
             self.assertEqual(code, 0)
             self.assertEqual((config / "theme").read_text(encoding="utf-8").strip(), VR_THEME)
             self.assertEqual(len(calls), 3)
-            visualizer, player, bigscreen = calls
+            # Bigscreen is launched first on purpose: the headset is already
+            # loading in, and it is what makes the desktop appear, so the
+            # player and visualizer are spawned onto a screen that exists.
+            bigscreen, visualizer, player = calls
             self.assertTrue(any("MP_Liquid_Visualizer" in part or "mp_liquid_visualizer" in part for part in visualizer[0]))
             self.assertEqual(visualizer[1]["MP_VR_LAYOUT"], "1")
             self.assertEqual(visualizer[1]["MP_VR_VISUALIZER_SIZE"], "1032")
@@ -141,9 +144,15 @@ class TestEnterVrMode(unittest.TestCase):
             self.assertIn("--theme", player[0])
             self.assertIn(VR_THEME, player[0])
             self.assertIn("--no-visualizer", player[0])
-            self.assertEqual(player[1]["MP_VR_PLAYER_X"], "575")
-            self.assertEqual(player[1]["MP_VR_PLAYER_Y"], "277")
-            self.assertEqual(player[1]["MP_VR_PLAYER_COLS"], "84")
+            # Derive the expected geometry from the layout function instead of
+            # hard-coding pixel offsets. The visualizer side (and therefore the
+            # player's vertical centring) changes whenever the side table or the
+            # player grid changes, and a literal stops describing the contract.
+            expected = vr_layout(0, 0, 1920, 1080, "vulkan")
+            px, py, pw, ph = expected["player"]
+            self.assertEqual(player[1]["MP_VR_PLAYER_X"], str(px))
+            self.assertEqual(player[1]["MP_VR_PLAYER_Y"], str(py))
+            self.assertEqual(player[1]["MP_VR_PLAYER_COLS"], str(expected["cols"]))
             self.assertEqual(bigscreen[0], [str(exe)])
             self.assertEqual(bigscreen[2], exe.parent)
 

@@ -92,7 +92,7 @@ class TestHarmonyMenu(unittest.TestCase):
 
 class TestHarmonyShiftA(unittest.TestCase):
     def test_empty_shift_a_returns_from_the_agent_prompt(self):
-        agent = Path("/var/home/mplanetarian/OpenAI/MP_Harmony_Agent/MP_Harmony_Agent.py")
+        agent = Path.home() / "OpenAI" / "MP_Harmony_Agent" / "MP_Harmony_Agent.py"
         if not agent.is_file():
             self.skipTest("MP Harmony agent is not installed on this machine")
         source = agent.read_text(encoding="utf-8")
@@ -146,10 +146,10 @@ class TestHarmonyGate(unittest.TestCase):
         self.assertEqual(result.returncode, 3, result.stdout + result.stderr)
         out = result.stdout
         self.assertIn("gpt-oss-pinned:latest", out)
-        self.assertIn("gpt-oss-20b", out)
-        self.assertIn("20.9 billion", out)
-        self.assertIn("Apache License 2.0", out)
-        self.assertIn("Harmony format", out)
+        self.assertIn("Nemotron 3.5 Bolt", out)
+        self.assertIn("4 billion effective", out)
+        self.assertIn("OpenMDW License 1.1", out)
+        self.assertIn("chat template", out)
         self.assertIn("mix archive", out)
         self.assertIn("MP Audio Player", out)
         self.assertIn("was not installed", out)

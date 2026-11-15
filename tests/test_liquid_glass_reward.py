@@ -20,7 +20,7 @@ class TestLiquidGlassReward(unittest.TestCase):
         with patch("sys.stdout", buf):
             show_welcome_message(wait_for_input=False)
         out = buf.getvalue()
-        self.assertIn("0.5.0 (Sensorium) - [Stable Release]", out)
+        self.assertIn("0.5.3 (Sensorium) - [Stable Release]", out)
         self.assertIn("MPlanetarian", out)
         self.assertIn("What's new since 0.4.2", out)
         self.assertIn("Favorites", out)

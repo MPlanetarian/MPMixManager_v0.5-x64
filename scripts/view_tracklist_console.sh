@@ -38,10 +38,7 @@ TRACKLIST_THEMES=(
     "cosmic_supernova"
     "dreamworlds_liquid"
     "dynamic_rainbow_liquid_glass"
-    "cosmic_dreamworlds_radioactive"
-    "cosmic_dreamworlds"
-    "orbital_void_reflux"
-    "sensorium_interface"
+    "sensorium"
     "cyberpunk"
     "dracula"
     "nord"
@@ -57,7 +54,7 @@ TRACKLIST_THEMES=(
 )
 
 set_theme_colors() {
-    local raw_name="${1:-dreamworlds}"
+    local raw_name="${1:-dreamworlds_ultra}"
     local theme_name
     theme_name="$(printf '%s' "$raw_name" | tr '[:upper:]' '[:lower:]' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
 
@@ -79,23 +76,24 @@ set_theme_colors() {
             CURRENT_THEME="stream_of_frequency"
             THEME_DISPLAY_NAME="Stream of Frequency"
             ;;
-        dreamworlds|mplanetarian_dreamworlds|mplanetarian|default|"mplanetarian dreamworlds [default]"|"mplanetarian dreamworlds")
-            RED='\033[38;2;46;107;255m'
-            GREEN='\033[38;2;125;186;255m'
-            YELLOW='\033[38;2;198;220;255m'
-            BLUE='\033[38;2;20;58;160m'
-            MAGENTA='\033[38;2;46;107;255m'
-            CYAN='\033[38;2;90;164;255m'
+        dreamworlds|mplanetarian_dreamworlds|mplanetarian|"mplanetarian dreamworlds [default]"|"mplanetarian dreamworlds")
+            RED='\033[38;2;237;37;78m'
+            GREEN='\033[38;2;0;229;255m'
+            YELLOW='\033[38;2;255;170;0m'
+            BLUE='\033[38;2;155;89;182m'
+            MAGENTA='\033[38;2;247;37;133m'
+            CYAN='\033[38;2;0;193;228m'
             CURRENT_THEME="dreamworlds"
             THEME_DISPLAY_NAME="MPlanetarian Dreamworlds"
             ;;
-        dreamworlds_ultra|ultra|dreamworlds_ultra_mp_mix_manager|hotpurple|trafficlight|"dreamworlds ultra mp mix manager"|"dreamworlds ultra"|"dreamworlds-ultra")
+        dreamworlds_ultra|ultra|default|dreamworlds_ultra_mp_mix_manager|hotpurple|trafficlight|"dreamworlds ultra mp mix manager"|"dreamworlds ultra"|"dreamworlds-ultra")
             RED='\033[38;2;255;0;0m'
             GREEN='\033[38;2;0;255;0m'
             YELLOW='\033[38;2;255;153;51m'
             BLUE='\033[38;2;102;102;255m'
             MAGENTA='\033[38;2;166;77;255m'
             CYAN='\033[38;2;153;153;255m'
+            WHITE='\033[38;2;216;180;254m'
             CURRENT_THEME="dreamworlds_ultra"
             THEME_DISPLAY_NAME="Dreamworlds Ultra"
             ;;
@@ -129,45 +127,16 @@ set_theme_colors() {
             CURRENT_THEME="dynamic_rainbow_liquid_glass"
             THEME_DISPLAY_NAME="Dynamic Liquid Glass [Rainbow Colours]"
             ;;
-        cosmic_dreamworlds_radioactive|radioactive|cosmic_radioactive|"cosmic_dreamworlds_radioactive_(liquid_glass_skin)"|"cosmic dreamworlds radioactive (liquid glass skin)"|"cosmic dreamworlds radioactive")
-            RED='\033[38;2;57;255;20m'
-            GREEN='\033[38;2;0;245;212m'
-            YELLOW='\033[38;2;255;215;0m'
-            BLUE='\033[38;2;102;102;255m'
-            MAGENTA='\033[38;2;166;77;255m'
-            CYAN='\033[38;2;0;245;212m'
-            CURRENT_THEME="cosmic_dreamworlds_radioactive"
-            THEME_DISPLAY_NAME="Cosmic Dreamworlds Radioactive"
-            ;;
-        cosmic_dreamworlds|cosmic_dreamworld|cosmic_dream|"cosmic_dreamworlds_(liquid_glass_skin)"|"cosmic dreamworlds (liquid glass skin)"|"cosmic dreamworlds"|"cosmic dreamworld"|"cosmic dream")
-            RED='\033[38;2;232;13;104m'
-            GREEN='\033[38;2;0;245;212m'
-            YELLOW='\033[38;2;254;228;64m'
-            BLUE='\033[38;2;94;96;206m'
-            MAGENTA='\033[38;2;176;88;255m'
-            CYAN='\033[38;2;0;245;212m'
-            CURRENT_THEME="cosmic_dreamworlds"
-            THEME_DISPLAY_NAME="Cosmic Dreamworlds"
-            ;;
-        orbital_void_reflux|orbital_void|void_reflux|orbital|"orbital_void_reflux_(liquid_glass_skin)"|"orbital void reflux (liquid glass skin)"|"orbital void reflux")
-            RED='\033[38;2;255;0;127m'
-            GREEN='\033[38;2;0;240;255m'
-            YELLOW='\033[38;2;157;78;221m'
-            BLUE='\033[38;2;123;44;191m'
-            MAGENTA='\033[38;2;157;78;221m'
-            CYAN='\033[38;2;0;240;255m'
-            CURRENT_THEME="orbital_void_reflux"
-            THEME_DISPLAY_NAME="Orbital Void Reflux"
-            ;;
-        sensorium_interface|sensorium|"sensorium_interface_(liquid_glass_skin)"|"sensorium interface (liquid glass skin)"|"sensorium interface")
-            RED='\033[38;2;240;168;216m'
-            GREEN='\033[38;2;0;245;255m'
-            YELLOW='\033[38;2;245;232;180m'
-            BLUE='\033[38;2;184;72;196m'
-            MAGENTA='\033[38;2;240;168;216m'
-            CYAN='\033[38;2;0;245;255m'
-            CURRENT_THEME="sensorium_interface"
-            THEME_DISPLAY_NAME="Sensorium Interface"
+        sensorium|sensorium_interface|"sensorium"|"sensorium_interface_(liquid_glass_skin)"|"sensorium interface (liquid glass skin)"|"sensorium interface")
+            RED='\033[38;2;94;20;15m'
+            GREEN='\033[38;2;38;61;0m'
+            YELLOW='\033[38;2;74;52;0m'
+            BLUE='\033[38;2;11;47;107m'
+            MAGENTA='\033[38;2;92;36;0m'
+            CYAN='\033[38;2;10;58;72m'
+            WHITE='\033[1;38;2;43;10;16m'
+            CURRENT_THEME="sensorium"
+            THEME_DISPLAY_NAME="Sensorium"
             ;;
         dreamworlds_neon|"dreamworlds neon")
             RED='\033[38;2;247;37;133m'
@@ -369,7 +338,7 @@ _USER_CYCLED_THEME=""
 load_tracklist_theme() {
     local file_theme
     file_theme="$(_read_saved_theme_file)"
-    local chosen_theme="dreamworlds"
+    local chosen_theme="dreamworlds_ultra"
 
     if [ -n "$file_theme" ] && [ "$file_theme" != "$_LAST_SEEN_FILE_THEME" ]; then
         _LAST_SEEN_FILE_THEME="$file_theme"
@@ -397,7 +366,7 @@ cycle_tracklist_theme() {
     local idx=0
     local i
     for ((i = 0; i < count; i++)); do
-        if [ "${TRACKLIST_THEMES[$i]}" = "${CURRENT_THEME:-dreamworlds}" ]; then
+        if [ "${TRACKLIST_THEMES[$i]}" = "${CURRENT_THEME:-dreamworlds_ultra}" ]; then
             idx=$(( (i + 1) % count ))
             break
         fi
@@ -1241,7 +1210,7 @@ while true; do
             ;;
         [tT])
             cycle_tracklist_theme
-            TRACKLIST_LAST_STATUS="${BOLD}${GREEN}✓ Theme switched to: ${THEME_DISPLAY_NAME} (${CURRENT_THEME})${NC}"
+            TRACKLIST_LAST_STATUS=$'\033[1;48;2;20;20;28;38;2;255;255;255m'"✓ Theme switched to: ${THEME_DISPLAY_NAME} (${CURRENT_THEME})"$'\033[0m'
             render_tracklist
             ;;
     esac

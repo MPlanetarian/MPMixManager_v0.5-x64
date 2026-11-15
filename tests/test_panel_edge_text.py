@@ -5,6 +5,7 @@ import re
 import subprocess
 import unittest
 from pathlib import Path
+from tests.mp_test_bash import BASH
 
 ROOT = Path(__file__).resolve().parent.parent
 ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
@@ -23,7 +24,7 @@ def _width(text: str) -> int:
 
 def _run(script: str) -> str:
     proc = subprocess.run(
-        ["bash", "--noprofile", "--norc", "-c", script],
+        [BASH, "--noprofile", "--norc", "-c", script],
         cwd=str(ROOT),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,

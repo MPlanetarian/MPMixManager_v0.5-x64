@@ -599,7 +599,8 @@ say "${BOLD}${BLUE}Preserving selected settings...${NC}"
 if [ "$NO_PRESERVE" -eq 0 ]; then
     for path in \
         "$CONFIG_DIR/backups" \
-        "$CONFIG_DIR/exports"; do
+        "$CONFIG_DIR/exports" \
+        "$CONFIG_DIR/installed_apps"; do
         stage_path "$path"
     done
 fi
@@ -726,6 +727,49 @@ if [ -d "$ROOT/REPORTS" ]; then
 fi
 
 # ------------------------------------------------------------------------------
+# Pick the MP Visualizer backend for this machine
+# ------------------------------------------------------------------------------
+# The shipped template hard-codes LIQUID_GLASS_BACKEND="opengl" as a
+# placeholder. Recreating config.env from it would otherwise leave an NVIDIA
+# machine on OpenGL, because the installer treats a value already in the file
+# as a user choice. Ask the shared engine instead, the same way a fresh install
+# does, and write its answer.
+detect_visualizer_backend() {
+    local py="" tree="$ROOT/scripts/visualizer_backend.py" backend=""
+    [ -f "$tree" ] || return 0
+    for py in python3 python; do
+        if command -v "$py" >/dev/null 2>&1; then
+            backend="$("$py" "$tree" --recommend-backend 2>/dev/null | tr -d '\r' | head -n 1 || true)"
+            [ -n "$backend" ] && break
+            py=""
+        fi
+    done
+    if [ -z "$backend" ]; then
+        # No interpreter: fall back to the NVIDIA ICD that ships with the
+        # proprietary driver, which is what proves the GPU can present Vulkan.
+        backend="opengl"
+        if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi >/dev/null 2>&1; then
+            if [ -f /usr/share/vulkan/icd.d/nvidia_icd.x86_64.json ] \
+               || [ -f /usr/share/vulkan/icd.d/nvidia_icd.json ] \
+               || [ -f /etc/vulkan/icd.d/nvidia_icd.json ]; then
+                backend="vulkan"
+            fi
+        fi
+    fi
+    case "$(printf '%s' "${MP_VISUALIZER_BACKEND:-auto}" | tr '[:upper:]' '[:lower:]')" in
+        opengl|gl|ogl) backend="opengl" ;;
+        vulkan|vk)     backend="vulkan" ;;
+    esac
+    if [ -n "$py" ]; then
+        "$py" "$tree" --apply-config "$ROOT/config.env" --backend "$backend" >/dev/null 2>&1 || true
+    fi
+    if ! grep -qE '^LIQUID_GLASS_BACKEND=' "$ROOT/config.env" 2>/dev/null; then
+        printf 'LIQUID_GLASS_BACKEND="%s"\n' "$backend" >> "$ROOT/config.env" 2>/dev/null || true
+    fi
+    ok "visualizer backend set to $(printf '%s' "$backend" | tr '[:lower:]' '[:upper:]')"
+}
+
+# ------------------------------------------------------------------------------
 # Recreate the first-install configuration
 # ------------------------------------------------------------------------------
 echo ""
@@ -740,6 +784,7 @@ if [ "$DRY_RUN" -eq 0 ]; then
     chmod 600 "$ROOT/config.env" 2>/dev/null || true
     ok "created a fresh config.env from the shipped template"
     apply_config_keys
+    detect_visualizer_backend
     restore_staged
 else
     step "would recreate config.env from config.env.example"

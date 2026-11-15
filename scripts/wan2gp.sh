@@ -82,7 +82,7 @@ fi
 
 # Load config if present
 _SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-for _cfg in "$_SCRIPT_DIR/config.env" "$_SCRIPT_DIR/../config.env" "$PWD/config.env" "/x/MP_Mix_Manager_v0.3/config.env" "X:/MP_Mix_Manager_v0.3/config.env" "$HOME/MP_Mix_Manager_v0.3/config.env"; do
+for _cfg in "${MP_CONFIG:-}" "$HOME/.config/mix-manager/config.env" "$_SCRIPT_DIR/config.env" "$_SCRIPT_DIR/../config.env"; do
     if [ -f "$_cfg" ]; then
         # shellcheck disable=SC1090
         source "$_cfg" 2>/dev/null || true
@@ -131,14 +131,11 @@ status_wan2gp() {
 resolve_wan2gp_paths() {
     # Resolve WAN2GP App Root
     APP_DIR="${WAN2GP_DIR:-}"
-    [ -z "$APP_DIR" ] && [ -d "X:/WAN2GP/Wan2GP" ] && APP_DIR="X:/WAN2GP/Wan2GP"
-    [ -z "$APP_DIR" ] && [ -d "D:/WAN2GP/Wan2GP" ] && APP_DIR="D:/WAN2GP/Wan2GP"
-    [ -z "$APP_DIR" ] && [ -d "/var/home/mplanetarian/pinokio/api/wan.git/app" ] && APP_DIR="/var/home/mplanetarian/pinokio/api/wan.git/app"
     [ -z "$APP_DIR" ] && [ -d "$HOME/pinokio/api/wan.git/app" ] && APP_DIR="$HOME/pinokio/api/wan.git/app"
+    [ -z "$APP_DIR" ] && [ -d "$HOME/WAN2GP/Wan2GP" ] && APP_DIR="$HOME/WAN2GP/Wan2GP"
 
     # Resolve Python environment
     PYTHON_BIN="${WAN2GP_PYTHON:-}"
-    [ -z "$PYTHON_BIN" ] && [ -x "X:/WAN2GP/conda_envs/wan2gp/python.exe" ] && PYTHON_BIN="X:/WAN2GP/conda_envs/wan2gp/python.exe"
     [ -z "$PYTHON_BIN" ] && [ -x "$APP_DIR/venv/Scripts/python.exe" ] && PYTHON_BIN="$APP_DIR/venv/Scripts/python.exe"
     [ -z "$PYTHON_BIN" ] && [ -x "$APP_DIR/venv/bin/python" ] && PYTHON_BIN="$APP_DIR/venv/bin/python"
     if [ -z "$PYTHON_BIN" ] || [ ! -x "$PYTHON_BIN" ]; then
@@ -270,10 +267,28 @@ if [ "$PROFILE" != "2" ] && [ "$PROFILE" != "4.5" ] && [ "$PROFILE" != "1" ] && 
     PROFILE="2"
 fi
 
-# Disable systemd-oomd if active on Linux to prevent premature OOM kills
-if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet systemd-oomd 2>/dev/null; then
-    sudo systemctl stop systemd-oomd 2>/dev/null || true
-    sudo systemctl mask systemd-oomd 2>/dev/null || true
+# Leave systemd-oomd ENABLED (changed 2026-11-14).
+#
+# This script used to stop and mask systemd-oomd "to prevent premature OOM
+# kills". That was the wrong trade on this box: the kernel OOM killer with
+# zram-only swap deadlocked and panicked instead of killing anything --
+#
+#   Out of memory and no killable processes...
+#   Kernel panic - not syncing: System is deadlocked on memory
+#     __swap_cache_alloc -> swapin_sync -> do_swap_page
+#
+# oomd is the only thing that reclaims BEFORE that state is reachable. It acts
+# on PSI memory pressure (kill at 80% for 20s, per
+# /usr/lib/systemd/{system,user}/slice.d/10-oomd-per-slice-defaults.conf), so it
+# targets the cgroup that is actually thrashing rather than picking a victim at
+# random after the machine is already wedged.
+#
+# If oomd ever kills something you wanted to keep, tune the cgroup's
+# ManagedOOMMemoryPressureLimit instead of masking it again.
+if command -v systemctl >/dev/null 2>&1; then
+    if ! systemctl is-active --quiet systemd-oomd 2>/dev/null; then
+        sudo systemctl start systemd-oomd.socket 2>/dev/null || true
+    fi
 fi
 
 resolve_wan2gp_paths
@@ -288,7 +303,6 @@ cd "$APP_DIR" || exit 1
 
 # Resolve Python environment
 PYTHON_BIN="${WAN2GP_PYTHON:-}"
-[ -z "$PYTHON_BIN" ] && [ -x "X:/WAN2GP/conda_envs/wan2gp/python.exe" ] && PYTHON_BIN="X:/WAN2GP/conda_envs/wan2gp/python.exe"
 [ -z "$PYTHON_BIN" ] && [ -x "$APP_DIR/venv/Scripts/python.exe" ] && PYTHON_BIN="$APP_DIR/venv/Scripts/python.exe"
 [ -z "$PYTHON_BIN" ] && [ -x "$APP_DIR/venv/bin/python" ] && PYTHON_BIN="$APP_DIR/venv/bin/python"
 if [ -z "$PYTHON_BIN" ] || [ ! -x "$PYTHON_BIN" ]; then
@@ -345,4 +359,10 @@ echo -e "  Python:            \033[1;36m$PYTHON_BIN\033[0m\n"
 export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
 export CUDA_VISIBLE_DEVICES="0"
 
-"$PYTHON_BIN" wgp.py --multiple-images --advanced --listen --profile "$PROFILE" --attention sage --output-dir "$WAN_OUTPUT_DIR"
+# `--listen` exposes the Gradio UI to the whole LAN with no login. That is a
+# deliberate choice, so it is now opt-in via WAN2GP_LISTEN=1.
+WAN2GP_LISTEN_ARGS=()
+if [ "${WAN2GP_LISTEN:-0}" = "1" ]; then
+    WAN2GP_LISTEN_ARGS=(--listen)
+fi
+"$PYTHON_BIN" wgp.py --multiple-images --advanced "${WAN2GP_LISTEN_ARGS[@]}" --profile "$PROFILE" --attention sage --output-dir "$WAN_OUTPUT_DIR"

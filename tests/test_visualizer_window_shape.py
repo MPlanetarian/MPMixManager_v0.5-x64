@@ -8,6 +8,7 @@ matching shape, the radius, and the cases that must stay rectangular.
 """
 from __future__ import annotations
 
+import ctypes
 import sys
 import unittest
 from pathlib import Path
@@ -21,6 +22,7 @@ for _p in (ROOT, ROOT / "scripts"):
 import liquid_glass_opengl
 import liquid_glass_vulkan
 import liquid_player_visualizer
+import mp_liquid_visualizer_metal
 import mp_liquid_visualizer_vulkan
 import visualizer_window_shape
 
@@ -36,6 +38,16 @@ class TestSharedRadius(unittest.TestCase):
         opengl = liquid_player_visualizer.LiquidVisualizerOpenGLRenderer("cosmic_dreamworlds_liquid")
         self.assertEqual(vulkan._shaper.radius, visualizer_window_shape.DEFAULT_CORNER_RADIUS)
         self.assertEqual(opengl._shaper.radius, visualizer_window_shape.DEFAULT_CORNER_RADIUS)
+
+    def test_the_metal_backend_owns_a_shaper_too(self):
+        """macOS used Metal for the standalone visualizer and never shaped it.
+
+        The player paints its glass into a 36 px rounded rectangle, so a square
+        Metal window showed its own corners through the player's cut-aways.
+        """
+        metal = mp_liquid_visualizer_metal.LiquidVisualizerMetalRenderer(
+            "cosmic_dreamworlds_liquid")
+        self.assertEqual(metal._shaper.radius, visualizer_window_shape.DEFAULT_CORNER_RADIUS)
 
 
 class TestShaperGeometry(unittest.TestCase):
@@ -133,6 +145,21 @@ class TestShaperGeometry(unittest.TestCase):
         with patch.object(shaper, "_apply_x11") as apply_x11:
             self.assertTrue(shaper.apply(width=800, height=600, enabled=True, x11_window=1234))
             apply_x11.assert_not_called()
+
+    def test_dead_window_probe_returns_none_instead_of_aborting(self):
+        """XGetGeometry on a dead id raises BadWindow, which exits Xlib by default."""
+        shaper = visualizer_window_shape.RoundedWindowShaper(36)
+        if not shaper._ensure_x11():
+            self.skipTest("no X11")
+        x11 = ctypes.CDLL("libX11.so.6")
+        x11.XOpenDisplay.restype = ctypes.c_void_p
+        x11.XOpenDisplay.argtypes = [ctypes.c_char_p]
+        display = x11.XOpenDisplay(None)
+        if not display:
+            self.skipTest("no X display")
+        # The important part is that this returns rather than killing the
+        # process through Xlib's default error handler.
+        self.assertIsNone(shaper._x11_geometry(display, 0x0BADF00D))
 
     def test_windows_region_uses_the_player_radius(self):
         """SetWindowRgn gets a 2×36 px diameter, the same as the player's mask."""
@@ -234,6 +261,75 @@ class TestOpenGLVisualizerShapesItsWindow(unittest.TestCase):
         source = Path(liquid_player_visualizer.__file__).read_text(encoding="utf-8")
         # Once on open, once per draw so a resize or mode switch is covered.
         self.assertGreaterEqual(source.count("self._apply_window_shape()"), 2)
+
+
+class TestMetalVisualizerShapesItsWindow(unittest.TestCase):
+    """macOS runs the standalone visualizer on Metal, which had no rounding.
+
+    The player's glass is a 36 px rounded rectangle. A square Metal window
+    behind it showed its own corners through the player's cut-aways, so the
+    Metal backend now applies the same mask the other two backends use.
+    """
+
+    def _renderer(self):
+        renderer = mp_liquid_visualizer_metal.LiquidVisualizerMetalRenderer(
+            "cosmic_dreamworlds_liquid")
+        return renderer
+
+    def test_metal_renderer_exposes_the_shape_hooks(self):
+        renderer = self._renderer()
+        for name in ("cocoa_window", "_apply_window_shape"):
+            self.assertTrue(callable(getattr(renderer, name)), name)
+
+    def test_metal_shape_is_applied_on_open_and_every_poll(self):
+        source = Path(mp_liquid_visualizer_metal.__file__).read_text(encoding="utf-8")
+        # Once while opening, and once per poll so resize/mode changes follow.
+        self.assertGreaterEqual(source.count("self._apply_window_shape()"), 2)
+
+    def test_metal_window_is_windowed_and_uses_the_player_radius(self):
+        renderer = self._renderer()
+        renderer._window = MagicMock()
+        renderer.width, renderer.height = 1094, 778
+        renderer._shaper = MagicMock()
+        renderer._shaper.apply.return_value = True
+        renderer._apply_window_shape()
+        kwargs = renderer._shaper.apply.call_args.kwargs
+        self.assertTrue(kwargs["enabled"])
+        self.assertEqual((kwargs["width"], kwargs["height"]), (1094, 778))
+
+    def test_metal_fullscreen_and_screensaver_stay_rectangular(self):
+        renderer = self._renderer()
+        renderer._window = MagicMock()
+        renderer._shaper = MagicMock()
+        renderer._shaper.apply.return_value = True
+        for state in ("fullscreen", "screensaver", "saver_bounds"):
+            renderer.is_fullscreen = state == "fullscreen"
+            renderer.screensaver = state == "screensaver"
+            renderer._saver_bounds = (0, 0, 1920, 1080) if state == "saver_bounds" else None
+            renderer._apply_window_shape()
+            self.assertFalse(renderer._shaper.apply.call_args.kwargs["enabled"], state)
+
+    def test_macos_shaper_clears_the_opaque_flags(self):
+        """An opaque NSWindow/CAMetalLayer fills the cut-aways with black.
+
+        The macOS branch is reached only on ``sys.platform == "darwin"``, so
+        pin the calls it makes rather than driving Objective-C here: while the
+        window is shaped, both the NSWindow and the content layer must have
+        their opaque flag cleared, or the rounded corners paint solid black.
+        """
+        source = Path(visualizer_window_shape.__file__).read_text(encoding="utf-8")
+        macos_branch = source.split("def _apply_macos", 1)[1]
+        self.assertIn('send_bool(window, sel(b"setOpaque:"), False)', macos_branch)
+        self.assertIn('send_bool(c_void_p(layer), sel(b"setOpaque:"), False)', macos_branch)
+        # The unshaped rectangle is the only case that goes back to opaque.
+        self.assertIn('send_bool(window, sel(b"setOpaque:"), True)', macos_branch)
+
+    def test_metal_layer_starts_non_opaque(self):
+        """The layer must not be opaque, or the mask has nothing transparent."""
+        source = Path(mp_liquid_visualizer_metal.__file__).read_text(encoding="utf-8")
+        self.assertIn('objc.send(layer, "setOpaque:", c_int(0)', source)
+        self.assertIn('objc.send(nswindow, "setOpaque:", c_int(0)', source)
+        self.assertNotIn('objc.send(layer, "setOpaque:", c_int(1)', source)
 
 
 if __name__ == "__main__":

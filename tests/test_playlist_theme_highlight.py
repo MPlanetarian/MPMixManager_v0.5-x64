@@ -454,7 +454,7 @@ class TestPlaylistThemeHighlight(unittest.TestCase):
             with patch.dict("os.environ", {"MP_LIQUID_GLASS": light} if light else {}, clear=False):
                 if not light:
                     os.environ.pop("MP_LIQUID_GLASS", None)
-                for test_theme in ("dreamworlds_ultra", "sensorium_interface", "cosmic_supernova",
+                for test_theme in ("dreamworlds_ultra", "sensorium", "cosmic_supernova",
                                    "retro_terminal", "stream_of_frequency"):
                     ui.visualizer.theme = test_theme
                     captured_lines = []

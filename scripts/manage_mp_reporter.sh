@@ -31,13 +31,15 @@ safe_clear() {
 }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-MP_REPORTER_DIR="/var/home/mplanetarian/MP_REPORTER"
+MP_REPORTER_DIR="${MP_REPORTER_DIR:-$HOME/MP_REPORTER}"
 TASKS_DIR="${MP_REPORTER_DIR}/tasks"
 EMAIL_CONFIG="${MP_REPORTER_DIR}/email_config.env"
 REPORTER_SH="${MP_REPORTER_DIR}/MP_Reporter.sh"
 CALENDAR_PY="${SCRIPT_DIR}/scripts/mp_reports_calendar.py"
 GEN_PY="${SCRIPT_DIR}/scripts/mp_report_generator.py"
 EMAIL_SH="${SCRIPT_DIR}/scripts/mp_email_manager.sh"
+PROGRESS_SH="${SCRIPT_DIR}/scripts/mp_opencode_progress_reporter.sh"
+[ ! -f "$PROGRESS_SH" ] && PROGRESS_SH="$SCRIPT_DIR/mp_opencode_progress_reporter.sh"
 
 press_enter() {
     echo ""
@@ -638,7 +640,7 @@ create_new_report_wizard() {
     # Step 6: Report Script
     echo -e "\n${BOLD}Step 6: Generator Script Path${NC}"
     echo -e "  Presets available:"
-    echo -e "  1) Mix Manager Bridge: /var/home/mplanetarian/Documents/BASH_SCRIPTS/MP_Gen_Mix_Manager_Report.sh ${kind}"
+    echo -e "  1) Mix Manager Bridge: $HOME/Documents/BASH_SCRIPTS/MP_Gen_Mix_Manager_Report.sh ${kind}"
     echo -e "  2) AI Brain Logs Bridge: /var/home/mplanetarian/Documents/BASH_SCRIPTS/MP_Gen_AI_Report.sh"
     echo -e "  3) Custom Script / Command Path"
     read -r -p "Select preset [1-3, default: 1]: " scr_opt || true
@@ -979,6 +981,91 @@ generate_hawking_video_report_menu() {
 }
 
 # ------------------------------------------------------------------------------
+# OPENCODE AGENT PROGRESS BRIEFINGS (TEXT + STEPHEN HAWKING AUDIO)
+# MP Reporter OpenCode progress reporting: every running agent session, every
+# interval, emailed as a text report plus a Hawking voice audio report.
+# ------------------------------------------------------------------------------
+opencode_progress_menu() {
+    while true; do
+        safe_clear
+        echo -e "${BOLD}${MAGENTA}======================================================================${NC}"
+        echo -e "${BOLD}${MAGENTA}      OPENCODE AGENT PROGRESS BRIEFINGS — TEXT & HAWKING AUDIO        ${NC}"
+        echo -e "${BOLD}${MAGENTA}======================================================================${NC}\n"
+        echo -e "  ${DIM}Every interval the MP Reporter walks every running OpenCode agent session${NC}"
+        echo -e "  ${DIM}and emails a text report plus a Stephen Hawking voice audio report.${NC}\n"
+
+        if [ -x "$PROGRESS_SH" ] || [ -f "$PROGRESS_SH" ]; then
+            bash "$PROGRESS_SH" status 2>/dev/null | sed -n '1,20p'
+        else
+            echo -e "  ${RED}Progress reporter not found: ${PROGRESS_SH}${NC}"
+        fi
+        echo ""
+        echo -e "  ${BOLD}${CYAN}1)${NC} Enable / Restart the ${BOLD}10-minute${NC} Briefing Timer"
+        echo -e "  ${BOLD}${CYAN}2)${NC} Change the Briefing Interval ${DIM}(minutes)${NC}"
+        echo -e "  ${BOLD}${CYAN}3)${NC} Disable the Briefing Timer"
+        echo -e "  ${BOLD}${CYAN}4)${NC} Send a Briefing Right Now ${DIM}(force dispatch)${NC}"
+        echo -e "  ${BOLD}${CYAN}5)${NC} Preview the Text Report ${DIM}(no email)${NC}"
+        echo -e "  ${BOLD}${CYAN}6)${NC} Test Build Text + Audio ${DIM}(dry run, no email)${NC}"
+        echo -e "  ${BOLD}${CYAN}7)${NC} View Recent Briefing Log Entries"
+        echo -e "  ${BOLD}${CYAN}0)${NC} Return to Reports Menu\n"
+
+        read -r -p "Enter choice [0-7]: " op_ch || true
+        case "$op_ch" in
+            1)
+                bash "$PROGRESS_SH" enable
+                press_enter
+                ;;
+            2)
+                local cur
+                cur=$(grep -E '^OPENCODE_PROGRESS_INTERVAL_MINUTES=' "$EMAIL_CONFIG" 2>/dev/null | cut -d= -f2 | tr -d '"' || true)
+                echo -e "\nCurrent interval: ${CYAN}${cur:-10}${NC} minute(s)"
+                read -r -p "New interval in minutes [10]: " new_min || true
+                new_min="${new_min:-10}"
+                if [[ "$new_min" =~ ^[0-9]+$ ]] && [ "$new_min" -ge 1 ]; then
+                    if grep -qE '^OPENCODE_PROGRESS_INTERVAL_MINUTES=' "$EMAIL_CONFIG" 2>/dev/null; then
+                        sed -i "s/^OPENCODE_PROGRESS_INTERVAL_MINUTES=.*/OPENCODE_PROGRESS_INTERVAL_MINUTES=\"${new_min}\"/" "$EMAIL_CONFIG"
+                    else
+                        printf '\nOPENCODE_PROGRESS_INTERVAL_MINUTES="%s"\n' "$new_min" >> "$EMAIL_CONFIG"
+                    fi
+                    bash "$PROGRESS_SH" enable "$new_min"
+                    echo -e "${GREEN}Briefing interval set to ${new_min} minute(s).${NC}"
+                else
+                    echo -e "${RED}Invalid interval; enter a whole number of minutes.${NC}"
+                fi
+                press_enter
+                ;;
+            3)
+                bash "$PROGRESS_SH" disable
+                press_enter
+                ;;
+            4)
+                bash "$PROGRESS_SH" force
+                press_enter
+                ;;
+            5)
+                bash "$PROGRESS_SH" print
+                press_enter
+                ;;
+            6)
+                bash "$PROGRESS_SH" dry-run
+                press_enter
+                ;;
+            7)
+                bash "$PROGRESS_SH" log 40
+                press_enter
+                ;;
+            0|[qQ])
+                return 0
+                ;;
+            *)
+                echo -e "${RED}Invalid choice!${NC}"
+                sleep 1
+                ;;
+        esac
+    done
+}
+
+# ------------------------------------------------------------------------------
 # MAIN INTERACTIVE MENU LOOP
 # ------------------------------------------------------------------------------
 main_menu() {
@@ -1009,17 +1096,19 @@ main_menu() {
         echo ""
         echo -e "  ${BOLD}EMAIL AUTOMATION & DASHBOARDS:${NC}"
         echo -e "  ${BOLD}${CYAN}8)${NC} Automated Daily Email Briefing & SMTP Settings   ${DIM}(Test build, SMTP auth, timer)${NC}"
-        echo -e "  ${BOLD}${CYAN}9)${NC} Multi-Archive Statistics Dashboard               ${DIM}(SOF_Archive_Stats.sh)${NC}"
-        echo -e "  ${BOLD}${CYAN}10)${NC} Master Tracklist HTML & Multi-Folder Statistics ${DIM}(Tracklist analyzer)${NC}"
-        echo -e "  ${BOLD}${CYAN}11)${NC} Advanced Math Formulas & Predictive Analytics   ${DIM}(Skew, Kurtosis, Entropy, Holt)${NC}"
-        echo -e "  ${BOLD}${CYAN}12)${NC} Continuous User Operations Telemetry Log        ${DIM}(Live activity & workflow tracking)${NC}"
-        echo -e "  ${BOLD}${CYAN}13)${NC} View / Inspect MP_Error.log                     ${DIM}(Error logging audit)${NC}"
-        echo -e "  ${BOLD}${CYAN}14)${NC} Launch Standalone MP Reporter Menu              ${DIM}(Full MP_Reporter.sh CLI)${NC}"
-        echo -e "  ${BOLD}${CYAN}15)${NC} Stephen Hawking Video Reports                   ${DIM}(WAN2GP Infinite Talk AI Generation)${NC}"
+        echo -e "  ${BOLD}${CYAN}9)${NC} OpenCode Agent Progress Briefings              ${DIM}(Text + Hawking audio every 10 min)${NC}"
+        echo -e "  ${BOLD}${CYAN}10)${NC} Multi-Archive Statistics Dashboard               ${DIM}(SOF_Archive_Stats.sh)${NC}"
+        echo -e "  ${BOLD}${CYAN}11)${NC} Master Tracklist HTML & Multi-Folder Statistics ${DIM}(Tracklist analyzer)${NC}"
+        echo -e "  ${BOLD}${CYAN}12)${NC} Advanced Math Formulas & Predictive Analytics   ${DIM}(Skew, Kurtosis, Entropy, Holt)${NC}"
+        echo -e "  ${BOLD}${CYAN}13)${NC} Continuous User Operations Telemetry Log        ${DIM}(Live activity & workflow tracking)${NC}"
+        echo -e "  ${BOLD}${CYAN}14)${NC} View / Inspect MP_Error.log                     ${DIM}(Error logging audit)${NC}"
+        echo -e "  ${BOLD}${CYAN}15)${NC} Launch Standalone MP Reporter Menu              ${DIM}(Full MP_Reporter.sh CLI)${NC}"
+        echo -e "  ${BOLD}${CYAN}16)${NC} Stephen Hawking Video Reports                   ${DIM}(WAN2GP Infinite Talk AI Generation)${NC}"
+        echo -e "  ${BOLD}${CYAN}17)${NC} MP Audio Responder & Harmony Voice Control      ${DIM}(Narration service, voice & engine)${NC}"
         echo ""
         echo -e "  ${BOLD}${CYAN}0)${NC} Return to Main Menu ${DIM}(or Esc / q)${NC}\n"
 
-        read -r -p "Enter choice [0-15]: " choice || true
+        read -r -p "Enter choice [0-17]: " choice || true
         case "$choice" in
             1) view_reports_menu ;;
             2) view_calendar_menu ;;
@@ -1050,6 +1139,9 @@ main_menu() {
                 esac
                 ;;
             9)
+                opencode_progress_menu
+                ;;
+            10)
                 echo -e "\n${BOLD}${YELLOW}Loading Multi-Archive Statistics Dashboard...${NC}\n"
                 if [ -x "$SCRIPT_DIR/SOF_Archive_Stats.sh" ]; then
                     "$SCRIPT_DIR/SOF_Archive_Stats.sh"
@@ -1058,7 +1150,7 @@ main_menu() {
                 fi
                 press_enter
                 ;;
-            10)
+            11)
                 safe_clear
                 echo -e "${BOLD}${MAGENTA}======================================================================${NC}"
                 echo -e "${BOLD}${MAGENTA}          MASTER TRACKLIST HTML & MULTI-FOLDER AUDIT                  ${NC}"
@@ -1066,7 +1158,7 @@ main_menu() {
                 python3 "$SCRIPT_DIR/scripts/mp_tracklist_analyzer.py"
                 press_enter
                 ;;
-            11)
+            12)
                 safe_clear
                 echo -e "${BOLD}${MAGENTA}======================================================================${NC}"
                 echo -e "${BOLD}${MAGENTA}    ADVANCED MATHEMATICAL FORMULAS & PREDICTIVE ANALYTICS DASHBOARD   ${NC}"
@@ -1074,7 +1166,7 @@ main_menu() {
                 python3 "$SCRIPT_DIR/scripts/mp_analytics_engine.py"
                 press_enter
                 ;;
-            12)
+            13)
                 safe_clear
                 echo -e "${BOLD}${MAGENTA}======================================================================${NC}"
                 echo -e "${BOLD}${MAGENTA}           CONTINUOUS USER OPERATIONS & ACTIVITY TELEMETRY            ${NC}"
@@ -1082,16 +1174,19 @@ main_menu() {
                 python3 "$SCRIPT_DIR/scripts/mp_activity_tracker.py" --summary daily
                 press_enter
                 ;;
-            13)
+            14)
                 safe_clear
                 bash "$SCRIPT_DIR/scripts/mp_logging.sh" --tail
                 press_enter
                 ;;
-            14)
+            15)
                 bash "$REPORTER_SH" menu
                 ;;
-            15|video|hawking-video|infinite-talk)
+            16|video|hawking-video|infinite-talk)
                 generate_hawking_video_report_menu
+                ;;
+            17|responder|audio-responder|voice)
+                bash "$SCRIPT_DIR/scripts/manage_mp_responder.sh"
                 ;;
             0|[qQ]|[eE][xX][iI][tT])
                 return 0
@@ -1108,8 +1203,15 @@ case "${1:-}" in
     view|view-reports)
         view_reports_menu
         ;;
+    opencode-progress|opencode|progress)
+        opencode_progress_menu
+        ;;
     video|hawking-video|infinite-talk)
         generate_hawking_video_report_menu
+        ;;
+    responder|audio-responder|voice)
+        shift || true
+        bash "$SCRIPT_DIR/scripts/manage_mp_responder.sh" "$@"
         ;;
     calendar|cal|12-months)
         view_calendar_menu
@@ -1138,7 +1240,7 @@ case "${1:-}" in
         main_menu
         ;;
     *)
-        echo "Usage: $(basename "$0") {view|video|calendar|schedule|edit|create|email|run}"
+        echo "Usage: $(basename "$0") {view|video|calendar|schedule|edit|create|email|opencode-progress|responder|run}"
         exit 1
         ;;
 esac

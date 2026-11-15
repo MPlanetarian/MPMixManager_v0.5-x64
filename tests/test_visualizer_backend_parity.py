@@ -39,25 +39,56 @@ class TestVisualizerBackendSelection(unittest.TestCase):
         self.assertEqual(visualizer_backend.normalise("bogus"), "auto")
 
     def test_explicit_backend_is_never_probed(self):
-        with patch.object(visualizer_backend, "vulkan_available") as available:
+        with patch.object(visualizer_backend, "nvidia_vulkan_available") as available:
             available.return_value = False
             self.assertEqual(visualizer_backend.resolve("vulkan"), "vulkan")
             self.assertEqual(visualizer_backend.resolve("opengl"), "opengl")
 
-    def test_auto_prefers_vulkan_when_a_driver_exists(self):
+    def test_auto_prefers_vulkan_on_nvidia(self):
         with patch.object(visualizer_backend, "configured_backend", return_value="auto"), \
-             patch.object(visualizer_backend, "vulkan_available", return_value=True):
+             patch.object(visualizer_backend, "nvidia_vulkan_available", return_value=True):
             self.assertEqual(visualizer_backend.resolve(), "vulkan")
 
-    def test_auto_falls_back_to_opengl_without_a_driver(self):
+    def test_auto_falls_back_to_opengl_without_nvidia(self):
         with patch.object(visualizer_backend, "configured_backend", return_value="auto"), \
-             patch.object(visualizer_backend, "vulkan_available", return_value=False):
+             patch.object(visualizer_backend, "nvidia_vulkan_available", return_value=False):
             self.assertEqual(visualizer_backend.resolve(), "opengl")
 
     def test_configured_player_backend_is_honoured(self):
         with patch.object(visualizer_backend, "configured_backend", return_value="opengl"), \
-             patch.object(visualizer_backend, "vulkan_available", return_value=True):
+             patch.object(visualizer_backend, "nvidia_vulkan_available", return_value=True):
             self.assertEqual(visualizer_backend.resolve(), "opengl")
+
+    def test_recommended_backend_is_vulkan_only_for_nvidia(self):
+        with patch.object(visualizer_backend, "nvidia_vulkan_available", return_value=True):
+            self.assertEqual(visualizer_backend.recommended_backend(), "vulkan")
+        with patch.object(visualizer_backend, "nvidia_vulkan_available", return_value=False):
+            self.assertEqual(visualizer_backend.recommended_backend(), "opengl")
+
+    def test_set_config_backend_replaces_the_key_in_place(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.env"
+            path.write_text(
+                '# keep this comment\nLIQUID_GLASS_BACKEND="opengl"\nOTHER="1"\n',
+                encoding="utf-8",
+            )
+            self.assertTrue(visualizer_backend.set_config_backend(path, "vulkan"))
+            text = path.read_text(encoding="utf-8")
+            self.assertIn('LIQUID_GLASS_BACKEND="vulkan"', text)
+            self.assertIn("# keep this comment", text)
+            self.assertIn('OTHER="1"', text)
+            self.assertEqual(text.count("LIQUID_GLASS_BACKEND="), 1)
+            # Writing the same value again is a no-op.
+            self.assertFalse(visualizer_backend.set_config_backend(path, "vulkan"))
+
+    def test_set_config_backend_appends_when_the_key_is_absent(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.env"
+            path.write_text('OTHER="1"\n', encoding="utf-8")
+            self.assertTrue(visualizer_backend.set_config_backend(path, "vulkan"))
+            self.assertIn('LIQUID_GLASS_BACKEND="vulkan"', path.read_text(encoding="utf-8"))
 
     def test_renderer_class_mapping(self):
         self.assertIs(
@@ -78,6 +109,46 @@ class TestVisualizerBackendSelection(unittest.TestCase):
                 os.environ.pop("LIQUID_GLASS_BACKEND", None)
                 os.environ.pop("VISUALIZER_BACKEND", None)
                 self.assertEqual(visualizer_backend.configured_backend(path), "vulkan")
+
+
+class TestVulkanProbe(unittest.TestCase):
+    """The probe must actually enumerate devices.
+
+    ``vkEnumeratePhysicalDevices`` is an instance command. The original probe
+    looked it up through ``vkGetInstanceProcAddr(NULL, ...)``, which returns
+    nothing, so every Linux machine reported "no Vulkan" and the installer
+    quietly fell back to OpenGL even with a working NVIDIA driver.
+    """
+
+    def test_probe_finds_devices_on_this_host_when_vulkaninfo_does(self):
+        import shutil
+        import subprocess
+
+        if not shutil.which("vulkaninfo"):
+            self.skipTest("vulkaninfo is not installed")
+        probe = subprocess.run(
+            ["vulkaninfo", "--summary"], capture_output=True, text=True
+        )
+        has_device = "deviceName" in probe.stdout
+        self.assertEqual(
+            visualizer_backend.vulkan_available(),
+            has_device,
+            "the probe and vulkaninfo disagree about whether a GPU exists",
+        )
+
+    def test_nvidia_vendor_id_is_recognised(self):
+        fake = [
+            {"vendor_id": 0x10DE, "device_type": 2, "name": "NVIDIA GeForce RTX 3080"},
+            {"vendor_id": 0x10005, "device_type": 4, "name": "llvmpipe"},
+        ]
+        with patch.object(visualizer_backend, "vulkan_devices", return_value=fake):
+            self.assertTrue(visualizer_backend.nvidia_vulkan_available())
+
+    def test_software_renderer_does_not_count_as_nvidia(self):
+        fake = [{"vendor_id": 0x10005, "device_type": 4, "name": "llvmpipe"}]
+        with patch.object(visualizer_backend, "vulkan_devices", return_value=fake):
+            self.assertFalse(visualizer_backend.nvidia_vulkan_available())
+            self.assertEqual(visualizer_backend.recommended_backend(), "opengl")
 
 
 class TestInWindowVisualizerOnBothBackends(unittest.TestCase):
@@ -122,6 +193,18 @@ class TestInWindowVisualizerOnBothBackends(unittest.TestCase):
         renderer._shape_size = (640, 480)
         renderer._pipeline = 999
         renderer._ubo = 555
+        # State the glass pass touches after the visualizer has drawn. It is
+        # irrelevant to this test (which asserts pipeline binding) but the code
+        # path reads it, so it has to exist.
+        renderer._layout = 700
+        renderer._layout_sets = 1
+        renderer._dset = 701
+        renderer.panels = ()
+        renderer.premultiplied = True
+        renderer.bezel_px = 7
+        renderer.radius_px = 36
+        renderer.cursor = (0.0, 0.0)
+        renderer._start = 0.0
         for name in ("WaitForFences", "ResetFences", "ResetCommandBuffer", "BeginCommandBuffer",
                      "EndCommandBuffer", "QueueSubmit", "QueuePresentKHR"):
             getattr(renderer._vk, name).return_value = 0
@@ -145,8 +228,17 @@ class TestInWindowVisualizerOnBothBackends(unittest.TestCase):
         renderer.window_size = lambda: (640, 480)
         renderer._visualizer_state = lambda: {"active": True, "preset_id": 3}
         renderer.sync_player_visualizer_opacity = MagicMock()
+        # This test asserts which pipeline is bound, not how the uniform buffer
+        # is uploaded. Stub the upload so the assertion is about its subject
+        # instead of about a fully constructed Vulkan device.
+        renderer._write_ubo = MagicMock()
 
-        liquid_glass_vulkan.LiquidGlassRenderer.draw(renderer, "dreamworlds_ultra")
+        # `draw` deliberately skips the in-window visualizer on Linux, because
+        # there the visualizer is its own bonded window. This test is about the
+        # non-Linux in-window path, so it has to say so explicitly; otherwise
+        # it silently asserts nothing on a Linux runner.
+        with patch.object(liquid_glass_vulkan.sys, "platform", "darwin"):
+            liquid_glass_vulkan.LiquidGlassRenderer.draw(renderer, "dreamworlds_ultra")
 
         self.assertEqual(len(calls), 1, "the visualizer must draw once")
         bound = [call.args[2] for call in renderer._vk.CmdBindPipeline.call_args_list]

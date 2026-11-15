@@ -12,6 +12,7 @@ import unittest
 import subprocess
 import re
 from pathlib import Path
+from tests.mp_test_bash import BASH
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -42,7 +43,7 @@ class TestMainHeaderPanelAlignment(unittest.TestCase):
         done
         """
         proc = subprocess.run(
-            ["bash", "-c", bash_script],
+            [BASH, "-c", bash_script],
             cwd=str(BASE_DIR),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -89,7 +90,7 @@ class TestMainHeaderPanelAlignment(unittest.TestCase):
         done
         """
         proc = subprocess.run(
-            ["bash", "-c", bash_script],
+            [BASH, "-c", bash_script],
             cwd=str(BASE_DIR),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,

@@ -2,23 +2,22 @@
 "true" '''\'
 # Self-executing Python wrapper using the WAN2GP virtual environment
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-for _cfg in "$SCRIPT_DIR/config.env" "$SCRIPT_DIR/../config.env" "$PWD/config.env" "/x/MP_Mix_Manager_v0.3/config.env" "X:/MP_Mix_Manager_v0.3/config.env" "$HOME/MP_Mix_Manager_v0.3/config.env"; do
+for _cfg in "${MP_CONFIG:-}" "$HOME/.config/mix-manager/config.env" "$SCRIPT_DIR/config.env" "$SCRIPT_DIR/../config.env"; do
     if [ -f "$_cfg" ]; then
         source "$_cfg" 2>/dev/null || true
         break
     fi
 done
 
-# Resolve WAN2GP App Root
+# Resolve WAN2GP App Root. The only paths considered are the configured one and
+# conventional locations under the current user's home, so this works on any
+# machine instead of only the one it was written on.
 APP_DIR="${WAN2GP_DIR:-}"
-[ -z "$APP_DIR" ] && [ -d "X:/WAN2GP/Wan2GP" ] && APP_DIR="X:/WAN2GP/Wan2GP"
-[ -z "$APP_DIR" ] && [ -d "D:/WAN2GP/Wan2GP" ] && APP_DIR="D:/WAN2GP/Wan2GP"
-[ -z "$APP_DIR" ] && [ -d "/var/home/mplanetarian/pinokio/api/wan.git/app" ] && APP_DIR="/var/home/mplanetarian/pinokio/api/wan.git/app"
 [ -z "$APP_DIR" ] && [ -d "$HOME/pinokio/api/wan.git/app" ] && APP_DIR="$HOME/pinokio/api/wan.git/app"
+[ -z "$APP_DIR" ] && [ -d "$HOME/WAN2GP/Wan2GP" ] && APP_DIR="$HOME/WAN2GP/Wan2GP"
 
 # Resolve Python environment
 VENV_PYTHON="${WAN2GP_PYTHON:-}"
-[ -z "$VENV_PYTHON" ] && [ -x "/run/media/mplanetarian/DATA2_1TB/pinokio/api/wan.git/app/venv/bin/python" ] && VENV_PYTHON="/run/media/mplanetarian/DATA2_1TB/pinokio/api/wan.git/app/venv/bin/python"
 [ -z "$VENV_PYTHON" ] && [ -x "$APP_DIR/venv/bin/python" ] && VENV_PYTHON="$APP_DIR/venv/bin/python"
 [ -z "$VENV_PYTHON" ] && [ -x "X:/WAN2GP/conda_envs/wan2gp/python.exe" ] && VENV_PYTHON="X:/WAN2GP/conda_envs/wan2gp/python.exe"
 [ -z "$VENV_PYTHON" ] && [ -x "$APP_DIR/venv/Scripts/python.exe" ] && VENV_PYTHON="$APP_DIR/venv/Scripts/python.exe"
@@ -50,6 +49,8 @@ fi
 
 exec "$VENV_PYTHON" "$0" "$@"
 '''
+
+from __future__ import annotations
 
 import argparse
 import gc
@@ -100,41 +101,28 @@ def load_config_env():
 
 load_config_env()
 
-# Default directories
-PRIMARY_DATA_DIR = Path("D:/DATA_DRIVE_MOVED")
-FALLBACK_DATA_DIR = Path("/run/media/mplanetarian/GAMES1/DATA_DRIVE_MOVED")
-DATA_DIR = PRIMARY_DATA_DIR if PRIMARY_DATA_DIR.exists() else FALLBACK_DATA_DIR
+# Shared WAN2GP path resolver (scripts/lib/wan2gp_runtime.py).
+sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
+try:
+    import wan2gp_runtime
+except ImportError:  # installed flat, beside this script
+    import importlib.util as _ilu
+    _spec = _ilu.spec_from_file_location(
+        "wan2gp_runtime", Path(__file__).resolve().parent / "lib" / "wan2gp_runtime.py"
+    )
+    wan2gp_runtime = _ilu.module_from_spec(_spec)
+    _spec.loader.exec_module(wan2gp_runtime)
 
-BATCH_DIR = Path(os.environ.get("WAN2GP_LTX_BATCH_DIR", DATA_DIR / "WAN2GP_LTX_BATCH"))
+# Default directories: resolved from configuration and the user's home, never
+# from a path belonging to the machine the script was written on.
+OUTPUT_DIR = wan2gp_runtime.outputs_dir()
+DATA_DIR = OUTPUT_DIR.parent
+BATCH_DIR = wan2gp_runtime.ltx_batch_dir()
 CTRL_VIDEO_DIR = BATCH_DIR / "CTRL_VIDEO"
 PROCESSED_DIR = BATCH_DIR / "PROCESSED"
 
-env_output = os.environ.get("WAN2GP_OUTPUTS")
-if env_output:
-    OUTPUT_DIR = Path(env_output)
-elif (DATA_DIR / "WAN2GP_OUTPUTS").exists():
-    OUTPUT_DIR = DATA_DIR / "WAN2GP_OUTPUTS"
-elif Path("D:/DATA_DRIVE_MOVED/WAN2GP_OUTPUTS").exists():
-    OUTPUT_DIR = Path("D:/DATA_DRIVE_MOVED/WAN2GP_OUTPUTS")
-elif Path("/run/media/mplanetarian/GAMES1/DATA_DRIVE_MOVED/WAN2GP_OUTPUTS").exists():
-    OUTPUT_DIR = Path("/run/media/mplanetarian/GAMES1/DATA_DRIVE_MOVED/WAN2GP_OUTPUTS")
-else:
-    OUTPUT_DIR = DATA_DIR / "WAN2GP_OUTPUTS"
-
-# WAN2GP constants
-wan_root_candidate = os.environ.get("WAN2GP_DIR")
-if wan_root_candidate and Path(wan_root_candidate).exists():
-    WAN_APP_ROOT = Path(wan_root_candidate)
-elif Path("X:/WAN2GP/Wan2GP").exists():
-    WAN_APP_ROOT = Path("X:/WAN2GP/Wan2GP")
-elif Path("D:/WAN2GP/Wan2GP").exists():
-    WAN_APP_ROOT = Path("D:/WAN2GP/Wan2GP")
-elif Path("/var/home/mplanetarian/pinokio/api/wan.git/app").exists():
-    WAN_APP_ROOT = Path("/var/home/mplanetarian/pinokio/api/wan.git/app")
-elif (Path.home() / "pinokio/api/wan.git/app").exists():
-    WAN_APP_ROOT = Path.home() / "pinokio/api/wan.git/app"
-else:
-    WAN_APP_ROOT = Path("X:/WAN2GP/Wan2GP")
+# WAN2GP constants (shared resolver)
+WAN_APP_ROOT = wan2gp_runtime.app_root() or Path.home()
 
 SAFE_PROFILE = "4.5"
 ATTENTION_MODE = "sage"
@@ -645,7 +633,7 @@ def check_and_resolve_running_server():
                 print(f"{CYAN}[*] Stopping existing WAN2GP instance...{RESET}")
                 stop_script = Path(__file__).resolve().parent / "wan2gp.sh"
                 if not stop_script.exists():
-                    stop_script = Path("/var/home/mplanetarian/wan2gp.sh")
+                    stop_script = wan2gp_runtime.stop_script()
                 if stop_script.exists() and shutil.which("bash"):
                     subprocess.run(["bash", str(stop_script), "stop"], check=False)
                 elif shutil.which("pkill"):

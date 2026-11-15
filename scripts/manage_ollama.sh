@@ -44,7 +44,10 @@ if [ "$OS_TYPE" = "linux" ]; then
 fi
 
 OLLAMA_CONTAINER="${OLLAMA_CONTAINER:-ollama-container}"
-OLLAMA_HOST="${OLLAMA_HOST:-0.0.0.0}"
+# Windows data root. Defaults to the conventional per-user location; the old
+# X:\OLLAMA literal only worked on one machine and silently failed elsewhere.
+OLLAMA_WIN_ROOT="${OLLAMA_HOME:-${LOCALAPPDATA:-$HOME}/Ollama}"
+OLLAMA_HOST="${OLLAMA_HOST:-127.0.0.1}"
 OLLAMA_PORT="${OLLAMA_PORT:-11434}"
 if [[ "$OLLAMA_HOST" =~ :[0-9]+$ ]]; then
     OLLAMA_PORT="${OLLAMA_HOST##*:}"
@@ -76,22 +79,22 @@ if [ "$OS_TYPE" = "windows" ]; then
         OLLAMA_BIN="ollama.exe"
     fi
 
-    for b_cand in "X:/OLLAMA/start_ollama.bat" "X:\OLLAMA\start_ollama.bat" "X:/STARTAI/start_ollama.bat"; do
-        if [ -f "$b_cand" ]; then
+    for b_cand in "$OLLAMA_WIN_ROOT/start_ollama.bat" "$(cygpath -w "$OLLAMA_WIN_ROOT/start_ollama.bat" 2>/dev/null || true)"; do
+        if [ -n "$b_cand" ] && [ -f "$b_cand" ]; then
             OLLAMA_START_BAT="$b_cand"
             break
         fi
     done
 
-    export OLLAMA_MODELS="${OLLAMA_MODELS:-X:\OLLAMA\models}"
-    export OLLAMA_ORIGINS="${OLLAMA_ORIGINS:-*}"
-    LOG_FILE="X:/OLLAMA/ollama-serve.log"
+    export OLLAMA_MODELS="${OLLAMA_MODELS:-$LOCALAPPDATA/Ollama/models}"
+    export OLLAMA_ORIGINS="${OLLAMA_ORIGINS:-http://127.0.0.1,http://localhost}"
+    LOG_FILE="$OLLAMA_WIN_ROOT/ollama-serve.log"
 else
     LOG_FILE="/tmp/ollama-serve.log"
 fi
 
 # Locate MP Harmony Agent Audio Speech Archive directory (Unified across Ollama and Harmony Agent)
-HARMONY_DIR="${HARMONY_DIR:-/var/home/mplanetarian/OpenAI/MP_Harmony_Agent}"
+HARMONY_DIR="${HARMONY_DIR:-$HOME/OpenAI/MP_Harmony_Agent}"
 if [ ! -d "$HARMONY_DIR" ] && [ -d "$HOME/OpenAI/MP_Harmony_Agent" ]; then
     HARMONY_DIR="$HOME/OpenAI/MP_Harmony_Agent"
 elif [ ! -d "$HARMONY_DIR" ] && [ -d "$HOME/OpenAI/Harmony_Agent" ]; then
@@ -99,7 +102,7 @@ elif [ ! -d "$HARMONY_DIR" ] && [ -d "$HOME/OpenAI/Harmony_Agent" ]; then
 fi
 
 HARMONY_AUDIO_DIR="$HARMONY_DIR/audio_responses"
-VOICE_AI_AUDIO_DIR_FALLBACK="/var/home/mplanetarian/voice-ai/audio_responses"
+VOICE_AI_AUDIO_DIR_FALLBACK="$HOME/voice-ai/audio_responses"
 [ ! -d "$VOICE_AI_AUDIO_DIR_FALLBACK" ] && [ -d "$HOME/voice-ai/audio_responses" ] && VOICE_AI_AUDIO_DIR_FALLBACK="$HOME/voice-ai/audio_responses"
 
 if [ -n "${OLLAMA_AUDIO_DIR:-}" ]; then
@@ -135,6 +138,17 @@ ensure_vroc_mounted() {
             udisksctl mount -b /dev/md126p2 >/dev/null 2>&1 || true
         fi
     fi
+}
+
+# The cloned Matrix voices are rendered by the XTTS service. It reserves about
+# 4 GB of VRAM, so it is not started by default; without it those voices fall
+# back to Stephen Hawking, which is synthesised locally.
+_xtts_running() {
+    local url="${XTTS_URL:-http://127.0.0.1:8020}"
+    if command -v curl >/dev/null 2>&1; then
+        curl -s --connect-timeout 1 "${url}/health" >/dev/null 2>&1 && return 0
+    fi
+    return 1
 }
 
 is_ollama_running() {
@@ -192,16 +206,16 @@ start_ollama_bg() {
     fi
 
     if [ "$OS_TYPE" = "windows" ]; then
-        export OLLAMA_MODELS="${OLLAMA_MODELS:-X:\OLLAMA\models}"
-        export OLLAMA_ORIGINS="${OLLAMA_ORIGINS:-*}"
+        export OLLAMA_MODELS="${OLLAMA_MODELS:-$LOCALAPPDATA/Ollama/models}"
+        export OLLAMA_ORIGINS="${OLLAMA_ORIGINS:-http://127.0.0.1,http://localhost}"
         export OLLAMA_HOST="${OLLAMA_BIND}"
         export OLLAMA_FLASH_ATTENTION="1"
         export OLLAMA_KV_CACHE_TYPE="q8_0"
         export OLLAMA_CONTEXT_LENGTH="32768"
-        [ -d "X:/OLLAMA/models" ] || mkdir -p "X:/OLLAMA/models" 2>/dev/null || true
-        [ -d "X:/OLLAMA" ] || mkdir -p "X:/OLLAMA" 2>/dev/null || true
+        local ollama_home="${OLLAMA_HOME:-$LOCALAPPDATA/Ollama}"
+        [ -d "$ollama_home/models" ] || mkdir -p "$ollama_home/models" 2>/dev/null || true
 
-        local bg_bat="X:/OLLAMA/start_ollama_bg.bat"
+        local bg_bat="$ollama_home/start_ollama_bg.bat"
         local win_bin win_models win_log win_err
         win_bin="$(cygpath -w "$OLLAMA_BIN" 2>/dev/null || echo "$OLLAMA_BIN")"
         win_models="$(cygpath -w "$OLLAMA_MODELS" 2>/dev/null || echo "$OLLAMA_MODELS")"
@@ -211,7 +225,7 @@ start_ollama_bg() {
         cat << EOFBAT > "$bg_bat"
 @echo off
 set OLLAMA_MODELS=${win_models}
-set OLLAMA_ORIGINS=*
+set OLLAMA_ORIGINS=${OLLAMA_ORIGINS}
 set OLLAMA_HOST=${OLLAMA_BIND}
 set OLLAMA_FLASH_ATTENTION=1
 set OLLAMA_KV_CACHE_TYPE=q8_0
@@ -220,15 +234,17 @@ set OLLAMA_NUM_PARALLEL=1
 set OLLAMA_GPU_OVERHEAD=536870912
 set OLLAMA_VULKAN=0
 if not exist "${win_models}" mkdir "${win_models}"
-cd /d "X:\OLLAMA"
+cd /d "%~dp0"
 "${win_bin}" serve > "${win_log}" 2> "${win_err}"
 EOFBAT
 
         echo -e "Launching 'ollama serve' in background on Windows [listening on ${OLLAMA_BIND}, models in ${OLLAMA_MODELS}]..."
         if command -v powershell.exe >/dev/null 2>&1; then
-            powershell.exe -NoProfile -Command "([wmiclass]'win32_process').Create('cmd.exe /c X:\OLLAMA\start_ollama_bg.bat')" >/dev/null 2>&1 &
+            local win_bat
+            win_bat="$(cygpath -w "$bg_bat" 2>/dev/null || echo "$bg_bat")"
+            powershell.exe -NoProfile -Command "([wmiclass]'win32_process').Create('cmd.exe /c \"$win_bat\"')" >/dev/null 2>&1 &
         else
-            cmd.exe /c start /b "" "X:\OLLAMA\start_ollama_bg.bat" >/dev/null 2>&1 &
+            cmd.exe /c start /b "" "$(cygpath -w "$bg_bat" 2>/dev/null || echo "$bg_bat")" >/dev/null 2>&1 &
         fi
     else
         ensure_container_started
@@ -240,7 +256,7 @@ EOFBAT
             nohup distrobox enter --no-workdir -T "$OLLAMA_CONTAINER" -- env \
                 LD_LIBRARY_PATH="/run/host/usr/lib64:/run/host/usr/lib64/nvidia:\${LD_LIBRARY_PATH:-}" \
                 OLLAMA_HOST="${OLLAMA_BIND}" \
-                OLLAMA_ORIGINS="*" \
+                OLLAMA_ORIGINS="${OLLAMA_ORIGINS:-http://127.0.0.1,http://localhost}" \
                 OLLAMA_FLASH_ATTENTION="1" \
                 OLLAMA_KV_CACHE_TYPE="q8_0" \
                 OLLAMA_CONTEXT_LENGTH="32768" \
@@ -297,11 +313,10 @@ start_ollama_window() {
     fi
 
     if [ "$OS_TYPE" = "windows" ]; then
-        export OLLAMA_MODELS="${OLLAMA_MODELS:-X:\OLLAMA\models}"
-        export OLLAMA_ORIGINS="${OLLAMA_ORIGINS:-*}"
+        export OLLAMA_MODELS="${OLLAMA_MODELS:-$LOCALAPPDATA/Ollama/models}"
+        export OLLAMA_ORIGINS="${OLLAMA_ORIGINS:-http://127.0.0.1,http://localhost}"
         export OLLAMA_HOST="${OLLAMA_BIND}"
-        [ -d "X:/OLLAMA/models" ] || mkdir -p "X:/OLLAMA/models" 2>/dev/null || true
-        [ -d "X:/OLLAMA" ] || mkdir -p "X:/OLLAMA" 2>/dev/null || true
+        [ -d "$OLLAMA_WIN_ROOT/models" ] || mkdir -p "$OLLAMA_WIN_ROOT/models" 2>/dev/null || true
 
         echo -e "Launching Ollama Server in new Windows terminal window..."
         if [ -n "$OLLAMA_START_BAT" ] && [ -f "$OLLAMA_START_BAT" ]; then
@@ -309,7 +324,7 @@ start_ollama_window() {
         else
             local win_bin
             win_bin="$(cygpath -w "$OLLAMA_BIN" 2>/dev/null || echo "$OLLAMA_BIN")"
-            cmd.exe /c start "Ollama Server" cmd.exe /k "set OLLAMA_MODELS=X:\OLLAMA\models && set OLLAMA_ORIGINS=* && set OLLAMA_HOST=${OLLAMA_BIND} && \"$win_bin\" serve" >/dev/null 2>&1 &
+            cmd.exe /c start "Ollama Server" cmd.exe /k "set OLLAMA_MODELS=${OLLAMA_MODELS:-$LOCALAPPDATA/Ollama/models} && set OLLAMA_ORIGINS=${OLLAMA_ORIGINS:-http://127.0.0.1} && set OLLAMA_HOST=${OLLAMA_BIND} && \"$win_bin\" serve" >/dev/null 2>&1 &
         fi
 
         echo -e "Waiting for Ollama to initialize..."
@@ -450,7 +465,7 @@ show_status() {
         [ -n "$LAN_IP" ] && echo -e "  LAN Endpoint:     ${BOLD}${CYAN}http://${LAN_IP}:${OLLAMA_PORT}${NC}"
         if [ "$OS_TYPE" = "windows" ]; then
             echo -e "  HTTP Health:      ${GREEN}HTTP 200 OK (Ollama is running)${NC}"
-            echo -e "  Runtime Backend:  ${GREEN}Native Windows${NC} (Models: ${OLLAMA_MODELS:-X:\OLLAMA\models})"
+            echo -e "  Runtime Backend:  ${GREEN}Native Windows${NC} (Models: ${OLLAMA_MODELS:-$LOCALAPPDATA/Ollama/models})"
             [ -n "$OLLAMA_START_BAT" ] && [ -f "$OLLAMA_START_BAT" ] && echo -e "  Launcher Batch:   ${CYAN}${OLLAMA_START_BAT}${NC}"
         else
             if systemctl --user is-active --quiet ollama-caddy.service 2>/dev/null; then
@@ -464,7 +479,7 @@ show_status() {
         echo -e "  Local Endpoint:   ${BOLD}${CYAN}http://127.0.0.1:${OLLAMA_PORT}${NC} (Offline)"
         [ -n "$LAN_IP" ] && echo -e "  LAN Endpoint:     ${BOLD}${CYAN}http://${LAN_IP}:${OLLAMA_PORT}${NC} (Offline)"
         if [ "$OS_TYPE" = "windows" ]; then
-            echo -e "  Runtime Backend:  ${YELLOW}Native Windows${NC} (Models: ${OLLAMA_MODELS:-X:\OLLAMA\models})"
+            echo -e "  Runtime Backend:  ${YELLOW}Native Windows${NC} (Models: ${OLLAMA_MODELS:-$LOCALAPPDATA/Ollama/models})"
             [ -n "$OLLAMA_START_BAT" ] && [ -f "$OLLAMA_START_BAT" ] && echo -e "  Launcher Batch:   ${CYAN}${OLLAMA_START_BAT}${NC}"
         else
             echo -e "  Container:        ${YELLOW}${OLLAMA_CONTAINER}${NC}"
@@ -504,7 +519,7 @@ show_status() {
         fi
     else
         local found_offline=false
-        local manifest_dir="X:/OLLAMA/models/manifests"
+        local manifest_dir="$OLLAMA_WIN_ROOT/models/manifests"
         [ ! -d "$manifest_dir" ] && [ -n "$OLLAMA_MODELS" ] && manifest_dir="$(cygpath -u "$OLLAMA_MODELS" 2>/dev/null)/manifests"
         [ ! -d "$manifest_dir" ] && [ -d "/run/media/mplanetarian/VROC/OLLAMAMODELS/manifests" ] && manifest_dir="/run/media/mplanetarian/VROC/OLLAMAMODELS/manifests"
         if [ -d "$manifest_dir" ]; then
@@ -548,7 +563,7 @@ run_chat_cli() {
     fi
 
     if [ ${#models[@]} -eq 0 ]; then
-        local manifest_dir="X:/OLLAMA/models/manifests"
+        local manifest_dir="$OLLAMA_WIN_ROOT/models/manifests"
         [ ! -d "$manifest_dir" ] && [ -n "$OLLAMA_MODELS" ] && manifest_dir="$(cygpath -u "$OLLAMA_MODELS" 2>/dev/null)/manifests"
         [ ! -d "$manifest_dir" ] && [ -d "/run/media/mplanetarian/VROC/OLLAMAMODELS/manifests" ] && manifest_dir="/run/media/mplanetarian/VROC/OLLAMAMODELS/manifests"
         if [ -d "$manifest_dir" ]; then
@@ -629,7 +644,7 @@ run_voice_chat_cli() {
     fi
 
     if [ ${#models[@]} -eq 0 ]; then
-        local manifest_dir="X:/OLLAMA/models/manifests"
+        local manifest_dir="$OLLAMA_WIN_ROOT/models/manifests"
         [ ! -d "$manifest_dir" ] && [ -n "$OLLAMA_MODELS" ] && manifest_dir="$(cygpath -u "$OLLAMA_MODELS" 2>/dev/null)/manifests"
         [ ! -d "$manifest_dir" ] && [ -d "/run/media/mplanetarian/VROC/OLLAMAMODELS/manifests" ] && manifest_dir="/run/media/mplanetarian/VROC/OLLAMAMODELS/manifests"
         if [ -d "$manifest_dir" ]; then
@@ -691,23 +706,27 @@ run_voice_chat_cli() {
             *) chosen_voice_name="$chosen_voice" ;;
         esac
     else
-        echo -e "\nSelect a Matrix Voice character (or press Enter for Morpheus):"
-        echo -e "  1) Morpheus (The Matrix - Master) [Default]"
-        echo -e "  2) Morpheus (The Construct - 'What is real?')"
-        echo -e "  3) Morpheus (Red Pill - 'Rabbit Hole')"
-        echo -e "  4) Morpheus (Combat Dojo - 'Free your mind')"
-        echo -e "  5) Morpheus (The System - 'Our enemy')"
-        echo -e "  6) Agent Smith (The Matrix)"
-        echo -e "  7) Neo (The Matrix)"
-        echo -e "  8) Trinity (The Matrix)"
-        echo -e "  9) The Oracle (The Matrix)"
-        echo -e " 10) Zion (Councillor Hamann)"
-        echo -e " 11) Stephen Hawking (Enters the Matrix)"
+        # The cloned Matrix voices need XTTS, which reserves about 4 GB of
+        # VRAM and is off by default, so Hawking is the working default.
+        local _xtts_tag="${DIM}[needs XTTS - off]${NC}"
+        if _xtts_running; then _xtts_tag="${GREEN}[ready]${NC}"; fi
+        echo -e "\nSelect a Matrix Voice character (or press Enter for Stephen Hawking):"
+        echo -e "  1) Morpheus (The Matrix - Master)           ${_xtts_tag}"
+        echo -e "  2) Morpheus (The Construct - 'What is real?') ${_xtts_tag}"
+        echo -e "  3) Morpheus (Red Pill - 'Rabbit Hole')       ${_xtts_tag}"
+        echo -e "  4) Morpheus (Combat Dojo - 'Free your mind') ${_xtts_tag}"
+        echo -e "  5) Morpheus (The System - 'Our enemy')       ${_xtts_tag}"
+        echo -e "  6) Agent Smith (The Matrix)                  ${_xtts_tag}"
+        echo -e "  7) Neo (The Matrix)                          ${_xtts_tag}"
+        echo -e "  8) Trinity (The Matrix)                      ${_xtts_tag}"
+        echo -e "  9) The Oracle (The Matrix)                   ${_xtts_tag}"
+        echo -e " 10) Zion (Councillor Hamann)                  ${_xtts_tag}"
+        echo -e " 11) Stephen Hawking (Enters the Matrix)       ${GREEN}[ready - local]${NC}"
         echo ""
-        read -r -p "Enter voice choice [1-11, Enter=1]: " v_choice
+        read -r -p "Enter voice choice [1-11, Enter=11]: " v_choice
 
-        local chosen_voice="morpheus"
-        local chosen_voice_name="Morpheus (The Matrix - Master)"
+        local chosen_voice="stephen_hawking_matrix"
+        local chosen_voice_name="Stephen Hawking (Enters the Matrix)"
         case "$v_choice" in
             1) chosen_voice="morpheus"; chosen_voice_name="Morpheus (The Matrix - Master)" ;;
             2) chosen_voice="morpheus_construct"; chosen_voice_name="Morpheus (The Construct - 'What is real?')" ;;
@@ -719,8 +738,8 @@ run_voice_chat_cli() {
             8) chosen_voice="trinity"; chosen_voice_name="Trinity (The Matrix)" ;;
             9) chosen_voice="oracle"; chosen_voice_name="The Oracle (The Matrix)" ;;
             10) chosen_voice="zion"; chosen_voice_name="Zion (Councillor Hamann)" ;;
-            11) chosen_voice="stephen_hawking_matrix"; chosen_voice_name="Stephen Hawking (Enters the Matrix)" ;;
-            *) chosen_voice="morpheus"; chosen_voice_name="Morpheus (The Matrix - Master)" ;;
+            11|"") chosen_voice="stephen_hawking_matrix"; chosen_voice_name="Stephen Hawking (Enters the Matrix)" ;;
+            *) chosen_voice="stephen_hawking_matrix"; chosen_voice_name="Stephen Hawking (Enters the Matrix)" ;;
         esac
     fi
 
@@ -729,7 +748,7 @@ run_voice_chat_cli() {
     for cand in \
         "$(command -v local-voice-talk 2>/dev/null)" \
         "$HOME/bin/local-voice-talk" \
-        "/var/home/mplanetarian/bin/local-voice-talk" \
+        "$HOME/bin/local-voice-talk" \
         "$HOME/.local/bin/local-voice-talk"; do
         if [ -n "$cand" ] && [ -x "$cand" ]; then
             voice_bin="$cand"
@@ -737,8 +756,8 @@ run_voice_chat_cli() {
         fi
     done
 
-    local voice_py="/var/home/mplanetarian/voice-ai/local_voice_talk.py"
-    local voice_venv_py="/var/home/mplanetarian/voice-ai/bin/python"
+    local voice_py="$HOME/voice-ai/local_voice_talk.py"
+    local voice_venv_py="$HOME/voice-ai/bin/python"
 
     local pids
     pids=$(get_ollama_pids)
@@ -791,7 +810,7 @@ view_audio_responses() {
     fi
 
     # Sync any recent recordings from voice-ai audio responses directory if present
-    local voice_ai_audio="/var/home/mplanetarian/voice-ai/audio_responses"
+    local voice_ai_audio="$HOME/voice-ai/audio_responses"
     [ ! -d "$voice_ai_audio" ] && [ -d "$HOME/voice-ai/audio_responses" ] && voice_ai_audio="$HOME/voice-ai/audio_responses"
     if [ -d "$voice_ai_audio" ] && [ -d "$AUDIO_DIR" ] && [ "$voice_ai_audio" != "$AUDIO_DIR" ]; then
         cp -u "$voice_ai_audio"/*.wav "$voice_ai_audio"/*.txt "$AUDIO_DIR/" 2>/dev/null || true
@@ -857,7 +876,7 @@ view_logs() {
     local check_logs=()
     if [ "$OS_TYPE" = "windows" ]; then
         [ -n "$LOG_FILE" ] && check_logs+=("${LOG_FILE%.*}.err" "$LOG_FILE")
-        check_logs+=("X:/OLLAMA/ollama-serve.err" "X:/OLLAMA/ollama-serve.log" "/x/OLLAMA/ollama-serve.err" "/x/OLLAMA/ollama-serve.log")
+        check_logs+=("$OLLAMA_WIN_ROOT/ollama-serve.err" "$OLLAMA_WIN_ROOT/ollama-serve.log")
         if [ -n "$LOCALAPPDATA" ]; then
             local u_local
             u_local="$(cygpath -u "$LOCALAPPDATA" 2>/dev/null || echo "$LOCALAPPDATA")"
@@ -889,7 +908,7 @@ view_logs() {
         tail -n 50 "$found_log"
     else
         echo -e "Log file does not exist yet (server may have been started in a dedicated terminal window)."
-        echo -e "Target log paths: ${LOG_FILE:-X:/OLLAMA/ollama-serve.log}"
+        echo -e "Target log paths: ${LOG_FILE:-$OLLAMA_WIN_ROOT/ollama-serve.log}"
     fi
     echo ""
     read -r -p "Press Enter to return..."
@@ -906,7 +925,7 @@ interactive_menu() {
         echo -e "  ${BOLD}${CYAN} 3)${NC} Stop Running Ollama Server"
         echo -e "  ${BOLD}${CYAN} 4)${NC} Restart Ollama Server"
         echo -e "  ${BOLD}${CYAN} 5)${NC} Chat with a Local Model (Interactive CLI: Qwen, LLaMA...)"
-        echo -e "  ${BOLD}${CYAN} 6)${NC} Start Voice Chat with Local Models (${BOLD}${MAGENTA}Matrix Cast: Morpheus [5 Variations], Smith, Neo, Trinity...${NC})"
+        echo -e "  ${BOLD}${CYAN} 6)${NC} Start Voice Chat with Local Models (${BOLD}${MAGENTA}Voice: Stephen Hawking [cloned cast needs XTTS]${NC})"
         echo -e "  ${BOLD}${CYAN} 7)${NC} View Archived Audio Responses & Transcripts (${AUDIO_DIR})"
         echo -e "  ${BOLD}${CYAN} 8)${NC} View Server Log File (${LOG_FILE})"
         echo -e "  ${BOLD}${CYAN} 9)${NC} Return to Previous Menu\n"

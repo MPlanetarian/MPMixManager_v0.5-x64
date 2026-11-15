@@ -20,6 +20,31 @@ MAGENTA='\033[0;35m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
+# Bright white for the brand logo. Deliberately not DIM/MAGENTA: the wordmark
+# is the first thing the user sees, so it must read as clean white branding.
+LOGO_WHITE='\033[1;97m'
+
+# ------------------------------------------------------------------------------
+# Brand logo
+#
+# Six-row block-letter wordmark: "MP MIX MANAGER" built from the block glyph
+# U+2588 and the double-line box-drawing glyphs (U+2550-U+256C), so the letters
+# have double-line stems, solid counters and a uniform letter height. It is
+# printed in bright white and runs before anything else the installer emits.
+# ------------------------------------------------------------------------------
+print_brand_logo() {
+    printf '\n'
+    printf '%b\n' "${LOGO_WHITE}███╗   ███╗██████╗     ███╗   ███╗██╗██╗  ██╗    ███╗   ███╗ █████╗ ███╗   ██╗ █████╗  ██████╗ ███████╗██████╗ ${NC}"
+    printf '%b\n' "${LOGO_WHITE}████╗ ████║██╔══██╗    ████╗ ████║██║╚██╗██╔╝    ████╗ ████║██╔══██╗████╗  ██║██╔══██╗██╔════╝ ██╔════╝██╔══██╗${NC}"
+    printf '%b\n' "${LOGO_WHITE}██╔████╔██║██████╔╝    ██╔████╔██║██║ ╚███╔╝     ██╔████╔██║███████║██╔██╗ ██║███████║██║  ███╗█████╗  ██████╔╝${NC}"
+    printf '%b\n' "${LOGO_WHITE}██║╚██╔╝██║██╔═══╝     ██║╚██╔╝██║██║ ██╔██╗     ██║╚██╔╝██║██╔══██║██║╚██╗██║██╔══██║██║   ██║██╔══╝  ██╔══██╗${NC}"
+    printf '%b\n' "${LOGO_WHITE}██║ ╚═╝ ██║██║         ██║ ╚═╝ ██║██║██╔╝ ██╗    ██║ ╚═╝ ██║██║  ██║██║ ╚████║██║  ██║╚██████╔╝███████╗██║  ██║${NC}"
+    printf '%b\n' "${LOGO_WHITE}╚═╝     ╚═╝╚═╝         ╚═╝     ╚═╝╚═╝╚═╝  ╚═╝    ╚═╝     ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═╝${NC}"
+    printf '\n'
+}
+
+print_brand_logo
+
 _RESOLVED_SRC="${BASH_SOURCE[0]}"
 while [ -h "$_RESOLVED_SRC" ]; do
     _RESOLVED_DIR="$(cd -P "$(dirname "$_RESOLVED_SRC")" >/dev/null 2>&1 && pwd)"
@@ -33,7 +58,7 @@ if [ -z "${VERSION:-}" ]; then
     if [ -f "$SCRIPT_DIR/VERSION" ]; then
         VERSION="$(head -n 1 "$SCRIPT_DIR/VERSION" | tr -d '\r\n')"
     else
-        VERSION="0.5.0 Stable (Sensorium)"
+        VERSION="0.5.3 Stable (Sensorium)"
     fi
 fi
 export VERSION
@@ -41,7 +66,12 @@ export VERSION
 # 0. Optional Reinstall / Factory Reset
 REINSTALL=0
 REINSTALL_ARGS=()
+_mp_skip_next=0
 for _arg in "$@"; do
+    if [ "$_mp_skip_next" -eq 1 ]; then
+        _mp_skip_next=0
+        continue
+    fi
     case "$_arg" in
         --reinstall|--re-install|--factory-reset|--reset)
             REINSTALL=1
@@ -53,6 +83,11 @@ for _arg in "$@"; do
             echo ""
             echo "Options:"
             echo "  --install                 Normal install (default)"
+            echo "  --install-harmony         Install the optional MP Harmony Agent (default)"
+            echo "  --no-harmony              Skip the optional MP Harmony Agent"
+            echo "  --apps LIST               Set up all four apps (--apps all) or only"
+            echo "                            the ones named: --apps gui"
+            echo "                            (manager, gui, liquid, visualizer; comma-separated)"
             echo "  --reinstall               Wipe this user's configuration and reinstall"
             echo "                            from a first-install state"
             echo "  --preserve-playlists      Reinstall: keep playlists and favorites"
@@ -61,14 +96,38 @@ for _arg in "$@"; do
             echo "  --fresh                   Reinstall: preserve nothing"
             echo "  --yes, -y                 Reinstall: do not prompt; preserve all"
             echo "  --dry-run                 Reinstall: show what would change"
+            echo "  MP_INSTALL_ACCOMPANIMENT=0  Run in silence (no theme track, no exit movie)"
             echo "  -h, --help                Show this help"
             echo ""
             echo "Converted audio files are never deleted by a reinstall."
             echo "Run ./scripts/reinstall_mp_manager.sh --help for the full option list."
+            echo "Run ./uninstall.sh --help to reset or remove apps."
             exit 0
             ;;
         --install)
             # Explicit normal install. Nothing to do; the script proceeds.
+            ;;
+        --install-harmony)
+            MP_INSTALL_HARMONY="always"
+            export MP_INSTALL_HARMONY
+            ;;
+        --no-harmony)
+            MP_INSTALL_HARMONY="never"
+            export MP_INSTALL_HARMONY
+            ;;
+        --apps|--components)
+            _mp_apps_next="${2:-}"
+            if [ -z "$_mp_apps_next" ]; then
+                echo "--apps needs a value: all, manager, gui, liquid, visualizer" >&2
+                exit 1
+            fi
+            MP_INSTALL_APPS="$_mp_apps_next"
+            export MP_INSTALL_APPS
+            _mp_skip_next=1
+            ;;
+        --apps=*|--components=*)
+            MP_INSTALL_APPS="${_arg#*=}"
+            export MP_INSTALL_APPS
             ;;
         --preserve-playlists|--preserve-music-folders|--preserve-archive-config|\
         --no-preserve-playlists|--no-preserve-music-folders|--no-preserve-archive-config|\
@@ -83,7 +142,76 @@ for _arg in "$@"; do
             ;;
     esac
 done
-unset _arg
+unset _arg _mp_skip_next 2>/dev/null || true
+
+# The theme track plays until this process exits. Exit_MP_Video.mp4 loops in
+# its own window for the same stretch, then the window is closed. The EXIT
+# trap is what makes a normal finish immediate. The watcher also stops on its
+# own if this process disappears without running the trap.
+# MP_INSTALL_ACCOMPANIMENT=0 leaves the run silent.
+MP_INSTALL_ACCOMPANIMENT_PID=""
+MP_INSTALL_ACCOMPANIMENT_PIDFILE=""
+
+mp_install_accompaniment_stop() {
+    local pid="${MP_INSTALL_ACCOMPANIMENT_PID:-}"
+    local pidfile="${MP_INSTALL_ACCOMPANIMENT_PIDFILE:-}"
+    local script="$SCRIPT_DIR/scripts/install_accompaniment.sh"
+    local i=0
+    if [ -n "$pid" ]; then
+        kill -TERM "$pid" 2>/dev/null || true
+        while [ "$i" -lt 20 ] && kill -0 "$pid" 2>/dev/null; do
+            sleep 0.05
+            i=$((i + 1))
+        done
+        kill -KILL "$pid" 2>/dev/null || true
+        wait "$pid" 2>/dev/null || true
+    fi
+    if [ -n "$pidfile" ] && [ -f "$script" ]; then
+        bash "$script" --stop "$pidfile" >/dev/null 2>&1 || true
+    fi
+    MP_INSTALL_ACCOMPANIMENT_PID=""
+    return 0
+}
+
+mp_install_accompaniment_abort() {
+    local code="$1"
+    trap - EXIT INT TERM HUP
+    mp_install_accompaniment_stop
+    exit "$code"
+}
+
+mp_install_accompaniment_start() {
+    case "${MP_INSTALL_ACCOMPANIMENT:-1}" in
+        0|false|no|off|never) return 0 ;;
+    esac
+    local script="$SCRIPT_DIR/scripts/install_accompaniment.sh"
+    [ -f "$script" ] || return 0
+    local theme="$SCRIPT_DIR/MP_SAMPLES/MPlanetarian - The Orbits of Planets (Cosmic Dreamworlds Remake).flac"
+    local movie="$SCRIPT_DIR/Exit_MP_Video.mp4"
+    if [ ! -f "$movie" ] && [ -f "$SCRIPT_DIR/assets/Exit_MP_Video.mp4" ]; then
+        movie="$SCRIPT_DIR/assets/Exit_MP_Video.mp4"
+    fi
+    if [ -f "$theme" ]; then
+        echo -e "${DIM}      • Theme track playing — it stops when the installer finishes${NC}"
+    fi
+    if [ -f "$movie" ]; then
+        echo -e "${DIM}      • Exit movie looping — the window closes when the installer finishes${NC}"
+    fi
+    MP_INSTALL_ACCOMPANIMENT_PIDFILE="${TMPDIR:-/tmp}/mp-install-accompaniment-$$.pid"
+    bash "$script" --watch "$$" --pidfile "$MP_INSTALL_ACCOMPANIMENT_PIDFILE" </dev/null >/dev/null 2>&1 &
+    MP_INSTALL_ACCOMPANIMENT_PID=$!
+    return 0
+}
+
+trap 'mp_install_accompaniment_stop' EXIT
+trap 'mp_install_accompaniment_abort 130' INT
+trap 'mp_install_accompaniment_abort 143' TERM
+trap 'mp_install_accompaniment_abort 129' HUP
+mp_install_accompaniment_start
+if [ "${MP_INSTALL_ACCOMPANIMENT_SELF_TEST:-0}" = "1" ]; then
+    sleep "${MP_INSTALL_ACCOMPANIMENT_SELF_TEST_SLEEP:-1}"
+    exit 0
+fi
 
 if [ "$REINSTALL" -eq 1 ]; then
     echo -e "${BOLD}${MAGENTA}================================================================================${NC}"
@@ -132,7 +260,7 @@ echo -e "${BOLD}${MAGENTA}======================================================
 echo ""
 
 # 1. Detect Host Environment
-echo -e "${BOLD}${BLUE}[1/7] Detecting Host Platform & Environment...${NC}"
+echo -e "${BOLD}${BLUE}[1/10] Detecting Host Platform & Environment...${NC}"
 HOST_OS="linux"
 case "$(uname -s)" in
     Darwin*)
@@ -356,7 +484,7 @@ unset MP_INSTALL_PYTHON 2>/dev/null || true
 echo ""
 
 # 2. Ensure Executable Permissions
-echo -e "${BOLD}${BLUE}[2/7] Configuring Script & Binary Permissions...${NC}"
+echo -e "${BOLD}${BLUE}[2/10] Configuring Script & Binary Permissions...${NC}"
 chmod +x "$SCRIPT_DIR"/*.sh "$SCRIPT_DIR"/*.command "$SCRIPT_DIR"/bin/* 2>/dev/null || true
 if [ -d "$SCRIPT_DIR/scripts" ]; then
     chmod +x "$SCRIPT_DIR"/scripts/*.sh "$SCRIPT_DIR"/scripts/*.py 2>/dev/null || true
@@ -366,7 +494,7 @@ echo -e "${GREEN}      ✓ Executable permissions granted across all scripts and
 echo ""
 
 # 3. Create Scaffold Working Directories
-echo -e "${BOLD}${BLUE}[3/7] Setting Up Archive Directory Structure...${NC}"
+echo -e "${BOLD}${BLUE}[3/10] Setting Up Archive Directory Structure...${NC}"
 mkdir -p "$SCRIPT_DIR"/{FLAC_CONVERTED_OUTPUTS,MP3_CONVERTED_OUTPUTS,WAV_CONVERTED_OUTPUTS,MP4_CONVERTED_OUTPUTS,CONVERTED_WAV_FILES,SPEK_OUTPUTS,BACKUP_LOGS,VERIFY_LOGS,IMPORT_LOGS,COVERS,config_backups,exported_configs}
 touch "$SCRIPT_DIR/FLAC_CONVERTED_OUTPUTS/.gitkeep"
 touch "$SCRIPT_DIR/MP3_CONVERTED_OUTPUTS/.gitkeep"
@@ -383,12 +511,24 @@ touch "$SCRIPT_DIR/exported_configs/.gitkeep"
 echo -e "${GREEN}      ✓ Archive, output, and log directories ready.${NC}"
 echo ""
 
+# 3b. Offer the manual before the long automatic phase
+#
+# Everything from here on is unattended: packages are fetched, Python modules
+# are installed, services are registered. That takes minutes on a slow link and
+# the user has nothing to do but wait. Offer the README now so they can read
+# what is being installed while it happens. On a TTY-only session the helper
+# prints the path instead of trying to open a window. It never fails the run.
+if [ -f "$SCRIPT_DIR/scripts/mp_show_readme.sh" ] && [ "${MP_DRY_RUN:-0}" != "1" ]; then
+    bash "$SCRIPT_DIR/scripts/mp_show_readme.sh" || true
+fi
+echo ""
+
 # 4. Check & Install Dependencies
 #
 # One engine (scripts/mp_dependencies.py) owns the list of what the app needs,
 # the package name on every distro, and how to install it. The installer just
 # drives it, so the answers cannot drift from the code that imports them.
-echo -e "${BOLD}${BLUE}[4/7] Checking & Installing Dependencies...${NC}"
+echo -e "${BOLD}${BLUE}[4/10] Checking & Installing Dependencies...${NC}"
 MP_DEPS="$SCRIPT_DIR/scripts/mp_dependencies.py"
 MP_DEV_CHOICE="${MP_INSTALL_DEV_DEPS:-ask}"
 MP_DEPS_OK=1
@@ -429,6 +569,14 @@ else
     # The engine may have created the per-user venv that the launchers prefer.
     # Point the rest of the installer at it so the desktop entries, tray and
     # shortcut scripts all use the interpreter that now holds the modules.
+    #
+    # The old check was `import numpy`, which made the handoff depend on one
+    # module. When numpy was installed but unimportable (an x86-64-v2 wheel on a
+    # pre-AVX CPU), the installer kept the bare system interpreter, the desktop
+    # entries and tray were written against it, and the final --verify gate then
+    # reported "not ready" while the dependency step had said 8/8 present. Ask
+    # the engine whether it produced a usable venv instead of importing one
+    # library here.
     MP_ENV_PYTHON=""
     for _cand in \
         "$HOME/.local/share/mp-mix-manager/python-env/bin/python3" \
@@ -440,7 +588,7 @@ else
             break
         fi
     done
-    if [ -n "$MP_ENV_PYTHON" ] && "$MP_ENV_PYTHON" -c "import numpy" >/dev/null 2>&1; then
+    if [ -n "$MP_ENV_PYTHON" ]; then
         MP_PYTHON="$MP_ENV_PYTHON"
         echo -e "${GREEN}      ✓ Python environment: ${CYAN}${MP_ENV_PYTHON}${NC}"
     fi
@@ -448,6 +596,34 @@ else
 
     if [ "$MP_DEPS_RC" -ne 0 ]; then
         MP_DEPS_OK=0
+    fi
+
+    # ---- VTE 2.91 for the embedded terminal in MP Liquid Glass ---------------
+    # Bazzite and other immutable images do not ship vte291, and a user cannot
+    # layer it on without a reboot. mp_dependencies.py reports the typelib as
+    # missing there, which is accurate but leaves the glass window unable to
+    # start ("Namespace Vte not available"). Download the distribution's own
+    # package and unpack the two files into ~/.local/lib/mp-liquid-glass; the
+    # launchers already put that directory on LD_LIBRARY_PATH/GI_TYPELIB_PATH.
+    if [ "${MP_DRY_RUN:-0}" != "1" ] && [ -x "$SCRIPT_DIR/scripts/mp_vte_local.sh" ]; then
+        if "$SCRIPT_DIR/scripts/mp_vte_local.sh" --check >/dev/null 2>&1; then
+            echo -e "${GREEN}      ✓ VTE 2.91 terminal library present.${NC}"
+        else
+            echo -e "${DIM}      VTE 2.91 is missing; fetching it for the embedded terminal...${NC}"
+            set +e
+            MP_VTE_SILENT=0 "$SCRIPT_DIR/scripts/mp_vte_local.sh" --install
+            MP_VTE_RC=$?
+            set -e
+            case "$MP_VTE_RC" in
+                0) echo -e "${GREEN}      ✓ VTE 2.91 installed to ~/.local/lib/mp-liquid-glass${NC}" ;;
+                2) echo -e "${DIM}      VTE bundling does not apply on this platform.${NC}" ;;
+                *)
+                    echo -e "${YELLOW}      ⚠ VTE 2.91 could not be installed automatically.${NC}"
+                    echo -e "${DIM}        MP Liquid Glass needs it for its embedded terminal.${NC}"
+                    echo -e "${DIM}        Retry any time with:  ./scripts/mp_vte_local.sh --install${NC}"
+                    ;;
+            esac
+        fi
     fi
 
     # Optional extras: report them, and offer to install them when this is an
@@ -460,7 +636,7 @@ else
             if [ "$MP_DEV_CHOICE" = "never" ]; then
                 echo -e "${DIM}      Optional extras skipped (MP_INSTALL_DEV_DEPS=never).${NC}"
             elif [ -t 0 ]; then
-                echo -e "${DIM}      Optional extras (spectrograms, cloud backup, PDF reports, tray,\n      YouTube downloads) are not required. Install them now?${NC}"
+                echo -e "${DIM}      Optional extras (spectrograms, cloud backup, PDF reports, tray) are\n      not required. Install them now?${NC}"
                 read -r -p "      Install optional extras? [y/N] " _mp_opt
                 case "${_mp_opt:-n}" in
                     y|Y|yes|YES) "$MP_PYTHON" "$MP_DEPS" --install --optional --python "$MP_PYTHON" || true ;;
@@ -477,19 +653,107 @@ fi
 echo ""
 
 # 5. User Configuration Setup
-echo -e "${BOLD}${BLUE}[5/7] Checking Configuration File...${NC}"
+echo -e "${BOLD}${BLUE}[5/10] Checking Configuration File...${NC}"
+MP_CONFIG_CREATED=0
 if [ ! -f "$SCRIPT_DIR/config.env" ]; then
     if [ -f "$SCRIPT_DIR/config.env.example" ]; then
         cp "$SCRIPT_DIR/config.env.example" "$SCRIPT_DIR/config.env"
+        MP_CONFIG_CREATED=1
         echo -e "${GREEN}      ✓ Created default config.env from template.${NC}"
     fi
 else
     echo -e "${GREEN}      ✓ Active config.env found.${NC}"
 fi
+
+# First install selects Dreamworlds Ultra [Default]. The shared theme
+# file is what the CLI manager, MP Gui, the Liquid Player and the tracklist
+# viewer all read, so writing it here means every window opens in that theme.
+# An existing choice is never overwritten: a reinstall or an update keeps the
+# theme the user picked with C.
+MP_THEME_DIR="$HOME/.config/mix-manager"
+MP_THEME_FILE="$MP_THEME_DIR/theme"
+mkdir -p "$MP_THEME_DIR" 2>/dev/null || true
+if [ ! -f "$MP_THEME_FILE" ]; then
+    printf '%s\n' "dreamworlds_ultra" > "$MP_THEME_FILE" 2>/dev/null || true
+    echo -e "${GREEN}      ✓ Default theme: Dreamworlds Ultra [Default]${NC}"
+else
+    echo -e "${DIM}      • Keeping your saved theme: $(tr -d ' \t\n\r' < "$MP_THEME_FILE" 2>/dev/null)${NC}"
+fi
+
+# Pick the MP Visualizer backend for this machine. NVIDIA GPUs that advertise a
+# working Vulkan device get Vulkan; everything else stays on OpenGL. The
+# decision lives in scripts/visualizer_backend.py so the installer, the app and
+# the tests cannot disagree.
+#
+# The template ships "opengl" as a placeholder, so a config that was just
+# created from it is not a user choice and gets replaced. A config the user has
+# already edited keeps its value unless it is still "auto"/empty.
+# MP_VISUALIZER_BACKEND=vulkan|opengl|auto forces the answer.
+MP_BACKEND_CHOICE="${MP_VISUALIZER_BACKEND:-auto}"
+if [ -n "$MP_PYTHON" ] && [ -f "$SCRIPT_DIR/scripts/visualizer_backend.py" ]; then
+    set +e
+    _mp_backend="$("$MP_PYTHON" "$SCRIPT_DIR/scripts/visualizer_backend.py" \
+        --recommend-backend 2>/dev/null | tr -d '\r' | head -n 1)"
+    _mp_backend_rc=$?
+    set -e
+    [ "$_mp_backend_rc" -eq 0 ] || _mp_backend=""
+else
+    _mp_backend=""
+fi
+if [ -z "$_mp_backend" ]; then
+    # No interpreter or no probe: fall back to the PCI ids the kernel already
+    # exposes. NVIDIA's ICD only ships with the proprietary driver, so the
+    # json file is what proves the GPU can actually present Vulkan.
+    _mp_backend="opengl"
+    if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi >/dev/null 2>&1; then
+        for _mp_icd in /usr/share/vulkan/icd.d/nvidia_icd.x86_64.json \
+                       /usr/share/vulkan/icd.d/nvidia_icd.json \
+                       /etc/vulkan/icd.d/nvidia_icd.json; do
+            if [ -f "$_mp_icd" ]; then
+                _mp_backend="vulkan"
+                break
+            fi
+        done
+        unset _mp_icd
+    fi
+fi
+case "$(printf '%s' "$MP_BACKEND_CHOICE" | tr '[:upper:]' '[:lower:]')" in
+    opengl|gl|ogl) _mp_backend="opengl" ;;
+    vulkan|vk)     _mp_backend="vulkan" ;;
+esac
+unset MP_BACKEND_CHOICE
+
+if [ -f "$SCRIPT_DIR/config.env" ]; then
+    _mp_existing="$(grep -E '^LIQUID_GLASS_BACKEND=' "$SCRIPT_DIR/config.env" 2>/dev/null | head -n 1 | cut -d'=' -f2- | tr -d '"'\'' ' || true)"
+    case "$(printf '%s' "$_mp_existing" | tr '[:upper:]' '[:lower:]')" in
+        ""|auto) _mp_keep_existing=0 ;;
+        *)       _mp_keep_existing=1 ;;
+    esac
+    if [ "$MP_CONFIG_CREATED" -eq 0 ] && [ "$_mp_keep_existing" -eq 1 ]; then
+        echo -e "${GREEN}      ✓ Visualizer backend kept: ${CYAN}${_mp_existing}${NC}"
+    else
+        if [ -n "$MP_PYTHON" ] && "$MP_PYTHON" "$SCRIPT_DIR/scripts/visualizer_backend.py" \
+                --apply-config "$SCRIPT_DIR/config.env" --backend "$_mp_backend" >/dev/null 2>&1; then
+            :
+        else
+            printf 'LIQUID_GLASS_BACKEND="%s"\n' "$_mp_backend" >> "$SCRIPT_DIR/config.env" 2>/dev/null || true
+        fi
+        _mp_gpu="$(printf '%s' "$_mp_backend" | tr '[:lower:]' '[:upper:]')"
+        echo -e "${GREEN}      ✓ Visualizer backend detected: ${CYAN}${_mp_gpu}${NC}"
+        unset _mp_gpu
+        # Launchers started outside this tree read
+        # ~/.config/mix-manager/config.env, so the same choice has to reach it.
+        if [ -f "$HOME/.config/mix-manager/config.env" ] && [ -n "$MP_PYTHON" ]; then
+            "$MP_PYTHON" "$SCRIPT_DIR/scripts/visualizer_backend.py" \
+                --apply-config "$HOME/.config/mix-manager/config.env" --backend "$_mp_backend" >/dev/null 2>&1 || true
+        fi
+    fi
+fi
+unset _mp_backend _mp_backend_rc _mp_existing _mp_keep_existing MP_CONFIG_CREATED
 echo ""
 
 # 6. Install Global/Local User Symlinks
-echo -e "${BOLD}${BLUE}[6/7] Installing Local User Symlinks & Launchers...${NC}"
+echo -e "${BOLD}${BLUE}[6/10] Installing Local User Symlinks & Launchers...${NC}"
 mkdir -p "$HOME/.local/bin"
 
 # link <target> <name-in-~/.local/bin>
@@ -541,6 +805,10 @@ link "$SCRIPT_DIR/scripts/kc_stop_wan2gp.sh" "wan2gp-stop"
 link "$SCRIPT_DIR/scripts/kc_run_ollama_serve.sh" "ollama-serve"
 link "$SCRIPT_DIR/scripts/kc_stop_ollama.sh" "ollama-stop"
 link "$SCRIPT_DIR/scripts/manage_ollama.sh" "manage-ollama"
+link "$SCRIPT_DIR/scripts/manage_harmony_agent.sh" "manage-harmony"
+link "$SCRIPT_DIR/scripts/install_harmony_agent.sh" "install-harmony"
+link "$SCRIPT_DIR/scripts/manage_mp_responder.sh" "manage-responder"
+link "$SCRIPT_DIR/scripts/mp_harmony_tts.py" "mp-harmony-tts"
 link "$SCRIPT_DIR/scripts/kc_launch_beszel_hub_and_agent.sh" "beszel-hub-and-agent"
 link "$SCRIPT_DIR/scripts/beszel.sh" "beszel"
 link "$SCRIPT_DIR/scripts/dsh_mobile.sh" "dsh-mobile"
@@ -640,21 +908,255 @@ if not found:
 fi
 echo ""
 
-# 7. Desktop Integration
-echo -e "${BOLD}${BLUE}[7/7] Installing Desktop Integration...${NC}"
+# 7. MP Companion Service
+#
+# The Studio & DJ Booth Mobile Web Companion (scripts/mix_web_companion.py) is
+# the phone/tablet dashboard on port 8888. Until now the installer created the
+# desktop shortcuts and the tray icon but never registered the companion's
+# service, so `mix_web_companion.sh install` had to be run by hand after every
+# install and the dashboard did not come back after a reboot. Install it here
+# so a plain `./install.sh` leaves a working, auto-starting companion.
+#
+# Linux uses a `systemd --user` unit (mp-web-companion.service); macOS uses a
+# launchd LaunchAgent (com.mplanetarian.mp-web-companion). Windows/WSL have
+# neither, and the companion is started from the tray there instead.
+echo -e "${BOLD}${BLUE}[7/10] Installing the MP Companion Service...${NC}"
+MP_COMPANION_SCRIPT="$SCRIPT_DIR/scripts/mix_web_companion.sh"
+MP_COMPANION_CHOICE="${MP_INSTALL_COMPANION:-auto}"
+MP_COMPANION_OK=0
+if [ "$MP_COMPANION_CHOICE" = "never" ]; then
+    echo -e "${DIM}      • Companion service skipped (MP_INSTALL_COMPANION=never).${NC}"
+    MP_COMPANION_OK=-1
+elif [ "$HOST_OS" = "windows" ] || [ "$HOST_OS" = "wsl" ]; then
+    # Windows has no systemd --user or launchd for a per-user process. The
+    # equivalent is a shortcut in the user's Startup folder plus a start now,
+    # both of which scripts/windows_user_integration.ps1 writes in step 10. Say
+    # so instead of claiming the companion is unsupported.
+    echo -e "${DIM}      • Windows: the companion starts at login from Startup\\MP Web Companion.lnk${NC}"
+    echo -e "${DIM}        (installed with the desktop shortcuts in step 10, then started)${NC}"
+    MP_COMPANION_OK=-1
+elif [ ! -f "$MP_COMPANION_SCRIPT" ]; then
+    echo -e "${YELLOW}      ⚠ scripts/mix_web_companion.sh is missing; companion not installed.${NC}"
+elif [ -z "$MP_PYTHON" ]; then
+    echo -e "${YELLOW}      ⚠ The companion needs Python 3.8+; install it and re-run ./install.sh.${NC}"
+else
+    # An SSH or cron install has no desktop session environment, so systemctl
+    # --user cannot find the user's bus and the service would look "installed"
+    # while never being enabled. Point it at the real runtime directory when the
+    # user is logged in; the wrapper still writes the unit when there is none.
+    _MP_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u 2>/dev/null || echo 0)}"
+    if [ -z "${XDG_RUNTIME_DIR:-}" ] && [ -d "$_MP_RUNTIME_DIR" ]; then
+        export XDG_RUNTIME_DIR="$_MP_RUNTIME_DIR"
+    fi
+    if [ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ] && [ -S "$_MP_RUNTIME_DIR/bus" ]; then
+        export DBUS_SESSION_BUS_ADDRESS="unix:path=$_MP_RUNTIME_DIR/bus"
+    fi
+    unset _MP_RUNTIME_DIR
+    set +e
+    if MP_PYTHON="$MP_PYTHON" bash "$MP_COMPANION_SCRIPT" install; then
+        MP_COMPANION_OK=1
+    else
+        MP_COMPANION_OK=0
+    fi
+    set -e
+    if [ "$MP_COMPANION_OK" -eq 1 ]; then
+        echo -e "${GREEN}      ✓ MP Companion Service installed and started on port 8888.${NC}"
+        if [ "$HOST_OS" = "macos" ]; then
+            echo -e "${DIM}        Autostart: launchd com.mplanetarian.mp-web-companion${NC}"
+        else
+            echo -e "${DIM}        Autostart: systemd --user mp-web-companion.service${NC}"
+        fi
+    else
+        echo -e "${YELLOW}      ⚠ The companion service could not be started automatically.${NC}"
+        echo -e "${DIM}        Finish it at next login with: scripts/mix_web_companion.sh install${NC}"
+    fi
+fi
+unset MP_COMPANION_SCRIPT MP_COMPANION_CHOICE MP_COMPANION_OK
+echo ""
+
+# 8. Optional: MP Harmony Agent
+#
+# The MP Harmony Agent is a SEPARATE project (github.com/MPlanetarian/
+# MP-Harmony-Agent), not a part of this tree. It is offered here because the
+# manager launches and supervises it, but nothing in MP Mix Manager requires
+# it: decline and every other feature still works.
+#
+# Default is YES on an interactive run. MP_INSTALL_HARMONY controls it:
+#   always | ask (default) | never
+echo -e "${BOLD}${BLUE}[8/10] MP Harmony Agent (Optional)...${NC}"
+MP_HARMONY_CHOICE="${MP_INSTALL_HARMONY:-ask}"
+MP_HARMONY_INSTALLER="$SCRIPT_DIR/scripts/install_harmony_agent.sh"
+MP_HARMONY_WANT=0
+if [ "$MP_HARMONY_CHOICE" = "never" ]; then
+    echo -e "${DIM}      • MP Harmony Agent skipped (MP_INSTALL_HARMONY=never).${NC}"
+elif [ "$MP_HARMONY_CHOICE" = "always" ]; then
+    MP_HARMONY_WANT=1
+elif [ ! -t 0 ]; then
+    # Non-interactive installs get the default, which is to include it.
+    MP_HARMONY_WANT=1
+    echo -e "${DIM}      • Non-interactive run: installing the agent (the default).${NC}"
+else
+    echo -e "      ${DIM}The MP Harmony Agent is a separate project: an autonomous engineering${NC}"
+    echo -e "      ${DIM}assistant and voice bridge for this manager (port 11435).${NC}"
+    echo -e "      ${DIM}It is installed outside this folder, in ~/OpenAI/MP_Harmony_Agent,${NC}"
+    echo -e "      ${DIM}and is not required by any other feature.${NC}"
+    read -r -p "      Install the MP Harmony Agent? [Y/n] " _mp_harmony_ans
+    case "${_mp_harmony_ans:-y}" in
+        n|N|no|NO) MP_HARMONY_WANT=0 ;;
+        *)         MP_HARMONY_WANT=1 ;;
+    esac
+    unset _mp_harmony_ans
+fi
+
+if [ "$MP_HARMONY_CHOICE" = "never" ] || [ "$MP_HARMONY_WANT" -eq 0 ]; then
+    if [ "$MP_HARMONY_CHOICE" != "never" ]; then
+        echo -e "${DIM}      • Skipped. Install it any time with:${NC}"
+        echo -e "${DIM}        scripts/install_harmony_agent.sh install${NC}"
+    fi
+elif [ ! -f "$MP_HARMONY_INSTALLER" ]; then
+    echo -e "${YELLOW}      ⚠ scripts/install_harmony_agent.sh is missing; the agent was not installed.${NC}"
+elif ! command -v git >/dev/null 2>&1; then
+    echo -e "${YELLOW}      ⚠ git is required to install the agent and was not found.${NC}"
+    echo -e "${DIM}        Install git, then run: scripts/install_harmony_agent.sh install${NC}"
+else
+    if bash "$MP_HARMONY_INSTALLER" install; then
+        # Only register the user unit on a host that actually has systemd and
+        # only when the user opted in: an unrequested daemon that restarts
+        # forever is worse than no daemon.
+        if [ "$HOST_OS" = "linux" ] && command -v systemctl >/dev/null 2>&1; then
+            bash "$MP_HARMONY_INSTALLER" unit >/dev/null 2>&1 || true
+            echo -e "${DIM}        Autostart: systemd --user mp-harmony-agent.service${NC}"
+            echo -e "${DIM}        Enable it with: systemctl --user enable --now mp-harmony-agent.service${NC}"
+        fi
+    else
+        echo -e "${YELLOW}      ⚠ The MP Harmony Agent could not be installed.${NC}"
+        echo -e "${DIM}        Everything else was installed. Retry with:${NC}"
+        echo -e "${DIM}        scripts/install_harmony_agent.sh install${NC}"
+    fi
+fi
+unset MP_HARMONY_CHOICE MP_HARMONY_INSTALLER
+echo ""
+
+# 9. Which MP applications this install sets up
+#
+# The tree is one folder, so every script is always present. What changes is
+# what the user is given to launch: the Desktop shortcuts, the application-menu
+# entries, the shared tray menu and the Web Companion launch pad only carry the
+# apps chosen here. That is what "install only MP Gui" means in practice, and
+# it is recorded in ~/.config/mix-manager/installed_apps so every later launch
+# (and a tray started at login) agrees.
+#
+# MP_INSTALL_APPS selects without a prompt:
+#   all | manager | gui | liquid | visualizer | gui,liquid | ...
+# An unset value asks; a non-interactive run takes "all".
+echo -e "${BOLD}${BLUE}[9/10] Choosing the MP Applications to Install...${NC}"
+MP_APPS_CHOICE="${MP_INSTALL_APPS:-}"
+MP_APPS_SELECTION="manager gui liquid visualizer"
+MP_APPS_INTERACTIVE=0
+if [ -n "$MP_APPS_CHOICE" ]; then
+    MP_APPS_INTERACTIVE=1
+elif [ ! -t 0 ]; then
+    echo -e "${DIM}      • Non-interactive run: installing all four MP applications.${NC}"
+else
+    MP_APPS_INTERACTIVE=1
+fi
+
+if [ "$MP_APPS_INTERACTIVE" -eq 1 ] && [ -z "$MP_APPS_CHOICE" ]; then
+    echo "      Which applications should this install set up?"
+    echo ""
+    echo -e "        ${BOLD}1)${NC} All four  ${DIM}MP Mix Manager, MP Gui, MP Liquid Player, MP Liquid Visualizer${NC}"
+    echo -e "        ${BOLD}2)${NC} MP Mix Manager only        ${DIM}(the terminal manager)${NC}"
+    echo -e "        ${BOLD}3)${NC} MP Gui only                ${DIM}(the Liquid Glass manager window)${NC}"
+    echo -e "        ${BOLD}4)${NC} MP Liquid Player only      ${DIM}(the audio player + visualizer host)${NC}"
+    echo -e "        ${BOLD}5)${NC} MP Liquid Visualizer only  ${DIM}(the standalone 3D visualizer)${NC}"
+    echo -e "        ${BOLD}6)${NC} Choose several            ${DIM}(pick more than one)${NC}"
+    echo ""
+    read -r -p "      Select [1]: " _mp_apps_ans || true
+    case "${_mp_apps_ans:-1}" in
+        2) MP_APPS_CHOICE="manager" ;;
+        3) MP_APPS_CHOICE="gui" ;;
+        4) MP_APPS_CHOICE="liquid" ;;
+        5) MP_APPS_CHOICE="visualizer" ;;
+        6)
+            echo ""
+            echo -e "        ${DIM}Enter the numbers you want, separated by spaces, e.g.${NC} 2 3"
+            echo -e "        ${DIM}  1)${NC} MP Mix Manager   ${DIM}2)${NC} MP Gui   ${DIM}3)${NC} MP Liquid Player   ${DIM}4)${NC} MP Liquid Visualizer"
+            read -r -p "      Numbers: " _mp_apps_multi || true
+            _mp_apps_picked=""
+            for _mp_app_num in $_mp_apps_multi; do
+                case "$_mp_app_num" in
+                    1) _mp_apps_picked="$_mp_apps_picked manager" ;;
+                    2) _mp_apps_picked="$_mp_apps_picked gui" ;;
+                    3) _mp_apps_picked="$_mp_apps_picked liquid" ;;
+                    4) _mp_apps_picked="$_mp_apps_picked visualizer" ;;
+                esac
+            done
+            # No valid number means the safe default, not an empty install.
+            MP_APPS_CHOICE="${_mp_apps_picked:-all}"
+            unset _mp_apps_picked _mp_app_num _mp_apps_multi
+            ;;
+        *) MP_APPS_CHOICE="all" ;;
+    esac
+    unset _mp_apps_ans
+fi
+MP_APPS_CHOICE="${MP_APPS_CHOICE:-all}"
+
+# Normalise through the same parser the rest of the suite uses, so "gui,liquid",
+# "MP Gui" and "3" cannot drift apart between the installer and the tray.
+if [ -n "$MP_PYTHON" ] && [ -f "$SCRIPT_DIR/scripts/mp_app_selection.py" ]; then
+    _mp_apps_norm="$("$MP_PYTHON" "$SCRIPT_DIR/scripts/mp_app_selection.py" --set "$MP_APPS_CHOICE" 2>/dev/null || true)"
+    [ -n "$_mp_apps_norm" ] && MP_APPS_SELECTION="$_mp_apps_norm"
+    unset _mp_apps_norm
+else
+    case "$MP_APPS_CHOICE" in
+        all|"") MP_APPS_SELECTION="manager gui liquid visualizer" ;;
+        *)      MP_APPS_SELECTION="$(printf '%s' "$MP_APPS_CHOICE" | tr ',;' '  ')" ;;
+    esac
+fi
+export MP_APPS_SELECTION
+
+_mp_apps_count=0
+_mp_apps_headline=""
+for _mp_app in $MP_APPS_SELECTION; do
+    _mp_apps_count=$((_mp_apps_count + 1))
+    case "$_mp_app" in
+        manager)    _mp_apps_headline="$_mp_apps_headline|MP Mix Manager" ;;
+        gui)        _mp_apps_headline="$_mp_apps_headline|MP Gui" ;;
+        liquid)     _mp_apps_headline="$_mp_apps_headline|MP Liquid Player" ;;
+        visualizer) _mp_apps_headline="$_mp_apps_headline|MP Liquid Visualizer" ;;
+    esac
+done
+_mp_apps_headline="${_mp_apps_headline#|}"
+_mp_apps_headline="${_mp_apps_headline//|/, }"
+MP_APPS_LABELS="$_mp_apps_headline"
+export MP_APPS_LABELS
+if [ "$_mp_apps_count" -eq 4 ]; then
+    echo -e "${GREEN}      ✓ Installing all four: ${CYAN}${_mp_apps_headline}${NC}"
+elif [ "$_mp_apps_count" -eq 1 ]; then
+    echo -e "${GREEN}      ✓ Installing one application: ${CYAN}${_mp_apps_headline}${NC}"
+else
+    echo -e "${GREEN}      ✓ Installing ${_mp_apps_count} applications: ${CYAN}${_mp_apps_headline}${NC}"
+fi
+echo -e "${DIM}        Selection saved to ~/.config/mix-manager/installed_apps${NC}"
+echo -e "${DIM}        Change it later: ./install.sh --apps all      (or --apps gui)${NC}"
+unset _mp_apps_count _mp_app _mp_apps_ans
+echo ""
+
+# 10. Desktop Integration
+echo -e "${BOLD}${BLUE}[10/10] Installing Desktop Integration...${NC}"
 if [ "$HOST_OS" = "windows" ] || [ "$HOST_OS" = "wsl" ]; then
     # python3 on a normal Windows install is the Microsoft Store alias, not an
     # interpreter. Shortcuts and the tray are written into the signed-in user's
     # profile (Desktop, Start Menu, and Startup) by PowerShell.
-    if bash "$SCRIPT_DIR/scripts/install_windows_user.sh" "$SCRIPT_DIR"; then
-        echo -e "${GREEN}      ✓ Desktop shortcuts are on this user profile: MP Liquid Player, MP Mix Manager, MP Gui, MP Liquid Visualizer${NC}"
+    if bash "$SCRIPT_DIR/scripts/install_windows_user.sh" "$SCRIPT_DIR" --components="$MP_APPS_SELECTION"; then
+        echo -e "${GREEN}      ✓ Desktop shortcuts are on this user profile: ${MP_APPS_LABELS:-MP Mix Manager}${NC}"
         echo -e "${GREEN}      ✓ System tray icon installed and started.${NC}"
     else
         echo -e "${YELLOW}      ⚠ Desktop shortcuts or the system tray icon could not be installed for this user.${NC}"
     fi
 elif [ -n "$MP_PYTHON" ]; then
-    if "$MP_PYTHON" "$SCRIPT_DIR/scripts/install_desktop_shortcuts.py" --root "$SCRIPT_DIR"; then
-        echo -e "${GREEN}      ✓ Desktop shortcuts: MP Liquid Player, MP Mix Manager, MP Gui, MP Liquid Visualizer${NC}"
+    if "$MP_PYTHON" "$SCRIPT_DIR/scripts/install_desktop_shortcuts.py" --root "$SCRIPT_DIR" --components "$MP_APPS_SELECTION"; then
+        echo -e "${GREEN}      ✓ Desktop shortcuts: ${MP_APPS_LABELS:-MP Mix Manager}${NC}"
     else
         echo -e "${YELLOW}      ⚠ Desktop shortcuts could not be created.${NC}"
     fi
@@ -683,6 +1185,18 @@ else
     update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
     echo -e "${GREEN}      ✓ Application, WAN2GP, Ollama, Beszel, and dsh-mobile shortcuts installed.${NC}"
 
+    # MP Harmony, MP Reporter and the MP Audio Responder are separate programs,
+    # so their shortcuts are owned by their own installer. Offer them here only
+    # when the user asked for the agent, so a plain manager install is unchanged.
+    if [ "${MP_HARMONY_WANT:-0}" -eq 1 ] && [ -f "$SCRIPT_DIR/scripts/install_harmony_desktop_shortcuts.sh" ]; then
+        if bash "$SCRIPT_DIR/scripts/install_harmony_desktop_shortcuts.sh" >/dev/null 2>&1; then
+            echo -e "${GREEN}      ✓ MP Harmony, MP Reporter and MP Audio Responder desktop shortcuts installed.${NC}"
+        else
+            echo -e "${YELLOW}      ⚠ The MP Harmony/Reporter shortcuts could not be created.${NC}"
+            echo -e "${DIM}        Retry with: scripts/install_harmony_desktop_shortcuts.sh${NC}"
+        fi
+    fi
+
     # Sync KDE Connect command scripts if directory exists
     if [ -d "$HOME/KDE_CONNECT_CMDS" ]; then
         cp -p "$SCRIPT_DIR/scripts/kc_start_wan2gp_profile45.sh" "$HOME/KDE_CONNECT_CMDS/kc_start_wan2gp_profile45.sh" 2>/dev/null || true
@@ -696,7 +1210,9 @@ else
     fi
 fi
 
-# 8. Final verification
+unset MP_HARMONY_WANT 2>/dev/null || true
+
+# 10. Final verification
 #
 # An installer that ends with a green banner while something is broken is the
 # worst kind: the user has no idea what to fix. Ask the dependency engine for a
@@ -740,12 +1256,47 @@ echo -e "${BOLD}${GREEN}========================================================
 echo -e "${BOLD}${GREEN}              MP MIX ARCHIVE MANAGER INSTALLATION COMPLETE!              ${NC}"
 echo -e "${BOLD}${GREEN}======================================================================${NC}"
 echo ""
-echo -e "Desktop shortcuts:"
-echo -e "  ${BOLD}${CYAN}MP Liquid Player${NC}"
-echo -e "  ${BOLD}${CYAN}MP Mix Manager${NC}"
-echo -e "  ${BOLD}${CYAN}MP Gui${NC}"
-echo -e "  ${BOLD}${CYAN}MP Liquid Visualizer${NC}"
+echo -e "Installed applications:"
+for _mp_app in $MP_APPS_SELECTION; do
+    case "$_mp_app" in
+        manager)    echo -e "  ${BOLD}${CYAN}MP Mix Manager${NC}" ;;
+        gui)        echo -e "  ${BOLD}${CYAN}MP Gui${NC}" ;;
+        liquid)     echo -e "  ${BOLD}${CYAN}MP Liquid Player${NC}" ;;
+        visualizer) echo -e "  ${BOLD}${CYAN}MP Liquid Visualizer${NC}" ;;
+    esac
+done
 echo ""
+echo -e "Desktop shortcuts:"
+for _mp_app in $MP_APPS_SELECTION; do
+    case "$_mp_app" in
+        manager)    echo -e "  ${BOLD}${CYAN}MP Mix Manager${NC}" ;;
+        gui)        echo -e "  ${BOLD}${CYAN}MP Gui${NC}" ;;
+        liquid)     echo -e "  ${BOLD}${CYAN}MP Liquid Player${NC}" ;;
+        visualizer) echo -e "  ${BOLD}${CYAN}MP Liquid Visualizer${NC}" ;;
+    esac
+done
+echo -e "  ${BOLD}${CYAN}MP Liquid Player VR Mode${NC} (Windows + Bigscreen, or the VR launcher)"
+echo ""
+echo -e "${DIM}Only the applications selected in step 9 have shortcuts and tray-menu${NC}"
+echo -e "${DIM}entries. Add the rest later with: ./install.sh --apps all${NC}"
+echo ""
+# Point at the manual here as well: someone who skipped the offer at step 3
+# still needs to know where it lives, and a TTY user has no window to open it in.
+if [ -f "$SCRIPT_DIR/README.md" ]; then
+    echo -e "Manual:"
+    echo -e "  ${BOLD}${CYAN}$SCRIPT_DIR/README.md${NC}"
+    if [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] && command -v xdg-open >/dev/null 2>&1; then
+        echo -e "  ${DIM}Read it now with: xdg-open \"$SCRIPT_DIR/README.md\"${NC}"
+    else
+        echo -e "  ${DIM}Read it now with: less \"$SCRIPT_DIR/README.md\"${NC}"
+    fi
+    echo ""
+fi
+if [ "$HOST_OS" != "windows" ] && [ "$HOST_OS" != "wsl" ] && [ "${MP_INSTALL_COMPANION:-auto}" != "never" ]; then
+    echo -e "Studio & DJ Booth Web Companion (phone / tablet dashboard):"
+    echo -e "  ${BOLD}${CYAN}http://<this-machine-ip>:8888${NC}  (scripts/mix_web_companion.sh status)"
+    echo ""
+fi
 if [ "$HOST_OS" = "macos" ]; then
     echo -e "Menu bar: the MP Mix Manager icon is on the right side of the menu bar. Click it to launch MP Gui, MP Liquid Player, or MP Mix Manager."
 else

@@ -43,7 +43,12 @@ WHITE = "\033[1;37m"
 RED, GREEN, YELLOW = COLOR_TRAFFIC_RED, COLOR_TRAFFIC_GREEN, COLOR_TRAFFIC_AMBER
 MAGENTA, CYAN = COLOR_HOT_PURPLE, COLOR_LILAC
 
-AUDIO_EXTENSIONS = ('.flac', '.wav', '.mp3', '.ogg', '.m4a', '.aac', '.aiff', '.wma')
+# Shared registry. A local eight-extension tuple meant a track the player could
+# open (an .opus, an .aiff, a .dsf) was invisible to the Music library.
+try:
+    from audio_formats import AUDIO_EXTENSIONS
+except ImportError:  # imported as scripts.music_folders_manager
+    from scripts.audio_formats import AUDIO_EXTENSIONS
 SKIP_DIR_NAMES = {
     "$recycle.bin", "system volume information", "@eadir", "#recycle", 
     "#snapshot", ".trashes", ".spotlight-v100", ".fseventsd", "logic pro library.bundle"
@@ -205,7 +210,7 @@ def load_music_config() -> Dict[str, Any]:
 _SMB_RE = re.compile(r'^(?:smb:)?(?:\\\\|//)([^\\/]+)[\\/]+([^\\/]+)(?:[\\/]+(.*))?$', re.I)
 _ONLY_LOCAL_OR_SMB = (
     "Only a local drive path or an SMB share is allowed "
-    "(for example D:\\Music, \\\\192.168.1.138\\music001, or smb://host/share)."
+    "(for example D:\\Music, \\\\192.0.2.20\\music001, or smb://host/share)."
 )
 
 def _normalize_extended_path(s: str) -> str:
@@ -262,15 +267,19 @@ def parse_folder_path(raw: str) -> Dict[str, Any]:
             user = user.split(":", 1)[0]
         sub = sub.replace("\\", "/").strip("/")
         if not host or not share or host in ("?", "."):
-            raise ValueError("SMB paths must include both a host and a share, e.g. \\\\192.168.1.138\\music001")
+            raise ValueError("SMB paths must include both a host and a share, e.g. \\\\192.0.2.20\\music001")
         return {"type": "smb", "host": host, "share": share, "subpath": sub, "user": user}
     if re.match(r'^[a-z][a-z0-9+.\-]*://', s, re.I):
         raise ValueError(_ONLY_LOCAL_OR_SMB)
     if s.startswith(("\\\\", "//")):
-        raise ValueError("SMB paths must include both a host and a share, e.g. \\\\192.168.1.138\\music001")
-    if IS_WINDOWS:
-        if not _looks_like_windows_local(s):
-            raise ValueError(_ONLY_LOCAL_OR_SMB)
+        raise ValueError("SMB paths must include both a host and a share, e.g. \\\\192.0.2.20\\music001")
+    # Classify by the *shape* of the path, not by the host OS. A Windows
+    # drive-letter path is legitimate input here even on Linux and macOS: the
+    # folder list can be imported from a Windows machine, and the parser has to
+    # describe it rather than reject it with "only local or SMB".
+    windows_style = bool(_looks_like_windows_local(s)) or bool(re.match(r'^[a-zA-Z]:[\\/]', s))
+    if windows_style:
+        pass
     elif not (s.startswith("~") or s.startswith("/")):
         raise ValueError(_ONLY_LOCAL_OR_SMB)
     p = os.path.expandvars(os.path.expanduser(s))
@@ -278,7 +287,18 @@ def parse_folder_path(raw: str) -> Dict[str, Any]:
         mm = re.match(r'^/(?:cygdrive/)?([a-zA-Z])(?:/(.*))?$', p)
         if mm:
             p = mm.group(1).upper() + ":\\" + (mm.group(2) or "").replace("/", "\\")
-    p = os.path.normpath(os.path.abspath(p))
+    msys = None if IS_WINDOWS else re.match(r'^/(?:cygdrive/)?([a-zA-Z])(?:/(.*))?$', p)
+    if msys:
+        # MSYS/Git Bash spelling of a Windows drive (/d/DJ, /cygdrive/d/DJ).
+        # Checked before the generic Windows branch below, which would otherwise
+        # rewrite the leading slash into a backslash and produce "\d\DJ".
+        p = msys.group(1).upper() + ":\\" + (msys.group(2) or "").replace("/", "\\")
+    elif windows_style and not IS_WINDOWS:
+        # Keep the path as written. `abspath` would prefix the POSIX working
+        # directory and destroy the drive letter.
+        p = p.replace("/", "\\")
+    else:
+        p = os.path.normpath(os.path.abspath(p))
     mapped = _windows_remote_unc(p)
     if mapped:
         return parse_folder_path(mapped)
@@ -339,7 +359,16 @@ def _migrate_legacy_folders(config: Dict[str, Any]) -> List[Dict[str, Any]]:
         f = {"type": "smb", "host": host, "share": share, "subpath": "", "user": ""}
         f["name"] = share
         f["id"] = make_folder_id(share, folders)
-        f["path"] = str(config["mount_root"] / f["id"])
+        # A partial config (the migration is also called from tests and from
+        # importers) may not carry mount_root; fall back to the documented
+        # default rather than raising KeyError from a migration helper.
+        mount_root = config.get("mount_root")
+        if not isinstance(mount_root, Path):
+            fallback = load_music_config().get("mount_root")
+            mount_root = Path(fallback) if fallback else Path.home() / "MUSIC_SMB"
+            if not isinstance(mount_root, Path):
+                mount_root = Path(str(mount_root))
+        f["path"] = str(mount_root / f["id"])
         folders.append(f)
     return folders
 
@@ -858,6 +887,15 @@ def save_playlist_files(tracks: List[Dict[str, Any]], target: str, config: Dict[
             f.write(f"{t['path']}\n")
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump(tracks, f, indent=2, ensure_ascii=False)
+    # Pre-build the MP Audio Player's fast sidecar so the next window open does
+    # not have to parse this JSON. Best effort: a failure only costs one slow start.
+    try:
+        if str(Path(__file__).resolve().parent) not in sys.path:
+            sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import playlist_cache
+        playlist_cache.write(json_path, tracks)
+    except Exception:
+        pass
     return m3u_path, json_path
 
 def rebuild_all_playlist(folders: List[Dict[str, Any]], config: Dict[str, Any]) -> int:

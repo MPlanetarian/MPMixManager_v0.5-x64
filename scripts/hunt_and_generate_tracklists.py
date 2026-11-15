@@ -20,11 +20,11 @@ import xml.etree.ElementTree as ET
 ARCHIVE_FOLDERS = [
     "/run/media/mplanetarian/WD BLACK B/MIX_ARCHIVE/FLAC_CONVERTED_OUTPUTS",
     "/run/media/mplanetarian/DATA/MIX_ARCHIVE2/FLAC_CONVERTED_OUTPUTS",
-    "/var/home/mplanetarian/GoogleDrive/MIX_ARCHIVE/FLAC_CONVERTED_OUTPUTS"
+    str(Path(os.environ.get("MIX_ARCHIVE_DIR", "") or (Path.home() / "GoogleDrive/MIX_ARCHIVE")) / "FLAC_CONVERTED_OUTPUTS")
 ]
 
 TRAKTOR_HISTORY_DIR = "/run/media/mplanetarian/WD BLACK B/MIX_ARCHIVE/Traktor 3.11.1/History"
-CACHE_DIR = "/home/mplanetarian/.cache/rclone/vfs/google3/MIX_ARCHIVE/FLAC_CONVERTED_OUTPUTS"
+CACHE_DIR = str(Path.home() / ".cache/rclone/vfs/google3/MIX_ARCHIVE/FLAC_CONVERTED_OUTPUTS")
 
 
 def is_valid_tracklist_content(text):

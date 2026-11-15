@@ -101,7 +101,14 @@ def _clear_error() -> None:
     _kernel32().SetLastError(0)
 
 
-_WNDPROC = ctypes.WINFUNCTYPE(
+# `ctypes.WINFUNCTYPE` only exists on Windows. Importing this module on Linux or
+# macOS raised AttributeError at module scope, which made the whole drag helper
+# (and anything that imports it for inspection) unloadable. Fall back to the
+# regular C callback type: the module's Windows entry points are never called
+# on another platform anyway.
+_CALLBACK = getattr(ctypes, "WINFUNCTYPE", ctypes.CFUNCTYPE)
+
+_WNDPROC = _CALLBACK(
     ctypes.c_ssize_t, ctypes.c_void_p, ctypes.c_uint, ctypes.c_size_t, ctypes.c_ssize_t,
 )
 

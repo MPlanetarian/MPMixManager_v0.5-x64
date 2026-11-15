@@ -28,6 +28,10 @@ try:
 except ImportError:
     from scripts.visualizer_monitor_span import ROLE_SPAWNED
 
+# Title prefixes of the two Liquid Glass hosts a companion can belong behind.
+PLAYER_TITLE = "MP Audio Player (Liquid Glass"
+GUI_TITLE = "MP Mix Manager (Liquid Glass"
+
 
 class PlayerBondMixin:
     """Follow the Liquid Player's published geometry and stack below it.
@@ -42,6 +46,13 @@ class PlayerBondMixin:
     bond comes from the process the player launched, not from a state file the
     user could flip, and Z/double-click cannot detach it or take it fullscreen.
     Any other visualizer window is free to move, resize and fullscreen.
+
+    The same mixin serves two hosts. The Liquid Player publishes to
+    ``liquid_player_window.json``; MP Gui publishes to
+    ``liquid_gui_window.json`` and starts its companion with
+    ``MP_VISUALIZER_MATCH_GUI=1``. That flag is what selects which record and
+    which host window this bond follows, so a GUI companion sits behind MP Gui
+    rather than behind a Liquid Player that happens to be open.
     """
 
     _player_bonded: bool
@@ -91,6 +102,79 @@ class PlayerBondMixin:
     def _bond_is_locked(self) -> bool:
         """True for the companion the player launched, which never detaches."""
         return bool(getattr(self, "_bond_locked", False))
+
+    # -- host selection ---------------------------------------------------
+    def _bond_targets_gui(self) -> bool:
+        """True when this companion belongs behind MP Gui, not the player.
+
+        MP_Gui.sh launches its companion with ``MP_VISUALIZER_MATCH_GUI=1`` and
+        publishes to ``liquid_gui_window.json``. Reading only the player record
+        made that window bond to whichever Liquid Player was open (or to
+        nothing at all when only the GUI was up).
+        """
+        try:
+            from liquid_player_visualizer import visualizer_matches_gui
+        except ImportError:
+            from scripts.liquid_player_visualizer import visualizer_matches_gui
+        try:
+            return bool(visualizer_matches_gui())
+        except Exception:
+            return False
+
+    def _bond_host_title(self) -> str:
+        """Title prefix of the window this bond must stack against."""
+        return GUI_TITLE if self._bond_targets_gui() else PLAYER_TITLE
+
+    def _bond_read_geometry(self) -> Optional[tuple]:
+        """Published (x, y, width, height) for the host this bond follows."""
+        try:
+            from liquid_player_visualizer import (
+                read_published_gui_window_geometry,
+                read_published_player_window_geometry,
+            )
+        except ImportError:
+            from scripts.liquid_player_visualizer import (
+                read_published_gui_window_geometry,
+                read_published_player_window_geometry,
+            )
+        if self._bond_targets_gui():
+            return read_published_gui_window_geometry()
+        return read_published_player_window_geometry()
+
+    def _bond_read_size(self) -> Optional[tuple]:
+        """Published (width, height) for the host this bond follows."""
+        try:
+            from liquid_player_visualizer import (
+                read_published_gui_window_size,
+                read_published_player_window_size,
+            )
+        except ImportError:
+            from scripts.liquid_player_visualizer import (
+                read_published_gui_window_size,
+                read_published_player_window_size,
+            )
+        if self._bond_targets_gui():
+            return read_published_gui_window_size()
+        return read_published_player_window_size()
+
+    def _bond_read_host_window_id(self) -> int:
+        """The host's own X11 window id, or 0 when it did not publish one."""
+        try:
+            from liquid_player_visualizer import (
+                read_published_gui_window_id,
+                read_published_player_window_id,
+            )
+        except ImportError:
+            from scripts.liquid_player_visualizer import (
+                read_published_gui_window_id,
+                read_published_player_window_id,
+            )
+        try:
+            if self._bond_targets_gui():
+                return int(read_published_gui_window_id() or 0)
+            return int(read_published_player_window_id() or 0)
+        except Exception:
+            return 0
 
     # -- stacking ---------------------------------------------------------
     def _set_bonded_stack(self, bonded: bool) -> None:
@@ -190,7 +274,16 @@ class PlayerBondMixin:
             pass
 
     def _find_player_window(self, x11) -> int:
-        """Window id of the Liquid Player this visualizer sits behind."""
+        """Window id of the host this visualizer sits behind.
+
+        The published ``wid`` is preferred: it names the exact window the host
+        owns, so a GUI companion stacks against MP Gui even while a Liquid
+        Player is also open. The title lookup stays as the fallback for a host
+        built before that field existed.
+        """
+        published = self._bond_read_host_window_id()
+        if published > 0:
+            return int(published)
         try:
             import ctypes
             from ctypes import POINTER, byref, c_char_p, c_int, c_uint, c_uint64, c_void_p
@@ -218,6 +311,12 @@ class PlayerBondMixin:
                 mine = int(self.x11_window() or 0)
             except Exception:
                 mine = 0
+            # The host this companion was started for wins; the other host is
+            # only a last resort, so a GUI companion is never sent behind a
+            # Liquid Player just because the player window came first.
+            wanted = self._bond_host_title()
+            other = PLAYER_TITLE if wanted == GUI_TITLE else GUI_TITLE
+            fallback = 0
             for i in range(count.value):
                 wid = children[i]
                 if int(wid) == mine:
@@ -227,10 +326,12 @@ class PlayerBondMixin:
                 if not name.value:
                     continue
                 title = name.value.decode("utf-8", "replace")
-                # The player and MP Gui both publish through this title prefix.
-                if title.startswith("MP Audio Player (Liquid Glass") or \
-                        title.startswith("MP Mix Manager (Liquid Glass"):
+                if title.startswith(wanted):
                     return int(wid)
+                if not fallback and title.startswith(other):
+                    fallback = int(wid)
+            if fallback:
+                return fallback
         except Exception:
             return 0
         finally:
@@ -273,7 +374,7 @@ class PlayerBondMixin:
             except Exception:
                 return None
         try:
-            geometry = read_published_player_window_geometry()
+            geometry = self._bond_read_geometry()
         except Exception:
             return None
         if not geometry:
@@ -304,13 +405,11 @@ class PlayerBondMixin:
         try:
             from liquid_player_visualizer import (
                 read_player_visualizer_state,
-                read_published_player_window_geometry,
                 visualizer_presets,
             )
         except ImportError:
             from scripts.liquid_player_visualizer import (
                 read_player_visualizer_state,
-                read_published_player_window_geometry,
                 visualizer_presets,
             )
 
@@ -366,7 +465,7 @@ class PlayerBondMixin:
             self._next_relower_at = now_relower + 0.5
             self._lower_below_player()
 
-        geometry = read_published_player_window_geometry()
+        geometry = self._bond_read_geometry()
         if geometry:
             x, y, width, height = geometry
             if geometry != self._last_player_geometry:
@@ -388,23 +487,60 @@ class PlayerBondMixin:
         else:
             # A host that publishes only its size still keeps the visualizer
             # on that size; the position stays where the bond put it.
-            try:
-                from liquid_player_visualizer import read_published_player_window_size
-            except ImportError:
-                from scripts.liquid_player_visualizer import read_published_player_window_size
-            size = read_published_player_window_size()
+            size = self._bond_read_size()
             if size and size != tuple(getattr(self, "_windowed_size", ())):
                 self._set_windowed_size(size[0], size[1], apply=True)
 
         self._sync_bonded_preset(read_player_visualizer_state(), visualizer_presets)
 
     def _sync_bonded_preset(self, state: Dict[str, Any], presets: Any) -> None:
-        """Use the same preset the Liquid Player is showing."""
+        """Use the same preset the Liquid Player is showing.
+
+        An explicit preset request wins. ``MP_Liquid_Visualizer.py --preset N``
+        (and the MP Visualizer menu rows) ask for one specific preset, but the
+        player publishes its own ``preset_id`` — so the sync used to drag every
+        window back to the player's preset on the first frame. Picking any
+        preset except the player's then showed someone else's scene: the
+        reported "presets 11 and 12 look wrong" was every preset rendering the
+        saved P2 river, because that was the only id the sync allowed.
+        """
         try:
+            if getattr(self, "_preset_pinned", False):
+                return
             preset_id = int(state.get("preset_id", 0))
             rows = presets() if callable(presets) else presets
             preset = next((row for row in rows if int(row.get("id", -1)) == preset_id), None)
             if preset is not None and int(self.preset.get("id", -1)) != preset_id:
                 self.switch_preset(preset)
+        except Exception:
+            pass
+
+    def _publish_bonded_preset(self, preset: Dict[str, Any]) -> None:
+        """Write a preset chosen in this window back to the player's state.
+
+        A bonded window and the Liquid Player share one preset. Both write the
+        same state file, so a key pressed here (Left/Right, 1-9, + or -) is
+        persisted for the player and is not undone by the next bond poll,
+        which would otherwise still see the player's older ``preset_id``.
+
+        Only a window that is already bonded publishes: a free window must not
+        mark the visualizer active, because that would ask the player to bond a
+        window the user keeps on its own.
+        """
+        if getattr(self, "screensaver", False):
+            return
+        try:
+            if not self._bonding_applies():
+                return
+        except Exception:
+            return
+        if not (getattr(self, "_player_bonded", False) or self._bond_is_locked()):
+            return
+        try:
+            from liquid_player_visualizer import write_player_visualizer_state
+        except ImportError:
+            from scripts.liquid_player_visualizer import write_player_visualizer_state
+        try:
+            write_player_visualizer_state(True, preset)
         except Exception:
             pass

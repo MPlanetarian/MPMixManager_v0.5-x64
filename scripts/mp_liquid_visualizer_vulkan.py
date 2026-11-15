@@ -8,6 +8,12 @@ from ctypes.util import find_library
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+# Raspberry Pi / low-power ARM tuning. Stdlib-only and cheap to import.
+try:
+    import mp_raspberry_pi
+except ImportError:
+    from scripts import mp_raspberry_pi  # type: ignore
+
 try:
     from desktop_launch_screen import (
         fit_square_on_main,
@@ -78,6 +84,21 @@ try:
 except ImportError:
     from scripts.visualizer_player_bond import PlayerBondMixin
 
+try:
+    from visualizer_z_cycle import (
+        WINDOW_MODE_DEFAULT,
+        WINDOW_MODE_FULLSCREEN,
+        WINDOW_MODE_HALF,
+        ZWindowCycleMixin,
+    )
+except ImportError:
+    from scripts.visualizer_z_cycle import (
+        WINDOW_MODE_DEFAULT,
+        WINDOW_MODE_FULLSCREEN,
+        WINDOW_MODE_HALF,
+        ZWindowCycleMixin,
+    )
+
 ROOT = Path(__file__).resolve().parent.parent
 if not (ROOT / "shaders").is_dir() and (Path(__file__).resolve().parent / "shaders").is_dir():
     ROOT = Path(__file__).resolve().parent
@@ -94,15 +115,43 @@ MIN_WINDOW_SIDE = 64
 # other screen falls back to 1920x1080.
 SAVER_MAX_WIDTH, SAVER_MAX_HEIGHT = 1920, 1200
 SAVER_FALLBACK_WIDTH, SAVER_FALLBACK_HEIGHT = 1920, 1080
+# The screen saver is a background effect on a machine that may be running
+# something else, so it renders 80% of the capped area: one fifth of the pixels
+# are simply not shaded. The river is a soft gradient, so the reduction is
+# invisible at viewing distance and saves a measurable amount of GPU time.
+SAVER_PIXEL_SCALE = 0.80
+# The pair the screen saver cycles by default, in order.
+DEFAULT_SAVER_POOL = (
+    "stream_of_frequency_dynamic_waves",
+    "stream_of_frequency_dynamic_waves_p2",
+)
 SAVER_FULLSCREEN_DELAY = 0.35
-# Z cycles the window through these modes: default -> fullscreen -> half -> default.
-WINDOW_MODE_FULLSCREEN, WINDOW_MODE_HALF, WINDOW_MODE_DEFAULT = "fullscreen", "half", "default"
+# Z cycles the window through these modes: default -> fullscreen -> half ->
+# default. The constants and the cycle itself live in visualizer_z_cycle so
+# the Vulkan, Metal and OpenGL backends cannot drift apart; they are imported
+# above and re-exported here for the existing callers.
+
+_BC = os.environ.get("MP_BANDCAMP_URL", "https://mplanetarian.bandcamp.com")
+
+# Reference material (cover art and the video clips behind each preset) used to
+# be pinned to one machine: the developer home and three /run/media drives.
+# On any other install every extra cover silently failed to load. The
+# environment variables let a user point at their own reference folder, and
+# Path.home() means the fallbacks below are at least *their* home.
+_HOME = Path.home()
+_REF = Path(os.environ.get("MP_VISUALIZER_REF_DIR", "")
+            or (_HOME / "MPlanetarian"))
+_GAMES = Path(os.environ.get("MP_VISUALIZER_COVERS_DIR", "")
+              or (_HOME / "MPlanetarian Bandcamp Covers"))
+_WDB = _GAMES
 
 _BC = "https://mplanetarian.bandcamp.com"
-_REF = Path("/run/media/mplanetarian/EXT_004_P1_1TB/MPlanetarian")
-_GAMES = Path("/run/media/mplanetarian/GAMES1/DATA_DRIVE_MOVED/MPlanetarian Bandcamp Covers")
-_WDB = Path("/run/media/mplanetarian/WD BLACK B/MPlanetarian Bandcamp Covers")
-_HOME = Path("/home/mplanetarian")
+
+# The two Stream of Frequency — Dynamic Waves presets. The shader dispatches on
+# these ids, so they are defined here rather than written as bare numbers.
+STREAM_WAVES_HORIZONTAL_ID = 11
+STREAM_WAVES_VERTICAL_ID = 12
+
 
 def _mk_preset(pid: int, key: str, name: str, album: str, c_asset: str, c_cov: str, extra: Optional[Path] = None,
                vid: Optional[str] = None, url: str = _BC, aliases: Tuple[str, ...] = ()) -> Dict[str, Any]:
@@ -156,6 +205,22 @@ VISUALIZER_PRESETS: List[Dict[str, Any]] = [
                vid="20260212 - XI-N： BIFURCATION (2026) [NMxVKbM8hU8].mkv",
                aliases=("chromatic storm", "chromatic_storm", "dreamworlds chromatic storm", "dreamworlds_chromatic_storm",
                         "storm", "chromatic", "dreamworlds storm", "dreamworlds lockscreen", "lockscreen", "11")),
+    # The Dynamic Waves pair closes the library on purpose: the shader branches
+    # on id > 10.5 / < 11.5, and the saver pools name them directly.
+    _mk_preset(STREAM_WAVES_HORIZONTAL_ID, "stream_of_frequency_dynamic_waves",
+               "Stream of Frequency — Dynamic Waves",
+               "MPlanetarian - Stream of Frequency [Dynamic Waves]",
+               "infinite_complexity_stream037_cover.jpg", "Infinite_Complexity_Stream037_Preset.jpg",
+               _WDB / "2026-05-21_MPlanetarian - Stream of Frequency 037 (Who am I- - Episode 005).jpg",
+               aliases=("dynamic waves", "dynamic_waves", "dynamic", "waves", "wave",
+                        "stream_of_frequency_dynamic_waves", "sof waves", "river")),
+    _mk_preset(STREAM_WAVES_VERTICAL_ID, "stream_of_frequency_dynamic_waves_p2",
+               "Stream of Frequency — Dynamic Waves P2",
+               "MPlanetarian - Stream of Frequency [Dynamic Waves P2]",
+               "infinite_complexity_stream037_cover.jpg", "Infinite_Complexity_Stream037_Preset.jpg",
+               _WDB / "2026-05-21_MPlanetarian - Stream of Frequency 037 (Who am I- - Episode 005).jpg",
+               aliases=("dynamic waves p2", "dynamic_waves_p2", "p2", "matrix", "matrix rain",
+                        "vertical", "vertical river", "sof p2", "stream_of_frequency_dynamic_waves_p2")),
 ]
 
 # The MPlanetarian reference clips live on more than one drive. Prefer a path that
@@ -170,7 +235,23 @@ for _preset in VISUALIZER_PRESETS:
         if _candidate.is_file():
             _preset["video_path"] = _candidate
             break
-VISUALIZER_PRESETS[5]["video_path"] = Path("/run/media/mplanetarian/WD BLACK B/MPlanetarian/20260212 - XI-N： BIFURCATION (2026) [NMxVKbM8hU8].mkv")
+
+# Preset 5 used to be overwritten here with one hard-coded absolute path no
+# matter what the search above found, so a machine without that drive got a
+# preset pointing at a file that does not exist. Only override when the clip
+# is actually present, and only the presets that specify one.
+for _preset in VISUALIZER_PRESETS:
+    _vid = _preset.get("mplanetarian_video")
+    if not _vid:
+        continue
+    _existing = _preset.get("video_path")
+    if _existing and Path(_existing).is_file():
+        continue
+    for _root in _VIDEO_SEARCH_DIRS:
+        _candidate = _root / _vid
+        if _candidate.is_file():
+            _preset["video_path"] = _candidate
+            break
 
 _SYS = platform.system().lower()
 _IS_WIN = sys.platform == "win32" or _SYS == "windows"
@@ -200,10 +281,32 @@ def _vr_visualizer_offset() -> Tuple[int, int]:
     except (KeyError, TypeError, ValueError):
         return (0, 0)
 
-def is_windows() -> bool: return _IS_WIN
-def is_windows_10_or_11() -> bool: return _IS_WIN and getattr(sys.getwindowsversion(), "major", 10) >= 10 if hasattr(sys, "getwindowsversion") else _IS_WIN
-def is_macos() -> bool: return _IS_MAC
-def is_apple_silicon() -> bool: return _IS_ARM
+# These read the live interpreter state rather than the module-level constants
+# computed at import. The constants are kept for the hot paths, but a function
+# that only ever returns a snapshot cannot be exercised on another platform, and
+# the cross-platform tests (and any future platform probe) need it to answer for
+# the platform they claim to be on.
+def is_windows() -> bool:
+    return sys.platform == "win32" or platform.system().lower() == "windows"
+
+
+def is_windows_10_or_11() -> bool:
+    if not is_windows():
+        return False
+    try:
+        return getattr(sys.getwindowsversion(), "major", 10) >= 10
+    except AttributeError:
+        return True
+
+
+def is_macos() -> bool:
+    return sys.platform == "darwin" or platform.system().lower() == "darwin"
+
+
+def is_apple_silicon() -> bool:
+    if not is_macos():
+        return False
+    return platform.machine().lower() in ("arm64", "aarch64")
 
 def _load_cdll(cands: List[str], names: Tuple[str, ...], bad: Tuple[str, ...], err: str, fb: Optional[str] = None):
     try:
@@ -218,10 +321,13 @@ def _load_cdll(cands: List[str], names: Tuple[str, ...], bad: Tuple[str, ...], e
     raise RuntimeError(err)
 
 def load_glfw_dll():
-    if _IS_WIN:
+    # Branch on the live probe, not the import-time constant, so a caller that
+    # forces a platform (a test, or a cross-build check) gets that platform's
+    # candidate list instead of the host's.
+    if is_windows():
         from liquid_glass_opengl import load_glfw_dll as _load_opengl_glfw
         return _load_opengl_glfw()
-    if _IS_MAC:
+    if is_macos():
         return _load_cdll(["/opt/homebrew/lib/libglfw.3.dylib", "/opt/homebrew/lib/libglfw.dylib", "/usr/local/lib/libglfw.3.dylib",
                            "/usr/local/lib/libglfw.dylib", "libglfw.3.dylib", "libglfw.dylib"],
                           ("glfw3", "glfw"), (".so", ".dll"), "Could not load GLFW on macOS. Please install GLFW (e.g. 'brew install glfw') or ensure libglfw is available.")
@@ -230,11 +336,11 @@ def load_glfw_dll():
 
 def load_vulkan_dll():
     sdk = os.environ.get("VULKAN_SDK")
-    if _IS_WIN:
+    if is_windows():
         sr = os.environ.get("SystemRoot", "C:\\Windows")
         return _load_cdll(([os.path.join(sdk, "Bin", "vulkan-1.dll")] if sdk else []) + ["vulkan-1.dll", os.path.join(sr, "System32", "vulkan-1.dll"), os.path.join(sr, "SysWOW64", "vulkan-1.dll")],
                           ("vulkan-1", "vulkan"), (".so", ".dylib"), "Could not load Vulkan loader on Windows. Ensure vulkan-1.dll is installed.")
-    if _IS_MAC:
+    if is_macos():
         return _load_cdll(([os.path.join(sdk, "lib", x) for x in ("libMoltenVK.dylib", "libvulkan.1.dylib", "libvulkan.dylib")] if sdk else []) +
                           ["/opt/homebrew/lib/libvulkan.1.dylib", "/opt/homebrew/lib/libvulkan.dylib", "/opt/homebrew/lib/libMoltenVK.dylib",
                            "/usr/local/lib/libvulkan.1.dylib", "/usr/local/lib/libvulkan.dylib", "/usr/local/lib/libMoltenVK.dylib",
@@ -309,6 +415,15 @@ def ensure_macos_vulkan_loader() -> None:
 
 _RAND_KEYS = {"random", "rand", "rnd", "-1", "any", "shuffle"}
 
+# Bare library words that now mean the Dynamic Waves river. They are checked
+# before the generic exact-match pass because "stream_of_frequency" would
+# otherwise win the prefix comparison.
+_SOF_WAVES_ALIASES = frozenset({
+    "dynamic waves", "dynamic_waves", "dynamic", "waves", "wave",
+    "12", "stream", "sof", "stream of frequency", "frequency",
+    "river", "sof waves",
+})
+
 # The presets bound to number keys 1-9, in slot order. Extra entries in
 # VISUALIZER_PRESETS beyond these are reachable with the +/- cycle keys.
 KEY_SLOTS: List[str] = [
@@ -369,6 +484,13 @@ def get_active_preset(preset_arg: Optional[str] = None) -> Dict[str, Any]:
             elif th in ("stream_of_frequency", "stream", "frequency", "sof", "frequency_stream"): t = "stream_of_frequency"
         except OSError: pass
     if t:
+        # The Dynamic Waves pair owns the bare "stream"/"sof"/"frequency" words.
+        # It is the newest thing those words mean, and the older
+        # stream_of_frequency preset keeps its explicit key.
+        if t in _SOF_WAVES_ALIASES:
+            for p in VISUALIZER_PRESETS:
+                if p["key"] == "stream_of_frequency_dynamic_waves":
+                    return p
         for p in VISUALIZER_PRESETS:
             kl = p["key"].lower()
             if t in (str(p["id"] + 1), str(p["id"]), kl, p["name"].lower(), kl.replace("_", "-"), kl.replace("_", " ")) or t in p.get("_aliases", ()): return p
@@ -391,13 +513,19 @@ def load_preset_cover_rgba(preset: Dict[str, Any], tex_size: int = 1024) -> Tupl
         if p.is_file():
             with Image.open(p) as im:
                 return tex_size, tex_size, im.convert("RGBA").resize((tex_size, tex_size), Image.Resampling.LANCZOS).tobytes()
+    # The Dynamic Waves rivers never sample the texture -- they are drawn from
+    # stream telemetry -- so a missing cover must not be fatal there. The page
+    # is paper white, so that is the fill.
+    if str(preset.get("key", "")).startswith("stream_of_frequency_dynamic_waves"):
+        return tex_size, tex_size, bytes([0xFF]) * (tex_size * tex_size * 4)
     raise FileNotFoundError(f"Cover art file not found for preset '{preset.get('name')}'")
 
 
 class AudioTelemetryBridge:
     __slots__ = (
         "config_dir", "state_file", "socket_path", "port_file", "_state_str", "_sock_str", "is_playing", "accum_time", "dynamic_time",
-        "bass_phase", "mid_phase", "high_phase", "beat_pulse", "_prev_bass", "_last_poll", "_last_state_mtime_ns",
+        "bass_phase", "mid_phase", "high_phase", "beat_pulse", "_prev_bass", "_last_poll",
+        "_last_state_mtime_ns", "_last_state_stamp",
         "_cached_status", "bands16", "sub_bass", "bass", "low_mid", "mid", "high_mid", "treble", "air", "rms_energy", "pitch_factor"
     )
 
@@ -408,6 +536,7 @@ class AudioTelemetryBridge:
         self.is_playing = False
         self.accum_time = self.dynamic_time = self.bass_phase = self.mid_phase = self.high_phase = self.beat_pulse = self._prev_bass = self._last_poll = 0.0
         self._last_state_mtime_ns = 0
+        self._last_state_stamp = None
         self._cached_status: Dict[str, Any] = {}
         self.bands16: List[float] = [0.0] * 16
         self.sub_bass = self.bass = self.low_mid = self.mid = self.high_mid = self.treble = self.air = self.rms_energy = 0.0
@@ -418,9 +547,17 @@ class AudioTelemetryBridge:
         changed, st_stat = False, None
         try:
             st_stat = os.stat(self._state_str)
-            if st_stat.st_mtime_ns != self._last_state_mtime_ns:
-                changed, self._last_state_mtime_ns = True, st_stat.st_mtime_ns
-        except OSError: pass
+            # st_mtime_ns alone is not a change token: on a filesystem with
+            # coarse timestamps two writes inside the same tick look identical,
+            # and the bridge then serves a stale state. The size and the mtime
+            # together catch the common case, and both are cheap.
+            stamp = (st_stat.st_mtime_ns, st_stat.st_size)
+            if stamp != getattr(self, "_last_state_stamp", None):
+                changed = True
+                self._last_state_stamp = stamp
+                self._last_state_mtime_ns = st_stat.st_mtime_ns
+        except OSError:
+            pass
 
         if not changed and (now - self._last_poll < 0.025) and self._cached_status:
             return self._cached_status
@@ -575,11 +712,16 @@ GLFW_FOCUSED, GLFW_AUTO_ICONIFY, GLFW_FLOATING, GLFW_ICONIFIED = 0x00020001, 0x0
 GLFW_FOCUS_ON_SHOW, GLFW_PLATFORM, GLFW_PLATFORM_X11, GLFW_DONT_CARE = 0x0002000C, 0x00050003, 0x00060004, -1
 GLFW_KEY_ESCAPE, GLFW_KEY_Q, GLFW_KEY_Z, GLFW_KEY_SPACE = 256, 81, 90, 32
 # R toggles random mode: a new random preset every RANDOM_PRESET_INTERVAL secs.
+GLFW_KEY_H = 72
 GLFW_KEY_R = 82
 GLFW_KEY_1, GLFW_KEY_2, GLFW_KEY_3, GLFW_KEY_4, GLFW_KEY_5, GLFW_KEY_6, GLFW_KEY_7, GLFW_KEY_8, GLFW_KEY_9 = range(49, 58)
 # Preset cycle keys. GLFW reports the "=" key as 61 (shifted it produces "+"),
 # 45 is "-", and the numeric keypad sends 334 ("+") / 333 ("-").
 GLFW_KEY_EQUAL, GLFW_KEY_MINUS, GLFW_KEY_KP_ADD, GLFW_KEY_KP_SUBTRACT = 61, 45, 334, 333
+# The arrow keys also step through presets, wrapping at both ends. The MP
+# Liquid Player binds the same keys while its visualizer is on, so the two
+# windows behave alike; the player keeps +/- for the track's pitch.
+GLFW_KEY_LEFT, GLFW_KEY_RIGHT = 263, 262
 # F10 spans every other monitor with a plain preset; F11 does the same in
 # random mode. Pressing either again (in any of the spanned windows) tears the
 # span down again.
@@ -662,7 +804,7 @@ VkBufferImageCopy = _S("VkBufferImageCopy", ("bufferOffset", U64), ("bufferRowLe
 VkImageBlit = _S("VkImageBlit", ("srcSubresource", VkImageSubresourceLayers), ("srcOffsets", VkOffset3D * 2), ("dstSubresource", VkImageSubresourceLayers), ("dstOffsets", VkOffset3D * 2))
 VkFenceCreateInfo = _S("VkFenceCreateInfo", ("sType", U32), ("pNext", VP), ("flags", U32))
 VkSemaphoreCreateInfo = _S("VkSemaphoreCreateInfo", ("sType", U32), ("pNext", VP), ("flags", U32))
-VisualizerUBO = _S("VisualizerUBO", ("res", F32 * 4), ("audio0", F32 * 4), ("audio1", F32 * 4), ("audio2", F32 * 4), ("bands0", F32 * 4), ("bands1", F32 * 4), ("bands2", F32 * 4), ("bands3", F32 * 4), ("preset", F32 * 4))
+VisualizerUBO = _S("VisualizerUBO", ("res", F32 * 4), ("audio0", F32 * 4), ("audio1", F32 * 4), ("audio2", F32 * 4), ("bands0", F32 * 4), ("bands1", F32 * 4), ("bands2", F32 * 4), ("bands3", F32 * 4), ("preset", F32 * 4), ("stream", F32 * 4))
 _VkExtProp = _S("_VkExtProp", ("extensionName", c_char * 256), ("specVersion", U32))
 _WinPOINT = _S("_WinPOINT", ("x", c_int), ("y", c_int))
 
@@ -687,24 +829,26 @@ def select_vulkan_device(devices: List[Dict[str, Any]]) -> int:
     raise RuntimeError("MP_Liquid_Visualizer requires a Vulkan-capable GPU.")
 
 
-def saver_target_resolution(monitor_width: int, monitor_height: int) -> Tuple[int, int]:
-    """Render size for one screensaver screen.
-
-    The screensaver fills every attached display, but the render target is
-    capped at 1920x1200. A display that can natively do 1920x1200 (or taller,
-    16:10 workstation panels) is driven at 1920x1200; anything else falls back
-    to 1920x1080. The cap never upscales past the panel's own native size, so a
-    smaller screen still renders at its native resolution.
-    """
+def saver_render_cap(monitor_width: int, monitor_height: int) -> Tuple[int, int]:
+    """The pre-reduction cap: 1920x1200, 1920x1080, or the panel's own size."""
     mw, mh = max(1, int(monitor_width)), max(1, int(monitor_height))
     if mw >= SAVER_MAX_WIDTH and mh >= SAVER_MAX_HEIGHT:
-        # Panel can hold the full 16:10 target.
         return SAVER_MAX_WIDTH, SAVER_MAX_HEIGHT
     if mw >= SAVER_FALLBACK_WIDTH and mh >= SAVER_FALLBACK_HEIGHT:
-        # Panel holds 1920x1080 but not 1920x1200.
         return SAVER_FALLBACK_WIDTH, SAVER_FALLBACK_HEIGHT
-    # Smaller panel: render at its native size rather than upscaling.
     return mw, mh
+
+
+def saver_target_resolution(monitor_width: int, monitor_height: int) -> Tuple[int, int]:
+    """The pixels actually shaded for one saver screen.
+
+    The cap above is the contract ceiling; this applies the 80% pixel budget on
+    top of it. Scaling both axes by sqrt keeps the aspect ratio, so the picture
+    is identical, just cheaper to draw.
+    """
+    width, height = saver_render_cap(monitor_width, monitor_height)
+    scale = math.sqrt(SAVER_PIXEL_SCALE)
+    return (max(1, int(width * scale) & ~1), max(1, int(height * scale) & ~1))
 
 
 def saver_screen_plan(monitors: List[Tuple[str, Tuple[int, int, int, int]]]) -> List[Dict[str, Any]]:
@@ -721,7 +865,7 @@ def saver_screen_plan(monitors: List[Tuple[str, Tuple[int, int, int, int]]]) -> 
             continue
         if w < MIN_WINDOW_SIDE or h < MIN_WINDOW_SIDE:
             continue
-        rw, rh = saver_target_resolution(w, h)
+        rw, rh = saver_render_cap(w, h)
         plan.append({
             "index": index,
             "name": name,
@@ -731,7 +875,8 @@ def saver_screen_plan(monitors: List[Tuple[str, Tuple[int, int, int, int]]]) -> 
     return plan
 
 
-class LiquidVisualizerVulkanRenderer(MonitorSpanMixin, RandomPresetMixin, PlayerBondMixin):
+class LiquidVisualizerVulkanRenderer(MonitorSpanMixin, RandomPresetMixin, PlayerBondMixin,
+                                     ZWindowCycleMixin):
     width = WINDOW_WIDTH
     height = WINDOW_HEIGHT
 
@@ -754,6 +899,13 @@ class LiquidVisualizerVulkanRenderer(MonitorSpanMixin, RandomPresetMixin, Player
                  span_bounds: Optional[Tuple[int, int, int, int]] = None, span_role: str = "",
                  saver_render: Optional[Tuple[int, int]] = None):
         self.preset = get_active_preset(preset_name)
+        # A preset named on the command line is a deliberate choice, so the
+        # player-bond sync must not drag this window back to the player's
+        # preset. Without the pin, ``--preset 3`` opened the saved P2 river.
+        # "random" is not a choice: it must keep following the player bond and
+        # its own auto-advance, or three launchers that pass ``--preset random``
+        # would freeze on the first pick.
+        self._preset_pinned = bool(preset_name) and str(preset_name).strip().lower() not in _RAND_KEYS
         self.title = "MP Liquid Visualizer"
         self.target_4k = target_4k
         self.fullscreen_on_start = fullscreen or target_4k
@@ -833,6 +985,10 @@ class LiquidVisualizerVulkanRenderer(MonitorSpanMixin, RandomPresetMixin, Player
         )
         self._user_selected_window_mode = False
         self.window_mode = WINDOW_MODE_FULLSCREEN if self.fullscreen_on_start else WINDOW_MODE_DEFAULT
+        # The Z cycle remembers the shape the window had when the user first
+        # pressed Z on this window, which is what the third press restores.
+        self._z_original_size: Optional[Tuple[int, int]] = None
+        self._z_original_pos: Optional[Tuple[int, int]] = None
         self.width, self.height = self._windowed_size
         self._cur_pos = self._saved_window_pos = self._windowed_offset
         self._images, self._views, self._framebuffers, self._image_available, self._render_finished, self._fences, self._cmd = [], [], [], [], [], [], []
@@ -843,7 +999,11 @@ class LiquidVisualizerVulkanRenderer(MonitorSpanMixin, RandomPresetMixin, Player
         self._march_image = self._march_memory = self._march_view = self._march_fb = self._march_pass = 0
         self._folded_spv = None
         self._preset_pipelines = {}
-        self._ubo_flat = (F32 * 36)()
+        # VisualizerUBO is 40 floats (res/audio0-2/bands0-3/preset/stream).
+        # A 36-float staging buffer silently dropped the whole ``stream`` vec4
+        # on the path where the mapped buffer is unavailable, so the river
+        # presets lost their PID phase and heat.
+        self._ubo_flat = (F32 * (sizeof(VisualizerUBO) // 4))()
         self._ubo_flat_ptr = byref(self._ubo_flat)
         # Hot-loop caches. The framebuffer size only changes when GLFW fires
         # its resize callback, so querying it every frame (a syscall into the
@@ -1011,7 +1171,7 @@ class LiquidVisualizerVulkanRenderer(MonitorSpanMixin, RandomPresetMixin, Player
         self._match_player_window(wait=True)
         self._silence_overlays()
         self._x11 = None
-        if not _IS_WIN and not _IS_MAC:
+        if not is_windows() and not is_macos():
             try:
                 self._x11 = ctypes.CDLL("libX11.so.6")
                 self._x11.XInitThreads.restype = c_int
@@ -1126,13 +1286,30 @@ class LiquidVisualizerVulkanRenderer(MonitorSpanMixin, RandomPresetMixin, Player
                     fn.restype, fn.argtypes = res, args
                 except Exception: pass
 
-    def win32_window(self): return self._glfw.glfwGetWin32Window(self._window) if _IS_WIN and hasattr(self._glfw, "glfwGetWin32Window") and self._window else 0
-    def cocoa_window(self): return self._glfw.glfwGetCocoaWindow(self._window) if _IS_MAC and hasattr(self._glfw, "glfwGetCocoaWindow") and self._window else 0
+    def win32_window(self):
+        # Probe the live platform: returning a host-platform snapshot means the
+        # Mac/Windows branches cannot be exercised (or cross-checked) anywhere
+        # else, and the guards below are the only thing keeping a GLFW call off
+        # a platform where it does not exist.
+        if not is_windows() or not getattr(self, "_window", 0):
+            return 0
+        glfw = getattr(self, "_glfw", None)
+        if glfw is None or not hasattr(glfw, "glfwGetWin32Window"):
+            return 0
+        return glfw.glfwGetWin32Window(self._window)
+
+    def cocoa_window(self):
+        if not is_macos() or not getattr(self, "_window", 0):
+            return 0
+        glfw = getattr(self, "_glfw", None)
+        if glfw is None or not hasattr(glfw, "glfwGetCocoaWindow"):
+            return 0
+        return glfw.glfwGetCocoaWindow(self._window)
     def x11_window(self):
         # A GLFW window's X11 id never changes while it is alive, so the first
         # lookup is cached. This is called several times per frame by the
         # corner mask and the player-bond logic.
-        if not _IS_WIN and not _IS_MAC and getattr(self, "_window", None):
+        if not is_windows() and not is_macos() and getattr(self, "_window", None):
             cached = getattr(self, "_x11_handle", None)
             if cached is not None:
                 return cached
@@ -1145,7 +1322,7 @@ class LiquidVisualizerVulkanRenderer(MonitorSpanMixin, RandomPresetMixin, Player
             self._x11_handle = 0
         return 0
     def x11_display(self):
-        if not _IS_WIN and not _IS_MAC and getattr(self, "_window", None):
+        if not is_windows() and not is_macos() and getattr(self, "_window", None):
             cached = getattr(self, "_x11_display_handle", None)
             if cached is not None:
                 return cached
@@ -1321,6 +1498,13 @@ class LiquidVisualizerVulkanRenderer(MonitorSpanMixin, RandomPresetMixin, Player
         elif key == GLFW_KEY_Z:
             # Z cycles: fullscreen -> half size -> default size.
             self._cycle_window_mode_for_user()
+        elif key == GLFW_KEY_H:
+            # Hidden Mode: hide or restore every MP window.
+            try:
+                import mp_hidden_mode as hidden
+                hidden.toggle()
+            except Exception:
+                pass
         elif key == GLFW_KEY_R:
             # R toggles random mode: switch to a new random preset every
             # RANDOM_PRESET_INTERVAL seconds. Pressing it again stops the
@@ -1329,7 +1513,7 @@ class LiquidVisualizerVulkanRenderer(MonitorSpanMixin, RandomPresetMixin, Player
             print(f"[LiquidVisualizer] Random mode {'on' if forward else 'off'}",
                   file=sys.stderr)
         elif key == 75 and (_mods & 1):
-            if _IS_WIN:
+            if is_windows():
                 subprocess.run('taskkill /F /FI "WINDOWTITLE eq MP Audio Player*" >nul 2>&1', shell=True)
                 subprocess.run('powershell.exe -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like \'*MP_Audio_Player*\' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }" >nul 2>&1', shell=True)
             else:
@@ -1344,6 +1528,13 @@ class LiquidVisualizerVulkanRenderer(MonitorSpanMixin, RandomPresetMixin, Player
             # own volume and mode controls, so it must never share these keys.
             forward = key in (GLFW_KEY_EQUAL, GLFW_KEY_KP_ADD)
             nxt = cycle_preset(self.preset, 1 if forward else -1)
+            if nxt is not None: self.switch_preset(nxt)
+        elif key in (GLFW_KEY_LEFT, GLFW_KEY_RIGHT):
+            # Left/Right step through the whole library too, wrapping at both
+            # ends. These preset keys live only in this window: the MP Liquid
+            # Player keeps its own Left/Right for ±10 s seeking, so an arrow
+            # pressed there can never change the theme out from under a video.
+            nxt = cycle_preset(self.preset, 1 if key == GLFW_KEY_RIGHT else -1)
             if nxt is not None: self.switch_preset(nxt)
 
     def is_4k_display(self, mon=None) -> bool:
@@ -1459,35 +1650,23 @@ class LiquidVisualizerVulkanRenderer(MonitorSpanMixin, RandomPresetMixin, Player
             return self.is_fullscreen
         return self.toggle_fullscreen()
 
-    def _cycle_window_mode_for_user(self) -> str:
-        """The Z key cycle: default -> fullscreen -> half -> default.
+    # -- ZWindowCycleMixin primitives -------------------------------------
+    def _z_window_size(self) -> Tuple[int, int]:
+        """The live windowed size, not the constructor's guess.
 
-        While the visualizer is bonded behind the Liquid Player the window is
-        owned by the player, so there is nothing to cycle. A locked companion
-        owns no geometry of its own, so Z does nothing for it.
+        ``_windowed_size`` is what the per-frame size lock enforces and what
+        the player bond keeps in step, so it is the shape the user is looking
+        at when they first press Z.
         """
-        if self._player_bonded or self._bond_is_locked():
-            return self.window_mode
-        return self.cycle_window_mode()
+        return int(self._windowed_size[0]), int(self._windowed_size[1])
 
-    def cycle_window_mode(self) -> str:
-        """Advance the window cycle: default -> fullscreen -> half -> default."""
-        if self.is_fullscreen or self.window_mode == WINDOW_MODE_FULLSCREEN:
-            self._user_selected_window_mode = True
-            self._set_windowed_size(self._half_windowed_size[0], self._half_windowed_size[1])
-            self.window_mode = WINDOW_MODE_HALF
-            self._leave_fullscreen_at(self._half_windowed_size, self._half_windowed_offset)
-        elif self.window_mode == WINDOW_MODE_HALF:
-            default_size, default_offset = self._default_windowed_size, self._default_windowed_offset
-            self._user_selected_window_mode = True
-            self._set_windowed_size(default_size[0], default_size[1])
-            self.window_mode = WINDOW_MODE_DEFAULT
-            self._leave_fullscreen_at(default_size, default_offset)
-        else:
-            self.window_mode = WINDOW_MODE_FULLSCREEN
-            self._user_selected_window_mode = True
-            self.toggle_fullscreen()          # enters fullscreen
-        return self.window_mode
+    def _z_window_pos(self) -> Tuple[int, int]:
+        return self.window_pos()
+
+    def _z_apply_windowed(self, width: int, height: int, x: int, y: int) -> None:
+        """Place the borderless window at width/height/x/y and stay windowed."""
+        self._set_windowed_size(int(width), int(height))
+        self._leave_fullscreen_at((int(width), int(height)), (int(x), int(y)))
 
     def _leave_fullscreen_at(self, size: Tuple[int, int], offset: Tuple[int, int]) -> None:
         """Leave fullscreen (if needed) and place the borderless window at size/offset."""
@@ -1508,6 +1687,7 @@ class LiquidVisualizerVulkanRenderer(MonitorSpanMixin, RandomPresetMixin, Player
         self._user_toggled_windowed = True
         self.width, self.height = width, height
         self._cur_pos = self._saved_window_pos = (x, y)
+        self._win_size = (width, height)
         self._resize = True
 
     def _leave_fullscreen(self) -> None:
@@ -1646,9 +1826,16 @@ class LiquidVisualizerVulkanRenderer(MonitorSpanMixin, RandomPresetMixin, Player
                 self._fb_size = size
         w, h = size
         if not self.is_fullscreen: return max(1, w), max(1, h)
-        if self._is_4k_cached or w >= FOUR_K_MIN_WIDTH or h >= FOUR_K_MIN_HEIGHT:
+        if self._is_4k_cached:
             return RENDER_1080P_WIDTH, RENDER_1080P_HEIGHT
-        return max(1, w), max(1, h)
+        # A 4K surface (a compositor that did not take the 1080p mode request,
+        # or a TV left at 2160p) is drawn at 1080p and scaled by the swapchain,
+        # so the march never runs at native 4K.
+        try:
+            from liquid_player_visualizer import fullscreen_render_cap
+        except ImportError:
+            from scripts.liquid_player_visualizer import fullscreen_render_cap
+        return fullscreen_render_cap(max(1, w), max(1, h), True)
 
     def window_pos(self) -> Tuple[int, int]:
         if getattr(self, "_window", None) and getattr(self, "_glfw", None):
@@ -1724,6 +1911,21 @@ class LiquidVisualizerVulkanRenderer(MonitorSpanMixin, RandomPresetMixin, Player
                 self.width, self.height = (RENDER_1080P_WIDTH, RENDER_1080P_HEIGHT) if (self._is_4k_cached or ww >= FOUR_K_MIN_WIDTH or wh >= FOUR_K_MIN_HEIGHT) else (ww, wh)
         return not self.should_close
 
+    def view_hidden(self) -> bool:
+        """True while the window is minimized or hidden, so no frame can be seen.
+
+        GLFW keeps both states from window-manager events, so these are local
+        lookups rather than window-system round trips.
+        """
+        g, w = getattr(self, "_glfw", None), getattr(self, "_window", None)
+        if g is None or not w or not hasattr(g, "glfwGetWindowAttrib"):
+            return False
+        try:
+            return (g.glfwGetWindowAttrib(w, GLFW_ICONIFIED) == GLFW_TRUE
+                    or g.glfwGetWindowAttrib(w, GLFW_VISIBLE) == GLFW_FALSE)
+        except Exception:
+            return False
+
     def _bind_loader(self):
         v = self._vulkan
         v.vkGetInstanceProcAddr.restype, v.vkGetInstanceProcAddr.argtypes = VP, [VP, CP]
@@ -1747,7 +1949,7 @@ class LiquidVisualizerVulkanRenderer(MonitorSpanMixin, RandomPresetMixin, Player
                 avail = {p.extensionName.split(b"\x00")[0] for p in ap}
 
         flags = 0
-        if b"VK_KHR_portability_enumeration" in avail or _IS_MAC:
+        if b"VK_KHR_portability_enumeration" in avail or is_macos():
             if b"VK_KHR_portability_enumeration" not in names: names.append(b"VK_KHR_portability_enumeration")
             flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR
         if b"VK_KHR_get_physical_device_properties2" in avail and b"VK_KHR_get_physical_device_properties2" not in names:
@@ -1893,14 +2095,13 @@ class LiquidVisualizerVulkanRenderer(MonitorSpanMixin, RandomPresetMixin, Player
     def _create_swapchain(self, old=0):
         caps, fmt, present = self._surface_choices()
         self.format, self._colorspace = int(fmt.format), int(fmt.colorSpace)
+        # ``framebuffer_size`` already applies the 1080p fullscreen policy, so
+        # the swapchain is created at the size the march will draw. Deriving a
+        # second, different size here made a 4K surface march at 1080p into a
+        # 4K swapchain and recreate it on every frame.
         fw, fh = self.framebuffer_size()
-        if caps.currentExtent.width != 0xFFFFFFFF and caps.currentExtent.width > 0:
-            ext = (int(caps.currentExtent.width), int(caps.currentExtent.height))
-        else:
-            efw = min(fw, RENDER_1080P_WIDTH) if (self.is_fullscreen and self._is_4k_cached) else fw
-            efh = min(fh, RENDER_1080P_HEIGHT) if (self.is_fullscreen and self._is_4k_cached) else fh
-            ext = (min(max(efw, caps.minImageExtent.width), caps.maxImageExtent.width),
-                   min(max(efh, caps.minImageExtent.height), caps.maxImageExtent.height))
+        ext = (min(max(fw, caps.minImageExtent.width), caps.maxImageExtent.width),
+               min(max(fh, caps.minImageExtent.height), caps.maxImageExtent.height))
         if ext[0] == 0 or ext[1] == 0: ext = (fw, fh)
 
         ic = max(caps.minImageCount, 3)
@@ -2240,6 +2441,10 @@ class LiquidVisualizerVulkanRenderer(MonitorSpanMixin, RandomPresetMixin, Player
         # copies and screensaver windows must not rewrite the active preset.
         if self._span_role != ROLE_SPAWNED and not getattr(self, "screensaver", False):
             save_active_preset(self.preset["key"])
+            # A bonded companion is the same visualizer the player shows, so
+            # publish the choice back or the player's next bond poll would
+            # switch it straight back.
+            self._publish_bonded_preset(self.preset)
         if hasattr(self, "_device") and self._device and getattr(self, "_tex_sampler", 0):
             try:
                 self._vk.QueueWaitIdle(self._queue)
@@ -2420,6 +2625,29 @@ class LiquidVisualizerVulkanRenderer(MonitorSpanMixin, RandomPresetMixin, Player
         self._hot_scissor.extent.width, self._hot_scissor.extent.height = ew, eh
         self._hot_swap.value = self._swapchain
 
+    def _stream_vector(self, bridge: AudioTelemetryBridge):
+        """The ``u.stream`` vector for this frame.
+
+        The screen saver has no player, so it is driven by new Linux PIDs; the
+        player window is driven by beats. Both come from pid_stream, which owns
+        one driver per window so two windows keep separate clocks.
+        """
+        try:
+            import pid_stream
+        except Exception:
+            return (0.0, 0.0, 0.0, 0.0)
+        mode = "pid" if getattr(self, "screensaver", False) else "audio"
+        now = float(getattr(bridge, "accum_time", 0.0) or 0.0)
+        dt = 1.0 / 60.0
+        try:
+            dt = float(getattr(bridge, "frame_dt", dt) or dt)
+        except (TypeError, ValueError):
+            pass
+        return pid_stream.stream_vector(
+            mode, int(self._preset_id_float), now, dt,
+            bridge=bridge, key=f"viz-{id(self)}",
+        )
+
     def _write_ubo(self, bridge: AudioTelemetryBridge):
         """Publish one frame of telemetry. Partial writes go into a staging
         struct first, but the staging copy is skipped once the mapped buffer
@@ -2462,11 +2690,24 @@ class LiquidVisualizerVulkanRenderer(MonitorSpanMixin, RandomPresetMixin, Player
         u[33] = bridge.pitch_factor
         u[34] = 1.0
         u[35] = getattr(bridge, "dynamic_time", bridge.accum_time)
+        # Dynamic Waves: the river reads this vector. Other presets get zeros,
+        # so nothing else changes behaviour. Guard the width because a test
+        # double (or an older staging buffer) may be exactly 36 floats.
+        sid, sprime, sheat, sserial = self._stream_vector(bridge)
+        if len(u) >= 40:
+            u[36] = sid
+            u[37] = sprime
+            u[38] = sheat
+            u[39] = sserial
         if self._ubo_mapped is None:
             memmove(self._ubo_ptr, self._ubo_flat_ptr, self._ubo_size)
 
     def draw(self, bridge: AudioTelemetryBridge, capture: bool = False):
         if not self.poll(): return None
+        # A minimized or hidden window shows no frame, so it is not rendered.
+        # The readback self-test still renders: it is the one caller that reads
+        # the pixels back.
+        if not capture and self.view_hidden(): return None
         # Random mode advances here so it follows the real render clock and
         # never fires while the window is hidden or the screensaver is up.
         self.poll_random_mode()
@@ -2669,10 +2910,12 @@ def save_png(path: Union[str, Path], width: int, height: int, bgra: bytes, swap_
 def run_self_test(png_path: Optional[Union[str, Path]] = None, preset_name: Optional[str] = None,
                   backend: Optional[str] = None) -> str:
     try:
-        from visualizer_backend import BACKEND_OPENGL, resolve
+        from visualizer_backend import BACKEND_METAL, BACKEND_OPENGL, resolve
     except ImportError:
-        from scripts.visualizer_backend import BACKEND_OPENGL, resolve
+        from scripts.visualizer_backend import BACKEND_METAL, BACKEND_OPENGL, resolve
     chosen = resolve(backend)
+    if chosen == BACKEND_METAL:
+        return _run_metal_self_test(png_path, preset_name)
     if chosen == BACKEND_OPENGL:
         return _run_opengl_self_test(png_path, preset_name)
 
@@ -2750,6 +2993,57 @@ def _run_opengl_self_test(png_path: Optional[Union[str, Path]] = None,
         renderer.close()
 
 
+def _run_metal_self_test(png_path: Optional[Union[str, Path]] = None,
+                         preset_name: Optional[str] = None) -> str:
+    """The Metal half of ``run_self_test``, with the same pause check.
+
+    It runs the real renderer - real window, real Metal device, real raymarch -
+    and reads the finished frame back, so a passing self-test means the whole
+    path from the GLSL source to the GPU output works, not just that the module
+    imports.
+    """
+    try:
+        from mp_liquid_visualizer_metal import LiquidVisualizerMetalRenderer
+    except ImportError:
+        from scripts.mp_liquid_visualizer_metal import LiquidVisualizerMetalRenderer
+    renderer = LiquidVisualizerMetalRenderer(preset_name or get_active_preset()["name"])
+    bridge = AudioTelemetryBridge()
+    try:
+        renderer.open()
+        ww, wh = renderer.window_size()
+        if min(ww, wh) < 64:
+            raise RuntimeError(f"Expected a Metal window of at least 64x64, got {ww}x{wh}")
+
+        for _ in range(5):
+            bridge.update(0.12, force_playing=True, synthetic_audio=True)
+            renderer.draw(bridge, capture=False)
+        t_playing = bridge.accum_time
+        if t_playing <= 0.0:
+            raise RuntimeError("accum_time did not advance while playing")
+
+        bridge.update(0.50, force_playing=False, synthetic_audio=True)
+        if bridge.accum_time != t_playing:
+            raise RuntimeError("accum_time advanced while music was stopped/paused")
+
+        bridge.update(0.15, force_playing=True, synthetic_audio=True)
+        pixels = renderer.draw(bridge, capture=True)
+        if not pixels:
+            raise RuntimeError(f"Metal did not produce a readable {ww}x{wh} frame")
+        w, h, bgra = pixels
+        if min(w, h) < 16:
+            raise RuntimeError(f"Metal returned a {w}x{h} frame, which is not usable")
+        # A frame of pure black means the raymarch ran but produced nothing,
+        # which is the failure mode a "did the call return" check would miss.
+        if not any(bgra[i] for i in range(0, min(len(bgra), 4 * 4096), 97)):
+            raise RuntimeError("Metal produced an all-black frame")
+        if png_path:
+            save_png(png_path, w, h, bgra, swap_rb=True)
+        print(f"MP_LIQUID_VISUALIZER_OK {renderer.summary}", flush=True)
+        return renderer.summary
+    finally:
+        renderer.close()
+
+
 def _autoplay_bridge(min_energy: float = 0.55) -> "AudioTelemetryBridge":
     """Telemetry bridge that always reports playing audio for the screensaver.
 
@@ -2769,15 +3063,106 @@ def _make_renderer(preset_name: Optional[str] = None, max_seconds: Optional[floa
                    span_role: str = ""):
     """Pick the renderer class for the requested backend and build it."""
     try:
-        from visualizer_backend import renderer_class, resolve
+        from visualizer_backend import (BACKEND_METAL, BACKEND_OPENGL, BACKEND_VULKAN,
+                                        normalise, renderer_class, resolve)
     except ImportError:
-        from scripts.visualizer_backend import renderer_class, resolve
+        from scripts.visualizer_backend import (BACKEND_METAL, BACKEND_OPENGL,
+                                                BACKEND_VULKAN, normalise,
+                                                renderer_class, resolve)
     chosen = resolve(backend)
-    renderer = renderer_class(chosen)(preset_name, fullscreen=fullscreen, target_4k=target_4k,
-                                      span_bounds=span_bounds, span_role=span_role)
+    try:
+        renderer = renderer_class(chosen)(preset_name, fullscreen=fullscreen,
+                                          target_4k=target_4k,
+                                          span_bounds=span_bounds, span_role=span_role)
+    except (ImportError, OSError, RuntimeError) as exc:
+        # A configured backend can still be unrunnable on the machine in front
+        # of us: vendor ids get misdetected, a loader is installed with no ICD
+        # behind it, or PyOpenGL was never installed on macOS. Rather than
+        # crashing out of the launcher, fall back to one that does work and say
+        # so on stderr. An explicit ``--backend`` is the user's decision and is
+        # never overridden silently.
+        explicit = normalise(backend) if backend else BACKEND_OPENGL
+        fallback = _fallback_backend(chosen, explicit != chosen)
+        if fallback is None or fallback == chosen:
+            raise
+        print(f"[LiquidVisualizer] {chosen} backend is unavailable ({exc}); "
+              f"using {fallback} instead.", file=sys.stderr)
+        chosen = fallback
+        renderer = renderer_class(chosen)(preset_name, fullscreen=fullscreen,
+                                          target_4k=target_4k,
+                                          span_bounds=span_bounds, span_role=span_role)
     # Remembered so spawned F10/F11 windows use the same drawing backend.
     renderer._span_backend = chosen
     return renderer
+
+
+def _open_with_fallback(renderer, preset_name=None, backend=None, **kwargs):
+    """``renderer.open()``, retrying on a Runnable backend when the first fails.
+
+    Construction rarely fails but opening does: ``open()`` is where GLFW, the
+    GPU device and the shader compiler are touched. A backend can be detected
+    correctly and still be unusable in this environment (Metal in a VM with no
+    GPU, Vulkan with a loader and no ICD, OpenGL without PyOpenGL on macOS), and
+    the user should get a window rather than a traceback.
+    """
+    try:
+        renderer.open()
+        return renderer
+    except (ImportError, OSError, RuntimeError) as exc:
+        chosen = getattr(renderer, "_span_backend", None)
+        if chosen is None:
+            raise
+        fallback = _fallback_backend(chosen, was_explicit=False)
+        if fallback is None or fallback == chosen:
+            raise
+        print(f"[LiquidVisualizer] {chosen} backend failed to open ({exc}); "
+              f"using {fallback} instead.", file=sys.stderr)
+        try:
+            renderer.close()
+        except Exception:
+            pass
+        try:
+            from visualizer_backend import renderer_class
+        except ImportError:
+            from scripts.visualizer_backend import renderer_class
+        renderer = renderer_class(fallback)(preset_name, **kwargs)
+        renderer._span_backend = fallback
+        renderer.open()
+        return renderer
+
+
+def _fallback_backend(failed: str, was_explicit: bool) -> Optional[str]:
+    """The backend to try when ``failed`` cannot run here.
+
+    Metal is preferred on macOS, then Vulkan, then OpenGL. A failure of an
+    explicitly requested backend still falls back, because leaving the user
+    with a traceback and no window is worse than drawing with another GPU
+    path; the message on stderr explains what happened.
+    """
+    try:
+        from visualizer_backend import (BACKEND_METAL, BACKEND_OPENGL,
+                                        BACKEND_VULKAN, metal_available,
+                                        vulkan_available)
+    except ImportError:
+        from scripts.visualizer_backend import (BACKEND_METAL, BACKEND_OPENGL,
+                                                BACKEND_VULKAN, metal_available,
+                                                vulkan_available)
+    order = [BACKEND_METAL, BACKEND_VULKAN, BACKEND_OPENGL]
+    available = {
+        BACKEND_METAL: metal_available,
+        BACKEND_VULKAN: vulkan_available,
+        BACKEND_OPENGL: lambda: True,
+    }
+    for candidate in order:
+        if candidate == failed:
+            continue
+        check = available[candidate]
+        try:
+            if check():
+                return candidate
+        except Exception:
+            continue
+    return None
 
 
 def _make_saver_renderer(preset_name: Optional[str], bounds, render, backend: Optional[str] = None):
@@ -2837,12 +3222,14 @@ def _saver_loop(renderer, dwell: float, cycle_to_next: bool,
     """The per-window screensaver draw loop, with preset cycling and wake-exit."""
     bridge = AudioTelemetryBridge()
     if not already_open:
-        renderer.open()
+        renderer = _open_with_fallback(renderer, renderer.preset.get("key"),
+                                       getattr(renderer, "_span_backend", None))
     _saver_hide_cursor(renderer)
 
     monotonic = time.monotonic
     last_t = start_t = monotonic()
     last_switch = start_t
+    session_started = float((shared_session or {}).get("started_at") or 0.0)
     pace = [last_t + _FRAME_INTERVAL, monitor_refresh_interval(renderer)]
     update, draw = bridge.update, renderer.draw
     try:
@@ -2858,10 +3245,25 @@ def _saver_loop(renderer, dwell: float, cycle_to_next: bool,
 
             # A spawned screen exits when the owner closes (or is woken).
             if shared_session is not None:
-                if read_span_session() is None:
+                live = read_span_session()
+                if live is None:
                     break
-                owner_pid = getattr(renderer, "_saver_owner_pid", 0)
-                if owner_pid and not pid_alive(owner_pid):
+                owner_pid = int(getattr(renderer, "_saver_owner_pid", 0) or 0)
+                is_owner = bool(getattr(renderer, "_saver_is_owner", False))
+                if is_owner:
+                    live_pid = int(live.get("owner_pid", 0) or 0)
+                    newer = (live.get("started_at") or 0) > (session_started or 0)
+                    if live_pid != owner_pid and newer:
+                        if pid_alive(live_pid):
+                            # A live newer wall has taken over: step down so it
+                            # can own the screen.
+                            break
+                        # The newer owner is gone. Reclaim the file rather than
+                        # leaving the machine with no saver at all.
+                        reclaimed = dict(shared_session)
+                        reclaimed["owner_pid"] = owner_pid
+                        write_span_session(reclaimed)
+                elif owner_pid and not pid_alive(owner_pid):
                     break
 
             if cycle_to_next and dwell > 0 and (now - last_switch) >= dwell:
@@ -2891,9 +3293,19 @@ def _saver_loop(renderer, dwell: float, cycle_to_next: bool,
         except Exception:
             pass
 
-    # A woken owner takes the whole wall down with it.
+    # A woken owner takes the whole wall down with it -- but only its own
+    # session. A newer wall may have replaced the file, and deleting that would
+    # close a saver the user is still watching.
     if shared_session is not None and renderer._wake_event:
-        clear_span_session()
+        live = read_span_session()
+        ours = (
+            live is not None
+            and int(live.get("owner_pid", 0) or 0) == int(
+                getattr(renderer, "_saver_owner_pid", 0) or 0)
+            and live.get("started_at") == shared_session.get("started_at")
+        )
+        if ours:
+            clear_span_session()
     return 0
 
 
@@ -2901,7 +3313,8 @@ def run_screensaver_screen(preset_name: Optional[str] = None, dwell: float = 45.
                            bounds: Optional[Tuple[int, int, int, int]] = None,
                            render: Optional[Tuple[int, int]] = None,
                            cycle_to_next: bool = True,
-                           backend: Optional[str] = None) -> int:
+                           backend: Optional[str] = None,
+                           preset_pool: Optional[Sequence[str]] = None) -> int:
     """Drive one spawned screensaver window on a specific monitor.
 
     ``bounds`` is that monitor's desktop rect, so the window can be placed and
@@ -2916,7 +3329,7 @@ def run_screensaver_screen(preset_name: Optional[str] = None, dwell: float = 45.
     renderer = _make_saver_renderer(
         preset_name or get_active_preset()["name"], bounds, render, backend=backend
     )
-    pool = [p["key"] for p in VISUALIZER_PRESETS] if cycle_to_next else None
+    pool = list(preset_pool or DEFAULT_SAVER_POOL) if cycle_to_next else None
     session = read_span_session() or {}
     owner_pid = int(session.get("owner_pid", 0) or 0)
     if owner_pid:
@@ -2936,7 +3349,8 @@ def _saver_monitor_rects(renderer) -> List[Tuple[str, Tuple[int, int, int, int]]
 def run_screensaver(preset_name: Optional[str] = None, dwell: float = 45.0,
                     fullscreen: bool = True, target_4k: bool = False,
                     cycle_to_next: bool = True, backend: Optional[str] = None,
-                    all_screens: bool = True) -> int:
+                    all_screens: bool = True,
+                    preset_pool: Optional[Sequence[str]] = None) -> int:
     """Run the visualizer as a screensaver across every connected screen.
 
     Behaviour:
@@ -2948,6 +3362,11 @@ def run_screensaver(preset_name: Optional[str] = None, dwell: float = 45.0,
       - keeps the scene animating even with no audio player running
       - exits on the first keypress or mouse event, on any screen
     """
+    # The saver cycles the Dynamic Waves pair by default rather than the whole
+    # library, so the wall reads as one effect. An explicit preset still locks
+    # it, and an explicit pool wins over both.
+    if not preset_pool and not preset_name:
+        preset_pool = DEFAULT_SAVER_POOL
     # A screensaver owner must clean up its child windows on a normal stop, so
     # SIGTERM sets a flag the loop honours instead of exiting immediately and
     # orphaning the windows on the other screens.
@@ -2970,7 +3389,7 @@ def run_screensaver(preset_name: Optional[str] = None, dwell: float = 45.0,
     screens: List[Dict[str, Any]] = []
     renderer = _make_saver_renderer(first, None, None, backend=backend)
     try:
-        renderer.open()
+        renderer = _open_with_fallback(renderer, first, backend)
         if all_screens:
             screens = saver_screen_plan(_saver_monitor_rects(renderer))
     except Exception as exc:
@@ -2991,7 +3410,7 @@ def run_screensaver(preset_name: Optional[str] = None, dwell: float = 45.0,
 
     # Single-screen fallback: fill the default display.
     if len(screens) <= 1:
-        pool = [p["key"] for p in VISUALIZER_PRESETS] if cycle_to_next else None
+        pool = list(preset_pool or DEFAULT_SAVER_POOL) if cycle_to_next else None
         return _saver_loop(renderer, dwell, cycle_to_next, preset_pool=pool,
                            already_open=True, stop_flag=_stop)
 
@@ -3003,7 +3422,7 @@ def run_screensaver(preset_name: Optional[str] = None, dwell: float = 45.0,
         renderer = _make_saver_renderer(first, None, None, backend=backend)
         return _saver_loop(renderer, dwell, cycle_to_next)
 
-    pool = [p["key"] for p in VISUALIZER_PRESETS] if cycle_to_next else None
+    pool = list(preset_pool or DEFAULT_SAVER_POOL) if cycle_to_next else None
     session = {
         "owner_pid": os.getpid(),
         "mode": "screensaver",
@@ -3065,7 +3484,18 @@ def run_screensaver(preset_name: Optional[str] = None, dwell: float = 45.0,
                 pass
         for proc in children:
             _stop_saver_child(proc)
-        clear_span_session()
+        # Only the wall that still owns the file may delete it. A newer saver
+        # that took over must keep its session, or both walls die.
+        live = read_span_session()
+        ours = (
+            live is None
+            or (
+                int(live.get("owner_pid", 0) or 0) == os.getpid()
+                and live.get("started_at") == session.get("started_at")
+            )
+        )
+        if ours:
+            clear_span_session()
 
 
 def _stop_saver_child(proc: subprocess.Popen) -> None:
@@ -3130,33 +3560,99 @@ def _exit_when_player_closes(signum, _frame):
 
 
 def monitor_refresh_interval(renderer) -> float:
-    """Seconds per refresh on the display the window is sitting on.
+    """Seconds per frame the draw loop should sleep toward.
 
-    The visualizer presents with FIFO, so this is the cadence the draw loop
-    should sleep toward. Falls back to ``_FRAME_INTERVAL`` when GLFW cannot
-    report a refresh rate (or reports a nonsensical one).
+    The visualizer presents with FIFO, so this is normally the display's
+    refresh cadence. A low-power GPU (Raspberry Pi) is capped lower: the
+    raymarch cannot hold 60 Hz, and running the loop faster than it can draw
+    only produces dropped frames and heat. ``MP_VISUALIZER_FPS_CAP`` overrides
+    the cap; 0 disables it. Falls back to ``_FRAME_INTERVAL`` when GLFW cannot
+    report a sensible refresh rate.
     """
+    interval = _FRAME_INTERVAL
     g = getattr(renderer, "_glfw", None)
-    if g is None:
-        return _FRAME_INTERVAL
+    if g is not None:
+        try:
+            mon = None
+            finder = getattr(renderer, "span_monitor", None)
+            if callable(finder):
+                mon = finder()
+            if not mon:
+                current = getattr(renderer, "_current_monitor", None)
+                if callable(current):
+                    mon = current()
+            if not mon:
+                mon = g.glfwGetPrimaryMonitor()
+            mode = g.glfwGetVideoMode(mon) if mon else None
+            hz = int(mode.contents.refreshRate) if mode else 0
+            if 20 <= hz <= 360:
+                interval = 1.0 / float(hz)
+        except Exception:
+            pass
+
+    cap = mp_raspberry_pi.visualizer_fps_cap()
+    if cap > 0:
+        capped = 1.0 / float(cap)
+        # Never slow the loop below the cap; only lower the target when the
+        # display is faster than the cap.
+        if interval < capped:
+            interval = capped
+    return interval
+
+
+# Power policy for the draw loop. While nothing is playing the scene only creeps
+# (see march_advance), so it is drawn at IDLE_FPS_DEFAULT rather than at the
+# display rate. A window that is minimized or hidden shows nothing, so it draws
+# nothing and the loop only checks at HIDDEN_POLL_INTERVAL for it coming back.
+IDLE_FPS_DEFAULT = 20
+HIDDEN_POLL_INTERVAL = 0.25
+
+
+def idle_fps() -> int:
+    """Frame rate used while audio is not playing, or 0 to keep the display rate.
+
+    ``MP_VISUALIZER_IDLE_FPS`` overrides it; ``0`` disables the reduction. The
+    value is clamped to 5..60 so a typo cannot freeze the window.
+    """
+    raw = (os.environ.get("MP_VISUALIZER_IDLE_FPS") or "").strip()
+    if not raw:
+        return IDLE_FPS_DEFAULT
     try:
-        mon = None
-        finder = getattr(renderer, "span_monitor", None)
-        if callable(finder):
-            mon = finder()
-        if not mon:
-            current = getattr(renderer, "_current_monitor", None)
-            if callable(current):
-                mon = current()
-        if not mon:
-            mon = g.glfwGetPrimaryMonitor()
-        mode = g.glfwGetVideoMode(mon) if mon else None
-        hz = int(mode.contents.refreshRate) if mode else 0
-        if 20 <= hz <= 360:
-            return 1.0 / float(hz)
-    except Exception:
-        pass
-    return _FRAME_INTERVAL
+        value = int(raw)
+    except ValueError:
+        return IDLE_FPS_DEFAULT
+    if value <= 0:
+        return 0
+    return max(5, min(60, value))
+
+
+def paced_interval(active: float, playing: bool, hidden: bool) -> float:
+    """Seconds between draws for the window's and the audio's current state.
+
+    ``active`` is the display's refresh interval and is never shortened; these
+    rules only slow the loop down. A hidden window polls at HIDDEN_POLL_INTERVAL
+    until it is shown again, and a paused one is drawn at the idle rate.
+    """
+    active = max(1e-6, float(active))
+    if hidden:
+        return max(active, HIDDEN_POLL_INTERVAL, _idle_interval(active))
+    if playing:
+        return active
+    return _idle_interval(active)
+
+
+def _idle_interval(active: float) -> float:
+    fps = idle_fps()
+    if fps <= 0:
+        return active
+    return max(active, 1.0 / float(fps))
+
+
+def loop_interval(renderer, bridge, active: float) -> float:
+    """The draw interval for this frame, from the renderer and the telemetry bridge."""
+    view_hidden = getattr(renderer, "view_hidden", None)
+    hidden = bool(view_hidden()) if callable(view_hidden) else False
+    return paced_interval(active, bool(getattr(bridge, "is_playing", True)), hidden)
 
 
 def _frame_sleep(renderer, deadline: List[float]) -> float:
@@ -3206,13 +3702,29 @@ def run_visualizer(preset_name: Optional[str] = None, max_seconds: Optional[floa
     renderer = _make_renderer(preset_name, fullscreen=fullscreen, target_4k=target_4k,
                               backend=backend, span_bounds=span_bounds, span_role=span_role)
     bridge = AudioTelemetryBridge()
-    renderer.open()
+    # The Web Companion's Visualizer button owns exactly one window. When this
+    # process was started for it, the instance token in the environment is
+    # published with the pid so the companion can toggle and close this window
+    # and no other visualizer that happens to be running.
+    #
+    # The handlers are installed *before* open(), because the signals have
+    # destructive defaults: an early SIGUSR1 would kill the process outright.
+    # A command that arrives while the window is still being created is held
+    # as a flag and applied by the first pump() after open().
+    control = _window_control()
+    control.install()
+    renderer = _open_with_fallback(renderer, preset_name, backend,
+                                   fullscreen=fullscreen, target_4k=target_4k,
+                                   span_bounds=span_bounds, span_role=span_role)
+    control.opened(renderer)
     monotonic = time.monotonic
     last_t = start_t = monotonic()
-    pace = [last_t + _FRAME_INTERVAL, monitor_refresh_interval(renderer)]
+    active_interval = monitor_refresh_interval(renderer)
+    pace = [last_t + _FRAME_INTERVAL, active_interval]
     update, draw = bridge.update, renderer.draw
     try:
         while not renderer.should_close:
+            control.pump(renderer)
             if stop_flag and stop_flag.get("flag"):
                 break
             now = monotonic()
@@ -3221,10 +3733,26 @@ def run_visualizer(preset_name: Optional[str] = None, max_seconds: Optional[floa
             if max_seconds is not None and (now - start_t) >= max_seconds: break
             update(dt)
             draw(bridge, False)
+            interval = loop_interval(renderer, bridge, active_interval)
+            if interval < pace[1]:
+                # Coming out of a slow state: do not sleep out the old deadline.
+                pace[0] = min(pace[0], monotonic() + interval)
+            pace[1] = interval
             _frame_sleep(renderer, pace)
     except KeyboardInterrupt: pass
-    finally: renderer.close()
+    finally:
+        control.closed()
+        renderer.close()
     return 0
+
+
+def _window_control():
+    """The Web Companion channel for this window, or an inert stand-in."""
+    try:
+        from mp_visualizer_control import WindowControl
+    except ImportError:
+        from scripts.mp_visualizer_control import WindowControl
+    return WindowControl()
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -3239,11 +3767,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--self-test", action="store_true", help="Run Vulkan render and pause/play verification")
     p.add_argument("--png", type=str, default=None, help="Output PNG path when running --self-test")
     p.add_argument("--max-seconds", type=float, default=None, help="Optional maximum runtime in seconds")
-    p.add_argument("--backend", type=str, default=None, choices=("auto", "opengl", "vulkan", "gl", "vk"),
-                   help="Render backend: auto (default), opengl, or vulkan. auto follows the configured Liquid Glass backend, then prefers Vulkan when a driver is present")
+    p.add_argument("--backend", type=str, default=None, choices=("auto", "opengl", "vulkan", "metal", "gl", "vk", "mtl"),
+                   help="Render backend: auto (default), metal (macOS), opengl, or vulkan. auto picks Metal on macOS, Vulkan for an NVIDIA driver, and OpenGL otherwise")
     p.add_argument("--screensaver", action="store_true", help="Run as a screensaver: fullscreen, auto-cycling presets, exits on any key or mouse input")
     p.add_argument("--saver-dwell", type=float, default=45.0, help="Seconds to hold each preset while in screensaver mode (default: 45)")
     p.add_argument("--saver-preset", type=str, default=None, help="Lock screensaver mode to one preset instead of cycling")
+    p.add_argument("--saver-presets", type=str, default=None,
+                   help="Comma-separated preset keys the screensaver cycles (default: the Dynamic Waves pair)")
     p.add_argument("--saver-windowed", action="store_true", help="Run the screensaver in a window instead of fullscreen")
     p.add_argument("--saver-bounds", type=str, default=None, help=argparse.SUPPRESS)
     p.add_argument("--saver-render", type=str, default=None, help=argparse.SUPPRESS)
@@ -3251,7 +3781,20 @@ def main(argv: Optional[List[str]] = None) -> int:
     # Internal flags used by F10 (mirror) and F11 (random) monitor spanning.
     p.add_argument("--span-bounds", type=str, default=None, help=argparse.SUPPRESS)
     p.add_argument("--span-role", type=str, default=None, help=argparse.SUPPRESS)
+    # The Web Companion's MP Visualizer button stamps its instance token into
+    # the command line so the pid in the state file can be verified as ours.
+    p.add_argument("--web-instance", type=str, default=None, help=argparse.SUPPRESS)
     args = p.parse_args(argv)
+
+    # A window started for the Web Companion's MP Visualizer button owns a
+    # control channel (see mp_visualizer_control). The token doubles as the
+    # command-line marker that proves the recorded pid is this window.
+    if args.web_instance:
+        try:
+            from mp_visualizer_control import ENV_INSTANCE
+        except ImportError:
+            from scripts.mp_visualizer_control import ENV_INSTANCE
+        os.environ[ENV_INSTANCE] = str(args.web_instance)
 
     if args.random_preset: args.preset = "random"
     if args.list_presets:
@@ -3273,9 +3816,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         # Spawned F10/F11 windows only display their assigned preset.
         save_active_preset(args.preset)
     if args.self_test:
-        run_self_test(args.png, backend=args.backend)
+        # Forward the preset: dropping it here meant --preset only changed the
+        # saved file, so the self-test always rendered whatever was saved last.
+        preset_name = args.preset if args.preset and args.preset.lower() not in _RAND_KEYS else None
+        run_self_test(args.png, preset_name=preset_name, backend=args.backend)
         return 0
-
     target_4k = bool(args.target_4k) or bool(args.screen and any(k in args.screen.lower() for k in ("4k", "hdmi", "uhd", "hisense")))
 
     if args.screensaver:
@@ -3286,6 +3831,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         # A spawned screen is one window of a multi-monitor saver. It fills its
         # assigned monitor and marches at the capped resolution, then exits when
         # the owner closes the session (or when the user wakes the saver here).
+        # --saver-presets names the pool to tour when no single preset is locked.
+        pool = None
+        if not locked and getattr(args, "saver_presets", None):
+            pool = [k.strip() for k in str(args.saver_presets).split(",") if k.strip()]
+
         if (args.saver_role or "").strip() == "spawned":
             return run_screensaver_screen(
                 preset_name=locked,
@@ -3294,6 +3844,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 render=_parse_pair(args.saver_render),
                 cycle_to_next=not bool(locked),
                 backend=args.backend,
+                preset_pool=pool,
             )
 
         return run_screensaver(
@@ -3303,6 +3854,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             target_4k=target_4k,
             cycle_to_next=not bool(locked),
             backend=args.backend,
+            preset_pool=pool,
         )
 
     return run_visualizer(

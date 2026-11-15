@@ -9,6 +9,12 @@ This overlay is a thin borderless GTK window pinned to the strip the terminal
 well reserves at the bottom of the player. It draws the same track and thumb,
 follows the active theme colour, and reports drag input, so both hosts share
 one implementation and one visual result regardless of the GPU path.
+
+The overlay is a *managed* toplevel, never a GTK popup window. A popup is
+created override-redirect, so the window manager never restacks it: the bar
+stayed at the top of the X stack for its whole life and kept floating over any
+other application the user switched to. A managed toplevel made transient for
+the player is restacked with the player instead.
 """
 from __future__ import annotations
 
@@ -24,6 +30,29 @@ SLIDER_STRIP = 44
 SLIDER_LEFT = 40
 SLIDER_RIGHT_PAD = 40
 SLIDER_HEIGHT = 8
+
+# Smallest strip the bar still fits in: the thumb is SLIDER_HEIGHT + 6 tall.
+MIN_SLIDER_STRIP = SLIDER_HEIGHT + 6
+
+
+def player_slider_strip(cell_height: float = 0.0) -> int:
+    """Strip under the *player*, one text row shorter than ``SLIDER_STRIP``.
+
+    The player's last two text rows are the status line and the key hints.
+    At the classic 44 px they filled the terminal but still stopped a whole
+    text row above the glass edge, which read as an empty line between the
+    hints and the transparency bar. Handing one text row back to the terminal
+    puts those two lines one line lower, directly above the bar. The window
+    keeps the size it publishes: the row comes out of the strip, not the
+    frame. MP Gui and the tracklist viewer keep the full strip.
+    """
+    try:
+        ch = int(round(float(cell_height)))
+    except (TypeError, ValueError):
+        ch = 0
+    if ch <= 0:
+        return SLIDER_STRIP
+    return max(MIN_SLIDER_STRIP, SLIDER_STRIP - ch)
 
 
 def opacity_from_x(x: float, width: float) -> float:
@@ -52,6 +81,15 @@ class GlassSlider:
     GPU-drawn glass and the VTE terminal on either backend. ``place()`` keeps it
     on the reserved strip, ``set_theme()`` recolours it, and a press or drag on
     it reports a new opacity through ``on_change``.
+
+    The window must be *managed* by the window manager, not a
+    ``Gtk.WindowType.POPUP``. A GTK popup is created override-redirect, which
+    the window manager never restacks: it stays at the very top of the X stack
+    for its whole life, so after the user switched to any other application
+    the transparency bar was still floating over that application. A managed
+    toplevel made transient for the player is restacked with the player, so it
+    is visible over the glass and disappears behind anything else that is
+    focused.
     """
 
     def __init__(self, opacity: float = DEFAULT_OPACITY, on_change=None):
@@ -62,23 +100,28 @@ class GlassSlider:
         self._Gdk = None
         self._theme = ((0, 229, 255), (247, 37, 133), (102, 102, 255))
         self._dragging = False
+        self._placed = None
 
     # -- lifecycle --------------------------------------------------------
     def attach(self, Gtk, Gdk, parent=None) -> bool:
         """Create the overlay window. Returns False when GTK is unavailable.
 
-        ``parent`` should be the player's terminal window. A GTK popup with no
-        parent is a temporary window that the display server refuses to
-        position, which would leave the bar off-screen.
+        ``parent`` should be the player's terminal window. The overlay is a
+        decorated-by-us-but-borderless *managed* toplevel made transient for
+        that parent, so the window manager stacks it with the player. A
+        ``Gtk.WindowType.POPUP`` would be override-redirect and would stay
+        above every other application after a window switch.
         """
         if Gtk is None or Gdk is None:
             return False
+        self._placed = None
         try:
-            win = Gtk.Window(type=Gtk.WindowType.POPUP)
+            win = Gtk.Window(type=Gtk.WindowType.TOPLEVEL)
             win.set_decorated(False)
             win.set_skip_taskbar_hint(True)
             win.set_skip_pager_hint(True)
             win.set_accept_focus(False)
+            win.set_focus_on_map(False)
             if parent is not None:
                 try:
                     win.set_transient_for(parent)
@@ -86,6 +129,12 @@ class GlassSlider:
                     pass
             try:
                 win.set_type_hint(Gdk.WindowTypeHint.UTILITY)
+            except Exception:
+                pass
+            try:
+                # The bar takes drags, but it must never steal keyboard focus
+                # from the terminal it belongs to.
+                win.set_modal(False)
             except Exception:
                 pass
             # Without an RGBA visual and a paintable window the overlay paints
@@ -112,7 +161,14 @@ class GlassSlider:
             area.connect("button-release-event", self._on_release)
             area.connect("motion-notify-event", self._on_motion)
             win.add(area)
-            win.show_all()
+            # A managed window is mapped by the window manager at a position it
+            # chooses, so showing the toplevel here would flash the bar at that
+            # spot before `place()` moves it onto the player's reserved strip.
+            # Realising creates the GdkWindow that `_on_draw` paints on, and
+            # showing the child readies it; the toplevel itself is only mapped
+            # once `place()` knows where it belongs.
+            win.realize()
+            area.show()
             # GTK paints the theme background on both the window and the drawing
             # area. With an RGBA visual that becomes opaque black, which is the
             # black strip that was showing under the player. Clear the CSS
@@ -143,6 +199,7 @@ class GlassSlider:
         except Exception:
             pass
         self._win = self._area = None
+        self._placed = None
 
     @property
     def available(self) -> bool:
@@ -157,16 +214,35 @@ class GlassSlider:
             return
         self._redraw()
 
-    def place(self, x: int, y: int, width: int, height: int) -> None:
-        """Pin the overlay to the reserved strip at the bottom of ``height``."""
+    def place(self, x: int, y: int, width: int, height: int, strip: int = 0) -> None:
+        """Pin the overlay to the reserved strip at the bottom of ``height``.
+
+        ``strip`` is that strip's height. The player passes the shorter strip
+        it handed one row of back to the terminal, so the bar stays directly
+        under the moved footer; MP Gui and the tracklist viewer omit it and
+        keep the classic ``SLIDER_STRIP``.
+
+        A managed window's move and resize are window-manager requests, not
+        bare X calls, so repeating them at 60 fps would flood the compositor
+        with configure requests. The geometry is therefore only submitted when
+        it actually changes.
+        """
         if self._win is None:
             return
+        strip = max(MIN_SLIDER_STRIP, int(strip or SLIDER_STRIP))
         width = max(64, int(width))
-        strip_y = int(y) + max(0, int(height) - SLIDER_STRIP)
+        strip_y = int(y) + max(0, int(height) - strip)
+        geometry = (int(x), strip_y, width, strip)
+        if geometry == getattr(self, "_placed", None):
+            return
+        self._placed = geometry
         try:
             self._win.move(int(x), strip_y)
-            self._win.resize(width, SLIDER_STRIP)
-            self._area.set_size_request(width, SLIDER_STRIP)
+            self._win.resize(width, strip)
+            self._area.set_size_request(width, strip)
+            # Map the window only now that it has a real position, so it never
+            # appears wherever the window manager would have put it first.
+            self._win.show()
         except Exception:
             pass
 

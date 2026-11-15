@@ -59,18 +59,18 @@ class TestMusicFolderConfiguration(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_user_smb_shares_parse(self):
-        first = parse_folder_path(r"\\192.168.1.138\music001")
-        second = parse_folder_path("smb://192.168.1.138/music002/House")
+        first = parse_folder_path(r"\\192.0.2.20\music001")
+        second = parse_folder_path("smb://192.0.2.20/music002/House")
         self.assertEqual(first["type"], "smb")
-        self.assertEqual(first["host"], "192.168.1.138")
+        self.assertEqual(first["host"], "192.0.2.20")
         self.assertEqual(first["share"], "music001")
-        self.assertEqual(unc_path(first), r"\\192.168.1.138\music001")
+        self.assertEqual(unc_path(first), r"\\192.0.2.20\music001")
         self.assertEqual(second["share"], "music002")
         self.assertEqual(second["subpath"], "House")
-        self.assertEqual(unc_path(second), r"\\192.168.1.138\music002\House")
+        self.assertEqual(unc_path(second), r"\\192.0.2.20\music002\House")
         self.assertEqual(
-            folder_key(parse_folder_path(r"\\192.168.1.138\music001")),
-            folder_key(parse_folder_path("smb://192.168.1.138/MUSIC001")),
+            folder_key(parse_folder_path(r"\\192.0.2.20\music001")),
+            folder_key(parse_folder_path("smb://192.0.2.20/MUSIC001")),
         )
 
     def test_only_local_drives_and_smb_are_accepted(self):
@@ -80,12 +80,12 @@ class TestMusicFolderConfiguration(unittest.TestCase):
         self.assertEqual(local["type"], "local")
         self.assertEqual(local["path"], r"D:\Music")
         self.assertEqual(bash_style["path"], r"D:\DJ")
-        for rejected in ("ftp://nas/music", "nfs://nas/music", "https://example.com/a.flac", "music", r"\\192.168.1.138"):
+        for rejected in ("ftp://nas/music", "nfs://nas/music", "https://example.com/a.flac", "music", r"\\192.0.2.20"):
             with self.assertRaises(ValueError):
                 parse_folder_path(rejected)
 
     def test_mapped_smb_drive_is_stored_as_a_share(self):
-        with patch.object(mfm, "_windows_remote_unc", return_value=r"\\192.168.1.138\music001\House"):
+        with patch.object(mfm, "_windows_remote_unc", return_value=r"\\192.0.2.20\music001\House"):
             parsed = parse_folder_path(r"Z:\House")
         self.assertEqual(parsed["type"], "smb")
         self.assertEqual(parsed["share"], "music001")
@@ -93,14 +93,14 @@ class TestMusicFolderConfiguration(unittest.TestCase):
 
     def test_add_list_and_remove_folders(self):
         folders = []
-        add_folder(r"\\192.168.1.138\music001", folders, name="MUSIC001")
-        add_folder(r"\\192.168.1.138\music002", folders, name="MUSIC002")
+        add_folder(r"\\192.0.2.20\music001", folders, name="MUSIC001")
+        add_folder(r"\\192.0.2.20\music002", folders, name="MUSIC002")
         with self.assertRaises(ValueError):
-            add_folder("smb://192.168.1.138/music001", folders)
+            add_folder("smb://192.0.2.20/music001", folders)
         loaded = load_folders(self.config)
         self.assertEqual([f["id"] for f in loaded], ["MUSIC001", "MUSIC002"])
         self.assertEqual(find_folder("2", loaded)["share"], "music002")
-        self.assertEqual(find_folder(r"\\192.168.1.138\MUSIC001", loaded)["id"], "MUSIC001")
+        self.assertEqual(find_folder(r"\\192.0.2.20\MUSIC001", loaded)["id"], "MUSIC001")
         remove_folder(loaded[0], loaded, self.config)
         self.assertEqual([f["id"] for f in load_folders(self.config)], ["MUSIC002"])
 
@@ -150,7 +150,7 @@ class TestMusicFolderConfiguration(unittest.TestCase):
         self.assertEqual(again.count("MUSIC_SMB_USER"), 1)
 
     def test_legacy_env_seed_is_optional(self):
-        seeded = _migrate_legacy_folders({"legacy_host": "192.168.1.138", "legacy_shares": "music001, music002"})
+        seeded = _migrate_legacy_folders({"legacy_host": "192.0.2.20", "legacy_shares": "music001, music002"})
         self.assertEqual([f["id"] for f in seeded], ["MUSIC001", "MUSIC002"])
         self.assertEqual(_migrate_legacy_folders({"legacy_host": "", "legacy_shares": ""}), [])
 
@@ -171,7 +171,7 @@ class TestMusicPlayerPresentation(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         playlist = Path(self.tmp.name) / "DJ_Tracks_MUSIC001.json"
-        self.track_path = r"\\192.168.1.138\music001\Cosmic Voyager.flac"
+        self.track_path = r"\\192.0.2.20\music001\Cosmic Voyager.flac"
         playlist.write_text(json.dumps([{
             "name": "Cosmic Voyager.flac",
             "title": "Cosmic Voyager",
@@ -256,9 +256,9 @@ class TestMusicPlayerPresentation(unittest.TestCase):
         self.assertIn("TRACK AUDIO INSPECTOR", hud_text)
         self.assertIn("Folder / Src", hud_text)
         self.assertIn("SMB Share [MUSIC001]", hud_text)
-        self.assertIn(r"\\192.168.1.138\music001", hud_text)
+        self.assertIn(r"\\192.0.2.20\music001", hud_text)
         self.assertIn("Network Path", hud_text)
-        self.assertNotIn("SMB Network /MUSIC001 (192.168.1.138)", hud_text)
+        self.assertNotIn("SMB Network /MUSIC001 (192.0.2.20)", hud_text)
         self.assertNotIn("Camelot", hud_text)
         self.assertNotIn("DJ Cues", hud_text)
 

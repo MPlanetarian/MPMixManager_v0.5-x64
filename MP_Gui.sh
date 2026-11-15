@@ -5,9 +5,9 @@
 # The same glass, bezel, opacity slider, and VTE terminal are used, and the
 # window follows ~/.config/mix-manager/theme (the built-in themes).
 #
-# The shared theme file is set to Retro Linux Memories on launch so the window
-# matches that theme immediately. That also changes an already-open terminal
-# manager, which uses the same file. Pass --keep-theme to leave it alone.
+# The shared theme file is set to Dreamworlds Ultra [Default] on launch
+# so the window matches that theme immediately. That also changes an already-open
+# terminal manager, which uses the same file. Pass --keep-theme to leave it alone.
 # Pass --theme NAME to write a different theme instead.
 #
 # Closing this window stops playback and closes the MP Liquid Visualizer,
@@ -26,6 +26,16 @@ unset _RESOLVED_SRC _RESOLVED_DIR
 
 CONFIG_FILE="$HOME/.config/mix-manager/config.env"
 [ ! -f "$CONFIG_FILE" ] && CONFIG_FILE="$BASE_DIR/config.env"
+
+# Raspberry Pi / low-power ARM detection and defaults. See
+# scripts/lib/mp_pi_detect.sh for what these helpers decide.
+_PI_LIB="$BASE_DIR/scripts/lib/mp_pi_detect.sh"
+[ ! -f "$_PI_LIB" ] && _PI_LIB="$(dirname "$BASE_DIR")/scripts/lib/mp_pi_detect.sh"
+# shellcheck source=/dev/null
+[ -f "$_PI_LIB" ] && . "$_PI_LIB"
+if command -v mp_pi_apply_defaults >/dev/null 2>&1; then
+    mp_pi_apply_defaults
+fi
 
 TARGET_PY=""
 # Renderer backend for the standalone visualizer spawned below. macOS keeps
@@ -53,6 +63,16 @@ if [ -z "$TARGET_PY" ]; then
     if [ -f "$CONFIG_FILE" ]; then
         VAL=$(grep -E "^LIQUID_GLASS_BACKEND=" "$CONFIG_FILE" 2>/dev/null | cut -d'=' -f2- | tr -d '"'\'' ')
         [ -n "$VAL" ] && BACKEND="$(echo "$VAL" | tr '[:upper:]' '[:lower:]')"
+    fi
+    # A Raspberry Pi has no NVIDIA device, and liquid_glass_vulkan.py refuses
+    # every other GPU, so a `vulkan` config used to open a dead window. Fall
+    # back to the OpenGL (Mesa V3D) host there.
+    if command -v mp_renderer_backend >/dev/null 2>&1; then
+        _RESOLVED_BACKEND="$(mp_renderer_backend "$BACKEND")"
+        if [ "$_RESOLVED_BACKEND" != "$BACKEND" ]; then
+            echo "MP Gui: $BACKEND is not supported on $(mp_pi_summary | cut -d'|' -f1 | sed 's/ *$//'); using OpenGL." >&2
+        fi
+        BACKEND="$_RESOLVED_BACKEND"
     fi
     if [ "$BACKEND" = "vulkan" ]; then
         TARGET_PY="$BASE_DIR/MP_Audio_Player_Liquid_Glass.py"
@@ -147,9 +167,9 @@ _mp_python() {
 MP_PY="$(_mp_python)"
 export MP_PY
 
-# Reset the shared equalizer on Linux whenever MP Gui is opened directly.
+# Reset the shared equalizer on Linux asynchronously whenever MP Gui is opened directly.
 if [ "$(uname -s 2>/dev/null)" = "Linux" ] && [ -f "$BASE_DIR/MP_Audio_Player.py" ]; then
-    "$MP_PY" "$BASE_DIR/MP_Audio_Player.py" --reset-eq >/dev/null 2>&1 || true
+    "$MP_PY" "$BASE_DIR/MP_Audio_Player.py" --reset-eq >/dev/null 2>&1 &
 fi
 
 KEEP_THEME=0
@@ -231,11 +251,11 @@ fi
 
 mkdir -p "$HOME/.config/mix-manager" 2>/dev/null || true
 if [ "$KEEP_THEME" -eq 0 ]; then
-    # Preserve the shared theme selected by the CLI manager. Retro Linux
-    # Memories remains the first-run default, while --theme stays explicit.
+    # Preserve the shared theme selected by the CLI manager. Dreamworlds Ultra
+    # is the first-run default, while --theme stays explicit.
     if [ -z "$THEME_NAME" ]; then
         THEME_NAME="$(tr -d ' \t\n\r' < "$HOME/.config/mix-manager/theme" 2>/dev/null)"
-        [ -n "$THEME_NAME" ] || THEME_NAME="retro_linux_memories"
+        [ -n "$THEME_NAME" ] || THEME_NAME="dreamworlds_ultra"
     fi
     printf '%s\n' "$THEME_NAME" > "$HOME/.config/mix-manager/theme"
 fi
@@ -250,15 +270,46 @@ fi
 #    pactl set-sink-volume @DEFAULT_SINK@ 100% 2>/dev/null || true
 #fi
 
-"$MP_PY" - "$BASE_DIR" << 'PY' || true
+("$MP_PY" - "$BASE_DIR" << 'PY' >/dev/null 2>&1 || true
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(sys.argv[1]) / "scripts"))
 from desktop_launch_screen import reposition_off_hisense
 reposition_off_hisense()
 PY
+) &
 
-if [ "$NO_VISUALIZER" -eq 0 ] && ! pgrep -f "MP_Liquid_Visualizer|mp_liquid_visualizer_vulkan" >/dev/null 2>&1; then
+#
+# Only a *companion* the GUI owns means one is already attached. The player's
+# own companion, and a window the user opened with Z (MP_VISUALIZER_DETACHED=1),
+# must not count: the first belongs behind a different window, and the second is
+# a free window that sits on top of the menu. Counting either made MP Gui skip
+# spawning its own companion, leaving the menu with no background window.
+# The first MP Gui window plays Exit_MP_Video.mp4 once, before the glass and
+# its companion visualizer, so the movie is the only thing on screen. It
+# closes when the clip ends. A second, third, or fourth MP Gui never shows
+# it. The host repeats the election for launch paths that skip this script;
+# MP_GUI_INTRO_DONE tells that host this launch already had its movie.
+if command -v mp_instance_is_first_gui >/dev/null 2>&1 && mp_instance_is_first_gui; then
+    _mp_intro_sh="$BASE_DIR/scripts/display_loader_video.sh"
+    if [ -f "$_mp_intro_sh" ]; then
+        bash "$_mp_intro_sh" --intro || true
+        export MP_GUI_INTRO_DONE=1
+    fi
+    unset _mp_intro_sh
+fi
+
+_mp_gui_vis_running() {
+    "$MP_PY" - "$BASE_DIR" <<'PYVIS' >/dev/null 2>&1
+import sys
+from pathlib import Path
+root = Path(sys.argv[1])
+sys.path.insert(0, str(root / "scripts"))
+from liquid_player_visualizer import companion_visualizer_running
+raise SystemExit(0 if companion_visualizer_running(True) else 1)
+PYVIS
+}
+if [ "$NO_VISUALIZER" -eq 0 ] && ! _mp_gui_vis_running; then
     VIS_PY="$BASE_DIR/MP_Liquid_Visualizer.py"
     [ ! -f "$VIS_PY" ] && VIS_PY="$BASE_DIR/scripts/mp_liquid_visualizer_vulkan.py"
     if [ -f "$VIS_PY" ]; then

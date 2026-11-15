@@ -173,7 +173,27 @@ if [ -f "$_mp_limit_sh" ]; then
         mp_instance_notify_limit player
         exit 0
     fi
+    # First window of the session: play Exit_MP_Video.mp4 before the glass
+    # and before the companion visualizer. Windows two to four skip it, and
+    # helper flags (--self-test, --embed-check, --tracklist, ...) draw no
+    # player window so they get no movie.
+    _mp_intro_wanted=1
+    for _mp_arg in "$@"; do
+        case "$_mp_arg" in
+            --self-test|--embed-check|--list-fonts|--manager) _mp_intro_wanted=0 ;;
+            --set-font|--set-font=*|--tracklist|--tracklist=*) _mp_intro_wanted=0 ;;
+        esac
+    done
+    if [ "$_mp_intro_wanted" = "1" ] && mp_instance_is_first_player; then
+        _mp_intro_sh="$BASE_DIR/scripts/display_loader_video.sh"
+        [ ! -f "$_mp_intro_sh" ] && _mp_intro_sh="$SCRIPT_DIR/display_loader_video.sh"
+        if [ -f "$_mp_intro_sh" ]; then
+            bash "$_mp_intro_sh" --intro || true
+            export MP_PLAYER_INTRO_DONE=1
+        fi
+    fi
 fi
+unset _mp_intro_sh _mp_intro_wanted _mp_arg
 
 # Automatically start MP Liquid Visualizer with a random preset if not already running
 if ! pgrep -f "MP_Liquid_Visualizer|mp_liquid_visualizer_vulkan" >/dev/null 2>&1; then

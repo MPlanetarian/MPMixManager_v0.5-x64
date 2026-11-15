@@ -17,8 +17,15 @@ DIM='\033[2m'
 NC='\033[0m' # No Color
 export PATH="$HOME/bin:$HOME/.local/bin:$PATH"
 
-HARMONY_DIR="${HARMONY_DIR:-/var/home/mplanetarian/OpenAI/MP_Harmony_Agent}"
-if [ ! -d "$HARMONY_DIR" ] && [ -d "$HOME/OpenAI/MP_Harmony_Agent" ]; then
+# MP Harmony Agent is a separate project installed by
+# scripts/install_harmony_agent.sh at ~/OpenAI/MP_Harmony_Agent. It is never
+# bundled inside this tree, so resolve it there (with a couple of legacy
+# fallbacks for older layouts). HARMONY_DIR always wins when it is set.
+_MP_ROOT="${MP_INSTALL_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+if [ -z "${HARMONY_DIR:-}" ]; then
+    HARMONY_DIR="$HOME/OpenAI/MP_Harmony_Agent"
+fi
+if [ ! -f "$HARMONY_DIR/MP_Harmony_Agent.py" ] && [ -d "$HOME/OpenAI/MP_Harmony_Agent" ]; then
     HARMONY_DIR="$HOME/OpenAI/MP_Harmony_Agent"
 elif [ ! -d "$HARMONY_DIR" ] && [ -d "$HOME/OpenAI/Harmony_Agent" ]; then
     HARMONY_DIR="$HOME/OpenAI/Harmony_Agent"
@@ -59,6 +66,17 @@ get_harmony_pids() {
     echo "$pids"
 }
 
+# The cloned Matrix voices are rendered by the XTTS service. It reserves about
+# 4 GB of VRAM, so it is not started by default; without it those voices fall
+# back to Stephen Hawking, which is synthesised locally.
+_xtts_running() {
+    local url="${XTTS_URL:-http://127.0.0.1:8020}"
+    if command -v curl >/dev/null 2>&1; then
+        curl -s --connect-timeout 1 "${url}/health" >/dev/null 2>&1 && return 0
+    fi
+    return 1
+}
+
 is_ollama_running() {
     if curl -s --connect-timeout 1 "${OLLAMA_API_URL}/" 2>/dev/null | grep -qi "Ollama is running"; then
         return 0
@@ -75,7 +93,7 @@ get_active_model() {
     fi
     # Check running python process directly (excluding bash/konsole wrapper)
     local cmdline
-    cmdline=$(pgrep -a -f "python.*MP_Harmony_Agent\.py" 2>/dev/null | grep -oE '(gpt-oss[a-zA-Z0-9:._-]*|qwen[a-zA-Z0-9:._-]*)' | head -1)
+    cmdline=$(pgrep -a -f "python.*MP_Harmony_Agent\.py" 2>/dev/null | grep -oE '(gpt-oss[a-zA-Z0-9:._-]*|mp-harmony[a-zA-Z0-9:._-]*|nemotron[a-zA-Z0-9:._-]*|qwen[a-zA-Z0-9:._-]*)' | head -1)
     if [ -n "$cmdline" ]; then
         cmdline="${cmdline//[\'\";]/}"
         if [ -n "$cmdline" ]; then
@@ -84,10 +102,14 @@ get_active_model() {
         fi
     fi
 
-    # Fallback to querying Ollama tags
+    # Fallback to querying Ollama tags. The agent default tag is
+    # gpt-oss-pinned:latest (now the Nemotron 3.5 Bolt E4B build).
     if is_ollama_running; then
         local found_model
-        found_model=$(curl -s "${OLLAMA_API_URL}/api/tags" 2>/dev/null | grep -o '"name":"[^"]*"' | grep -i "gpt-oss" | head -1 | cut -d'"' -f4)
+        found_model=$(curl -s "${OLLAMA_API_URL}/api/tags" 2>/dev/null | grep -o '"name":"[^"]*"' | grep -i "gpt-oss-pinned" | head -1 | cut -d'"' -f4)
+        if [ -z "$found_model" ]; then
+            found_model=$(curl -s "${OLLAMA_API_URL}/api/tags" 2>/dev/null | grep -o '"name":"[^"]*"' | grep -iE "mp-harmony-nemotron|nemotron" | head -1 | cut -d'"' -f4)
+        fi
         if [ -n "$found_model" ]; then
             found_model="${found_model//[\'\";]/}"
             echo "$found_model"
@@ -107,7 +129,9 @@ start_harmony_bg() {
     fi
 
     if [ ! -f "$HARMONY_SCRIPT" ]; then
-        echo -e "${RED}Error: MP_Harmony_Agent.py not found in ${HARMONY_DIR}!${NC}"
+        echo -e "${RED}The MP Harmony Agent is not installed (expected in ${HARMONY_DIR}).${NC}"
+        echo -e "${DIM}  It is a separate project. Install it with:${NC}"
+        echo -e "${DIM}    scripts/install_harmony_agent.sh install${NC}"
         return 1
     fi
 
@@ -185,7 +209,9 @@ start_harmony_window() {
     fi
 
     if [ ! -f "$HARMONY_SCRIPT" ]; then
-        echo -e "${RED}Error: MP_Harmony_Agent.py not found in ${HARMONY_DIR}!${NC}"
+        echo -e "${RED}The MP Harmony Agent is not installed (expected in ${HARMONY_DIR}).${NC}"
+        echo -e "${DIM}  It is a separate project. Install it with:${NC}"
+        echo -e "${DIM}    scripts/install_harmony_agent.sh install${NC}"
         return 1
     fi
 
@@ -226,7 +252,9 @@ start_harmony_window() {
 
 launch_chat_cli() {
     if [ ! -f "$HARMONY_SCRIPT" ]; then
-        echo -e "${RED}Error: MP_Harmony_Agent.py not found in ${HARMONY_DIR}!${NC}"
+        echo -e "${RED}The MP Harmony Agent is not installed (expected in ${HARMONY_DIR}).${NC}"
+        echo -e "${DIM}  It is a separate project. Install it with:${NC}"
+        echo -e "${DIM}    scripts/install_harmony_agent.sh install${NC}"
         return 1
     fi
 
@@ -294,23 +322,34 @@ launch_voice_chat_cli() {
         return 1
     fi
 
-    echo -e "\nSelect a Matrix Voice character (or press Enter for Morpheus):"
-    echo -e "  1) Morpheus (The Matrix - Master) [Default]"
-    echo -e "  2) Morpheus (The Construct - 'What is real?')"
-    echo -e "  3) Morpheus (Red Pill - 'Rabbit Hole')"
-    echo -e "  4) Morpheus (Combat Dojo - 'Free your mind')"
-    echo -e "  5) Morpheus (The System - 'Our enemy')"
-    echo -e "  6) Agent Smith (The Matrix)"
-    echo -e "  7) Neo (The Matrix)"
-    echo -e "  8) Trinity (The Matrix)"
-    echo -e "  9) The Oracle (The Matrix)"
-    echo -e " 10) Zion (Councillor Hamann)"
-    echo -e " 11) Stephen Hawking (Enters the Matrix)"
-    echo ""
-    read -r -p "Enter voice choice [1-11, Enter=1]: " v_choice
+    local xtts_note="[needs XTTS]"
+    if _xtts_running; then
+        xtts_note="${GREEN}[ready]${NC}"
+    else
+        xtts_note="${DIM}[needs XTTS - off]${NC}"
+    fi
 
-    local chosen_voice="morpheus"
-    local chosen_voice_name="Morpheus (The Matrix - Master)"
+    echo -e "\nSelect a Matrix Voice character (or press Enter for Stephen Hawking):"
+    echo -e "  1) Morpheus (The Matrix - Master)         ${xtts_note}"
+    echo -e "  2) Morpheus (The Construct - 'What is real?') ${xtts_note}"
+    echo -e "  3) Morpheus (Red Pill - 'Rabbit Hole')     ${xtts_note}"
+    echo -e "  4) Morpheus (Combat Dojo - 'Free your mind') ${xtts_note}"
+    echo -e "  5) Morpheus (The System - 'Our enemy')     ${xtts_note}"
+    echo -e "  6) Agent Smith (The Matrix)                ${xtts_note}"
+    echo -e "  7) Neo (The Matrix)                        ${xtts_note}"
+    echo -e "  8) Trinity (The Matrix)                    ${xtts_note}"
+    echo -e "  9) The Oracle (The Matrix)                 ${xtts_note}"
+    echo -e " 10) Zion (Councillor Hamann)                ${xtts_note}"
+    echo -e " 11) Stephen Hawking (Enters the Matrix)     ${GREEN}[ready - local]${NC}"
+    if ! _xtts_running; then
+        echo -e "\n  ${DIM}The cloned voices need the XTTS service, which reserves about${NC}"
+        echo -e "  ${DIM}4 GB of VRAM and is off. They fall back to Stephen Hawking.${NC}"
+    fi
+    echo ""
+    read -r -p "Enter voice choice [1-11, Enter=11]: " v_choice
+
+    local chosen_voice="stephen_hawking_matrix"
+    local chosen_voice_name="Stephen Hawking (Enters the Matrix)"
     case "$v_choice" in
         1) chosen_voice="morpheus"; chosen_voice_name="Morpheus (The Matrix - Master)" ;;
         2) chosen_voice="morpheus_construct"; chosen_voice_name="Morpheus (The Construct - 'What is real?')" ;;
@@ -322,9 +361,12 @@ launch_voice_chat_cli() {
         8) chosen_voice="trinity"; chosen_voice_name="Trinity (The Matrix)" ;;
         9) chosen_voice="oracle"; chosen_voice_name="The Oracle (The Matrix)" ;;
         10) chosen_voice="zion"; chosen_voice_name="Zion (Councillor Hamann)" ;;
-        11) chosen_voice="stephen_hawking_matrix"; chosen_voice_name="Stephen Hawking (Enters the Matrix)" ;;
-        *) chosen_voice="morpheus"; chosen_voice_name="Morpheus (The Matrix - Master)" ;;
+        11|"") chosen_voice="stephen_hawking_matrix"; chosen_voice_name="Stephen Hawking (Enters the Matrix)" ;;
+        *) chosen_voice="stephen_hawking_matrix"; chosen_voice_name="Stephen Hawking (Enters the Matrix)" ;;
     esac
+    if ! _xtts_running && [ "$chosen_voice" != "stephen_hawking_matrix" ]; then
+        echo -e "\n  ${YELLOW}XTTS is off, so ${chosen_voice_name} will sound like Stephen Hawking.${NC}"
+    fi
 
     echo -e "\n  • Bridge URL: ${BOLD}${CYAN}http://127.0.0.1:${HARMONY_PORT}${NC}"
     echo -e "  • Model:      ${BOLD}${YELLOW}${target_model}${NC}"
@@ -495,7 +537,7 @@ view_audio_responses() {
     fi
 
     # Sync any recent recordings from voice-ai audio responses directory if present
-    local voice_ai_audio="/var/home/mplanetarian/voice-ai/audio_responses"
+    local voice_ai_audio="${VOICE_AI_AUDIO_DIR:-$HOME/voice-ai/audio_responses}"
     [ ! -d "$voice_ai_audio" ] && [ -d "$HOME/voice-ai/audio_responses" ] && voice_ai_audio="$HOME/voice-ai/audio_responses"
     if [ -d "$voice_ai_audio" ] && [ -d "$AUDIO_DIR" ] && [ "$voice_ai_audio" != "$AUDIO_DIR" ]; then
         cp -u "$voice_ai_audio"/*.wav "$voice_ai_audio"/*.txt "$AUDIO_DIR/" 2>/dev/null || true
@@ -573,8 +615,8 @@ interactive_menu() {
         echo -e "${BOLD}${MAGENTA}----------------------------------------------------------------------${NC}"
         echo -e "${BOLD}Select an MP Harmony Agent operation:${NC}\n"
         echo -e "  ${BOLD}${CYAN} 1)${NC} Launch Interactive Chat CLI with MP Harmony Agent (${BOLD}${GREEN}Terminal Console${NC})"
-        echo -e "  ${BOLD}${CYAN} 2)${NC} Launch Voice Chat CLI with MP Harmony Agent (${BOLD}${MAGENTA}Matrix Cast: Smith, Morpheus, Neo, Trinity, Oracle, Zion${NC})"
-        echo -e "  ${BOLD}${CYAN} 3)${NC} Launch Voice Chat with Ollama Models (${BOLD}${MAGENTA}Matrix Cast: Smith, Morpheus, Neo, Trinity, Oracle, Zion${NC})"
+        echo -e "  ${BOLD}${CYAN} 2)${NC} Launch Voice Chat CLI with MP Harmony Agent (${BOLD}${MAGENTA}Voice: Stephen Hawking [cloned cast needs XTTS]${NC})"
+        echo -e "  ${BOLD}${CYAN} 3)${NC} Launch Voice Chat with Ollama Models (${BOLD}${MAGENTA}Voice: Stephen Hawking [cloned cast needs XTTS]${NC})"
         echo -e "  ${BOLD}${CYAN} 4)${NC} Start MP Harmony Voice Bridge / Server (${BOLD}${GREEN}Background Daemon${NC}) [:11435]"
         echo -e "  ${BOLD}${CYAN} 5)${NC} Start MP Harmony Voice Bridge in ${BOLD}${YELLOW}New Terminal Window${NC} (Live Logs)"
         echo -e "  ${BOLD}${CYAN} 6)${NC} Stop Running MP Harmony Agent / Server"
@@ -671,11 +713,22 @@ case "${1:-}" in
     logs)
         view_logs
         ;;
+    install|setup)
+        _installer="$(dirname "${BASH_SOURCE[0]}")/install_harmony_agent.sh"
+        if [ -f "$_installer" ]; then
+            shift
+            bash "$_installer" install "$@"
+        else
+            echo -e "${RED}install_harmony_agent.sh is missing from the manager tree.${NC}" >&2
+            exit 1
+        fi
+        unset _installer
+        ;;
     "")
         interactive_menu
         ;;
     *)
-        echo "Usage: $(basename "$0") {chat|voice|ollama-voice|start|start-window|stop|restart|status|audio|logs}"
+        echo "Usage: $(basename "$0") {chat|voice|ollama-voice|start|start-window|stop|restart|status|audio|logs|install}"
         exit 1
         ;;
 esac

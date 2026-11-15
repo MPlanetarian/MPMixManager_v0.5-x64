@@ -60,7 +60,7 @@ class TestMacOSConsoleTabTitle(unittest.TestCase):
             bash = r'''
 set -u
 export HOME="$TEST_HOME"
-export VERSION="0.5.0 Stable (Sensorium)"
+export VERSION="0.5.3 Stable (Sensorium)"
 export OS_TYPE=macos
 BOLD="" CYAN="" NC="" BLUE="" GREEN="" YELLOW="" RED="" MAGENTA="" DIM="" WHITE=""
 export TERM_PROGRAM=Apple_Terminal
@@ -117,7 +117,7 @@ printf '%s\n' NO_SPAWN_OK
             self.assertIn(b"NO_SPAWN_OK", result.stdout)
             if b"PROC_UPTIME" not in result.stdout:
                 self.assertIn(b"UPTIME_FORMAT_OK", result.stdout)
-            title = "MP Mix Archive Manager [v0.5.0 Stable (Sensorium)]"
+            title = "MP Mix Archive Manager [v0.5.3 Stable (Sensorium)]"
             with open(os.path.join(home, "title1"), "rb") as handle:
                 first = handle.read()
             with open(os.path.join(home, "title2"), "rb") as handle:

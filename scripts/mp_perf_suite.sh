@@ -17,7 +17,7 @@
 # Usage
 #   ./scripts/mp_perf_suite.sh                        # local, full
 #   ./scripts/mp_perf_suite.sh --quick                # local, fast
-#   ./scripts/mp_perf_suite.sh --remote 192.168.1.13  # one host
+#   ./scripts/mp_perf_suite.sh --remote <host>        # one host
 #   ./scripts/mp_perf_suite.sh --all-hosts            # every known host
 #   ./scripts/mp_perf_suite.sh --all-hosts --quick
 #   ./scripts/mp_perf_suite.sh --no-email
@@ -29,9 +29,11 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." >/dev/null 2>&1 && pwd)"
 cd "$PROJECT_ROOT" || exit 1
 
 # Hosts the programme measures. Edit this list, or pass --remote.
-MAC_HOST="${MP_MAC_HOST:-192.168.1.138}"
-FEDORA_HOST="${MP_FEDORA_HOST:-192.168.1.13}"
-FREEBSD_VM_HOST="${MP_FREEBSD_HOST:-192.168.1.16}"
+# No host is baked in: supply the machines you want measured, either through
+# the environment or with --remote. Empty means "that target is skipped".
+MAC_HOST="${MP_MAC_HOST:-}"
+FEDORA_HOST="${MP_FEDORA_HOST:-}"
+FREEBSD_VM_HOST="${MP_FREEBSD_HOST:-}"
 
 BENCH="${SCRIPT_DIR}/mp_perf_bench.py"
 MARK="${SCRIPT_DIR}/mp_benchmark_mode.py"

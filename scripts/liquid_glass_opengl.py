@@ -12,6 +12,7 @@ import ctypes
 import math
 import os
 import platform
+import re
 import subprocess
 import sys
 import time
@@ -36,6 +37,13 @@ try:
     from desktop_launch_screen import place_on_main_screen, window_launch_origin
 except ImportError:
     from scripts.desktop_launch_screen import place_on_main_screen, window_launch_origin
+
+# Raspberry Pi / low-power ARM tuning. Import is cheap and stdlib-only, and
+# every helper degrades to the pre-Pi behaviour on a normal desktop.
+try:
+    import mp_raspberry_pi
+except ImportError:  # imported as scripts.liquid_glass_*
+    from scripts import mp_raspberry_pi  # type: ignore
 
 # Ensure PyOpenGL uses the correct platform backend
 if sys.platform == "win32":
@@ -253,88 +261,24 @@ def load_glfw_dll():
 ROOT = Path(__file__).resolve().parent.parent
 SHADER_DIR = ROOT / "shaders"
 
-THEME_COLORS = {
-    "stream_of_frequency": ((0, 242, 255), (76, 217, 123), (245, 237, 106)),
-    "dreamworlds_ultra": ((166, 77, 255), (247, 37, 133), (0, 229, 255)),
-    "dynamic_rainbow_liquid_glass": ((176, 88, 255), (255, 45, 142), (0, 242, 254)),
-    "dreamworlds_liquid": ((0, 245, 255), (199, 125, 255), (72, 149, 239)),
-    "cosmic_supernova": ((224, 86, 253), (0, 245, 212), (76, 201, 240)),
-    "dreamworlds_neon": ((0, 229, 255), (247, 37, 133), (102, 102, 255)),
-    "retro_studio": ((241, 196, 15), (230, 126, 34), (243, 156, 18)),
-    "cyber_neon": ((76, 201, 240), (255, 0, 85), (153, 153, 255)),
-    "phosphor": ((57, 255, 20), (166, 255, 0), (0, 255, 102)),
-    "ice_cold": ((0, 229, 255), (136, 192, 208), (129, 161, 193)),
-    "retro_terminal": ((230, 230, 230), (180, 180, 180), (255, 255, 255)),
-    "retro_linux_memories": ((45, 45, 45), (21, 83, 158), (26, 30, 33)),
-    "into_darkness_void_out": ((0, 0, 0), (0, 0, 0), (0, 0, 0)),
-    "cosmic_dreamworlds_radioactive": ((57, 255, 20), (0, 245, 212), (166, 77, 255)),
-    "cosmic_dreamworlds": ((232, 13, 104), (0, 245, 212), (176, 88, 255)),
-    "orbital_void_reflux": ((0, 240, 255), (157, 78, 221), (255, 0, 127)),
-    "sensorium_interface": ((0, 245, 255), (240, 168, 216), (184, 72, 196)),
-    "solarized": ((220, 50, 47), (38, 139, 210), (181, 137, 0)),
-    "tokyo": ((247, 118, 142), (122, 162, 247), (187, 154, 247)),
-    "monokai": ((249, 38, 114), (166, 226, 46), (102, 217, 239)),
-    "emerald": ((46, 204, 113), (26, 188, 156), (0, 168, 132)),
-}
-
-THEME_ALIASES = {
-    "stream_of_frequency": "stream_of_frequency",
-    "stream_of_frequency_theme": "stream_of_frequency",
-    "stream of frequency": "stream_of_frequency",
-    "stream-of-frequency": "stream_of_frequency",
-    "stream": "stream_of_frequency",
-    "frequency": "stream_of_frequency",
-    "sof": "stream_of_frequency",
-    "frequency_stream": "stream_of_frequency",
-    "unix_terminal": "retro_terminal", "retro_unix": "retro_terminal", "white_on_black": "retro_terminal", "old_style_unix": "retro_terminal", "terminal": "retro_terminal", "classic": "retro_terminal",
-    "cosmic": "cosmic_supernova", "supernova": "cosmic_supernova",
-    "cyberpunk": "cyber_neon", "cyber": "cyber_neon",
-    "matrix": "phosphor", "nord": "ice_cold", "dracula": "dreamworlds_neon", "gruvbox": "retro_studio",
-    "dreamworlds": "dreamworlds_ultra", "default": "dreamworlds_ultra", "mplanetarian": "dreamworlds_ultra",
-    "dynamic_rainbow_liquid_glass": "dynamic_rainbow_liquid_glass",
-    "dynamic_liquid_glass_rainbow": "dynamic_rainbow_liquid_glass",
-    "dynamic_rainbow": "dynamic_rainbow_liquid_glass",
-    "rainbow_liquid_glass": "dynamic_rainbow_liquid_glass",
-    "rainbow": "dynamic_rainbow_liquid_glass",
-    "dynamic_liquid_glass": "dynamic_rainbow_liquid_glass",
-    "dynamic_liquid_glass_[rainbow_colours]_(new)": "dynamic_rainbow_liquid_glass",
-    "dynamic_liquid_glass_[rainbow_colours]": "dynamic_rainbow_liquid_glass",
-    "dynamic liquid glass [rainbow colours] (new)": "dynamic_rainbow_liquid_glass",
-    "dynamic liquid glass [rainbow colours]": "dynamic_rainbow_liquid_glass",
-    "mp_dreamworlds_liquid_transparency": "dreamworlds_liquid", "dreamworlds_liquid_transparency": "dreamworlds_liquid",
-    "liquid_transparency": "dreamworlds_liquid", "liquid": "dreamworlds_liquid", "glass": "dreamworlds_liquid",
-    "liquid_glass": "dreamworlds_liquid", "mp_liquid": "dreamworlds_liquid",
-    "retro_linux_memories": "retro_linux_memories",
-    "into_darkness_void_out": "into_darkness_void_out",
-    "into darkness (void out)": "into_darkness_void_out",
-    "into darkness": "into_darkness_void_out",
-    "void out": "into_darkness_void_out",
-    "retro_linux": "retro_linux_memories",
-    "linux_memories": "retro_linux_memories",
-    "retro-linux-memories": "retro_linux_memories",
-    "retro-linux": "retro_linux_memories",
-    "retro linux memories": "retro_linux_memories",
-    "retro linux": "retro_linux_memories",
-    "veracrypt": "retro_linux_memories",
-    "retrolinux": "retro_linux_memories",
-    "linux": "retro_linux_memories",
-    "sensorium_interface": "sensorium_interface",
-    "sensorium": "sensorium_interface",
-    "cosmic_dreamworlds": "cosmic_dreamworlds",
-    "cosmic_dreamworlds_radioactive": "cosmic_dreamworlds_radioactive",
-    "radioactive": "cosmic_dreamworlds_radioactive",
-    "orbital_void_reflux": "orbital_void_reflux",
-    "orbital": "orbital_void_reflux",
-    "void_reflux": "orbital_void_reflux",
-    "solarized": "solarized",
-    "tokyo": "tokyo", "tokyo_night": "tokyo", "tokyo night": "tokyo",
-    "monokai": "monokai",
-    "emerald": "emerald", "emerald_isle": "emerald",
-    "charcoal_vault": "retro_linux_memories", "charcoal": "retro_linux_memories",
-    "charcoal vault": "retro_linux_memories", "vault": "retro_linux_memories",
-    "dark_vault": "retro_linux_memories", "veracrypt_dark": "retro_linux_memories",
-    "charcoal vault (veracrypt dark)": "retro_linux_memories",
-}
+# Theme colours and aliases live in one shared module. The three renderers
+# used to carry separate copies, and their alias maps drifted: `cosmic
+# dreamworlds` worked on Vulkan but silently fell back on the default OpenGL
+# backend. Import the single table instead.
+try:
+    from mp_theme_palette import (
+        THEME_COLORS,
+        THEME_ALIASES,
+        normalize_theme_name,
+        theme_colors,
+    )
+except ImportError:  # imported as scripts.liquid_glass_*
+    from scripts.mp_theme_palette import (  # type: ignore
+        THEME_COLORS,
+        THEME_ALIASES,
+        normalize_theme_name,
+        theme_colors,
+    )
 
 # GLFW Constants
 GLFW_RESIZABLE = 0x00020003
@@ -357,9 +301,38 @@ GLFW_KEY_ESCAPE = 256
 GLFW_RELEASE = 0
 
 
+def monitor_refresh_hz(glfw, window=None) -> int:
+    """Refresh rate of the monitor a window is on, or 0 when unknown.
+
+    Used only to choose a vsync divisor, so a failure here is harmless: the
+    caller falls back to interval 1 and its own frame deadline.
+    """
+    try:
+        monitor = None
+        if window is not None and hasattr(glfw, "glfwGetWindowMonitor"):
+            glfw.glfwGetWindowMonitor.restype = c_void_p
+            glfw.glfwGetWindowMonitor.argtypes = [c_void_p]
+            monitor = glfw.glfwGetWindowMonitor(window)
+        if not monitor:
+            glfw.glfwGetPrimaryMonitor.restype = c_void_p
+            glfw.glfwGetPrimaryMonitor.argtypes = []
+            monitor = glfw.glfwGetPrimaryMonitor()
+        if not monitor:
+            return 0
+        glfw.glfwGetVideoMode.restype = c_void_p
+        glfw.glfwGetVideoMode.argtypes = [c_void_p]
+        mode = glfw.glfwGetVideoMode(monitor)
+        if not mode:
+            return 0
+        hz = int(mode.contents.refreshRate)
+        return hz if 20 <= hz <= 360 else 0
+    except Exception:
+        return 0
+
+
 def theme_rgb(name):
-    key = THEME_ALIASES.get(str(name or "").strip().lower(), str(name or "").strip().lower())
-    return THEME_COLORS.get(key, THEME_COLORS["dreamworlds_ultra"])
+    """Colours for a theme name or label, resolved by the shared table."""
+    return theme_colors(name)
 
 
 def theme_uses_dark_glass(name) -> bool:
@@ -409,27 +382,32 @@ def glass_foreground_rgb(theme_name) -> tuple[int, int, int]:
 
 # Same hues as the manager menu text. Retro Terminal stays white.
 THEME_TEXT = {
-    "stream_of_frequency": (255, 237, 20),
-    "dreamworlds_ultra": (165, 20, 255),
+    # Dark gold, orange, amber and green: the same hues as the manager menu,
+    # pulled down so they read on the light console tints.
+    "stream_of_frequency": (98, 91, 5),
+    "dreamworlds_ultra": (216, 180, 254),
     "dynamic_rainbow_liquid_glass": (255, 20, 237),
-    "cosmic_supernova": (255, 129, 20),
+    "cosmic_supernova": (129, 64, 7),
     "dreamworlds_liquid": (20, 255, 147),
     "dreamworlds_neon": (219, 20, 255),
-    "retro_studio": (180, 140, 20),
+    "retro_studio": (114, 88, 13),
     "cyber_neon": (255, 20, 20),
-    "phosphor": (165, 255, 20),
+    "phosphor": (67, 105, 6),
     "ice_cold": (20, 147, 255),
     "retro_terminal": (255, 255, 255),
-    "cosmic_dreamworlds_radioactive": (111, 255, 20),
-    "cosmic_dreamworlds": (255, 20, 183),
-    "orbital_void_reflux": (56, 20, 255),
-    "sensorium_interface": (111, 20, 255),
+    # Deep maroon body ink for Sensorium's light coral console pane. The bright
+    # chartreuse stays in the glass palette and selection bar.
+    "sensorium": (43, 10, 16),
     "retro_linux_memories": (255, 183, 20),
     "into_darkness_void_out": (255, 255, 255),
     "solarized": (219, 255, 20),
     "tokyo": (255, 75, 20),
     "monokai": (56, 255, 20),
     "emerald": (20, 255, 93),
+    # The Whitest White paints a white console pane, so its body ink has to be
+    # black. It was missing from this table, which meant theme_text_rgb fell
+    # through to the pink default and drew pink rows on a white pane.
+    "the_whitest_white": (0, 0, 0),
 }
 
 
@@ -698,10 +676,8 @@ void main() {
 """
 
 SKIN_FILES = {
-#    "cosmic_dreamworlds_radioactive": ROOT / "assets" / "skins" / "cosmic_dreamworlds_radioactive.png",
-#    "cosmic_dreamworlds": ROOT / "assets" / "skins" / "cosmic_dreamworlds.png",
-#    "orbital_void_reflux": ROOT / "assets" / "skins" / "orbital_void_reflux.png",
-#    "sensorium_interface": ROOT / "assets" / "skins" / "sensorium_interface.png",
+    # The three cover-wrapped Liquid Glass skins were retired. The shader
+    # path stays for a future asset pack, but no theme registers a skin.
 }
 
 
@@ -734,12 +710,20 @@ class LiquidGlassRendererOpenGL:
         self._skin_textures = {}
         self._prog = 0
         self._u_locs = {}
+        # Set by _create_window to the context that was actually granted.
+        self.requested_gl = (3, 3, "core")
+        # True when the transparent framebuffer had to be dropped to get a
+        # context; the glass then draws over an opaque window instead.
+        self.transparency_unavailable = False
+        # Filled by _init_gl once GL_VERSION is known; the shader compiles
+        # against this version so a 3.1 driver gets GLSL 1.40 source.
+        self.glsl_version = "330"
 
     @property
     def summary(self):
         return (
             f"OpenGL device: {self.renderer_name} "
-            f"(vendor: {self.vendor_name}, version: {self.gl_version})"
+            f"(vendor: {self.vendor_name}, version: {self.gl_version}, GLSL {self.glsl_version})"
         )
 
     def open(self):
@@ -767,7 +751,11 @@ class LiquidGlassRendererOpenGL:
             self._step = "glfw"
             self._glfw = load_glfw_dll()
             self._bind_glfw()
-            self._glfw.glfwInitHint(GLFW_PLATFORM, GLFW_PLATFORM_X11)
+            # Pin the X11 platform only on GLFW 3.4+. On 3.3 the symbol is
+            # absent and glfwInit picks the available platform itself, which
+            # is exactly what a Raspberry Pi OS image needs.
+            if hasattr(self._glfw, "glfwInitHint"):
+                self._glfw.glfwInitHint(GLFW_PLATFORM, GLFW_PLATFORM_X11)
 
         result = self._glfw.glfwInit()
         if not result:
@@ -789,7 +777,15 @@ class LiquidGlassRendererOpenGL:
         self._bind_input()
         self._glfw.glfwMakeContextCurrent(self._window)
         try:
-            self._glfw.glfwSwapInterval(1)
+            # Divide vsync when the display outruns the frame cap, so a Pi
+            # blocks in the driver instead of spinning. A desktop has no cap
+            # and keeps interval 1 (full refresh rate).
+            self._glfw.glfwSwapInterval(
+                mp_raspberry_pi.swap_interval_for_cap(
+                    monitor_refresh_hz(self._glfw, self._window),
+                    mp_raspberry_pi.visualizer_fps_cap(),
+                )
+            )
         except Exception:
             pass
 
@@ -836,14 +832,20 @@ class LiquidGlassRendererOpenGL:
         self.panels = tuple(rects)
 
     def window_size(self):
+        if getattr(self, "_cur_size", None) is not None:
+            return self._cur_size
         w, h = c_int(), c_int()
         self._glfw.glfwGetWindowSize(self._window, byref(w), byref(h))
-        return int(w.value), int(h.value)
+        self._cur_size = (int(w.value), int(h.value))
+        return self._cur_size
 
     def framebuffer_size(self):
+        if getattr(self, "_cur_fb_size", None) is not None:
+            return self._cur_fb_size
         w, h = c_int(), c_int()
         self._glfw.glfwGetFramebufferSize(self._window, byref(w), byref(h))
-        return max(1, int(w.value)), max(1, int(h.value))
+        self._cur_fb_size = (max(1, int(w.value)), max(1, int(h.value)))
+        return self._cur_fb_size
 
     def window_pos(self):
         if getattr(self, "_cur_pos", None) is not None:
@@ -860,6 +862,7 @@ class LiquidGlassRendererOpenGL:
         self._glfw.glfwSetWindowPos(self._window, pos[0], pos[1])
 
     def set_window_size(self, w, h):
+        self._cur_size = (int(w), int(h))
         self._glfw.glfwSetWindowSize(self._window, int(w), int(h))
         self._resize = True
 
@@ -997,7 +1000,10 @@ class LiquidGlassRendererOpenGL:
         if self.window_size() != self._shape_size:
             self._apply_shape()
 
-        from OpenGL import GL
+        GL = getattr(self, "_GL", None)
+        if GL is None:
+            from OpenGL import GL
+            self._GL = GL
 
         GL.glViewport(0, 0, fw, fh)
         GL.glClearColor(0.0, 0.0, 0.0, 0.0)
@@ -1005,12 +1011,7 @@ class LiquidGlassRendererOpenGL:
         GL.glUseProgram(self._prog)
 
         colors, effective_opacity, factor = get_dynamic_theme_state(theme_name, opacity)
-        win = self.x11_window() if hasattr(self, "x11_window") else None
-        if factor != 1.0 and win:
-            target_op = int(self.clear_opacity * factor * 1000)
-            if getattr(self, "_last_dyn_opacity", None) != target_op:
-                self._last_dyn_opacity = target_op
-                self._set_opacity(win, self.clear_opacity * factor)
+        self.apply_clear_opacity(factor)
 
         a = _rgb01(colors[0])
         b = _rgb01(colors[1])
@@ -1366,6 +1367,42 @@ class LiquidGlassRendererOpenGL:
         value = int(max(0.0, min(1.0, float(opacity))) * 0xFFFFFFFF)
         self._change_cardinal(window, self._x_atom("_NET_WM_WINDOW_OPACITY"), [value])
 
+    def apply_clear_opacity(self, factor=1.0):
+        """Publish ``clear_opacity * factor`` to the window, once per change.
+
+        Every host had its own copy of this and all four carried the same
+        defect: the write was guarded by ``factor != 1.0``, so a theme without
+        the rainbow oscillation (every static theme) never republished the
+        property. Moving the transparency slider then changed only the thumb
+        drawing while the window kept its startup opacity.
+
+        The guard is gone; the comparison is now against the value actually
+        published, so any change to ``clear_opacity`` reaches the window on the
+        next frame and an unchanged value costs nothing.
+        """
+        try:
+            base = float(self.clear_opacity)
+            factor = float(factor)
+        except (TypeError, ValueError):
+            return False
+        target_op = int(base * factor * 1000)
+        if getattr(self, "_last_dyn_opacity", None) == target_op:
+            return False
+        self._last_dyn_opacity = target_op
+        win = self.x11_window() if hasattr(self, "x11_window") else 0
+        if win:
+            self._set_opacity(win, base * factor)
+            return True
+        if (
+            self._window
+            and hasattr(getattr(self, "_glfw", None), "glfwSetWindowOpacity")
+        ):
+            self._glfw.glfwSetWindowOpacity(
+                self._window, c_float(max(0.0, min(1.0, base * factor)))
+            )
+            return True
+        return False
+
     def _apply_desktop_glass(self):
         if is_windows():
             hwnd = self.win32_window()
@@ -1587,7 +1624,11 @@ class LiquidGlassRendererOpenGL:
     def _bind_glfw(self):
         g = self._glfw
         g.glfwInit.restype = c_int
-        g.glfwInitHint.argtypes = [c_int, c_int]
+        # glfwInitHint/GLFW_PLATFORM exist only in GLFW 3.4+. Raspberry Pi OS
+        # Bookworm ships libglfw3 3.3, where touching this symbol raises
+        # AttributeError before any window exists. Bind it only when present.
+        if hasattr(g, "glfwInitHint"):
+            g.glfwInitHint.argtypes = [c_int, c_int]
         g.glfwWindowHint.argtypes = [c_int, c_int]
         if hasattr(g, "glfwWindowHintString"):
             g.glfwWindowHintString.argtypes = [c_int, c_char_p]
@@ -1626,44 +1667,63 @@ class LiquidGlassRendererOpenGL:
         g.glfwSetFramebufferSizeCallback.restype = c_void_p
         g.glfwSetWindowPosCallback.argtypes = [c_void_p, c_void_p]
         g.glfwSetWindowPosCallback.restype = c_void_p
+        if hasattr(g, "glfwSetWindowSizeCallback"):
+            g.glfwSetWindowSizeCallback.argtypes = [c_void_p, c_void_p]
+            g.glfwSetWindowSizeCallback.restype = c_void_p
         if hasattr(g, "glfwSetWindowOpacity"):
             g.glfwSetWindowOpacity.argtypes = [c_void_p, c_float]
 
     def _create_window(self):
         g = self._glfw
-        g.glfwDefaultWindowHints()
-        g.glfwWindowHint(GLFW_CLIENT_API, GLFW_OPENGL_API)
-        g.glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3)
-        g.glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3)
-        g.glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE)
-        if is_macos():
-            g.glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, 1)
-        g.glfwWindowHint(GLFW_RESIZABLE, 1)
-        g.glfwWindowHint(GLFW_DECORATED, 0)
-        g.glfwWindowHint(GLFW_FOCUS_ON_SHOW, 1)
-        g.glfwWindowHint(GLFW_VISIBLE, 1)
-        g.glfwWindowHint(GLFW_FOCUSED, 1)
-        g.glfwWindowHint(GLFW_TRANSPARENT, 1)
-        if hasattr(g, "glfwWindowHintString"):
-            g.glfwWindowHintString(0x00024001, b"MP_Liquid")
-            g.glfwWindowHintString(0x00024002, b"mp_liquid")
-
         title = self.title.encode("utf-8")
-        window = g.glfwCreateWindow(self.width, self.height, title, None, None)
-        if not window:
-            # Fallback for older legacy hardware/drivers that may not support Core 3.3 profile:
+        window = None
+
+        # Walk down the context ladder until one is accepted. A Raspberry Pi 4
+        # or 5 caps out at OpenGL 3.1 core through Mesa V3D, so a fixed 3.3
+        # request produced no window at all. On a PC the first attempt wins
+        # and the rest of the list is never touched. The last attempt also
+        # drops the transparent framebuffer, which a few drivers refuse.
+        attempts = list(mp_raspberry_pi.gl_create_attempts())
+        for index, (major, minor, profile) in enumerate(attempts):
+            plain = index == len(attempts) - 1
             g.glfwDefaultWindowHints()
+            g.glfwWindowHint(GLFW_CLIENT_API, GLFW_OPENGL_API)
+            if major:
+                g.glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, major)
+                g.glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, minor)
+            if profile == "core":
+                g.glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE)
+            if is_macos():
+                g.glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, 1)
             g.glfwWindowHint(GLFW_RESIZABLE, 1)
             g.glfwWindowHint(GLFW_DECORATED, 0)
+            g.glfwWindowHint(GLFW_FOCUS_ON_SHOW, 1)
             g.glfwWindowHint(GLFW_VISIBLE, 1)
-            g.glfwWindowHint(GLFW_TRANSPARENT, 1)
+            g.glfwWindowHint(GLFW_FOCUSED, 1)
+            if not plain:
+                g.glfwWindowHint(GLFW_TRANSPARENT, 1)
+            if hasattr(g, "glfwWindowHintString"):
+                g.glfwWindowHintString(0x00024001, b"MP_Liquid")
+                g.glfwWindowHintString(0x00024002, b"mp_liquid")
+
             window = g.glfwCreateWindow(self.width, self.height, title, None, None)
+            if window:
+                self.requested_gl = (major, minor, profile)
+                if plain:
+                    self.transparency_unavailable = True
+                break
+
         if not window:
-            raise RuntimeError("GLFW could not open a window with OpenGL support")
+            raise RuntimeError(
+                "GLFW could not open a window with OpenGL support. Install the "
+                "GPU driver (on Raspberry Pi OS: sudo apt install libglfw3 "
+                "mesa-utils libgl1-mesa-dri) and check that X11 or XWayland is running."
+            )
 
         origin_x, origin_y = window_launch_origin(72, 64)
         g.glfwSetWindowPos(window, origin_x, origin_y)
         self._cur_pos = (origin_x, origin_y)
+        self._cur_size = (int(self.width), int(self.height))
         self._resize = False
         return window
 
@@ -1672,10 +1732,16 @@ class LiquidGlassRendererOpenGL:
         self._on_cursor = CFUNCTYPE(None, c_void_p, c_double, c_double)(self._cursor)
         self._on_fb = CFUNCTYPE(None, c_void_p, c_int, c_int)(self._framebuffer)
         self._on_pos = CFUNCTYPE(None, c_void_p, c_int, c_int)(self._pos_callback)
+        self._on_size = CFUNCTYPE(None, c_void_p, c_int, c_int)(self._size_callback)
         self._glfw.glfwSetMouseButtonCallback(self._window, ctypes.cast(self._on_mouse, c_void_p))
         self._glfw.glfwSetCursorPosCallback(self._window, ctypes.cast(self._on_cursor, c_void_p))
         self._glfw.glfwSetFramebufferSizeCallback(self._window, ctypes.cast(self._on_fb, c_void_p))
         self._glfw.glfwSetWindowPosCallback(self._window, ctypes.cast(self._on_pos, c_void_p))
+        if hasattr(self._glfw, "glfwSetWindowSizeCallback"):
+            self._glfw.glfwSetWindowSizeCallback(self._window, ctypes.cast(self._on_size, c_void_p))
+
+    def _size_callback(self, _window, w, h):
+        self._cur_size = (int(w), int(h))
 
     def _pos_callback(self, _window, x, y):
         self._cur_pos = (int(x), int(y))
@@ -1690,6 +1756,7 @@ class LiquidGlassRendererOpenGL:
         self.cursor = (float(x), float(y))
 
     def _framebuffer(self, _window, _w, _h):
+        self._cur_fb_size = (max(1, int(_w)), max(1, int(_h)))
         self._resize = True
 
     def _init_gl(self):
@@ -1702,6 +1769,50 @@ class LiquidGlassRendererOpenGL:
         self.renderer_name = renderer_b.decode("utf-8", errors="replace") if renderer_b else "OpenGL Generic"
         self.gl_version = version_b.decode("utf-8", errors="replace") if version_b else "Unknown"
 
+        # Decide which GLSL version the pipeline may use. `GL_VERSION` is the
+        # authority when it reports more than the context that was asked for:
+        # a driver may grant a 3.0 compatibility context while advertising
+        # 3.1 support, and using the lower number needlessly compiles a more
+        # conservative shader. Take the higher of the two.
+        major, minor = self.requested_gl[0], self.requested_gl[1]
+        gl_major = gl_minor = 0
+        match = re.search(r"(\d+)\.(\d+)", self.gl_version)
+        if match:
+            gl_major, gl_minor = int(match.group(1)), int(match.group(2))
+        if (gl_major, gl_minor) > (major, minor):
+            major, minor = gl_major, gl_minor
+        if not major:
+            major, minor = 3, 1 if mp_raspberry_pi.is_low_power_gpu() else 3
+        self.glsl_version = mp_raspberry_pi.preferred_glsl_version(major, minor)
+
+    def _compile_shader(self, stage, source):
+        """Compile one shader stage for the version this context supports.
+
+        The source is compiled at the target version directly rather than
+        trying 3.30 first and falling back. Mesa 22.3 (the Raspberry Pi OS
+        Bookworm driver) accepts a `#version 330` shader under
+        `MESA_GLSL_VERSION_OVERRIDE` with `GL_COMPILE_STATUS` set, but then
+        drops `main` and the *link* fails with "vertex shader lacks `main'".
+        Pre-adapting removes that failure mode entirely. `adapt_glsl` is a
+        no-op above 3.30, so a desktop still compiles its source unchanged.
+        """
+        from OpenGL import GL
+
+        prepared = source
+        if self.glsl_version not in ("330", "410"):
+            prepared = mp_raspberry_pi.adapt_glsl(source, self.glsl_version)
+
+        shader = GL.glCreateShader(stage)
+        GL.glShaderSource(shader, prepared)
+        GL.glCompileShader(shader)
+        if GL.glGetShaderiv(shader, GL.GL_COMPILE_STATUS):
+            return shader
+
+        err = GL.glGetShaderInfoLog(shader).decode("utf-8", errors="replace")
+        GL.glDeleteShader(shader)
+        label = "Vertex" if stage == GL.GL_VERTEX_SHADER else "Fragment"
+        raise RuntimeError(f"{label} shader compilation failed: {err}")
+
     def _create_pipeline(self):
         from OpenGL import GL
         import numpy as np
@@ -1712,23 +1823,27 @@ class LiquidGlassRendererOpenGL:
         vert_src = vert_path.read_text(encoding="utf-8") if vert_path.is_file() else FALLBACK_VERT_SRC
         frag_src = frag_path.read_text(encoding="utf-8") if frag_path.is_file() else FALLBACK_FRAG_SRC
 
-        vs = GL.glCreateShader(GL.GL_VERTEX_SHADER)
-        GL.glShaderSource(vs, vert_src)
-        GL.glCompileShader(vs)
-        if not GL.glGetShaderiv(vs, GL.GL_COMPILE_STATUS):
-            err = GL.glGetShaderInfoLog(vs).decode("utf-8", errors="replace")
-            raise RuntimeError(f"Vertex shader compilation failed: {err}")
-
-        fs = GL.glCreateShader(GL.GL_FRAGMENT_SHADER)
-        GL.glShaderSource(fs, frag_src)
-        GL.glCompileShader(fs)
-        if not GL.glGetShaderiv(fs, GL.GL_COMPILE_STATUS):
-            err = GL.glGetShaderInfoLog(fs).decode("utf-8", errors="replace")
-            raise RuntimeError(f"Fragment shader compilation failed: {err}")
+        vs = self._compile_shader(GL.GL_VERTEX_SHADER, vert_src)
+        fs = self._compile_shader(GL.GL_FRAGMENT_SHADER, frag_src)
 
         prog = GL.glCreateProgram()
         GL.glAttachShader(prog, vs)
         GL.glAttachShader(prog, fs)
+        # GLSL below 3.30 has no `layout(location = ...)` qualifier, so the
+        # attribute indices the renderer uses in glVertexAttribPointer have to
+        # be bound by hand before linking. Doing it unconditionally is
+        # harmless: the names match the declarations at every version.
+        try:
+            for _name, _index in mp_raspberry_pi.glsl_attribute_locations(vert_src):
+                GL.glBindAttribLocation(prog, _index, _name)
+        except Exception:
+            pass
+        # A single fragment output binds to 0 implicitly, but a 3.1 core
+        # profile is stricter across drivers than a 3.3 one, so say it.
+        try:
+            GL.glBindFragDataLocation(prog, 0, "outColor")
+        except Exception:
+            pass
         GL.glLinkProgram(prog)
         if not GL.glGetProgramiv(prog, GL.GL_LINK_STATUS):
             err = GL.glGetProgramInfoLog(prog).decode("utf-8", errors="replace")

@@ -21,7 +21,7 @@ import unittest
 import urllib.error
 import urllib.request
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from scripts import mix_web_companion as companion
 
@@ -185,9 +185,15 @@ class TestLocalVoiceCommand(AssistantTestBase):
 class _LiveServer:
     """Tiny stdlib HTTP server around CompanionHandler for endpoint tests."""
 
+    # The companion now refuses a mutating request that does not carry a
+    # custom header (CSRF defence), so every test POST sends one. Auth itself
+    # is disabled here and exercised by test_web_companion_security.
+    CSRF_HEADERS = {"X-MP-Companion": "1"}
+
     def __init__(self):
         import http.server
 
+        companion.COMPANION_REQUIRE_AUTH = False
         self.httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), companion.CompanionHandler)
         self.port = self.httpd.server_address[1]
         self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
@@ -202,10 +208,12 @@ class _LiveServer:
             return response.status, response.read()
 
     def post(self, path, payload, timeout=60):
+        headers = {"Content-Type": "application/json"}
+        headers.update(self.CSRF_HEADERS)
         request = urllib.request.Request(
             self.base + path,
             data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
+            headers=headers,
             method="POST",
         )
         try:
@@ -218,6 +226,7 @@ class _LiveServer:
     def close(self):
         self.httpd.shutdown()
         self.httpd.server_close()
+        companion.COMPANION_REQUIRE_AUTH = True
 
 
 class TestAssistantEndpoints(AssistantTestBase):
@@ -279,10 +288,38 @@ class TestAssistantEndpoints(AssistantTestBase):
         stream.assert_not_called()
 
     def test_a_normal_prompt_is_streamed(self):
-        status, body = self.server.post(
-            "/api/assistant/chat",
-            {"messages": [{"role": "user", "content": "hello"}]},
+        """The proxy relays the agent's SSE stream to the phone.
+
+        This used to call whatever agent happened to be listening on
+        127.0.0.1:11435. On a workstation running MP Harmony that means a real
+        model inference: the test then took as long as the model did and hung
+        outright when the agent was mid-request. It now talks to a local stub,
+        which is what actually pins the proxy's behaviour.
+        """
+        sse = (
+            b'data: {"choices":[{"delta":{"content":"hi"}}]}\n\n'
+            b"data: [DONE]\n\n"
         )
+        # The agent call happens inside the server's own handler, one thread
+        # away from the test client. Patching `urllib.request.urlopen` would
+        # also capture the client's own POST, so the patch is scoped with a
+        # predicate that only intercepts the agent's /v1/chat/completions.
+        response = MagicMock()
+        response.__iter__ = lambda _self: iter(sse.splitlines(keepends=True))
+        response.status = 200
+        real_urlopen = urllib.request.urlopen
+
+        def fake_urlopen(request, *args, **kwargs):
+            url = getattr(request, "full_url", str(request))
+            if "/v1/chat/completions" in url:
+                return response
+            return real_urlopen(request, *args, **kwargs)
+
+        with patch.object(companion.urllib.request, "urlopen", side_effect=fake_urlopen):
+            status, body = self.server.post(
+                "/api/assistant/chat",
+                {"messages": [{"role": "user", "content": "hello"}]},
+            )
         text = body.decode("utf-8", "replace")
         self.assertEqual(status, 200)
         self.assertIn("data: ", text)

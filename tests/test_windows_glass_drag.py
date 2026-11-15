@@ -232,7 +232,10 @@ class TestStuckMouseAndHostWiring(unittest.TestCase):
         host.renderer = MagicMock()
         host.renderer.win32_window.return_value = 55
         host.child_xid = 77
-        with patch("windows_glass_drag.GlassWindowDrag._subclass"):
+        # These paths are guarded by `sys.platform != "win32"`. Without saying
+        # this is Windows they return immediately and the test asserts nothing.
+        with patch.object(opengl_host.sys, "platform", "win32"), \
+             patch("windows_glass_drag.GlassWindowDrag._subclass"):
             host._sync_windows_drag()
         self.assertEqual(host._glass_drag.glass_hwnd, 55)
         self.assertEqual(host._glass_drag.console_hwnd, 77)
@@ -243,9 +246,10 @@ class TestStuckMouseAndHostWiring(unittest.TestCase):
         host.renderer.mouse_down = False
         drag = MagicMock()
         host._glass_drag = drag
-        host._pump_windows_drag()
-        drag.update.assert_called_once()
-        host.close()
+        with patch.object(opengl_host.sys, "platform", "win32"):
+            host._pump_windows_drag()
+            drag.update.assert_called_once()
+            host.close()
         drag.close.assert_called_once()
         self.assertIsNone(host._glass_drag)
 

@@ -19,115 +19,24 @@ ROOT = Path(__file__).resolve().parent.parent
 SHADER_DIR = ROOT / "shaders"
 
 # Palette definitions matching the Liquid Glass suite
-THEME_COLORS = {
-    "stream_of_frequency": ((0, 242, 255), (76, 217, 123), (245, 237, 106)),
-    "dreamworlds_ultra": ((166, 77, 255), (247, 37, 133), (0, 229, 255)),
-    "dynamic_rainbow_liquid_glass": ((176, 88, 255), (255, 45, 142), (0, 242, 254)),
-    "dreamworlds_liquid": ((0, 245, 255), (199, 125, 255), (72, 149, 239)),
-    "cosmic_supernova": ((224, 86, 253), (0, 245, 212), (76, 201, 240)),
-    "dreamworlds_neon": ((0, 229, 255), (247, 37, 133), (102, 102, 255)),
-    "retro_studio": ((241, 196, 15), (230, 126, 34), (243, 156, 18)),
-    "cyber_neon": ((76, 201, 240), (255, 0, 85), (153, 153, 255)),
-    "phosphor": ((57, 255, 20), (166, 255, 0), (0, 255, 102)),
-    "ice_cold": ((0, 229, 255), (136, 192, 208), (129, 161, 193)),
-    "retro_terminal": ((230, 230, 230), (180, 180, 180), (255, 255, 255)),
-    "cosmic_dreamworlds_radioactive": ((57, 255, 20), (0, 245, 212), (166, 77, 255)),
-    "cosmic_dreamworlds": ((232, 13, 104), (0, 245, 212), (176, 88, 255)),
-    "orbital_void_reflux": ((0, 240, 255), (157, 78, 221), (255, 0, 127)),
-    "sensorium_interface": ((0, 245, 255), (240, 168, 216), (184, 72, 196)),
-    "retro_linux_memories": ((45, 45, 45), (21, 83, 158), (26, 30, 33)),
-    "solarized": ((220, 50, 47), (38, 139, 210), (181, 137, 0)),
-    "tokyo": ((247, 118, 142), (122, 162, 247), (187, 154, 247)),
-    "monokai": ((249, 38, 114), (166, 226, 46), (102, 217, 239)),
-    "emerald": ((46, 204, 113), (26, 188, 156), (0, 168, 132)),
-}
-
-THEME_ALIASES = {
-    "sensorium_interface": "sensorium_interface",
-    "sensorium_interface_(liquid_glass_skin)": "sensorium_interface",
-    "sensorium interface (liquid glass skin)": "sensorium_interface",
-    "sensorium interface": "sensorium_interface",
-    "sensorium": "sensorium_interface",
-    "earth_flipper": "sensorium_interface",
-    "earth flipper": "sensorium_interface",
-    "stream_of_frequency": "stream_of_frequency",
-    "stream_of_frequency_theme": "stream_of_frequency",
-    "stream of frequency": "stream_of_frequency",
-    "stream-of-frequency": "stream_of_frequency",
-    "stream": "stream_of_frequency",
-    "frequency": "stream_of_frequency",
-    "sof": "stream_of_frequency",
-    "frequency_stream": "stream_of_frequency",
-    "cosmic_dreamworlds": "cosmic_dreamworlds",
-    "cosmic_dreamworlds_(liquid_glass_skin)": "cosmic_dreamworlds",
-    "cosmic dreamworlds (liquid glass skin)": "cosmic_dreamworlds",
-    "cosmic dreamworlds": "cosmic_dreamworlds",
-    "cosmic_dreamworld": "cosmic_dreamworlds",
-    "cosmic dreamworld": "cosmic_dreamworlds",
-    "cosmic_dream": "cosmic_dreamworlds",
-    "cosmic dream": "cosmic_dreamworlds",
-    "cosmic_dreamworlds_radioactive": "cosmic_dreamworlds_radioactive",
-    "cosmic_dreamworlds_radioactive_(liquid_glass_skin)": "cosmic_dreamworlds_radioactive",
-    "cosmic dreamworlds radioactive (liquid glass skin)": "cosmic_dreamworlds_radioactive",
-    "cosmic dreamworlds radioactive": "cosmic_dreamworlds_radioactive",
-    "cosmic_radioactive": "cosmic_dreamworlds_radioactive",
-    "radioactive": "cosmic_dreamworlds_radioactive",
-    "orbital_void_reflux": "orbital_void_reflux",
-    "orbital_void_reflux_(liquid_glass_skin)": "orbital_void_reflux",
-    "orbital void reflux (liquid glass skin)": "orbital_void_reflux",
-    "orbital void reflux": "orbital_void_reflux",
-    "orbital_void": "orbital_void_reflux",
-    "void_reflux": "orbital_void_reflux",
-    "orbital": "orbital_void_reflux",
-    "dreamworlds": "dreamworlds_ultra",
-    "default": "dreamworlds_ultra",
-    "mplanetarian": "dreamworlds_ultra",
-    "dynamic_rainbow_liquid_glass": "dynamic_rainbow_liquid_glass",
-    "dynamic_liquid_glass_rainbow": "dynamic_rainbow_liquid_glass",
-    "dynamic_rainbow": "dynamic_rainbow_liquid_glass",
-    "rainbow_liquid_glass": "dynamic_rainbow_liquid_glass",
-    "rainbow": "dynamic_rainbow_liquid_glass",
-    "dynamic_liquid_glass": "dynamic_rainbow_liquid_glass",
-    "dynamic_liquid_glass_[rainbow_colours]_(new)": "dynamic_rainbow_liquid_glass",
-    "dynamic_liquid_glass_[rainbow_colours]": "dynamic_rainbow_liquid_glass",
-    "dynamic liquid glass [rainbow colours] (new)": "dynamic_rainbow_liquid_glass",
-    "dynamic liquid glass [rainbow colours]": "dynamic_rainbow_liquid_glass",
-    "mp_dreamworlds_liquid_transparency": "dreamworlds_liquid",
-    "dreamworlds_liquid_transparency": "dreamworlds_liquid",
-    "liquid_transparency": "dreamworlds_liquid",
-    "liquid": "dreamworlds_liquid",
-    "glass": "dreamworlds_liquid",
-    "liquid_glass": "dreamworlds_liquid",
-    "cosmic": "cosmic_supernova",
-    "supernova": "cosmic_supernova",
-    "cyberpunk": "cyber_neon",
-    "cyber": "cyber_neon",
-    "matrix": "phosphor",
-    "nord": "ice_cold",
-    "dracula": "dreamworlds_neon",
-    "gruvbox": "retro_studio",
-    "unix_terminal": "retro_terminal",
-    "terminal": "retro_terminal",
-    "classic": "retro_terminal",
-    "retro_linux_memories": "retro_linux_memories",
-    "retro_linux": "retro_linux_memories",
-    "linux_memories": "retro_linux_memories",
-    "retro-linux-memories": "retro_linux_memories",
-    "retro-linux": "retro_linux_memories",
-    "retro linux memories": "retro_linux_memories",
-    "retro linux": "retro_linux_memories",
-    "veracrypt": "retro_linux_memories",
-    "retrolinux": "retro_linux_memories",
-    "linux": "retro_linux_memories",
-    "solarized": "solarized",
-    "tokyo": "tokyo", "tokyo_night": "tokyo", "tokyo night": "tokyo",
-    "monokai": "monokai",
-    "emerald": "emerald", "emerald_isle": "emerald",
-    "charcoal_vault": "retro_linux_memories", "charcoal": "retro_linux_memories",
-    "charcoal vault": "retro_linux_memories", "vault": "retro_linux_memories",
-    "dark_vault": "retro_linux_memories", "veracrypt_dark": "retro_linux_memories",
-    "charcoal vault (veracrypt dark)": "retro_linux_memories",
-}
+# Theme colours and aliases live in one shared module. The three renderers
+# used to carry separate copies, and their alias maps drifted: `cosmic
+# dreamworlds` worked on Vulkan but silently fell back on the default OpenGL
+# backend. Import the single table instead.
+try:
+    from mp_theme_palette import (
+        THEME_COLORS,
+        THEME_ALIASES,
+        normalize_theme_name,
+        theme_colors,
+    )
+except ImportError:  # imported as scripts.liquid_glass_*
+    from scripts.mp_theme_palette import (  # type: ignore
+        THEME_COLORS,
+        THEME_ALIASES,
+        normalize_theme_name,
+        theme_colors,
+    )
 
 
 def is_macos() -> bool:
@@ -173,8 +82,8 @@ def check_apple_silicon_support():
 
 
 def theme_rgb(name):
-    key = THEME_ALIASES.get(str(name or "").strip().lower(), str(name or "").strip().lower())
-    return THEME_COLORS.get(key, THEME_COLORS["dreamworlds_ultra"])
+    """Colours for a theme name or label, resolved by the shared table."""
+    return theme_colors(name)
 
 
 def get_dynamic_theme_state(theme_name, base_opacity=1.0, current_time=None):

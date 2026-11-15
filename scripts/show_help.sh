@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# MP Mix Manager 0.5.0 Stable (Sensorium) - Help Usage & Available Options
+# MP Mix Manager 0.5.3 Stable (Sensorium) - Help Usage & Available Options
 # Purpose: Display help usage and all available options for mix-archive-manager
 # Usage:
 #   mix-archive-manager --help
@@ -30,7 +30,7 @@ if [ -z "$VERSION" ]; then
     if [ -f "$CODEBASE_DIR/VERSION" ]; then
         VERSION="$(head -n 1 "$CODEBASE_DIR/VERSION" | tr -d '\r\n')"
     else
-        VERSION="0.5.0 Stable (Sensorium)"
+        VERSION="0.5.3 Stable (Sensorium)"
     fi
 fi
 export VERSION
@@ -86,6 +86,14 @@ ${BOLD}LAUNCH FLAGS & OPTIONS:${NC}
         ${GREEN}--check, -c${NC}    Check for updates without installing
         ${GREEN}--force, -f${NC}    Force re-pull and reinstall from remote repository
 
+  ${BOLD}${GREEN}reinstall, --reinstall${NC}
+      Reinstall or factory-reset this install. Keeps the application tree and
+      rebuilds the launchers, desktop entries and Python environment.
+      ${DIM}Sub-options:${NC}
+        ${GREEN}--yes, -y${NC}       Do not prompt for confirmation
+        ${GREEN}--fresh${NC}         Factory reset: also drop playlists, music folders and archive config
+        ${GREEN}--dry-run${NC}       Print what would change, then exit
+
   ${BOLD}${GREEN}-p, --track, --current-track${NC}
       Print the absolute filesystem path of the currently playing mix track.
 
@@ -102,7 +110,7 @@ ${BOLD}AVAILABLE MENU OPTIONS (INTERACTIVE & DIRECT SHORTCUTS):${NC}
 
   ${BOLD}${BLUE}─── [ SECTION 1: Listen to Mixes & Tracks / Convert Audio / Import Mixes / Plus More ] ────${NC}
   ${BOLD}${CYAN}AI${NC}  ${BOLD}Load MP Mix Manager AI Assistant (MP Harmony) (New)${NC}
-       First row. Ollama must already be running. Loads gpt-oss-pinned:latest, or asks before installing that model. Shift+A opens it. Shift+A on an empty assistant line returns here.
+       First row. Ollama must already be running. Loads gpt-oss-pinned:latest (NVIDIA Nemotron 3.5 Bolt E4B, 8B/4B effective), or asks before installing that model. Shift+A opens it. Shift+A on an empty assistant line returns here.
   ${BOLD}${CYAN}MP${NC}  ${BOLD}MP GUI Mix Manager (New)${NC}
        Open the manager in the Liquid Glass window (MP_Gui.sh). Press G on the main menu. Also: gui, mp-gui, 36.
    ${BOLD}${CYAN}0${NC}   ${BOLD}Run Any Desktop Shortcuts — Linux${NC}
@@ -152,7 +160,7 @@ ${BOLD}AVAILABLE MENU OPTIONS (INTERACTIVE & DIRECT SHORTCUTS):${NC}
   ${BOLD}${CYAN}21${NC}   ${BOLD}Morning Alarm Clock & DJ Mix Playback Suite${NC}
        Wake-up mixes, the scheduler, and the MPlanetarians alarm clock.
   ${BOLD}${CYAN}22${NC}   ${BOLD}YouTube Video Suite${NC}
-       4K, 1080p, and 720p videos, Shorts, and the channel downloader.
+       4K, 1080p, and 720p videos, plus Shorts promos.
   ${BOLD}${CYAN}23${NC}   ${BOLD}Visual Media, Cover Art & MP Liquid Visualizer${NC}
        Vulkan visualizer (also: Z, visualizer), video cut and split, and cover art.
   ${BOLD}${CYAN}24${NC}   ${BOLD}Record Video of DJ Mix using GPU Screen Recorder (Linux)${NC}
@@ -194,17 +202,25 @@ ${BOLD}AVAILABLE MENU OPTIONS (INTERACTIVE & DIRECT SHORTCUTS):${NC}
        is restored on exit, including a crash: echo, the cursor, and stty sane. The player
        repaints changed cells and does not clear the screen on every tick. Liquid Glass,
        MP Gui, the visualizer, and other desktop windows stay closed. Also: tty, tty-mode, desktop-cli.
+       ${DIM}Over SSH, option 37 turns the mode on for that login only. The remote Plasma session,
+       its login screen, and the machine's console are left alone.${NC}
   ${BOLD}${CYAN}38${NC}   ${BOLD}Exit Manager${NC} (or q / exit)
        Exit the application cleanly.
 
 ${BOLD}HEADER SESSION:${NC}
   A desktop Bash terminal shows ${CYAN}CLI Mode${NC} on the right of the main header title.
   The Linux text console shows ${GREEN}TTY CLI Mode${NC}. MP Gui does not show either label.
+  ${DIM}With MP Mix Manager TTY Audio Mode on, the header shows ${GREEN}TTY CLI Mode${NC} on any
+  terminal that runs the manager, including an SSH session on a pts. The mode names the
+  session; the device path alone does not.${NC}
 
 ${BOLD}SYSTEM TRAY:${NC}
   MP Mix Manager, MP Gui, and MP Liquid Player share one tray icon while any of them is open.
   Right-click it for ${CYAN}Launch MP Gui${NC}, ${CYAN}Launch MP Liquid Player${NC}, and ${CYAN}Launch MP Mix Manager${NC}.
+  ${DIM}An install that set up only some of the apps shows only those launch entries; Close All and the Web entry always stay.${NC}
+  ${CYAN}Start / Stop MP Audio Player (Web)${NC} starts or stops the phone companion without stopping the apps.
   ${CYAN}Close MP Mix Manager (Closes everything)${NC} stops the console manager, MP Gui, MP Liquid Player, playback, and the visualizer.
+  ${DIM}The exit movie plays first and the icon stays responsive while it runs. Every MP window is then closed, including one launched from the tray's own manager launcher.${NC}
 
 ${BOLD}DIRECT COMMAND SHORTCUTS:${NC}
   You can execute these shortcuts directly from the command line:

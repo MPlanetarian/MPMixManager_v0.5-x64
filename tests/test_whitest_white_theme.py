@@ -97,21 +97,33 @@ class TestWhitestWhitePalette(unittest.TestCase):
         black = "38;2;0;0;0"
         self.assertIn(black, plain)
         self.assertIn("[ 4]", plain)
-        # The selected row stays white and writes black text, never a colour fill.
-        self.assertIn("48;2;255;255;255", sel)
+        # Unselected rows sit directly on the white pane: no fill of their own.
+        for marker in ("48;2;", "48;5;", "1;37;40m"):
+            self.assertNotIn(marker, plain, marker)
+        # The selected row follows the 0.4 navigation rotation, which is a
+        # colour fill rather than the white block 0.5 used. It starts on Pink,
+        # and the black ink keeps it legible.
+        self.assertIn("48;2;247;37;133", sel)
         self.assertIn("1;38;2;0;0;0", sel)
-        self.assertNotIn("48;2;0;0;0", sel)
-        for hue in (
-            "247;37;133",
-            "0;229;255",
-            "255;140;0",
-            "88;98;118",
-            "255;183;20",
-        ):
-            self.assertNotIn(hue, plain, hue)
-            self.assertNotIn(hue, sel, hue)
-        # A black pointer marks the row on a white pane.
         self.assertIn("▶", sel)
+
+    def test_selected_row_walks_the_four_colour_palette(self):
+        """Whitest White cycles the same palette as every other theme."""
+        script = f"""
+        set -e
+        eval "$(awk '/^set_theme_colors\\(\\)/{{f=1}} f{{print}} f&&/^}}/{{exit}}' "{MGR_SH}")"
+        eval "$(sed -n '/^highlight_menu_line() {{/,/^}}/p' "{MGR_SH}")"
+        set_theme_colors the_whitest_white
+        for idx in 0 1 2 3; do
+            sel=""
+            highlight_menu_line 4 "Play Mix" "" "$idx" sel 74 100
+            printf '%s\\n' "$sel"
+        done
+        """
+        res = _bash(script)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        for hue in ("247;37;133", "0;229;255", "255;140;0", "88;98;118"):
+            self.assertIn(f"48;2;{hue}", res.stdout, hue)
 
 
 class TestWhitestWhiteWiring(unittest.TestCase):
@@ -147,7 +159,7 @@ class TestWhitestWhiteWiring(unittest.TestCase):
 
     def test_theme_picker_offers_and_switches_to_it(self):
         text = MGR_SH.read_text(encoding="utf-8")
-        self.assertIn("23|The Whitest White|", text)
+        self.assertIn("20|The Whitest White|", text)
         self.assertIn("The Whitest White MP Mix Manager", text)
         self.assertIn('save_theme "the_whitest_white"', text)
         self.assertIn('_sync_btop_theme "$new_theme"', text)

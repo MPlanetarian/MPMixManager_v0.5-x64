@@ -76,7 +76,7 @@ if [ -z "$LOCAL_HISTORY_DIR" ] || [ ! -d "$LOCAL_HISTORY_DIR" ]; then
 for cand in "${MIX_ARCHIVE_DIR:-$PWD}/Traktor 3.11.1/History" "./Traktor 3.11.1/History" "/run/media/$USER/WD BLACK B/MIX_ARCHIVE/Traktor 3.11.1/History" "/run/media/mplanetarian/WD BLACK B/MIX_ARCHIVE/Traktor 3.11.1/History" "/Volumes/WD BLACK B/MIX_ARCHIVE/Traktor 3.11.1/History" "/Volumes/MIX_ARCHIVE/Traktor 3.11.1/History" "/Volumes/DATAMAC3/MIX_ARCHIVE/Traktor 3.11.1/History" "/d/MIX_ARCHIVE/Traktor 3.11.1/History" "D:/MIX_ARCHIVE/Traktor 3.11.1/History" "/mnt/d/MIX_ARCHIVE/Traktor 3.11.1/History" "$HOME/Documents/Native Instruments/Traktor 3.11.1/History" "$HOME/Native Instruments/Traktor 3.11.1/History"; do if [ -d "$cand" ]; then LOCAL_HISTORY_DIR="$cand"; break; fi; done
 fi
 load_conversion_theme() {
-local mgr="" cand fn_src saved_theme="dreamworlds"
+local mgr="" cand fn_src saved_theme="dreamworlds_ultra"
 for cand in "$SCRIPT_DIR/Mix_Archive_Manager.sh" "$PARENT_DIR/Mix_Archive_Manager.sh" "${MIX_ARCHIVE_DIR:-}/Mix_Archive_Manager.sh" "$HOME/MP_Mix_Manager_v0.3/Mix_Archive_Manager.sh"; do if [ -f "$cand" ]; then mgr="$cand"; break; fi; done
 if [ -n "$mgr" ]; then fn_src="$(awk '/^set_theme_colors\(\)/{f=1} f{print} f&&/^}/{exit}' "$mgr" 2>/dev/null || true)"; if [ -n "$fn_src" ]; then eval "$fn_src"; fi; fi
 if ! declare -F set_theme_colors >/dev/null 2>&1; then
@@ -89,7 +89,7 @@ esac
 }
 fi
 if [ -f "$HOME/.config/mix-manager/theme" ]; then IFS= read -r saved_theme < "$HOME/.config/mix-manager/theme" 2>/dev/null || true; saved_theme="${saved_theme//[[:space:]]/}"; fi
-set_theme_colors "${saved_theme:-dreamworlds}"
+set_theme_colors "${saved_theme:-dreamworlds_ultra}"
 if [ ! -t 1 ] || [ -n "${NO_COLOR:-}" ]; then NC=''; BOLD=''; DIM=''; RED=''; GREEN=''; YELLOW=''; BLUE=''; MAGENTA=''; CYAN=''; fi; return 0
 }
 load_conversion_theme

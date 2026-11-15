@@ -63,7 +63,7 @@ class TestGlassTextInk(unittest.TestCase):
         names = (
             "stream_of_frequency",
             "dreamworlds_ultra",
-            "sensorium_interface",
+            "sensorium",
             "cosmic_supernova",
             "phosphor",
             "retro_linux_memories",
@@ -71,7 +71,7 @@ class TestGlassTextInk(unittest.TestCase):
         )
         colours = [theme_text_rgb(name) for name in names]
         self.assertEqual(len(colours), len(set(colours)))
-        self.assertNotEqual(theme_text_rgb("sensorium_interface"), (255, 255, 255))
+        self.assertNotEqual(theme_text_rgb("sensorium"), (255, 255, 255))
         self.assertEqual(theme_text_rgb("retro_linux_memories"), (255, 183, 20))
 
     def test_default_foreground_follows_the_pane(self):

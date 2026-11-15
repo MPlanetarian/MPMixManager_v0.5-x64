@@ -8,7 +8,7 @@ export WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-wayland-0}"
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 export PATH="$HOME/.local/bin:$PATH"
 
-BESZEL_DIR="/var/home/mplanetarian/beszel-hub"
+BESZEL_DIR="${BESZEL_DIR:-$HOME/beszel-hub}"
 
 hub_running=false
 agent_running=false
@@ -21,7 +21,7 @@ if podman ps --filter "name=beszel-agent" --format "{{.Names}}" 2>/dev/null | gr
 fi
 
 if [ "$hub_running" = "true" ] && [ "$agent_running" = "true" ]; then
-    notify-send -a "KDE Connect" -i "dialog-information" "Beszel Monitoring" "Beszel Hub & Agent are already running (http://192.168.1.11:8090)." 2>/dev/null || true
+    notify-send -a "KDE Connect" -i "dialog-information" "Beszel Monitoring" "Beszel Hub & Agent are already running (http://localhost:8090)." 2>/dev/null || true
     exit 0
 fi
 
@@ -58,7 +58,7 @@ sleep 1.5
 # 3. Verify status and notify
 if podman ps --filter "name=beszel" --format "{{.Names}}" 2>/dev/null | grep -q "^beszel$" && \
    podman ps --filter "name=beszel-agent" --format "{{.Names}}" 2>/dev/null | grep -q "^beszel-agent$"; then
-    notify-send -a "KDE Connect" -i "dialog-ok" "Beszel Monitoring" "✓ Beszel Hub & Agent are running (http://192.168.1.11:8090)" 2>/dev/null || true
+    notify-send -a "KDE Connect" -i "dialog-ok" "Beszel Monitoring" "✓ Beszel Hub & Agent are running (http://localhost:8090)" 2>/dev/null || true
 else
     notify-send -a "KDE Connect" -i "dialog-warning" "Beszel Monitoring" "Beszel launched (check podman ps for container status)." 2>/dev/null || true
 fi

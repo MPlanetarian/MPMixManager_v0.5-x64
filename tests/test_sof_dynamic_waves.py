@@ -133,21 +133,60 @@ class TestShaderContract(unittest.TestCase):
 
     def test_both_rivers_branch_on_the_preset_id(self):
         self.assertIn("u.preset.x > 10.5", self.src)
-        self.assertIn("u.preset.x < 11.5", self.src)
+        self.assertIn("u.preset.x > 11.5", self.src)
 
     def test_arc_bend_is_slow_and_band_fanned(self):
         self.assertIn("sofArcOffset", self.src)
         # The phase creep must stay in the "slow wave" range, not per-cell.
         self.assertIn("sin(along * PI + t * 0.071", self.src)
 
-    def test_pid_fireworks_composite_over_white(self):
-        """A white page needs coverage/alpha mixing, not additive light."""
-        self.assertIn("vec4 sofPidBursts", self.src)
-        self.assertIn("return mix(col, burst.rgb, burst.a);", self.src)
+    def test_both_rivers_are_raymarched_scenes(self):
+        """The pair are 3D presets: mapScene must return their distance field.
+
+        They used to be a full-frame colour pass that `main()` returned early
+        from, so they drew no geometry at all. Both now have a `vec2` scene
+        function over world space, dispatched from mapScene like every other
+        preset, and `main()` no longer shortcuts them.
+        """
+        for scene in ("vec2 sofHorizontalRiver(vec3 p)",
+                      "vec2 sofVerticalRiver(vec3 p)"):
+            self.assertIn(scene, self.src)
+        # mapScene hands the pair to their scene functions...
+        self.assertIn("return (u.preset.x > 11.5) ? sofVerticalRiver(p) : sofHorizontalRiver(p);",
+                      self.src)
+        # ...and main() marches them instead of painting a flat river.
+        self.assertNotIn("outColor = vec4(sofHorizontalRiver(screenUv, t), 1.0);", self.src)
+        self.assertNotIn("outColor = vec4(sofVerticalRiver(screenUv, t), 1.0);", self.src)
+
+    def test_the_rain_and_the_vault_build_real_geometry(self):
+        """Each river has depth cues rather than one flat plane."""
+        # Horizontal: the stack converges with perspective along the span.
+        self.assertIn("float taper = mix(0.38, 1.0, smoothstep(-SOF_RIVER_HALF, SOF_RIVER_HALF, p.x));",
+                      self.src)
+        # Horizontal: ribbons weave in Z, which is what separates them in depth.
+        self.assertIn("float depth = 0.50 * sin(p.x * 1.25", self.src)
+        # Vertical: glyph blocks are framed on the cylinder's own axes.
+        self.assertIn("vec2 radial = vec2(cos(ang), sin(ang));", self.src)
+        self.assertIn("vec2 tang = vec2(-radial.y, radial.x);", self.src)
+
+    def test_pid_sparks_are_geometry_not_an_overlay(self):
+        """The burst is a distance field, so the river occludes and lights it."""
+        self.assertIn("float sofPidBursts(vec3 p)", self.src)
+        self.assertIn("float dMote = sofPidBursts(p);", self.src)
+        self.assertIn("if (dMote < res.x) res = vec2(dMote, 4.0);", self.src)
 
     def test_vertical_mode_is_top_to_bottom(self):
-        self.assertIn("float head = fract(t * speed + hCol * 7.0);", self.src)
-        self.assertIn("float drop = head - along;", self.src)
+        # Glyphs fall along -Y: the phase advances with time against p.y.
+        self.assertIn("float yy = mod(p.y + t * speed + phase + 0.5 * period, period)",
+                      self.src)
+        self.assertIn("mix(SOF_RAIN_HALF, -SOF_RAIN_HALF, front)", self.src)
+
+    def test_the_pair_keep_their_own_material_set(self):
+        """The rivers are shaded from their own table, not a vessel's."""
+        self.assertIn("float specKey = pow(max(dot(reflect(-lightDir1, n), v), 0.0), 52.0);",
+                      self.src)
+        self.assertIn("// DYNAMIC WAVES material set", self.src)
+        self.assertIn("vec3 accent = sofSurfaceHue(p, isSofVertical ? 1.0 : 0.0);", self.src)
 
     def test_shipped_spirv_has_the_new_presets(self):
         for preset_id in (vis.STREAM_WAVES_HORIZONTAL_ID, vis.STREAM_WAVES_VERTICAL_ID):

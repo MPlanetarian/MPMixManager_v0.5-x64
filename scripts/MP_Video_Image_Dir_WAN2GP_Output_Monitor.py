@@ -19,6 +19,8 @@ Features:
 - Continuous monitoring
 """
 
+from __future__ import annotations
+
 import os
 import time
 import subprocess
@@ -137,7 +139,7 @@ def resolve_default_watch_dir() -> Path:
         Path("/run/media/mplanetarian/GAMES1/DATA_DRIVE_MOVED/WAN2GP_OUTPUTS"),
         Path.home() / "Documents/WAN2GP_OUTPUTS",
         Path.home() / "WAN2GP_OUTPUTS",
-        Path("/var/home/mplanetarian/Documents/WAN2GP_OUTPUTS"),
+        Path(os.environ.get("WAN2GP_OUTPUTS", "") or Path.home() / "WAN2GP_OUTPUTS"),
     ]
     for fb in fallbacks:
         if fb.exists():

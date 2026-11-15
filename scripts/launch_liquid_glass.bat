@@ -73,6 +73,26 @@ set "MP_LIQUID_GLASS=1"
 set "MP_LIQUID_GLASS_PLATFORM=win32"
 set "PYTHONIOENCODING=utf-8"
 
+:: The first MP Liquid Player window of a session plays Exit_MP_Video.mp4
+:: before its glass appears. Run it here, before the companion visualizer, so
+:: the movie is the only thing on screen. Windows two to four skip it, and the
+:: host repeats the election for launch paths that skip this file. Helper
+:: flags (--self-test, --embed-check, --tracklist, ...) draw no player window,
+:: so they get no movie. The helper exits 0 only when it actually played.
+set "MP_INTRO_WANTED=1"
+for %%A in (%*) do (
+    if /I "%%~A"=="--self-test" set "MP_INTRO_WANTED=0"
+    if /I "%%~A"=="--embed-check" set "MP_INTRO_WANTED=0"
+    if /I "%%~A"=="--list-fonts" set "MP_INTRO_WANTED=0"
+    if /I "%%~A"=="--manager" set "MP_INTRO_WANTED=0"
+    if /I "%%~A"=="--set-font" set "MP_INTRO_WANTED=0"
+    if /I "%%~A"=="--tracklist" set "MP_INTRO_WANTED=0"
+)
+if "%MP_INTRO_WANTED%"=="1" (
+    "%PYTHON_BIN%" -c "import sys; sys.path.insert(0, r'%BASE_DIR%\scripts'); import exit_video; raise SystemExit(0 if exit_video.play_player_intro('NORMAL') else 1)" >nul 2>&1
+    if not errorlevel 1 set "MP_PLAYER_INTRO_DONE=1"
+)
+
 :: Automatically start MP Liquid Visualizer with a random preset if not already running
 set "VIS_PY=%BASE_DIR%\MP_Liquid_Visualizer.py"
 if not exist "%VIS_PY%" set "VIS_PY=%BASE_DIR%\scripts\mp_liquid_visualizer_vulkan.py"

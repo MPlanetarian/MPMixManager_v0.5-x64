@@ -87,6 +87,22 @@ class TestLoaderVideoIntegration(unittest.TestCase):
         self.assertEqual(res.returncode, 0)
         self.assertIn("SKIPPED_CLI_ACTION", res.stdout)
 
+    def test_skips_inside_an_mp_gui_session(self):
+        """MP Gui plays Exit_MP_Video once. The menu must not play MP_loader."""
+        script = r"""
+        set -e
+        source scripts/display_loader_video.sh
+        MP_GUI_SESSION=1
+        is_manager_already_open() { return 1; }
+        _launch_borderless_video() { echo PLAYED; return 0; }
+        display_startup_loader_video 0
+        echo "SKIPPED_GUI"
+        """
+        res = subprocess.run([BASH_BIN, "-c", script], cwd=str(BASE_DIR), capture_output=True, text=True)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertIn("SKIPPED_GUI", res.stdout)
+        self.assertNotIn("PLAYED", res.stdout)
+
     def test_skips_when_manager_already_open(self):
         script = r"""
         set -e
@@ -319,7 +335,18 @@ EOF
         self.assertEqual(res.returncode, 0, res.stderr)
         self.assertIn("PLAY_OK", res.stdout)
         self.assertIn("PLAYER_MARK:PLAYER:", res.stdout)
-        self.assertIn(str(BASE_DIR / "MP_loader.mp4"), res.stdout)
+        # The loader resolves its video through SCRIPT_DIR, so the child bash
+        # inherits this process's logical PWD. On a host where the tree is
+        # reached through a symlink (e.g. /home -> /var/home) bash reports the
+        # logical path while BASE_DIR.resolve() is physical; compare the real
+        # paths so the same file is recognised however it is spelled.
+        expected_video = (BASE_DIR / "MP_loader.mp4").resolve()
+        played_video = ""
+        for line in res.stdout.splitlines():
+            if line.startswith("PLAYER_MARK:PLAYER:"):
+                played_video = line.split("PLAYER_MARK:PLAYER:", 1)[1].strip()
+        self.assertTrue(played_video, res.stdout)
+        self.assertEqual(Path(played_video).resolve(), expected_video, res.stdout)
         elapsed = 0
         for line in res.stdout.splitlines():
             if line.startswith("ELAPSED:"):

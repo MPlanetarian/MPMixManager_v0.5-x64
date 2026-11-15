@@ -10,8 +10,14 @@ the last slot.
 Only MP Gui (a --manager host) and MP Liquid Player are capped. The tracklist
 viewer, the MP Liquid Visualizer, and the console manager are not.
 
-Exit codes for the command line: 0 allowed / claimed, 3 at the limit,
-2 bad usage. Launchers use 3 to focus the window that is already open.
+The same module decides when the MP exit video may be shown. A closing window
+marks itself, then asks whether any MP Gui or MP Liquid Player window is still
+live. The answer is "yes" only for the last one, counting both roles together,
+so closing one of two open windows stays silent.
+
+Exit codes for the command line: 0 allowed / claimed / last window, 3 at the
+limit, 1 not the last window, 2 bad usage. Launchers use 3 to focus the window
+that is already open.
 """
 
 from __future__ import annotations
@@ -81,6 +87,104 @@ def _command_tokens(cmdline: str) -> list[str]:
     return cmdline.replace("\x00", " ").split()
 
 
+# Interpreters that run a host script as their own program. An editor, a
+# `tail -f`, or a shell whose *arguments* mention the host are not windows, so
+# only these may introduce a host script — never bash/sh.
+_HOST_INTERPRETERS = (
+    "python", "python2", "python3", "pypy", "pypy3",
+)
+
+
+def _interpreter_name(token: str) -> str:
+    return Path(token.strip("'\"")).name
+
+
+def _is_host_interpreter(token: str) -> bool:
+    name = _interpreter_name(token)
+    if name in _HOST_INTERPRETERS:
+        return True
+    # Versioned builds: python3.14, python3.11, pypy3.10.
+    return name.startswith(("python3.", "python2.", "pypy3."))
+
+
+def _host_script_index(tokens: list[str]) -> int | None:
+    """Index of the token that actually runs a Liquid Glass host, or None.
+
+    A window is either the host script executed directly (a shebang run) or a
+    script handed to a Python interpreter. Scanning *every* token counted a
+    text editor, a `tail`, or a resident shell that merely mentioned the file
+    name as an open window, so four such processes filled the cap and the real
+    player was refused after its intro movie.
+    """
+    index = _skip_wrappers(tokens)
+    if index is None:
+        return None
+    if _interpreter_name(tokens[index]) in HOST_SCRIPTS:
+        return index
+    if not _is_host_interpreter(tokens[index]):
+        return None
+    for cursor in range(index + 1, len(tokens)):
+        token = tokens[cursor]
+        if token.startswith("-"):
+            # `-c code` / `-m module` are programs, not script paths: the
+            # argument that follows them is not a file the interpreter runs.
+            if token in ("-c", "-m"):
+                return None
+            continue
+        if Path(token.strip("'\"")).name in HOST_SCRIPTS:
+            return cursor
+        # The first non-flag argument is the script (or module) being run.
+        return None
+    return None
+
+
+# Prefixes a launcher puts in front of the interpreter. They are transparent:
+# `env FOO=1 python3 Host.py` draws the same window as `python3 Host.py`.
+_WRAPPER_COMMANDS = ("env", "nice", "nohup", "setsid", "stdbuf", "timeout", "command", "exec")
+
+# Wrapper flags that take the following token as their value, so it must not be
+# mistaken for the script. (`env -u LINES python3 Host.py`, `nice -n 5 ...`.)
+_WRAPPER_VALUE_FLAGS = {
+    "env": ("-u", "--unset", "-C", "--chdir", "-S", "--split-string"),
+    "nice": ("-n", "--adjustment"),
+    "stdbuf": ("-i", "-o", "-e", "--input", "--output", "--error"),
+    "timeout": ("-s", "--signal", "-k", "--kill-after"),
+    "setsid": (),
+    "nohup": (),
+    "command": (),
+    "exec": ("-a",),
+}
+
+
+def _skip_wrappers(tokens: list[str]) -> int | None:
+    """Index of the real command after any wrapper prefixes, or None."""
+    index = 0
+    while index < len(tokens):
+        name = _interpreter_name(tokens[index])
+        if name not in _WRAPPER_COMMANDS:
+            return index
+        value_flags = _WRAPPER_VALUE_FLAGS.get(name, ())
+        index += 1
+        while index < len(tokens):
+            token = tokens[index]
+            # env's KEY=VALUE assignments are part of the prefix.
+            if name == "env" and "=" in token and not token.startswith("-"):
+                index += 1
+                continue
+            if token in value_flags:
+                index += 2
+                continue
+            if token.startswith("-"):
+                index += 1
+                continue
+            # `timeout DURATION COMMAND`: the leading duration is not the command.
+            if name == "timeout" and token.replace(".", "", 1).isdigit():
+                index += 1
+                continue
+            break
+    return None
+
+
 def role_from_cmdline(cmdline: str) -> str | None:
     """Return the capped role this command line draws, or None."""
     if not cmdline:
@@ -88,22 +192,14 @@ def role_from_cmdline(cmdline: str) -> str | None:
     lowered = cmdline.lower()
     if "mp_instance_limit" in lowered:
         return None
-    # pgrep / pkill / grep lines only mention the host name as a pattern.
-    if any(mark in lowered for mark in ("pgrep", "pkill", "grep ")):
-        return None
     tokens = _command_tokens(cmdline)
+    if _host_script_index(tokens) is None:
+        return None
     if any(tok in ("--self-test", "--list-fonts", "--embed-check") for tok in tokens):
         return None
     if any(tok.startswith("--set-font") for tok in tokens):
         return None
     if any(tok == "--tracklist" or tok.startswith("--tracklist=") for tok in tokens):
-        return None
-    host = None
-    for token in tokens:
-        if Path(token.strip("'\"")).name in HOST_SCRIPTS:
-            host = token
-            break
-    if host is None:
         return None
     if "--manager" in tokens:
         return ROLE_GUI
@@ -180,6 +276,12 @@ def _proc_table_from_windows() -> list[tuple[int, str]]:
 
 def process_table() -> list[tuple[int, str]]:
     try:
+        # Tests and isolated tooling can supply a fixed table. Without this a
+        # subprocess launched by a test still scans the real process table, so
+        # a player the user happens to have open changes the result.
+        override = os.environ.get("MP_INSTANCE_PROC_TABLE", "")
+        if override == "empty":
+            return []
         if sys.platform == "win32":
             return _proc_table_from_windows()
         found = _proc_table_from_proc()
@@ -283,7 +385,12 @@ def _live_claims(role: str, hosts: set[int]) -> set[int]:
 
 
 def instance_count(role: str, exclude_pid: int | None = None) -> int:
-    """Live hosts plus pending launch claims, counted once per process."""
+    """Live hosts plus pending launch claims, counted once per process.
+
+    `exclude_pid` drops one process from both halves of the count, so a host
+    (or its launcher, whose claim it inherited through exec) can ask how many
+    *other* windows of that role are open.
+    """
     hosts = role_pids(role)
     if exclude_pid:
         hosts.discard(int(exclude_pid))
@@ -292,7 +399,10 @@ def instance_count(role: str, exclude_pid: int | None = None) -> int:
             claims = _live_claims(role, hosts)
     except (TimeoutError, OSError):
         claims = set()
-    return len(hosts | claims)
+    counted = hosts | claims
+    if exclude_pid:
+        counted.discard(int(exclude_pid))
+    return len(counted)
 
 
 def at_limit(role: str, exclude_pid: int | None = None) -> bool:
@@ -494,6 +604,159 @@ def status() -> dict[str, dict[str, int]]:
     }
 
 
+# ------------------------------------------------------------------------------
+# Exit video election: is this the last MP window?
+# ------------------------------------------------------------------------------
+# MP Gui and MP Liquid Player share one namespace here. The exit video plays
+# once, for the last window of either role, and stays silent while another
+# window of either kind is still on screen.
+CLOSING_GRACE_SECONDS = 300.0
+
+
+def _closing_dir() -> Path:
+    path = state_dir() / "closing"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _closing_file(pid: int) -> Path:
+    return _closing_dir() / f"{int(pid)}.closing"
+
+
+# A suite-wide close (the tray's Close MP Mix Manager item) writes this marker
+# so the windows being killed do not each try to play the movie again. It
+# carries a timestamp and is ignored once stale, so a crashed tray cannot mute
+# a later, ordinary window close.
+SUITE_CLOSE_FILE_NAME = "suite.closing"
+SUITE_CLOSE_GRACE_SECONDS = 180.0
+
+
+def _suite_close_file() -> Path:
+    return state_dir() / SUITE_CLOSE_FILE_NAME
+
+
+def mark_suite_closing() -> None:
+    """Announce that the whole suite is being closed by the tray."""
+    try:
+        _suite_close_file().write_text(f"{time.time():.3f}\n", encoding="utf-8")
+    except OSError:
+        pass
+
+
+def clear_suite_closing() -> None:
+    try:
+        _suite_close_file().unlink()
+    except OSError:
+        pass
+
+
+def suite_closing() -> bool:
+    """True while a tray-driven close is in progress."""
+    path = _suite_close_file()
+    try:
+        age = time.time() - path.stat().st_mtime
+    except OSError:
+        return False
+    if age > SUITE_CLOSE_GRACE_SECONDS:
+        try:
+            path.unlink()
+        except OSError:
+            pass
+        return False
+    return True
+
+
+def _live_closing() -> set[int]:
+    """Pids that already announced they are closing, dropping dead markers."""
+    marked: set[int] = set()
+    now = time.time()
+    for path in _closing_dir().glob("*.closing"):
+        try:
+            pid = int(path.stem)
+        except ValueError:
+            continue
+        if not _pid_alive(pid):
+            try:
+                path.unlink()
+            except OSError:
+                pass
+            continue
+        try:
+            age = now - path.stat().st_mtime
+        except OSError:
+            age = 0.0
+        if age > CLOSING_GRACE_SECONDS:
+            # A marker this old belongs to a close that never finished.
+            try:
+                path.unlink()
+            except OSError:
+                pass
+            continue
+        marked.add(pid)
+    return marked
+
+
+def remaining_windows(exclude_pid: int | None = None, table: list[tuple[int, str]] | None = None) -> set[int]:
+    """Every MP Gui and MP Liquid Player window still open, closing ones removed."""
+    exclude = int(exclude_pid or 0)
+    closing = _live_closing()
+    remaining: set[int] = set()
+    for role in ROLES:
+        remaining |= role_pids(role, table)
+    remaining -= closing
+    if exclude:
+        remaining.discard(exclude)
+    return remaining
+
+
+def is_last_window(role: str = "", pid: int | None = None) -> bool:
+    """True when no other capped MP window is left, so the exit video may play.
+
+    The caller's own pid is ignored (a host always counts itself as closing),
+    and every window that already started closing is ignored too. Marking and
+    counting happen under one lock, so two windows closed at the same instant
+    cannot both be elected: the first still sees the second, only the second
+    sees none.
+
+    A suite close in progress (the tray's Close item) returns False: the tray
+    plays the movie itself before it stops the windows, so they must not play
+    it a second time.
+    """
+    pid = int(pid or os.getpid())
+    if suite_closing():
+        return False
+    # One lock for the whole election, not one per role: a Gui and a Player
+    # closing at the same instant must serialise their mark-then-count, or
+    # both could read the other as still open and neither would play.
+    try:
+        with _state_lock("exit"):
+            try:
+                _closing_file(pid).write_text(f"{pid}\n", encoding="utf-8")
+            except OSError:
+                pass
+            return not remaining_windows(pid)
+    except (TimeoutError, OSError):
+        # A broken lock must not swallow the video on the only window open.
+        return not remaining_windows(pid)
+
+
+def end_closing(role: str = "", pid: int | None = None) -> None:
+    """Drop this process's closing marker once the exit video is over."""
+    pid = int(pid or os.getpid())
+    try:
+        _closing_file(pid).unlink()
+    except OSError:
+        pass
+
+
+def release_all(pid: int | None = None) -> None:
+    """Drop every claim and closing marker this process owns."""
+    pid = int(pid or os.getpid())
+    for role in ROLES:
+        release_instance(role, pid)
+    end_closing("", pid)
+
+
 def _role_list(role: str) -> list[str]:
     return list(ROLES) if role == "all" else [role]
 
@@ -505,10 +768,19 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "command",
-        choices=("status", "count", "check", "claim", "release", "notify", "focus"),
+        choices=(
+            "status", "count", "check", "claim", "release", "notify", "focus",
+            "last-window", "end-closing", "suite-closing", "end-suite-closing",
+        ),
     )
     parser.add_argument("role", nargs="?", default="all", choices=(*ROLES, "all"))
     parser.add_argument("--pid", type=int, default=None)
+    parser.add_argument(
+        "--exclude-pid",
+        type=int,
+        default=None,
+        help="leave this process out of the count (its own claim is not a sibling)",
+    )
     args = parser.parse_args(argv)
 
     if args.command == "status":
@@ -517,9 +789,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "count":
         if args.role == "all":
-            print(json.dumps({role: instance_count(role) for role in ROLES}))
+            print(json.dumps({role: instance_count(role, args.exclude_pid) for role in ROLES}))
         else:
-            print(instance_count(args.role))
+            print(instance_count(args.role, args.exclude_pid))
         return 0
 
     if args.command == "check":
@@ -546,6 +818,25 @@ def main(argv: list[str] | None = None) -> int:
         for role in _role_list(args.role):
             focused = focus_existing(role) or focused
         return 0 if focused else 1
+
+    if args.command == "last-window":
+        # Exit code 0 elects this process, 1 means another window is still open.
+        role = args.role if args.role in ROLES else ""
+        return 0 if is_last_window(role, args.pid) else 1
+
+    if args.command == "end-closing":
+        role = args.role if args.role in ROLES else ""
+        end_closing(role, args.pid)
+        return 0
+
+    if args.command == "suite-closing":
+        # The tray is closing everything and plays the movie itself.
+        mark_suite_closing()
+        return 0
+
+    if args.command == "end-suite-closing":
+        clear_suite_closing()
+        return 0
 
     return 2
 

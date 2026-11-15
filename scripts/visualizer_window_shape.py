@@ -35,6 +35,7 @@ class RoundedWindowShaper:
         self._xext = None
         self._x11_failed = False
         self._own_display = None
+        self._x_error_handler = None
         self._applied: Optional[Tuple[int, int, int, bool]] = None
 
     # -- public -----------------------------------------------------------
@@ -50,6 +51,21 @@ class RoundedWindowShaper:
         if enabled and (width < 8 or height < 8):
             return False
         window_id = int(x11_window or win32_window or cocoa_window or 0)
+        if (enabled and sys.platform not in ("win32", "darwin") and x11_window
+                and self._ensure_x11()):
+            # Index the cache by the window's *real* size, not the size the
+            # caller believes it has. A bonded companion is resized right after
+            # the player publishes a new size, and the window manager can land
+            # on a different size than requested; keying on the request would
+            # then treat the outdated mask as already applied and never fix it.
+            display = x11_display or self._own_display
+            if display is None:
+                display = self._x11.XOpenDisplay(None)
+                if display:
+                    self._own_display = display
+            real = self._x11_geometry(display, x11_window) if display else None
+            if real is not None:
+                width, height = real
         key = (window_id, width, height, bool(enabled))
         if key == self._applied:
             return True
@@ -84,6 +100,15 @@ class RoundedWindowShaper:
             x11.XFillRectangle.argtypes = [c_void_p, c_uint64, c_void_p, c_int, c_int, c_uint32, c_uint32]
             x11.XFillArc.argtypes = [c_void_p, c_uint64, c_void_p, c_int, c_int, c_uint32, c_uint32, c_int, c_int]
             x11.XFlush.argtypes = [c_void_p]
+            x11.XGetGeometry.argtypes = [
+                c_void_p, c_uint64, ctypes.POINTER(c_uint64),
+                ctypes.POINTER(c_int), ctypes.POINTER(c_int),
+                ctypes.POINTER(c_uint32), ctypes.POINTER(c_uint32),
+                ctypes.POINTER(c_uint32), ctypes.POINTER(c_uint32),
+            ]
+            x11.XGetGeometry.restype = c_int
+            x11.XSetErrorHandler.argtypes = [c_void_p]
+            x11.XSetErrorHandler.restype = c_void_p
             ext = ctypes.CDLL("libXext.so.6")
             ext.XShapeCombineMask.argtypes = [c_void_p, c_uint64, c_int, c_int, c_int, c_uint64, c_int]
             ext.XShapeCombineMask.restype = None
@@ -91,7 +116,56 @@ class RoundedWindowShaper:
             self._x11_failed = True
             return False
         self._x11, self._xext = x11, ext
+        self._install_x_error_handler(x11)
         return True
+
+    def _install_x_error_handler(self, x11) -> None:
+        """Ignore X protocol errors on the geometry probe.
+
+        ``XGetGeometry`` on a window that has just been destroyed reports
+        ``BadWindow`` asynchronously, and Xlib's default handler prints the
+        error and exits the process. The glass renderers silence the handler
+        for the same reason; a probe that cannot answer must simply report
+        "unknown" instead of killing the visualizer mid-frame.
+        """
+        if getattr(self, "_x_error_handler", None) is not None:
+            return
+        try:
+            @ctypes.CFUNCTYPE(c_int, c_void_p, c_void_p)
+            def handler(_display, _event):
+                return 0
+
+            x11.XSetErrorHandler(ctypes.cast(handler, c_void_p))
+        except (AttributeError, OSError, TypeError):
+            return
+        self._x_error_handler = handler
+
+    def _x11_geometry(self, display, window: int):
+        """``(width, height)`` the X server currently reports for ``window``.
+
+        Returns ``None`` when the query cannot be made, so callers fall back to
+        the size they were handed.
+        """
+        x11 = self._x11
+        if x11 is None:
+            return None
+        try:
+            root = ctypes.c_uint64()
+            x = ctypes.c_int()
+            y = ctypes.c_int()
+            width = ctypes.c_uint32()
+            height = ctypes.c_uint32()
+            border = ctypes.c_uint32()
+            depth = ctypes.c_uint32()
+            ok = x11.XGetGeometry(display, int(window), ctypes.byref(root),
+                                  ctypes.byref(x), ctypes.byref(y),
+                                  ctypes.byref(width), ctypes.byref(height),
+                                  ctypes.byref(border), ctypes.byref(depth))
+            if not ok or width.value < 1 or height.value < 1:
+                return None
+            return int(width.value), int(height.value)
+        except (AttributeError, OSError, ValueError):
+            return None
 
     def _apply_x11(self, window: int, display, width: int, height: int, enabled: bool) -> bool:
         if not self._ensure_x11():
@@ -111,6 +185,16 @@ class RoundedWindowShaper:
             ext.XShapeCombineMask(display, window, SHAPE_BOUNDING, 0, 0, 0, SHAPE_SET)
             x11.XFlush(display)
             return True
+        # Trust the window over the caller. A bonded companion is force-resized
+        # straight after the player publishes a new size, and the window
+        # manager can land on a different size than the one requested. A mask
+        # built for the requested size then sits on a window that is a
+        # different shape, which leaves the far corners square. XGetGeometry
+        # reports what the window really is right now.
+        real = self._x11_geometry(display, window)
+        if real is not None:
+            width, height = real
+        width, height = max(1, int(width)), max(1, int(height))
         radius = max(8, min(self.radius, width // 2 - 1, height // 2 - 1))
         mask = x11.XCreatePixmap(display, window, width, height, 1)
         if not mask:
@@ -213,4 +297,10 @@ class RoundedWindowShaper:
             clear = send_id(color_cls, sel(b"clearColor"))
             if clear:
                 send_obj(window, sel(b"setBackgroundColor:"), c_void_p(clear))
+        # A CAMetalLayer defaults to opaque, and the Metal visualizer sets that
+        # flag explicitly. An opaque layer paints its own black over the
+        # rounded cut-aways, which re-creates the square corners the radius is
+        # meant to remove, so clear it here too. (``setOpacity:`` is unrelated;
+        # only the opaque flag decides whether the layer has alpha.)
+        send_bool(c_void_p(layer), sel(b"setOpaque:"), False)
         return True

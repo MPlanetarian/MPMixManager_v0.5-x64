@@ -44,7 +44,7 @@ def _get_app_version() -> str:
                 return cand.read_text(encoding="utf-8").strip()
             except Exception:
                 pass
-    return "0.5.0 Stable (Sensorium)"
+    return "0.5.3 Stable (Sensorium)"
 
 VERSION = _get_app_version()
 
@@ -59,8 +59,8 @@ def _early_daily_done() -> bool:
         return False
     try:
         today = datetime.now().strftime("%Y-%m-%d")
-        for cand in (Path("/var/home/mplanetarian/MP_REPORTER/tasks/ai_brain_reporter_state.json"),
-                     Path("/var/home/mplanetarian/Documents/BASH_SCRIPTS/ai_brain_reporter_state.json")):
+        for cand in (MP_REPORTER_DIR / "tasks" / "ai_brain_reporter_state.json",
+                     FALLBACK_STATE_FILE):
             if not cand.is_file():
                 continue
             with open(cand, "r", encoding="utf-8") as fp:
@@ -94,11 +94,17 @@ from reportlab.platypus import (
 )
 from reportlab.pdfgen import canvas
 
-# State & Persistence Paths
-MP_REPORTER_DIR = Path("/var/home/mplanetarian/MP_REPORTER")
+# State & Persistence Paths. Every path used to be pinned to one machine; on
+# any other install the reporter silently found "0 sessions". MP_REPORTER_DIR
+# overrides, else the conventional location under the user's home.
+_HOME = Path.home()
+MP_REPORTER_DIR = Path(os.environ.get("MP_REPORTER_DIR", "") or (_HOME / "MP_REPORTER"))
 TASKS_DIR = MP_REPORTER_DIR / "tasks"
 STATE_FILE = TASKS_DIR / "ai_brain_reporter_state.json"
-FALLBACK_STATE_FILE = Path("/var/home/mplanetarian/Documents/BASH_SCRIPTS/ai_brain_reporter_state.json")
+FALLBACK_STATE_FILE = Path(
+    os.environ.get("MP_BRAIN_STATE_FILE", "")
+    or (_HOME / "Documents/BASH_SCRIPTS/ai_brain_reporter_state.json")
+)
 PDF_DIR = MP_REPORTER_DIR / "PDF_REPORTS" / "DAILY_REPORTS"
 
 def load_state() -> Dict[str, Any]:
@@ -207,8 +213,8 @@ def harvest_gemini_brain(since_timestamp: Optional[float] = None,
         processed_map = {}
     sessions = []
     gemini_dirs = [
-        Path("/home/mplanetarian/.gemini/antigravity-cli/brain"),
-        Path("/home/mplanetarian/.gemini/antigravity/brain")
+        _HOME / ".gemini/antigravity-cli/brain",
+        _HOME / ".gemini/antigravity/brain"
     ]
 
     for g_dir in gemini_dirs:
@@ -323,7 +329,7 @@ def harvest_grok_brain(since_timestamp: Optional[float] = None,
     if processed_map is None:
         processed_map = {}
     sessions = []
-    grok_base = Path("/home/mplanetarian/.grok/sessions")
+    grok_base = Path(os.environ.get("GROK_SESSIONS_DIR", "") or (_HOME / ".grok/sessions"))
     if not grok_base.exists():
         return sessions
 
@@ -441,52 +447,76 @@ def harvest_grok_brain(since_timestamp: Optional[float] = None,
 
 def harvest_harmony_agent(since_timestamp: Optional[float] = None,
                           processed_map: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
-    """Harvest MP Harmony Autonomous Agent voice responses and logs."""
+    """Harvest MP Harmony Autonomous Agent voice responses and logs.
+
+    The live agent writes to its own audio_responses/ folder; MP Reporter keeps a
+    browsable copy under TTS_AUDIO/HARMONY (see scripts/mp_harmony_archive.py).
+    Both locations are read so a report is complete even before the next archive
+    sync, and duplicate stems are collapsed so a pair is never counted twice.
+    """
     if processed_map is None:
         processed_map = {}
-    responses = []
-    audio_dir = Path("/var/home/mplanetarian/OpenAI/MP_Harmony_Agent/audio_responses")
-    if not audio_dir.exists():
-        return responses
+    responses: List[Dict[str, Any]] = []
+    seen: set = set()
 
-    for txt_file in audio_dir.glob("*.txt"):
-        try:
-            st = txt_file.stat()
-            mtime = st.st_mtime
-        except Exception:
+    primary = Path(os.environ.get("HARMONY_AUDIO_DIR", "") or (_HOME / "OpenAI/MP_Harmony_Agent/audio_responses"))
+    archived = Path(os.environ.get("MP_REPORTER_DIR", "") or (_HOME / "MP_REPORTER")) / "TTS_AUDIO" / "HARMONY"
+    # The archive is read first so a stem that exists in both places is marked
+    # archived: that is the copy the reporting suite browses.
+    sources = [archived, primary]
+
+    for audio_dir in sources:
+        if not audio_dir.exists():
             continue
+        for txt_file in audio_dir.glob("*.txt"):
+            try:
+                st = txt_file.stat()
+                mtime = st.st_mtime
+            except Exception:
+                continue
 
-        fname = txt_file.name
-        if fname in processed_map:
-            continue
-        if since_timestamp and mtime < since_timestamp:
-            continue
+            stem = txt_file.stem
+            if stem in seen:
+                continue
+            # A pair without audio is a half-written file: skip it.
+            if not (audio_dir / f"{stem}.wav").is_file():
+                continue
 
-        # Pattern: ollama_speech_YYYYMMDD_HHMMSS_<persona>_<context>_<model>_<voice>_<hash>.txt
-        parts = fname.replace(".txt", "").split("_")
-        persona = "Harmony Agent"
-        model = "Llama-3-8B / Command-R"
-        speech_snippet = ""
-        try:
-            with open(txt_file, "r", encoding="utf-8", errors="replace") as f:
-                speech_snippet = f.read().strip()[:180].replace("\n", " ")
-        except Exception:
-            pass
+            if stem in processed_map:
+                continue
+            if since_timestamp and mtime < since_timestamp:
+                continue
 
-        if len(parts) >= 6:
-            persona = f"{parts[4].capitalize()} ({parts[3].capitalize()})"
-            model = parts[5].replace("-", " ")
+            fname = txt_file.name
+            persona = "Harmony Agent"
+            model = "Harmony"
+            speech_snippet = ""
+            try:
+                with open(txt_file, "r", encoding="utf-8", errors="replace") as f:
+                    speech_snippet = f.read().strip()[:180].replace("\n", " ")
+            except Exception:
+                pass
 
-        responses.append({
-            "id": fname,
-            "engine": "MP Harmony Agent",
-            "model": model,
-            "persona": persona,
-            "mtime": mtime,
-            "created_at": datetime.fromtimestamp(mtime).isoformat(),
-            "snippet": speech_snippet,
-            "status": "Voiced"
-        })
+            # Naming differs by producer:
+            #   agent_speech_YYYYMMDD_HHMMSS_<hash>.txt   (interactive turn)
+            #   ollama_speech_..._<persona>_<model>_<voice>_<hash>.txt
+            parts = stem.split("_")
+            if stem.startswith("ollama_speech") and len(parts) >= 6:
+                persona = f"{parts[4].capitalize()} ({parts[3].capitalize()})"
+                model = parts[5].replace("-", " ")
+
+            seen.add(stem)
+            responses.append({
+                "id": stem,
+                "engine": "MP Harmony Agent",
+                "model": model,
+                "persona": persona,
+                "mtime": mtime,
+                "created_at": datetime.fromtimestamp(mtime).isoformat(),
+                "snippet": speech_snippet,
+                "archived": audio_dir == archived,
+                "status": "Voiced",
+            })
 
     responses.sort(key=lambda r: r["mtime"])
     return responses
@@ -497,7 +527,7 @@ def harvest_open_webui(since_timestamp: Optional[float] = None,
     if processed_map is None:
         processed_map = {}
     chats = []
-    db_path = Path("/home/mplanetarian/pinokio/api/open-webui/app/data/webui.db")
+    db_path = Path(os.environ.get("OPEN_WEBUI_DB", "") or (_HOME / "pinokio/api/open-webui/app/data/webui.db"))
     if not db_path.exists():
         return chats
 
@@ -529,7 +559,7 @@ def harvest_open_webui(since_timestamp: Optional[float] = None,
 def harvest_deepseek_harness(since_timestamp: Optional[float] = None) -> List[Dict[str, Any]]:
     """Harvest DeepSeek Harness active sessions."""
     sessions = []
-    dsh_base = Path("/home/mplanetarian/.dsh/sessions")
+    dsh_base = Path(os.environ.get("DSH_SESSIONS_DIR", "") or (_HOME / ".dsh/sessions"))
     if not dsh_base.exists():
         return sessions
 
@@ -931,8 +961,11 @@ def format_plain_text(report_data: Dict[str, Any]) -> str:
     lines.append("")
 
     if report_data.get("harmony_items"):
-        lines.append(f"=== MP Harmony Agent Audio Responses ({len(report_data['harmony_items'])} Responses) ===")
-        for h in report_data['harmony_items'][-3:]:
+        h_items = report_data['harmony_items']
+        archived = sum(1 for h in h_items if h.get("archived"))
+        lines.append(f"=== MP Harmony Agent Audio Responses ({len(h_items)} Responses) ===")
+        lines.append(f"• Reporter archive (TTS_AUDIO/HARMONY): {archived} of {len(h_items)} pairs present")
+        for h in h_items[-3:]:
             lines.append(f"• [{h['created_at'][11:19]}] {h['persona']}: {h['snippet'][:120]}...")
         lines.append("")
 

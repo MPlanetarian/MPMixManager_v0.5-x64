@@ -19,22 +19,14 @@ from urllib.parse import unquote, urlparse
 
 # Every audio type the player can hand to FFmpeg or libsndfile.
 # Video containers are left out so a dropped movie is not treated as a track.
-AUDIO_DROP_EXTENSIONS = (
-    ".flac", ".wav", ".wave", ".w64", ".rf64",
-    ".mp3", ".mp2", ".mp1", ".mpga",
-    ".ogg", ".oga", ".opus", ".spx",
-    ".m4a", ".m4b", ".m4p", ".aac", ".alac",
-    ".aiff", ".aif", ".aifc",
-    ".wma",
-    ".ape", ".wv", ".tta", ".tak",
-    ".mpc", ".mpp",
-    ".ac3", ".eac3", ".dts",
-    ".caf", ".au", ".snd",
-    ".amr", ".3ga",
-    ".dsf", ".dff",
-    ".mka",
-    ".voc", ".ofr", ".ofs",
-)
+# The list comes from audio_formats so a drag-and-drop target can never accept
+# a type the archive scanner would not then list (and vice versa). The two
+# OptimFROG extensions that used to live here are gone on purpose: FFmpeg has
+# no decoder for them, so accepting a drop only produced "no backend could open".
+try:
+    from audio_formats import AUDIO_EXTENSIONS as AUDIO_DROP_EXTENSIONS
+except ImportError:  # imported as scripts.liquid_audio_drop
+    from scripts.audio_formats import AUDIO_EXTENSIONS as AUDIO_DROP_EXTENSIONS
 AUDIO_DROP_EXTENSION_SET = frozenset(AUDIO_DROP_EXTENSIONS)
 PLAYLIST_EXTENSIONS = frozenset({".m3u", ".m3u8", ".pls"})
 DROP_FILE_LIMIT = 2000

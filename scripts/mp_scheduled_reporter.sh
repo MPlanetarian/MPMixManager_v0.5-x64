@@ -264,6 +264,20 @@ print_status() {
         echo "  Email Rate Limit:           1 email per day (Strictly enforced)"
         echo "  Recipients:                 mplanetarian@mplanetarian.com, serotine@gmail.com, MathewKJohn2026@gmail.com"
     fi
+    local progress_script="${SCRIPT_DIR}/scripts/mp_opencode_progress_reporter.py"
+    if [ -f "$progress_script" ]; then
+        local p_int p_addr
+        p_int=$(grep -E '^OPENCODE_PROGRESS_INTERVAL_MINUTES=' "$HOME/MP_REPORTER/email_config.env" 2>/dev/null | cut -d= -f2 | tr -d '"' || true)
+        p_addr=$(grep -E '^EMAIL_RECIPIENTS=' "$HOME/MP_REPORTER/email_config.env" 2>/dev/null | cut -d= -f2- | tr -d '"' || true)
+        echo "----------------------------------------------------------------------"
+        echo "  OpenCode Progress Email:    ⚡ Every ${p_int:-10} minute(s) (text + Hawking audio)"
+        if systemctl --user is-active --quiet "mp-reporter-opencode-progress.timer" 2>/dev/null; then
+            echo "  Progress Timer:             ✔ active (mp-reporter-opencode-progress.timer)"
+        else
+            echo "  Progress Timer:             ○ inactive (enable: scripts/mp_opencode_progress_reporter.sh enable)"
+        fi
+        echo "  Progress Recipients:        ${p_addr:-mplanetarian@mplanetarian.com, serotine@gmail.com, MathewKJohn2026@gmail.com}"
+    fi
     echo "======================================================================"
 }
 
@@ -294,6 +308,9 @@ case "${1:-}" in
         ;;
     --email-force|email-force)
         py "${SCRIPT_DIR}/scripts/mp_daily_email_reporter.py" --force
+        ;;
+    --opencode-progress|opencode-progress|progress)
+        bash "${SCRIPT_DIR}/scripts/mp_opencode_progress_reporter.sh" "${2:-status}"
         ;;
     --status|status)
         print_status

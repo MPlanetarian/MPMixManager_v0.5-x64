@@ -6,7 +6,7 @@ When a user runs MP Mix Manager or MP Audio Player for the very first time:
 1. Installs four desktop shortcuts: MP Liquid Player, MP Mix Manager, MP Gui,
    and MP Liquid Visualizer.
 2. Sets the Liquid Glass Audio Player as the Default Audio Player in config.
-3. Displays the welcome installer message for 0.5.0 (Sensorium) - [Stable Release]
+3. Displays the welcome installer message for 0.5.3 (Sensorium) - [Stable Release]
    from MPlanetarian: features added since 0.4.3, five tips, a Mix Archive and
    Music Folder quick start, and a thank-you.
 4. Marks the first-run reward as completed in ~/.config/mix-manager/.liquid_glass_welcomed.
@@ -24,9 +24,15 @@ CONFIG_DIR = Path.home() / ".config" / "mix-manager"
 FLAG_FILE = CONFIG_DIR / ".liquid_glass_welcomed"
 
 SAMPLE_DIR = ROOT / "MP_SAMPLES"
-SAMPLE_TRACK_NAME = "MPlanetarian - Ecology of the Earth (Cosmic Dreamworlds Remake)"
+SAMPLE_TRACK_NAME = "MPlanetarian - The Orbits of Planets (Cosmic Dreamworlds Remake)"
+# 16-bit FLAC, not the 24-bit WAV: GitHub rejects any file over 100 MB,
+# and the 24-bit master is 242 MB. The shipped track has always been
+# 16-bit, so this keeps the download size and the repo healthy.
 SAMPLE_TRACK_FILE = SAMPLE_DIR / f"{SAMPLE_TRACK_NAME}.flac"
-SAMPLE_COVER_FILE = SAMPLE_DIR / "Cosmic_Dreamworlds_Cover.png"
+SAMPLE_COVER_FILE = SAMPLE_DIR / "The_Orbits_of_Planets_Dreamworlds_Cover.png"
+# 79,076,571 samples at 48 kHz. The player clock prints this as 27:27.
+SAMPLE_TRACK_DURATION_SEC = 79076571 / 48000
+SAMPLE_TRACK_DURATION_FMT = "27:27"
 SAMPLE_FLAG_FILE = CONFIG_DIR / ".first_run_sample_loaded"
 PREVENT_AUTOPLAY_FILE = CONFIG_DIR / ".first_run_sample_prevent_autoplay"
 EQ_FLAG_FILE = CONFIG_DIR / ".first_run_eq_initialized"
@@ -190,7 +196,7 @@ def setup_first_run_sample_track(force: bool = False) -> bool:
         resume_data = {
             "path": res_path,
             "position_sec": 0.0,
-            "duration_sec": 1014.42,
+            "duration_sec": SAMPLE_TRACK_DURATION_SEC,
             "title": SAMPLE_TRACK_NAME,
             "mode": "MIX_ARCHIVE",
             "player": "mp_audio_player",
@@ -213,8 +219,8 @@ def setup_first_run_sample_track(force: bool = False) -> bool:
             "title": SAMPLE_TRACK_NAME,
             "position_sec": 0.0,
             "position_fmt": "00:00",
-            "duration_sec": 1014.42,
-            "duration_fmt": "16:54",
+            "duration_sec": SAMPLE_TRACK_DURATION_SEC,
+            "duration_fmt": SAMPLE_TRACK_DURATION_FMT,
             "progress_pct": 0.0,
             "mode": "MIX_ARCHIVE",
             "volume": 85,
@@ -269,20 +275,44 @@ def _welcome_items(items, color, nc, label_for, width=72):
     return lines
 
 
+def _active_theme_name() -> str:
+    """The theme the manager saved, or an empty string on a fresh install."""
+    for name in ("theme", "menu_theme"):
+        try:
+            value = (CONFIG_DIR / name).read_text(encoding="utf-8").strip()
+            if value:
+                return value
+        except OSError:
+            continue
+    return ""
+
+
 def show_welcome_message(wait_for_input=True):
     NC = "\033[0m"
     BOLD = "\033[1m"
     DIM = "\033[2m"
-    CYAN = "\033[38;2;0;245;255m"
-    MINT = "\033[38;2;0;245;212m"
-    PURPLE = "\033[38;2;199;125;255m"
-    BLUE = "\033[38;2;72;149;239m"
-    WHITE = "\033[38;2;255;255;255m"
-    GOLD = "\033[38;2;255;215;0m"
+
+    # The banner used to paint a fixed Dreamworlds palette. On the Whitest
+    # White theme that put cyan and pink text on a white pane, which is
+    # unreadable, so it now follows the active theme: one ink colour for a
+    # single-colour theme, the usual accent set otherwise.
+    if _active_theme_name().strip().lower().replace(" ", "_") in (
+        "the_whitest_white", "whitest_white", "whitest", "white",
+    ):
+        BLACK = "\033[38;2;0;0;0m"
+        CYAN = MINT = PURPLE = BLUE = WHITE = GOLD = BLACK
+        DIM = BLACK
+    else:
+        CYAN = "\033[38;2;0;245;255m"
+        MINT = "\033[38;2;0;245;212m"
+        PURPLE = "\033[38;2;199;125;255m"
+        BLUE = "\033[38;2;72;149;239m"
+        WHITE = "\033[38;2;255;255;255m"
+        GOLD = "\033[38;2;255;215;0m"
 
     w = 78
     title = "✦ WELCOME TO MP MIX MANAGER ✦"
-    version = "0.5.0 (Sensorium) - [Stable Release]"
+    version = "0.5.3 (Sensorium) - [Stable Release]"
     sub = "Welcome Installer Message from MPlanetarian"
 
     features_since_042 = [
@@ -333,7 +363,7 @@ def show_welcome_message(wait_for_input=True):
         f"  {WHITE}Version {BOLD}{GOLD}{version}{NC}",
         "",
         f"  {WHITE}A gift is ready in the Liquid Transparent Audio Player:{NC}",
-        f"  {BOLD}{GOLD}MPlanetarian - Ecology of the Earth (Cosmic Dreamworlds Remake){NC}",
+        f"  {BOLD}{GOLD}{SAMPLE_TRACK_NAME}{NC}",
         f"  {WHITE}The track and its art are in MP_SAMPLES. Press play when you are ready.{NC}",
         "",
         f"  {BOLD}{MINT}What's new since 0.4.2{NC}",

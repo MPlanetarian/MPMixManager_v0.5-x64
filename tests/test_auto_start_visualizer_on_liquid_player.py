@@ -47,7 +47,11 @@ class TestAutoStartVisualizerOnLiquidPlayer(unittest.TestCase):
             self.assertIn(preset["key"], [p["key"] for p in vis_mod.VISUALIZER_PRESETS])
 
     def test_stream_of_frequency_preset(self):
-        """Preset Stream of Frequency (internal ID 5, 1-based index 6) is correctly registered and resolvable."""
+        """Preset Stream of Frequency (internal ID 5, 1-based index 6) is correctly registered and resolvable.
+
+        The bare words "stream of frequency" now resolve to the newer Dynamic
+        Waves river, so this test addresses the original preset by its key.
+        """
         preset_by_idx = vis_mod.get_active_preset("6")
         self.assertEqual(preset_by_idx["key"], "stream_of_frequency")
         self.assertEqual(preset_by_idx["name"], "Stream of Frequency")
@@ -56,38 +60,44 @@ class TestAutoStartVisualizerOnLiquidPlayer(unittest.TestCase):
         preset_by_key = vis_mod.get_active_preset("stream_of_frequency")
         self.assertEqual(preset_by_key["id"], 5)
 
-        preset_by_name = vis_mod.get_active_preset("stream of frequency")
-        self.assertEqual(preset_by_name["key"], "stream_of_frequency")
+        preset_by_name = vis_mod.get_active_preset("Stream of Frequency")
+        # Input is lower-cased before matching, so a case-sensitive name cannot
+        # pick the older preset apart from the pair; the key is the way to ask
+        # for it, and the shorthand belongs to the river.
+        self.assertEqual(preset_by_name["key"], "stream_of_frequency_dynamic_waves")
+        self.assertEqual(waves_id_check := vis_mod.get_active_preset(
+            "stream_of_frequency")["id"], 5)
+        self.assertNotEqual(waves_id_check, vis_mod.STREAM_WAVES_HORIZONTAL_ID)
 
-    @patch("subprocess.run")
     @patch("subprocess.Popen")
-    def test_ensure_random_visualizer_skips_when_already_running(self, mock_popen, mock_run):
-        """ensure_random_visualizer_started should return False if already running."""
-        # Mock pgrep returning 0 (process found)
-        mock_run.return_value = MagicMock(returncode=0)
+    def test_ensure_random_visualizer_skips_when_already_running(self, mock_popen):
+        """ensure_random_visualizer_started should return False if already running.
 
-        started = opengl_glass.ensure_random_visualizer_started()
+        The probe is scoped to this host's *own* companion. A bare pgrep for
+        any visualizer used to answer "already running" for MP Gui just because
+        a Liquid Player was open, so the GUI never spawned its own window.
+        """
+        with patch.object(opengl_glass, "_companion_already_running", return_value=True):
+            started = opengl_glass.ensure_random_visualizer_started()
         self.assertFalse(started)
         mock_popen.assert_not_called()
 
-        started_vulkan = vulkan_glass.ensure_random_visualizer_started()
-        self.assertFalse(started_vulkan)
-        mock_popen.assert_not_called()
+        # The same probe drives the Vulkan and macOS hosts.
+        for module in (vulkan_glass, macos_glass):
+            with patch.object(module, "_companion_already_running", return_value=True) \
+                    if hasattr(module, "_companion_already_running") else nullcontext():
+                started = module.ensure_random_visualizer_started()
+            self.assertFalse(started)
+            mock_popen.assert_not_called()
 
-        started_macos = macos_glass.ensure_random_visualizer_started()
-        self.assertFalse(started_macos)
-        mock_popen.assert_not_called()
-
-    @patch("subprocess.run")
     @patch("subprocess.Popen")
-    def test_ensure_random_visualizer_spawns_when_not_running(self, mock_popen, mock_run):
+    def test_ensure_random_visualizer_spawns_when_not_running(self, mock_popen):
         """ensure_random_visualizer_started should spawn visualizer with --preset random when not running."""
-        # Mock pgrep returning 1 (process not found)
-        mock_run.return_value = MagicMock(returncode=1)
         mock_proc = MagicMock(pid=12345)
         mock_popen.return_value = mock_proc
 
-        started = opengl_glass.ensure_random_visualizer_started()
+        with patch.object(opengl_glass, "_companion_already_running", return_value=False):
+            started = opengl_glass.ensure_random_visualizer_started()
         self.assertTrue(started)
         mock_popen.assert_called_once()
         args, kwargs = mock_popen.call_args
@@ -196,15 +206,19 @@ class TestAutoStartVisualizerOnLiquidPlayer(unittest.TestCase):
     @patch("liquid_visualizer_session._signal_visualizer")
     @patch("liquid_visualizer_session._alive", return_value=False)
     @patch("liquid_visualizer_session.visualizer_pids", return_value=[4242])
-    @patch("liquid_visualizer_session.other_liquid_player_running", return_value=False)
-    def test_player_exit_stops_the_visualizer(self, _other, _pids, _alive, signal_vis):
+    @patch("liquid_visualizer_session._visualizer_is_gui_companion", return_value=False)
+    @patch("liquid_visualizer_session._other_host_window_running", return_value=False)
+    def test_player_exit_stops_the_visualizer(self, _other, _is_gui, _pids, _alive, signal_vis):
         vis_session.stop_companion_visualizer()
         signal_vis.assert_called_once_with(4242, signal.SIGTERM)
 
     @patch("liquid_visualizer_session._signal_visualizer")
+    @patch("liquid_visualizer_session._alive", return_value=False)
     @patch("liquid_visualizer_session.visualizer_pids", return_value=[4242])
-    @patch("liquid_visualizer_session.other_liquid_player_running", return_value=True)
-    def test_player_exit_leaves_visualizer_when_another_player_is_open(self, _other, _pids, signal_vis):
+    @patch("liquid_visualizer_session._visualizer_is_gui_companion", return_value=False)
+    @patch("liquid_visualizer_session._other_host_window_running", return_value=True)
+    def test_player_exit_leaves_visualizer_when_another_player_is_open(
+            self, _other, _is_gui, _pids, _alive, signal_vis):
         vis_session.stop_companion_visualizer()
         signal_vis.assert_not_called()
 

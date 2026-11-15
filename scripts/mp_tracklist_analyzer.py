@@ -8,6 +8,8 @@ analyzing mixes across archive folders, tracks played per day, top artists,
 durations, and storage footprints.
 """
 
+from __future__ import annotations
+
 import os
 import sys
 import re

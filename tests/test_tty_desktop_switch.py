@@ -87,7 +87,14 @@ class TestTtyAudioMode(unittest.TestCase):
         script = _tty_block() + "\n" + textwrap.dedent(body)
         env = os.environ.copy()
         env["HOME"] = str(home)
-        env.pop("MP_MIX_MANAGER_TTY_MODE", None)
+        for key in (
+            "MP_MIX_MANAGER_TTY_MODE",
+            "MP_TTY_SESSION_ONLY",
+            "SSH_CONNECTION",
+            "SSH_CLIENT",
+            "SSH_TTY",
+        ):
+            env.pop(key, None)
         return subprocess.run(
             ["bash", "-c", script],
             capture_output=True,
@@ -245,6 +252,67 @@ class TestTtyAudioMode(unittest.TestCase):
             self.assertNotIn("SWITCHED", result.stdout)
             self.assertIn("FLAG", result.stdout)
             self.assertIn("MP Mix Manager TTY Audio Mode is on.", result.stdout)
+
+    def test_ssh_session_enables_the_mode_without_touching_the_console(self):
+        """An SSH login is a session, not the machine's seat. Do not log out Plasma."""
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as home:
+            switch = Path(home) / "scripts"
+            switch.mkdir()
+            fake = switch / "MP_Desktop_CLI_Switch.sh"
+            fake.write_text("#!/bin/bash\nprintf '%s\\n' SWITCHED\nexit 0\n", encoding="utf-8")
+            fake.chmod(0o755)
+            body = f"""
+            press_enter() {{ :; }}
+            BOLD= CYAN= NC= YELLOW= GREEN= RED= DIM=
+            systemctl() {{ printf '%s\\n' graphical.target; }}
+            OS_TYPE=linux
+            SCRIPT_DIR={str(Path(home))}
+            unset DISPLAY WAYLAND_DISPLAY
+            export SSH_CONNECTION="198.51.100.50 51234 192.0.2.13 22"
+            export SSH_TTY=/dev/pts/1
+            printf 'target:%s\\n' "$(_mp_tty_switch_target)"
+            manage_linux_tty_desktop_switch <<< 'y'
+            test -f "$HOME/.config/mix-manager/tty_audio_mode" && echo FLAG || echo NOFLAG
+            printf 'env:%s\\n' "$MP_MIX_MANAGER_TTY_MODE"
+            """
+            result = self._run(body, home)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("target:session", result.stdout)
+            self.assertNotIn("SWITCHED", result.stdout)
+            self.assertIn("NOFLAG", result.stdout)
+            self.assertIn("env:1", result.stdout)
+            self.assertIn("on for this session", result.stdout)
+
+    def test_session_only_override_keeps_the_console_untouched(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as home:
+            body = """
+            press_enter() { :; }
+            BOLD= CYAN= NC= YELLOW= GREEN= RED= DIM=
+            unset DISPLAY WAYLAND_DISPLAY SSH_CONNECTION SSH_CLIENT SSH_TTY
+            MP_TTY_SESSION_ONLY=1
+            printf 'target:%s\\n' "$(_mp_tty_switch_target)"
+            """
+            result = self._run(body, home)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("target:session", result.stdout)
+
+    def test_a_seated_desktop_still_targets_the_tty(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as home:
+            body = """
+            press_enter() { :; }
+            unset SSH_CONNECTION SSH_CLIENT SSH_TTY MP_TTY_SESSION_ONLY
+            WAYLAND_DISPLAY=wayland-0
+            printf 'target:%s\\n' "$(_mp_tty_switch_target)"
+            """
+            result = self._run(body, home)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("target:tty", result.stdout)
 
     def test_session_unbuffers_python_and_restores_the_console(self):
         import tempfile

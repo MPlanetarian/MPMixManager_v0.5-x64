@@ -48,11 +48,21 @@ if "%MP_INSTANCE_STATUS%"=="3" (
     exit /b 0
 )
 
+:: Keep the theme the user picked. A fresh install starts on the default.
 if "!KEEP_THEME!"=="0" (
-    "%PYTHON_BIN%" -c "from pathlib import Path; p=Path.home()/'.config'/'mix-manager'/'theme'; p.parent.mkdir(parents=True, exist_ok=True); p.write_text('retro_linux_memories\n', encoding='utf-8')" >nul 2>&1
+    if not exist "%CONFIG_DIR%\theme" (
+        echo dreamworlds> "%CONFIG_DIR%\theme"
+    )
 )
 
-"%PYTHON_BIN%" -c "import sys; sys.path.insert(0, r'%BASE_DIR%\scripts'); from desktop_launch_screen import reposition_off_hisense; reposition_off_hisense()" >nul 2>&1
+start "" /B "%PYTHON_BIN%" -c "import sys; sys.path.insert(0, r'%BASE_DIR%\scripts'); from desktop_launch_screen import reposition_off_hisense; reposition_off_hisense()" >nul 2>&1
+
+:: The first MP Gui window plays Exit_MP_Video.mp4 once, before the companion
+:: visualizer, so the movie is the only thing on screen. It closes when the
+:: clip ends. A second, third, or fourth MP Gui never shows it. The helper
+:: exits 0 only when it actually played; the host then skips a second play.
+"%PYTHON_BIN%" -c "import sys; sys.path.insert(0, r'%BASE_DIR%\scripts'); import exit_video; raise SystemExit(0 if exit_video.play_player_intro('MANAGER') else 1)" >nul 2>&1
+if not errorlevel 1 set "MP_GUI_INTRO_DONE=1"
 
 set "BACKEND=opengl"
 set "CONFIG_FILE=%CONFIG_DIR%\config.env"

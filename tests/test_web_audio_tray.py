@@ -1,4 +1,4 @@
-"""Tests for the tray's Start / Stop MP Web Audio entry.
+"""Tests for the tray's Start / Stop MP Audio Player (Web) entry.
 
 Covers the three pieces the user asked for:
 
@@ -27,11 +27,11 @@ import mp_web_service as web
 class TestLabels(unittest.TestCase):
     def test_fresh_install_reads_start(self):
         with patch.object(web, "companion_running", return_value=False):
-            self.assertEqual(web.menu_label(), "Start MP Web Audio")
+            self.assertEqual(web.menu_label(), "Start MP Audio Player (Web)")
 
     def test_running_service_reads_stop(self):
         with patch.object(web, "companion_running", return_value=True):
-            self.assertEqual(web.menu_label(), "Stop MP Web Audio")
+            self.assertEqual(web.menu_label(), "Stop MP Audio Player (Web)")
 
     def test_tray_menu_has_the_option_before_close_all(self):
         ids = [ident for ident, _label in tray.MENU_ENTRIES]
@@ -41,9 +41,9 @@ class TestLabels(unittest.TestCase):
 
     def test_tray_label_follows_the_service_state(self):
         with patch.object(web, "companion_running", return_value=True):
-            self.assertEqual(tray.web_audio_label(), "Stop MP Web Audio")
+            self.assertEqual(tray.web_audio_label(), "Stop MP Audio Player (Web)")
         with patch.object(web, "companion_running", return_value=False):
-            self.assertEqual(tray.web_audio_label(), "Start MP Web Audio")
+            self.assertEqual(tray.web_audio_label(), "Start MP Audio Player (Web)")
 
 
 class TestPlatformCase(unittest.TestCase):
@@ -71,7 +71,7 @@ class TestToggle(unittest.TestCase):
         self.assertEqual(stop.call_count, 1)
         self.assertEqual(start.call_count, 0)
         self.assertTrue(result["success"])
-        self.assertEqual(result["label"], "Start MP Web Audio")
+        self.assertEqual(result["label"], "Start MP Audio Player (Web)")
 
     def test_stopped_service_is_started(self):
         with patch.object(web, "companion_running", side_effect=[False, False, True]), \
@@ -82,7 +82,7 @@ class TestToggle(unittest.TestCase):
         self.assertEqual(start.call_count, 1)
         self.assertEqual(stop.call_count, 0)
         self.assertTrue(result["success"])
-        self.assertEqual(result["label"], "Stop MP Web Audio")
+        self.assertEqual(result["label"], "Stop MP Audio Player (Web)")
 
     def test_stop_tells_clients_before_the_port_closes(self):
         order = []
@@ -140,7 +140,7 @@ class TestAnnounce(unittest.TestCase):
         self.assertEqual(captured["method"], "POST")
         self.assertEqual(
             json.loads(captured["body"])["message"],
-            "MP Audio Web Companion has been restarted",
+            "MP Audio Player (Web) has been restarted",
         )
 
     def test_announce_failure_is_not_fatal(self):
@@ -167,12 +167,12 @@ class TestCompanionAnnouncements(unittest.TestCase):
     def test_announcement_is_returned_once_set(self):
         self.assertIsNone(self.companion.current_announcement())
         queued = self.companion.set_announcement(
-            "MP Audio Web Companion has been restarted"
+            "MP Audio Player (Web) has been restarted"
         )
         self.assertIsNotNone(queued)
         current = self.companion.current_announcement()
         self.assertEqual(
-            current["message"], "MP Audio Web Companion has been restarted"
+            current["message"], "MP Audio Player (Web) has been restarted"
         )
 
     def test_empty_announcement_is_ignored(self):
@@ -198,7 +198,7 @@ class TestPageRestartNotice(unittest.TestCase):
     def test_notice_banner_exists(self):
         self.assertIn('id="restartNotice"', self.page)
         self.assertIn('id="restartNoticeText"', self.page)
-        self.assertIn("MP Audio Web Companion has been restarted", self.page)
+        self.assertIn("MP Audio Player (Web) has been restarted", self.page)
 
     def test_page_tracks_the_instance_id_and_reconnects(self):
         self.assertIn("serverInstance", self.page)
@@ -220,10 +220,18 @@ class TestPageRestartNotice(unittest.TestCase):
         header with no audio frames) re-attached, errored, and re-attached
         again. On a phone that is a flickering screen with the "companion has
         been restarted" banner stuck at the top.
+
+        The dead file is now reported to the host and the queue walks on, but
+        that walk is bounded by the library size: if nothing decodes, the page
+        stops with one message instead of looping.
         """
         self.assertIn("MEDIA_RECOVERY_LIMIT", self.page)
         self.assertIn("mediaRecoveryAttempts", self.page)
-        self.assertIn("cannot be played on this device", self.page)
+        # A decode failure is no longer a dead end: it is a skip, bounded by
+        # the queue length, with a single message once everything has failed.
+        self.assertIn("handleUnplayableMix", self.page)
+        self.assertIn("consecutiveSkips >= total", self.page)
+        self.assertIn("None of the mixes in this playlist can be played", self.page)
         # The ended handler has its own loop and must be bounded too.
         self.assertIn("quickEndRestarts", self.page)
         self.assertIn("if (quickEndRestarts >= 2)", self.page)
