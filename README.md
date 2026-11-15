@@ -28,6 +28,12 @@ An enterprise-grade workstation orchestration console and media management suite
 
 ![MP Mix Manager 0.5.3 Screenshot (MP Liquid Player) ](002.png)
 
+> [!NOTE]
+> ### 🎵 Celebrating the Release of MP Mix Manager 0.5 (Sensorium)
+> **The release theme track is here:** ***MPlanetarian - The Orbits of Planets (Cosmic Dreamworlds Remake)*** — a pristine **24-bit / 48 kHz WAV**, **14:17** long, shipped in [`MP_SAMPLES/`](MP_SAMPLES/) and preloaded into the Liquid Transparent Audio Player at **0:00** on first launch.
+>
+> The new artwork ships as **`MP_SAMPLES/The_Orbits_of_Planets_Dreamworlds_Cover.png`** and is embedded in the WAV's ID tags as both its **Cover (front)** and **Cover (back)** pictures. The cover is shown below the MP Audio Player screenshot.
+
 > [!TIP]
 > ### 🌟 Welcome to MP Mix Manager v0.5.3 Stable (Sensorium)
 > **November 14, 2026. Welcome from MPlanetarian.** This is the stable Sensorium release, and the direct successor to **0.4.3 Stable (Liquid)**. Thank you for running MP Mix Manager, MP Gui, and the Liquid Transparent Audio Player. The manager, the Liquid Player, and the music library share one glass desktop, and the macOS build in this release is the one on this page.
@@ -59,6 +65,13 @@ An enterprise-grade workstation orchestration console and media management suite
 ## 📑 Table of Contents
 
 ![MP Mix Manager 0.5.3 Screenshot (MP Audio CLI Player) ](003.png)
+
+<p align="center">
+  <img src="MP_SAMPLES/The_Orbits_of_Planets_Dreamworlds_Cover.png" width="420" alt="The Orbits of Planets (Cosmic Dreamworlds Remake) — release theme track cover for MP Mix Manager 0.5 (Sensorium)">
+</p>
+
+> ### 🎨 Release Theme Track Cover — MP Mix Manager 0.5 (Sensorium)
+> ***MPlanetarian - The Orbits of Planets (Cosmic Dreamworlds Remake)*** — the free release track cover, embedded in the WAV as its **Cover (front)** and **Cover (back)**. The track ships in [`MP_SAMPLES/`](MP_SAMPLES/) and is preloaded in the Liquid Transparent Audio Player at **0:00** on first launch.
 
 - [🚀 What's New in v0.5.3 Stable (Sensorium)](#-whats-new-in-v053-stable-sensorium)
 - [✅ Closed gaps — previously in the tree only](#-closed-gaps--previously-in-the-tree-only)
