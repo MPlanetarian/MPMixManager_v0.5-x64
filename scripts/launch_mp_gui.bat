@@ -51,7 +51,7 @@ if "%MP_INSTANCE_STATUS%"=="3" (
 :: Keep the theme the user picked. A fresh install starts on the default.
 if "!KEEP_THEME!"=="0" (
     if not exist "%CONFIG_DIR%\theme" (
-        echo dreamworlds> "%CONFIG_DIR%\theme"
+        echo dreamworlds_ultra> "%CONFIG_DIR%\theme"
     )
 )
 
@@ -114,7 +114,13 @@ if "!NO_VISUALIZER!"=="0" (
             if not "%%P"=="" set "VIS_RUNNING=1"
         )
         if "!VIS_RUNNING!"=="0" (
-            start "" "%PYTHON_BIN%" "!VIS_PY!" --preset random
+            set "VIS_BACKEND=opengl"
+            if /i "!BACKEND!"=="vulkan" set "VIS_BACKEND=vulkan"
+            set "MP_VISUALIZER_COMPANION=1"
+            set "MP_VISUALIZER_MATCH_GUI=1"
+            start "" "%PYTHON_BIN%" "!VIS_PY!" --preset random --backend !VIS_BACKEND!
+            set "MP_VISUALIZER_COMPANION="
+            set "MP_VISUALIZER_MATCH_GUI="
         )
     )
 )

@@ -233,6 +233,49 @@ class TestLiquidGlassPlayerFeatures(unittest.TestCase):
         finally:
             flag.unlink(missing_ok=True)
 
+    def test_plain_h_reaches_the_player_and_escape_does_not_close_the_glass(self):
+        """Plain H is Favorites in the Liquid Player and a search letter in MP Gui.
+
+        The hosts used to hide every window on H, so Favorites never ran, and
+        the Vulkan host closed the glass on Escape before the child could
+        leave search or step back a menu. Ctrl+H in the player is the player's
+        own Hidden Mode chord, so the host leaves that byte alone too.
+        """
+        import gi
+        gi.require_version("Gdk", "3.0")
+        from gi.repository import Gdk
+
+        cases = (
+            (lg_vulkan, "MP_Audio_Player_Liquid_Glass._toggle_hidden_mode"),
+            (lg_opengl, "mp_hidden_mode.toggle"),
+        )
+        for mod, toggle in cases:
+            host = mod.GlassHost.__new__(mod.GlassHost)
+            host.renderer = MagicMock()
+            event = MagicMock()
+            event.keyval = int(Gdk.KEY_h)
+            event.state = 0
+            for mode in ("NORMAL", "MINI", "MICRO", "MANAGER"):
+                host.mode = mode
+                with patch(toggle) as hidden:
+                    self.assertFalse(host._on_key_press(None, event), mode)
+                hidden.assert_not_called()
+            host.mode = "TRACKLIST"
+            with patch(toggle) as hidden:
+                self.assertTrue(host._on_key_press(None, event))
+            hidden.assert_called_once()
+            host.mode = "MANAGER"
+            event.keyval = int(Gdk.KEY_h)
+            event.state = int(Gdk.ModifierType.CONTROL_MASK)
+            with patch(toggle) as hidden:
+                self.assertTrue(host._on_key_press(None, event))
+            hidden.assert_called_once()
+            event.keyval = int(Gdk.KEY_Escape)
+            event.state = 0
+            host.mode = "NORMAL"
+            self.assertFalse(host._on_key_press(None, event))
+            host.renderer.request_close.assert_not_called()
+
     def tearDown(self):
         flag = Path.home() / ".config" / "mix-manager" / f"liquid_ui_size.{os.getpid()}"
         flag.unlink(missing_ok=True)

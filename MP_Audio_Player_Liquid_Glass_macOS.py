@@ -358,37 +358,29 @@ class MetalGlassHost:
                     except OSError:
                         break
         finally:
-            self._exit_video_then_close(master_fd)
+            self._close_then_exit_video(master_fd)
 
         return True
 
-    def _exit_video_then_close(self, master_fd=None):
-        """Play the exit movie on the last MP window, then tear the host down.
+    def _close_then_exit_video(self, master_fd=None):
+        """Tear the host down, then play the exit movie on the last MP window.
 
-        The movie plays while this window is still on screen, and the pump
-        keeps drawing frames so the glass does not freeze for its whole
-        length. Only the last MP Gui or MP Liquid Player window shows it.
+        The window is destroyed first, so closing the player disappears at
+        once instead of sitting on screen for the whole movie. The movie then
+        plays on its own, once, and closes itself when it ends, is skipped, or
+        reaches its timeout. Only the last MP Gui or MP Liquid Player window
+        shows it.
         """
+        self.close(master_fd)
         if not self.embed_check and self.mode in ("NORMAL", "MANAGER", "MINI", "MICRO"):
             video = ExitVideo(self.mode)
             try:
                 if video.start():
-                    video.wait(self._pump_exit_frame)
+                    video.wait()
             except Exception:
                 pass
             finally:
                 video.finish()
-        self.close(master_fd)
-
-    def _pump_exit_frame(self):
-        """One frame of the closing window while the exit movie plays."""
-        if self.renderer is None:
-            return
-        try:
-            self.renderer.poll()
-            self.renderer.draw(read_player_theme())
-        except Exception:
-            pass
 
     def close(self, master_fd=None):
         if master_fd is not None:

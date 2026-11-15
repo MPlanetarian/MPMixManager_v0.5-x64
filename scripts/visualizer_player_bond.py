@@ -292,19 +292,25 @@ class PlayerBondMixin:
         display = x11.XOpenDisplay(None)
         if not display:
             return 0
+        children = None
         try:
             x11.XDefaultRootWindow.restype = c_uint64
             x11.XDefaultRootWindow.argtypes = [c_void_p]
             root = x11.XDefaultRootWindow(display)
+            x11.XQueryTree.restype = c_int
             x11.XQueryTree.argtypes = [
                 c_void_p, c_uint64, POINTER(c_uint64), POINTER(c_uint64),
                 POINTER(POINTER(c_uint64)), POINTER(c_uint),
             ]
+            x11.XFree.restype = c_int
+            x11.XFree.argtypes = [c_void_p]
             rr, parent = c_uint64(), c_uint64()
             children = POINTER(c_uint64)()
             count = c_uint()
-            x11.XQueryTree(display, root, byref(rr), byref(parent),
-                           byref(children), byref(count))
+            if not x11.XQueryTree(display, root, byref(rr), byref(parent),
+                                   byref(children), byref(count)):
+                return 0
+            x11.XFetchName.restype = c_int
             x11.XFetchName.argtypes = [c_void_p, c_uint64, POINTER(c_char_p)]
             mine = 0
             try:
@@ -322,10 +328,12 @@ class PlayerBondMixin:
                 if int(wid) == mine:
                     continue
                 name = c_char_p()
-                x11.XFetchName(display, wid, byref(name))
-                if not name.value:
+                if not x11.XFetchName(display, wid, byref(name)) or not name:
                     continue
-                title = name.value.decode("utf-8", "replace")
+                try:
+                    title = name.value.decode("utf-8", "replace") if name.value else ""
+                finally:
+                    x11.XFree(name)
                 if title.startswith(wanted):
                     return int(wid)
                 if not fallback and title.startswith(other):
@@ -335,8 +343,16 @@ class PlayerBondMixin:
         except Exception:
             return 0
         finally:
-            x11.XCloseDisplay.argtypes = [c_void_p]
-            x11.XCloseDisplay(display)
+            if children:
+                try:
+                    x11.XFree(children)
+                except Exception:
+                    pass
+            try:
+                x11.XCloseDisplay.argtypes = [c_void_p]
+                x11.XCloseDisplay(display)
+            except Exception:
+                pass
         return 0
 
     # -- geometry ---------------------------------------------------------

@@ -207,6 +207,55 @@ class TestDesktopShortcuts(unittest.TestCase):
             )
             self.assertFalse(linux_shortcut_is_healthy(desktop / f"{SHORTCUT_NAMES[0]}.desktop"))
 
+    def test_desktop_shortcuts_present_rejects_a_dangling_try_exec(self):
+        """A TryExec that names a dead install must count as missing.
+
+        Leaving an OpenCode worktree, or unloading a versioned folder, leaves
+        ~/.local/bin/mp-desktop-exec as a symlink to a path that no longer
+        exists. GLib still finds the link, but cannot run it, so it hides the
+        entry and clicking the icon does nothing. The link must be followed and
+        checked, otherwise every shortcut looks healthy and is never repaired.
+        """
+        from install_desktop_shortcuts import linux_shortcut_is_healthy
+
+        with tempfile.TemporaryDirectory() as tmp:
+            desktop = Path(tmp) / "Desktop"
+            desktop.mkdir()
+            dead_tree = Path(tmp) / "MPMixManager_v9.9-x64"
+            dead_helper = dead_tree / "bin" / "mp-desktop-exec"
+            local_bin = Path(tmp) / ".local" / "bin"
+            local_bin.mkdir(parents=True)
+            helper = local_bin / "mp-desktop-exec"
+            helper.symlink_to(dead_helper)
+
+            entry = (
+                "[Desktop Entry]\n"
+                "Type=Application\n"
+                "Name=MP Gui\n"
+                'Exec=sh -c "exec \\\\"\\\\$HOME/.local/bin/mp-desktop-exec\\\\" MP_Gui.sh"\n'
+                f"TryExec={helper}\n"
+                "Terminal=false\n"
+            )
+            for name in SHORTCUT_NAMES:
+                (desktop / f"{name}.desktop").write_text(entry, encoding="utf-8")
+
+            self.assertFalse(
+                linux_shortcut_is_healthy(desktop / f"{SHORTCUT_NAMES[0]}.desktop"),
+                "a TryExec pointing at a deleted tree must be unhealthy",
+            )
+            self.assertFalse(
+                desktop_shortcuts_present(desktop, "linux"),
+                "shortcuts whose TryExec cannot run must be treated as absent",
+            )
+
+            # A resolvable helper makes the same entry healthy again, so the
+            # repair runs once and does not loop.
+            dead_helper.parent.mkdir(parents=True)
+            dead_helper.write_text("#!/bin/sh\n", encoding="utf-8")
+            dead_helper.chmod(0o755)
+            self.assertTrue(linux_shortcut_is_healthy(desktop / f"{SHORTCUT_NAMES[0]}.desktop"))
+            self.assertTrue(desktop_shortcuts_present(desktop, "linux"))
+
     def test_linux_try_exec_is_absolute_not_a_bare_name(self):
         """TryExec must not rely on PATH.
 

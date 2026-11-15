@@ -1442,7 +1442,8 @@ class OpenGLGlassHost:
                 if pid_res == self.child_pid:
                     break
         finally:
-            self._exit_video_then_close()
+            # Destroy this window first, so closing the player disappears at
+            # once instead of sitting on screen for the whole movie.
             if self.master_fd is not None:
                 try:
                     os.close(self.master_fd)
@@ -1458,37 +1459,26 @@ class OpenGLGlassHost:
             if self.renderer:
                 self.renderer.close()
                 self.renderer = None
+            self._play_exit_video_after_close()
 
         return True
 
-    def _exit_video_then_close(self):
-        """Play the exit movie on the last MP window, then tear the host down.
+    def _play_exit_video_after_close(self):
+        """Play the exit movie on the last MP window, after its own window is gone.
 
-        The movie plays while this window is still on screen, and the pump
-        keeps drawing frames so the glass does not freeze for its whole
-        length. Only the last MP Gui or MP Liquid Player window shows it.
+        The glass is already destroyed when this runs, so the movie is the only
+        thing left on screen. Only the last MP Gui or MP Liquid Player window
+        shows it, and only once.
         """
         if self.mode in ("NORMAL", "MANAGER"):
             video = ExitVideo(self.mode)
             try:
                 if video.start():
-                    video.wait(self._pump_exit_frame)
+                    video.wait()
             except Exception:
                 pass
             finally:
                 video.finish()
-
-    def _pump_exit_frame(self):
-        """One frame of the closing window while the exit movie plays."""
-        if self.renderer is None:
-            return
-        try:
-            self.renderer.poll()
-            theme = read_player_theme()
-            self.overlay.set_theme_text(theme)
-            self.renderer.draw(theme)
-        except Exception:
-            pass
 
 
 def main():

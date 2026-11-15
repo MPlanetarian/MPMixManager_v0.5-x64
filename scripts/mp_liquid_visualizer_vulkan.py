@@ -145,8 +145,6 @@ _GAMES = Path(os.environ.get("MP_VISUALIZER_COVERS_DIR", "")
               or (_HOME / "MPlanetarian Bandcamp Covers"))
 _WDB = _GAMES
 
-_BC = "https://mplanetarian.bandcamp.com"
-
 # The two Stream of Frequency — Dynamic Waves presets. The shader dispatches on
 # these ids, so they are defined here rather than written as bare numbers.
 STREAM_WAVES_HORIZONTAL_ID = 11

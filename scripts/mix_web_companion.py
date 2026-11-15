@@ -4130,6 +4130,28 @@ def control_player(action: str, params: Optional[Dict[str, List[str]]] = None) -
             # irrelevant and must never be written over it.
             return True
 
+    # Transport that only reads or writes the session must not touch the queue.
+    # `build_stream_queue()` can walk the whole music library, and on a sleeping
+    # CIFS share a single `stat()` costs seconds: a pause tap was measured
+    # blocking for ~119 s because it built the queue first. Pause and toggle
+    # need the clock and the saved path, nothing else.
+    if action in ("pause", "play-pause", "toggle"):
+        with _stream_lock:
+            state = load_stream_session()
+            pos = clamp_position(state, stream_position(state))
+            if action == "pause" or state.get("playing"):
+                state["playing"] = False
+                state["position_sec"] = pos
+                state["started_at"] = 0.0
+            else:
+                if not str(state.get("path", "") or ""):
+                    return False
+                state["playing"] = True
+                state["position_sec"] = pos
+                state["started_at"] = time.time()
+            save_stream_session(state)
+        return True
+
     queue = build_stream_queue()
     if not queue:
         return False
@@ -4212,22 +4234,6 @@ def control_player(action: str, params: Optional[Dict[str, List[str]]] = None) -
         if action in ("play", "resume"):
             state["playing"] = True
             state["started_at"] = time.time()
-        elif action == "pause":
-            # Pause means pause. Treating it as a toggle started the mix again
-            # when the page and the session had drifted apart, so the Stop
-            # tap appeared to do nothing (or the opposite of what was asked).
-            state["playing"] = False
-            state["position_sec"] = pos
-            state["started_at"] = 0.0
-        elif action in ("play-pause", "toggle"):
-            if state.get("playing"):
-                state["playing"] = False
-                state["position_sec"] = pos
-                state["started_at"] = 0.0
-            else:
-                state["playing"] = True
-                state["position_sec"] = pos
-                state["started_at"] = time.time()
         elif action == "next":
             switch(1)
         elif action in ("previous", "prev"):
@@ -6471,6 +6477,12 @@ def render_html_page(theme: Dict[str, Any]) -> str:
         // launch; a change means the companion was stopped and started again.
         let serverInstance = "";
         let restartNoticeShown = false;
+        // A restart notice is transient; a skip notice belongs to the run of
+        // unplayable mixes and stays put until a mix really plays. Without the
+        // distinction the 2 s status poll cleared the skip notice right after
+        // it appeared, and the next failed file put it straight back: the top
+        // of the page strobed in Chrome.
+        let restartNoticeKind = "";
         let statusFailureCount = 0;
         // Native media errors (the server went away mid-stream) are recovered
         // by re-attaching to the fresh instance, not by a full page reload.
@@ -6495,6 +6507,21 @@ def render_html_page(theme: Dict[str, Any]) -> str:
         let consecutiveSkips = 0;
         let skipRunStartAt = 0;
         let exhaustedNoticeShown = false;
+        // Set when a run stops for a reason that will not fix itself (every
+        // entry failed, or the source share dropped mid-walk). Unlike
+        // exhaustedNoticeShown this is not cleared by the next status poll: the
+        // poll cannot know whether the share is back, so only a successful
+        // play() or a deliberate re-engage clears it. This is what keeps the
+        // page from resuming the skip walk two seconds later.
+        let skipRunStopped = false;
+        // Many different files failing within seconds is not a handful of
+        // damaged mixes, it is the archive drive or share being unreachable.
+        // Walking the rest of the queue would both write off hundreds of good
+        // files and keep repainting the top banner, so the walk stops there.
+        let skipBurstStartAt = 0;
+        let skipBurstCount = 0;
+        const SKIP_BURST_WINDOW_MS = 20000;
+        const SKIP_BURST_LIMIT = 8;
         // Size of the current library queue, from the last status poll. It is
         // the bound on automatic skipping: a run may try every entry once, no
         // more, so a library where nothing decodes settles instead of looping.
@@ -7919,7 +7946,10 @@ def render_html_page(theme: Dict[str, Any]) -> str:
                     // the tail of the previous burst.
                     consecutiveSkips = 0;
                     skipRunStartAt = 0;
+                    skipBurstStartAt = 0;
+                    skipBurstCount = 0;
                     exhaustedNoticeShown = false;
+                    skipRunStopped = false;
                 }}
                 hideRestartNotice();
                 hideStreamOverlay();
@@ -7946,6 +7976,10 @@ def render_html_page(theme: Dict[str, Any]) -> str:
         // tried in one run, the listener gets a single clear message.
         function handleUnplayableMix(file) {{
             if (!file) return;
+            // The run already ended with one clear message (nothing plays, or
+            // the archive stopped answering). A late `error` from the last
+            // source must not restart the walk or the banner.
+            if (skipRunStopped) return;
             const label = file.split('/').pop() || file;
             const alreadyKnown = unplayableFiles.has(file);
             const now = performance.now();
@@ -7979,6 +8013,28 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             // the next poll hands out a different file even if this page is
             // closed and reopened.
             sendAction('track_failed', {{ path: file }});
+            // A burst of different files failing seconds apart means the source
+            // itself is gone, not that each mix is damaged. Stop before the
+            // walk writes off the rest of the library or repaints the banner
+            // once per file.
+            if (!skipBurstStartAt || (now - skipBurstStartAt) > SKIP_BURST_WINDOW_MS) {{
+                skipBurstStartAt = now;
+                skipBurstCount = 0;
+            }}
+            skipBurstCount += 1;
+            if (skipBurstCount >= SKIP_BURST_LIMIT) {{
+                skipRunStopped = true;
+                hideRestartNotice();
+                showRestartNotice(
+                    'The music library stopped responding — skipping is paused. ' +
+                    'Check the archive drive or share, then tap “Engage Audio Stream”.',
+                    'skip');
+                showPlaybackExhaustedNotice(
+                    'The last ' + skipBurstCount + ' mixes could not be loaded. ' +
+                    'The archive drive or share may be offline. Reconnect it, then ' +
+                    'tap “Engage Audio Stream” to try again.');
+                return;
+            }}
             // The queue length is what bounds the run: once this phone has
             // written off as many files as the library holds, there is nothing
             // left to try. `queueLength` comes from the last status poll.
@@ -7988,7 +8044,7 @@ def render_html_page(theme: Dict[str, Any]) -> str:
                 showPlaybackExhaustedNotice();
                 return;
             }}
-            showRestartNotice('“' + label + '” cannot be played — skipping to the next mix…');
+            showRestartNotice('“' + label + '” cannot be played — skipping to the next mix…', 'skip');
             // The action above advanced the server cursor; the next status poll
             // re-points the element at the new file and resumes it because this
             // flag says the listener still wants sound.
@@ -8005,6 +8061,7 @@ def render_html_page(theme: Dict[str, Any]) -> str:
         function showPlaybackExhaustedNotice(detail) {{
             if (exhaustedNoticeShown) return;
             exhaustedNoticeShown = true;
+            skipRunStopped = true;
             // A page loaded afresh has not seen any failures itself, so the
             // host's count is the truthful one there. Whichever is larger is the
             // number this playlist has actually lost.
@@ -8339,7 +8396,11 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             unplayableFiles.clear();
             consecutiveSkips = 0;
             skipRunStartAt = 0;
+            skipBurstStartAt = 0;
+            skipBurstCount = 0;
             exhaustedNoticeShown = false;
+            skipRunStopped = false;
+            hideRestartNotice();
             fetch('/api/control?action=rescan', {{ method: 'POST' }})
                 .then(r => r.json())
                 .then(() => fetchStatus())
@@ -9162,17 +9223,26 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             if (state.detail) el.title = state.detail;
         }}
 
-        function showRestartNotice(message) {{
+        function showRestartNotice(message, kind) {{
             const el = document.getElementById('restartNotice');
             const text = document.getElementById('restartNoticeText');
+            const nextKind = kind || 'restart';
+            // One steady banner per skip run. Re-showing it for every dead file
+            // and hiding it again on the next status poll is exactly the
+            // flicker this notice used to produce.
+            if (nextKind === 'skip' && restartNoticeShown
+                    && restartNoticeKind === 'skip') return;
             if (text && message) text.innerText = message;
             if (el) el.classList.add('show');
             restartNoticeShown = true;
+            restartNoticeKind = nextKind;
         }}
 
         function hideRestartNotice() {{
             const el = document.getElementById('restartNotice');
             if (el) el.classList.remove('show');
+            restartNoticeShown = false;
+            restartNoticeKind = "";
         }}
 
         // The tray tells us before it stops the service; show that reason now
@@ -9256,7 +9326,10 @@ def render_html_page(theme: Dict[str, Any]) -> str:
                     }}
                     serverInstance = data.instance;
                 }}
-                if (restartNoticeShown) hideRestartNotice();
+                // Only a transient restart notice is cleared by a poll. A skip
+                // notice belongs to the run and stays until a mix really plays,
+                // so it must not blink off between two failed files.
+                if (restartNoticeShown && restartNoticeKind !== 'skip') hideRestartNotice();
 
                 document.getElementById('trackTitle').innerText = data.title || "No Mix Playing";
                 document.getElementById('trackArtist').innerText = data.album ? (data.artist + " • " + data.album) : (data.artist || "MPlanetarian");

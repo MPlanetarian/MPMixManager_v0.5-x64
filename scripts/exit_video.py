@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
-"""Play the MP exit movie before the last MP Gui / MP Liquid Player window closes.
+"""Play the MP exit movie after the last MP Gui / MP Liquid Player window closes.
 
 The movie is `Exit_MP_Video.mp4` in the install tree. It is played by the same
 script that plays the startup logo (`scripts/display_loader_video.sh --exit`),
 so the player choice, the borderless always-on-top window and the skip keys are
 identical on every platform and there is only one implementation to maintain.
+
+The host destroys its own window first, then plays the movie. Closing the
+player therefore disappears the instant the user closes it, and the movie runs
+on its own with nothing behind it to cover.
 
 Two rules decide whether it plays at all:
 
@@ -15,8 +19,8 @@ Two rules decide whether it plays at all:
     closed at the same instant elect exactly one of them.
 
 The four Liquid Glass hosts use `ExitVideo`: `start()` elects and launches the
-movie, the host keeps pumping its own window while `wait()` runs, then
-`finish()` clears the marker so a later launch is elected normally.
+movie, `wait()` blocks until it ends, then `finish()` clears the marker so a
+later launch is elected normally.
 
 The same movie is the intro for the **first MP Liquid Player window** and the
 **first MP Gui window**. `PlayerIntro` plays it *before* the window exists, and
@@ -461,10 +465,11 @@ class ExitVideo:
         return True
 
     def wait(self, pump=None, interval: float = 0.03) -> None:
-        """Block until the movie ends, calling `pump` so the host stays live.
+        """Block until the movie ends.
 
-        `pump` is the host's own event-pump (drawing a frame, polling input).
-        Without it the closing window would freeze for the whole movie.
+        The host closes its own window before calling this, so there is nothing
+        left to draw. `pump` remains for a caller that still owns a live window
+        and wants it to stay responsive while the movie runs.
         """
         while self.running():
             if pump is not None:
@@ -513,8 +518,9 @@ def play_exit_video(
 ) -> bool:
     """Start, wait for, and finish the exit movie in one call.
 
-    Returns True when the movie played on this window. Call it before the
-    window is destroyed and pass `pump` to keep the window responsive.
+    Returns True when the movie played on this window. Call it after the
+    window is destroyed; pass `pump` only if the caller still owns a window
+    that must stay responsive.
     """
     video = ExitVideo(mode, root, timeout, elect=elect)
     if not video.start():

@@ -402,5 +402,50 @@ class ClientAutoSkipTest(unittest.TestCase):
                       self.html)
 
 
+class SkipBannerFlickerTest(unittest.TestCase):
+    """The top banner must not strobe while the queue skips dead mixes.
+
+    The 2 s status poll used to clear the "cannot be played - skipping" notice
+    unconditionally, right after the error handler had shown it. The next file
+    failed, the banner came back, the poll cleared it again: on Chrome the top
+    of the page flashed roughly once a second for the whole queue.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.html = mwc.render_html_page(mwc.get_theme_palette(None))
+
+    def test_a_skip_notice_survives_the_status_poll(self):
+        fn = self.html[self.html.index("async function fetchStatus"):]
+        fn = fn[:fn.index("document.getElementById('trackTitle')")]
+        self.assertIn("restartNoticeKind !== 'skip'", fn)
+
+    def test_the_skip_notice_is_not_redrawn_for_every_dead_file(self):
+        fn = self.html[self.html.index("function showRestartNotice"):]
+        fn = fn[:fn.index("function hideRestartNotice")]
+        self.assertIn("nextKind === 'skip'", fn)
+        self.assertIn("return;", fn)
+        # The skip caller names its kind, or the notice is treated as a restart.
+        self.assertIn("'skip');", self.html)
+
+    def test_a_burst_of_failures_pauses_the_walk(self):
+        fn = self.html[self.html.index("function handleUnplayableMix"):]
+        fn = fn[:fn.index("function showPlaybackExhaustedNotice")]
+        self.assertIn("SKIP_BURST_LIMIT", fn)
+        self.assertIn("skipRunStopped = true", fn)
+        self.assertIn("if (skipRunStopped) return;", fn)
+
+    def test_the_stop_is_not_cleared_by_the_status_poll(self):
+        fn = self.html[self.html.index("async function fetchStatus"):]
+        fn = fn[:fn.index("updateAutoplayNotice(data.autoplay)")]
+        self.assertNotIn("skipRunStopped", fn)
+        # A successful play and a deliberate re-engage are the only resets.
+        self.assertGreaterEqual(self.html.count("skipRunStopped = false;"), 2)
+
+    def test_the_paused_message_names_the_share(self):
+        self.assertIn("The music library stopped responding", self.html)
+        self.assertIn("archive drive or share", self.html)
+
+
 if __name__ == "__main__":
     unittest.main()

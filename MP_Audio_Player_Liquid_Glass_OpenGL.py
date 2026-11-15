@@ -1141,11 +1141,33 @@ class GlassHost:
         if mode and mode != self.mode:
             self.set_mode(mode)
 
+    def _claims_hidden_mode_key(self, keyval, state) -> bool:
+        """True when this host, not the child, should hide the windows.
+
+        The audio player uses plain H for Favorites, for search, and for the
+        equalizer, and it binds Hidden Mode to Ctrl+H itself. Eating plain H
+        here made Favorites unreachable for the whole life of the window.
+        MP Gui's manager already decides between search and Hidden Mode, so
+        plain H has to reach that script too. The tracklist viewer has no
+        binding on H, so the host still hides the windows from that view.
+        """
+        import gi
+        gi.require_version("Gdk", "3.0")
+        from gi.repository import Gdk
+        if keyval not in (Gdk.KEY_h, Gdk.KEY_H):
+            return False
+        if self.mode in ("NORMAL", "MINI", "MICRO"):
+            return False
+        if self.mode == "MANAGER":
+            return bool(state & Gdk.ModifierType.CONTROL_MASK)
+        return True
+
     def _on_key_press(self, _term, event):
         import gi
         gi.require_version("Gdk", "3.0")
         from gi.repository import Gdk
         kv = getattr(event, "keyval", 0)
+        st = getattr(event, "state", 0)
         # Headset play/pause. Consumed here so a focused window cannot hand
         # the key to a video player. The daemon's MPRIS object is the path
         # the desktop uses; this covers a key that arrives at the window.
@@ -1156,7 +1178,7 @@ class GlassHost:
         except Exception:
             pass
         # M stays with the player. Search uses it as a letter. A real mode change is published back.
-        if kv == Gdk.KEY_K or (kv == Gdk.KEY_k and bool(getattr(event, "state", 0) & Gdk.ModifierType.SHIFT_MASK)):
+        if kv == Gdk.KEY_K or (kv == Gdk.KEY_k and bool(st & Gdk.ModifierType.SHIFT_MASK)):
             # Kill only player processes owned by this user, matched on argv
             # rather than a substring of a shell command line. `pkill -f` also
             # hit editors with the file open, other users' players, and any
@@ -1164,10 +1186,10 @@ class GlassHost:
             _kill_player_processes()
             return True
         # Z opens a new MP Liquid Visualizer window, matching the Vulkan host.
-        if kv in (Gdk.KEY_h, Gdk.KEY_H):
-            # Hidden Mode: hide or restore every MP window. Registered here so
-            # the player is one of the hosts that can start it; the restore half
-            # is handled by the KWin script on Wayland.
+        if self._claims_hidden_mode_key(kv, st):
+            # Hidden Mode from a view that has no text binding on H. The
+            # player and MP Gui handle their own H. The restore half is the
+            # KWin script on Wayland.
             try:
                 import mp_hidden_mode as hidden
                 hidden.toggle()
@@ -1362,7 +1384,7 @@ class GlassHost:
             try:
                 return self._run_windows()
             finally:
-                self._exit_video_then_close()
+                self._close_then_exit_video()
         glib, gtk, vte = _import_gtk()
         self.glib = glib
         gtk.init([])
@@ -1374,39 +1396,28 @@ class GlassHost:
         try:
             return self._run_window(vte, glib)
         finally:
-            self._exit_video_then_close()
+            self._close_then_exit_video()
 
-    def _exit_video_then_close(self):
-        """Play the exit movie on the last MP window, then tear the host down.
+    def _close_then_exit_video(self):
+        """Tear the host down, then play the exit movie on the last MP window.
 
-        The movie runs while this window is still on screen, and the draw loop
-        keeps running underneath it, so the glass does not freeze for the
-        whole movie. Every other MP Gui and MP Liquid Player window is counted
-        first: one of several open windows closes silently and the movie waits
-        for the last one.
+        The window is destroyed first, so closing the player disappears at
+        once instead of sitting on screen for the whole movie. The movie then
+        plays on its own, once, and closes itself when it ends, is skipped, or
+        reaches its timeout. Every other MP Gui and MP Liquid Player window is
+        counted first: one of several open windows closes silently and the
+        movie waits for the last one.
         """
+        self.close()
         if not self.embed_check and self.mode in ("NORMAL", "MANAGER", "MINI", "MICRO"):
             video = ExitVideo(self.mode)
             try:
                 if video.start():
-                    video.wait(lambda: self._pump_exit_frame())
+                    video.wait()
             except Exception:
                 pass
             finally:
                 video.finish()
-        self.close()
-
-    def _pump_exit_frame(self):
-        """One frame of the closing window while the exit movie plays."""
-        if self.renderer is None:
-            return
-        try:
-            self.renderer.poll()
-            self.renderer.draw(read_player_theme())
-        except Exception:
-            pass
-        if self.glib is not None:
-            self._pump_gtk(self.glib)
 
     def _run_windows(self):
         self.renderer.open()
@@ -1482,8 +1493,8 @@ class GlassHost:
                     proc.terminate()
             except Exception:
                 pass
-            # The window stays up until _exit_video_then_close() has played the
-            # exit movie; closing here would hide it too early on Windows.
+            # The window is destroyed by _close_then_exit_video() as soon as
+            # this loop returns; the exit movie then plays on its own.
         return True
 
     def _take_launch_mouse_focus(self, warp: bool = True) -> bool:
@@ -1816,10 +1827,9 @@ def spawn_new_visualizer() -> bool:
             return False
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         extra_kw = {"creationflags": 0x00000208} if sys.platform == "win32" else {"start_new_session": True}
-        if sys.platform != "win32":
-            # Z opens an extra window: it is explicitly detached from the
-            # player, while the companion the player starts stays locked.
-            extra_kw["env"] = _visualizer_env(companion=False)
+        # Z opens an extra window: it is explicitly detached from the
+        # player, while the companion the player starts stays locked.
+        extra_kw["env"] = _visualizer_env(companion=False)
         with open(CONFIG_DIR / "liquid_visualizer.log", "a") as f:
             f.write(f"\n--- spawn_new_visualizer: {vis_script.name} ---\n")
             f.flush()
@@ -1880,8 +1890,8 @@ def ensure_random_visualizer_started() -> bool:
         except Exception:
             pass
         extra_kw = {"creationflags": 0x00000208} if sys.platform == "win32" else {"start_new_session": True}
-        if sys.platform != "win32":
-            extra_kw["env"] = _visualizer_env(companion=True)
+        # Windows included. Without this env the companion never bonds.
+        extra_kw["env"] = _visualizer_env(companion=True)
         with open(CONFIG_DIR / "liquid_visualizer.log", "a") as f:
             subprocess.Popen([sys.executable, str(vis_script), "--preset", "random", "--backend", "opengl"], cwd=str(ROOT), stdin=subprocess.DEVNULL, stdout=f, stderr=f, **extra_kw)
         return True

@@ -335,6 +335,38 @@ class TestAStandaloneWindowNeverBonds(unittest.TestCase):
         self.assertFalse(renderer._bond_is_locked())
 
 
+class TestBondedWindowIgnoresQuit(unittest.TestCase):
+    """Q closes a free visualizer. It must not close the player's companion.
+
+    Vulkan and Metal already skipped Q while bonded. The OpenGL window, which
+    is the usual one on Linux, closed anyway and took the player's background
+    with it. Escape still closes every window.
+    """
+
+    def test_q_leaves_a_bonded_window_and_closes_a_free_one(self):
+        targets = (
+            (vis, "LiquidVisualizerOpenGLRenderer"),
+            (vulkan_vis, "LiquidVisualizerVulkanRenderer"),
+        )
+        try:
+            import mp_liquid_visualizer_metal as metal
+            targets = targets + ((metal, "LiquidVisualizerMetalRenderer"),)
+        except ImportError:
+            pass
+        for module, name in targets:
+            renderer = object.__new__(getattr(module, name))
+            renderer.screensaver = False
+            renderer._player_bonded = True
+            renderer.request_close = MagicMock()
+            with self.subTest(backend=name, bonded=True):
+                renderer._on_key(None, 81, 0, 1, 0)
+                renderer.request_close.assert_not_called()
+            renderer._player_bonded = False
+            with self.subTest(backend=name, bonded=False):
+                renderer._on_key(None, 81, 0, 1, 0)
+                renderer.request_close.assert_called_once()
+
+
 class TestTheBondServesMPGuiToo(unittest.TestCase):
     """MP Gui's companion sits behind MP Gui, not behind the Liquid Player.
 
@@ -366,6 +398,8 @@ class TestTheBondServesMPGuiToo(unittest.TestCase):
         renderer = _renderer(vis, "LiquidVisualizerOpenGLRenderer")
         with patch.dict(os.environ, {"MP_VISUALIZER_MATCH_GUI": ""}, clear=False), \
              patch.object(vulkan_vis, "_IS_LINUX", True), \
+             patch("liquid_player_visualizer.read_player_visualizer_state",
+                   return_value={"active": True}), \
              patch("liquid_player_visualizer.read_published_player_window_geometry",
                    return_value=(10, 20, 1094, 778)), \
              patch("liquid_player_visualizer.read_published_gui_window_geometry",

@@ -102,7 +102,11 @@ if exist "%VIS_PY%" (
         if not "%%P"=="" set "VIS_RUNNING=1"
     )
     if "!VIS_RUNNING!"=="0" (
-        start "" "%PYTHON_BIN%" "%VIS_PY%" --preset random
+        set "VIS_BACKEND=opengl"
+        if /i "!BACKEND!"=="vulkan" set "VIS_BACKEND=vulkan"
+        set "MP_VISUALIZER_COMPANION=1"
+        start "" "%PYTHON_BIN%" "%VIS_PY%" --preset random --backend !VIS_BACKEND!
+        set "MP_VISUALIZER_COMPANION="
     )
 )
 

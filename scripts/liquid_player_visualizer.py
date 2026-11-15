@@ -2030,7 +2030,10 @@ class LiquidVisualizerOpenGLRenderer(MonitorSpanMixin, RandomPresetMixin, Player
         if key == 256:  # ESCAPE
             self.request_close()
         elif key == 81:  # Q
-            self.request_close()
+            # A bonded companion belongs to the player. Vulkan and Metal leave
+            # it up; Q only closes a free window. Escape still closes it.
+            if not self._player_bonded:
+                self.request_close()
         elif key == 90:  # Z
             # The locked companion owns its geometry: it stays behind the
             # player and never cycles to half size or fullscreen.

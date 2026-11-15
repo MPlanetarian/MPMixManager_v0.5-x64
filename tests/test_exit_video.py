@@ -9,7 +9,7 @@ feature correct:
   * the movie is played with the loader's own window flags,
   * only the last window of *either* role is elected (closing one of two open
     windows stays silent), and
-  * every Liquid Glass host runs the movie before it destroys its window.
+  * every Liquid Glass host closes its own window first, then runs the movie.
 """
 
 import os
@@ -199,26 +199,50 @@ class TestLastWindowElection(LimiterCase):
         self.assertNotIn("111", markers)
 
 
-class TestHostsPlayItBeforeClosing(unittest.TestCase):
+class TestHostsCloseFirstThenPlayIt(unittest.TestCase):
     def test_every_host_runs_the_movie_in_its_shutdown_path(self):
         for name in HOSTS:
             text = (ROOT / name).read_text(encoding="utf-8")
             self.assertIn("from exit_video import ExitVideo", text, name)
-            self.assertIn("_exit_video_then_close", text, name)
+            # Three hosts close and then play through one helper; the macOS
+            # OpenGL host tears down inline and plays through its own.
+            self.assertTrue(
+                "_close_then_exit_video" in text or "_play_exit_video_after_close" in text,
+                f"{name} has no close-then-play path",
+            )
             self.assertIn("video.finish()", text, name)
 
-    def test_the_movie_runs_before_the_window_is_destroyed(self):
+    def test_the_window_is_destroyed_before_the_movie_starts(self):
+        """Closing the player must disappear at once, not wait out the movie."""
         for name in ("MP_Audio_Player_Liquid_Glass_OpenGL.py", "MP_Audio_Player_Liquid_Glass.py"):
             text = (ROOT / name).read_text(encoding="utf-8")
-            fn = text.split("def _exit_video_then_close", 1)[1].split("\n    def ", 1)[0]
+            fn = text.split("def _close_then_exit_video", 1)[1].split("\n    def ", 1)[0]
             self.assertIn("video.start()", fn, name)
-            self.assertLess(fn.index("video.start()"), fn.index("self.close()"), name)
+            self.assertLess(fn.index("self.close()"), fn.index("video.start()"), name)
 
-    def test_the_host_keeps_drawing_while_the_movie_plays(self):
+    def test_the_macos_glass_host_tears_down_before_the_movie(self):
+        """The macOS host tears down inline, so the order is in its finally."""
+        text = (ROOT / "MP_Audio_Player_Liquid_Glass_macOS.py").read_text(encoding="utf-8")
+        fn = text.split("def _close_then_exit_video", 1)[1].split("\n    def ", 1)[0]
+        self.assertIn("video.start()", fn)
+        self.assertLess(fn.index("self.close("), fn.index("video.start()"))
+
+    def test_the_macos_opengl_host_tears_down_before_the_movie(self):
+        text = (ROOT / "MP_Audio_Player_Liquid_Glass_OpenGL_macOS.py").read_text(encoding="utf-8")
+        body = text.split("finally:", 1)[1].split("_play_exit_video_after_close()", 1)[0]
+        # Teardown is complete, including the renderer, before the movie runs.
+        self.assertIn("self.renderer.close()", body)
+        self.assertIn("self.renderer = None", body)
+        self.assertLess(body.index("self.renderer.close()"), len(body))
+
+    def test_no_host_pumps_its_own_frames_during_the_movie(self):
+        """The glass is gone by then, so nothing should be drawing a frame."""
         for name in HOSTS:
             text = (ROOT / name).read_text(encoding="utf-8")
-            self.assertIn("_pump_exit_frame", text, name)
-            self.assertIn("video.wait(", text, name)
+            fn = text.split("_close_then_exit_video", 1)[-1] if "def _close_then_exit_video" in text else ""
+            with self.subTest(host=name):
+                self.assertNotIn("_pump_exit_frame", text, name)
+                self.assertNotIn("video.wait(lambda", fn, name)
 
     def test_tracklist_and_embed_check_stay_silent(self):
         for name in HOSTS:
@@ -232,6 +256,45 @@ class TestExitVideoModule(LimiterCase):
         self.assertEqual(exit_video_mod.role_for_mode("MANAGER"), "gui")
         self.assertEqual(exit_video_mod.role_for_mode("NORMAL"), "player")
         self.assertEqual(exit_video_mod.role_for_mode(None), "player")
+
+    def test_the_movie_runs_without_a_host_pump(self):
+        """The window is already gone, so `wait()` must stand alone.
+
+        Passing a pump would draw frames for a destroyed window, so the hosts
+        call `video.wait()` with no argument. A movie that is still running
+        must then be waited on, and a finished one must return at once.
+        """
+        state = {"polls": 0}
+
+        class FakeProc:
+            pid = 888
+
+            def poll(self):
+                state["polls"] += 1
+                # Still running for two polls, then finished.
+                return None if state["polls"] < 3 else 0
+
+            def terminate(self):
+                pass
+
+            def wait(self, timeout=None):
+                return 0
+
+            def kill(self):
+                pass
+
+        def fake_popen(_argv, **_kwargs):
+            return FakeProc()
+
+        with patch.object(limiter, "process_table", return_value=[]), \
+             patch.object(limiter, "_pid_alive", return_value=True), \
+             patch.object(subprocess, "Popen", side_effect=fake_popen):
+            video = exit_video_mod.ExitVideo("NORMAL", timeout=20)
+            self.assertTrue(video.start())
+            video.wait()
+            video.finish()
+        # Three polls to see the movie finish, plus one from finish()/stop().
+        self.assertGreaterEqual(state["polls"], 3)
 
     def test_the_movie_is_launched_through_the_loader_script(self):
         calls = []

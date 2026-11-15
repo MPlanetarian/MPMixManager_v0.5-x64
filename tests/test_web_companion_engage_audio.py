@@ -237,11 +237,17 @@ class WebCompanionEngageAudioTest(unittest.TestCase):
             fh.write(body)
             tmp = fh.name
         try:
+            # The bundled sample's NITR metadata tag carries raw bytes that are
+            # not valid UTF-8, so a bare `text=True` raises UnicodeDecodeError
+            # while decoding the probe's own stderr. That is the harness
+            # falling over, not the stream: decode with replacement and keep
+            # reading the codec and volume lines, which are ASCII.
             probe = subprocess.run(
                 ["ffprobe", "-v", "error", "-show_entries",
                  "stream=codec_type,codec_name,duration",
                  "-of", "json", tmp],
-                capture_output=True, text=True, timeout=120, check=False)
+                capture_output=True, text=True, errors="replace",
+                timeout=120, check=False)
             self.assertEqual(probe.returncode, 0,
                              f"ffprobe rejected the served bytes: {probe.stderr[-500:]}")
             streams = json.loads(probe.stdout or "{}").get("streams") or []
@@ -254,7 +260,8 @@ class WebCompanionEngageAudioTest(unittest.TestCase):
             decode = subprocess.run(
                 ["ffmpeg", "-hide_banner", "-nostats", "-i", tmp,
                  "-map", "0:a:0", "-af", "volumedetect", "-f", "null", "-"],
-                capture_output=True, text=True, timeout=240, check=False)
+                capture_output=True, text=True, errors="replace",
+                timeout=240, check=False)
             err = decode.stderr or ""
             peak = re.search(r"max_volume:\s*(-?[\d.]+)\s*dB", err)
             mean = re.search(r"mean_volume:\s*(-?[\d.]+)\s*dB", err)
