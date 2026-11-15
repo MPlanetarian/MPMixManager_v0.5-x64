@@ -96,10 +96,12 @@ for _arg in "$@"; do
             echo "  --fresh                   Reinstall: preserve nothing"
             echo "  --yes, -y                 Reinstall: do not prompt; preserve all"
             echo "  --dry-run                 Reinstall: show what would change"
+            echo "  MP_INSTALL_ACCOMPANIMENT=0  Run in silence (no theme track, no exit movie)"
             echo "  -h, --help                Show this help"
             echo ""
             echo "Converted audio files are never deleted by a reinstall."
             echo "Run ./scripts/reinstall_mp_manager.sh --help for the full option list."
+            echo "Run ./uninstall.sh --help to reset or remove apps."
             exit 0
             ;;
         --install)
@@ -141,6 +143,75 @@ for _arg in "$@"; do
     esac
 done
 unset _arg _mp_skip_next 2>/dev/null || true
+
+# The theme track plays until this process exits. Exit_MP_Video.mp4 loops in
+# its own window for the same stretch, then the window is closed. The EXIT
+# trap is what makes a normal finish immediate. The watcher also stops on its
+# own if this process disappears without running the trap.
+# MP_INSTALL_ACCOMPANIMENT=0 leaves the run silent.
+MP_INSTALL_ACCOMPANIMENT_PID=""
+MP_INSTALL_ACCOMPANIMENT_PIDFILE=""
+
+mp_install_accompaniment_stop() {
+    local pid="${MP_INSTALL_ACCOMPANIMENT_PID:-}"
+    local pidfile="${MP_INSTALL_ACCOMPANIMENT_PIDFILE:-}"
+    local script="$SCRIPT_DIR/scripts/install_accompaniment.sh"
+    local i=0
+    if [ -n "$pid" ]; then
+        kill -TERM "$pid" 2>/dev/null || true
+        while [ "$i" -lt 20 ] && kill -0 "$pid" 2>/dev/null; do
+            sleep 0.05
+            i=$((i + 1))
+        done
+        kill -KILL "$pid" 2>/dev/null || true
+        wait "$pid" 2>/dev/null || true
+    fi
+    if [ -n "$pidfile" ] && [ -f "$script" ]; then
+        bash "$script" --stop "$pidfile" >/dev/null 2>&1 || true
+    fi
+    MP_INSTALL_ACCOMPANIMENT_PID=""
+    return 0
+}
+
+mp_install_accompaniment_abort() {
+    local code="$1"
+    trap - EXIT INT TERM HUP
+    mp_install_accompaniment_stop
+    exit "$code"
+}
+
+mp_install_accompaniment_start() {
+    case "${MP_INSTALL_ACCOMPANIMENT:-1}" in
+        0|false|no|off|never) return 0 ;;
+    esac
+    local script="$SCRIPT_DIR/scripts/install_accompaniment.sh"
+    [ -f "$script" ] || return 0
+    local theme="$SCRIPT_DIR/MP_SAMPLES/MPlanetarian - The Orbits of Planets (Cosmic Dreamworlds Remake).flac"
+    local movie="$SCRIPT_DIR/Exit_MP_Video.mp4"
+    if [ ! -f "$movie" ] && [ -f "$SCRIPT_DIR/assets/Exit_MP_Video.mp4" ]; then
+        movie="$SCRIPT_DIR/assets/Exit_MP_Video.mp4"
+    fi
+    if [ -f "$theme" ]; then
+        echo -e "${DIM}      • Theme track playing — it stops when the installer finishes${NC}"
+    fi
+    if [ -f "$movie" ]; then
+        echo -e "${DIM}      • Exit movie looping — the window closes when the installer finishes${NC}"
+    fi
+    MP_INSTALL_ACCOMPANIMENT_PIDFILE="${TMPDIR:-/tmp}/mp-install-accompaniment-$$.pid"
+    bash "$script" --watch "$$" --pidfile "$MP_INSTALL_ACCOMPANIMENT_PIDFILE" </dev/null >/dev/null 2>&1 &
+    MP_INSTALL_ACCOMPANIMENT_PID=$!
+    return 0
+}
+
+trap 'mp_install_accompaniment_stop' EXIT
+trap 'mp_install_accompaniment_abort 130' INT
+trap 'mp_install_accompaniment_abort 143' TERM
+trap 'mp_install_accompaniment_abort 129' HUP
+mp_install_accompaniment_start
+if [ "${MP_INSTALL_ACCOMPANIMENT_SELF_TEST:-0}" = "1" ]; then
+    sleep "${MP_INSTALL_ACCOMPANIMENT_SELF_TEST_SLEEP:-1}"
+    exit 0
+fi
 
 if [ "$REINSTALL" -eq 1 ]; then
     echo -e "${BOLD}${MAGENTA}================================================================================${NC}"
@@ -438,6 +509,18 @@ touch "$SCRIPT_DIR/COVERS/.gitkeep"
 touch "$SCRIPT_DIR/config_backups/.gitkeep"
 touch "$SCRIPT_DIR/exported_configs/.gitkeep"
 echo -e "${GREEN}      ✓ Archive, output, and log directories ready.${NC}"
+echo ""
+
+# 3b. Offer the manual before the long automatic phase
+#
+# Everything from here on is unattended: packages are fetched, Python modules
+# are installed, services are registered. That takes minutes on a slow link and
+# the user has nothing to do but wait. Offer the README now so they can read
+# what is being installed while it happens. On a TTY-only session the helper
+# prints the path instead of trying to open a window. It never fails the run.
+if [ -f "$SCRIPT_DIR/scripts/mp_show_readme.sh" ] && [ "${MP_DRY_RUN:-0}" != "1" ]; then
+    bash "$SCRIPT_DIR/scripts/mp_show_readme.sh" || true
+fi
 echo ""
 
 # 4. Check & Install Dependencies
@@ -1197,6 +1280,18 @@ echo ""
 echo -e "${DIM}Only the applications selected in step 9 have shortcuts and tray-menu${NC}"
 echo -e "${DIM}entries. Add the rest later with: ./install.sh --apps all${NC}"
 echo ""
+# Point at the manual here as well: someone who skipped the offer at step 3
+# still needs to know where it lives, and a TTY user has no window to open it in.
+if [ -f "$SCRIPT_DIR/README.md" ]; then
+    echo -e "Manual:"
+    echo -e "  ${BOLD}${CYAN}$SCRIPT_DIR/README.md${NC}"
+    if [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] && command -v xdg-open >/dev/null 2>&1; then
+        echo -e "  ${DIM}Read it now with: xdg-open \"$SCRIPT_DIR/README.md\"${NC}"
+    else
+        echo -e "  ${DIM}Read it now with: less \"$SCRIPT_DIR/README.md\"${NC}"
+    fi
+    echo ""
+fi
 if [ "$HOST_OS" != "windows" ] && [ "$HOST_OS" != "wsl" ] && [ "${MP_INSTALL_COMPANION:-auto}" != "never" ]; then
     echo -e "Studio & DJ Booth Web Companion (phone / tablet dashboard):"
     echo -e "  ${BOLD}${CYAN}http://<this-machine-ip>:8888${NC}  (scripts/mix_web_companion.sh status)"

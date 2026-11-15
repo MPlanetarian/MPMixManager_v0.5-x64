@@ -54,9 +54,24 @@ def requirements_names() -> list[str]:
     return names
 
 
+def _stdlib_names() -> set[str] | None:
+    """The standard library module names, or None when unknowable.
+
+    sys.stdlib_module_names arrived in 3.10. This suite also runs on the macOS
+    mini's 3.9, where a hand-written substitute invents false positives (it
+    flagged `piper`, a TTS engine name, as an import). Returning None lets the
+    caller skip the audit instead of reporting a wrong answer.
+    """
+    names = getattr(sys, "stdlib_module_names", None)
+    return set(names) if names is not None else None
+
+
 def imported_third_party_modules() -> set[str]:
     """Every top-level third-party module the shipped code imports."""
-    stdlib = set(sys.stdlib_module_names)
+    stdlib = _stdlib_names()
+    if stdlib is None:
+        # No authoritative list (Python < 3.10): the caller must skip.
+        return set()
     local = {p.stem for p in ROOT.glob("*.py")}
     local |= {p.stem for p in (ROOT / "scripts").glob("*.py")}
     local |= {p.stem for p in (ROOT / "scripts" / "lib").glob("*.py")}
@@ -140,7 +155,15 @@ class TestImportsAreDeclared(unittest.TestCase):
 
         This is what catches "Error: numpy is required" on a fresh machine: a new
         import added to the code without a matching SPECS entry.
+
+        Needs `sys.stdlib_module_names` (Python 3.10+). On the macOS mini's 3.9
+        there is no authoritative stdlib list, and a hand-written substitute
+        invents false positives (it flagged `piper`, a voice *engine* name, as
+        an import). Skipping is honest; the dependency map is still covered by
+        the requirements and per-spec tests.
         """
+        if _stdlib_names() is None:
+            self.skipTest("needs sys.stdlib_module_names (Python 3.10+)")
         deps = load_deps_module()
         known = set()
         for spec in deps.SPECS:
@@ -159,6 +182,11 @@ class TestImportsAreDeclared(unittest.TestCase):
             "torch", "cv2", "openai", "psycopg2", "dbus", "cairo",
             "prompt_toolkit", "filling", "shared", "mplanetarian",
             "the", "traktor",
+            # Piper is the local neural TTS engine behind the spoken reports and
+            # the Infinite Talker. Every call site is `from piper import ...`
+            # inside a try/except that falls back to the macOS `say` voice, so
+            # it is a genuine optional import with no installer entry.
+            "piper",
         }
         offenders = []
         for name in sorted(imported_third_party_modules()):
@@ -205,7 +233,7 @@ class TestDependencyEngine(unittest.TestCase):
         self.assertEqual(result.returncode, 0 if data["ok"] else 1)
 
     def test_a_probe_does_not_import_heavy_optional_packages(self):
-        """Probing must stay fast: it uses find_spec, not import.
+        """Probing must stay fast: optional modules use find_spec, not import.
 
         Importing ultralytics pulls in PyTorch and took over 2 seconds, which
         made the installer feel broken on a machine that has it installed.
@@ -213,7 +241,52 @@ class TestDependencyEngine(unittest.TestCase):
         source = DEPS.read_text(encoding="utf-8")
         probe_body = source.split("PROBE_CODE =", 1)[1].split('"""', 2)[1]
         self.assertIn("find_spec", probe_body)
-        self.assertNotIn("importlib.import_module(name)", probe_body)
+        # The optional branch returns before any import.
+        optional_branch = probe_body.split('if mode != "required":', 1)[1].split("continue", 1)[0]
+        self.assertNotIn("import_module", optional_branch)
+
+    def test_required_modules_are_really_imported(self):
+        """find_spec lies about a wheel that cannot be imported.
+
+        numpy 2.x ships an x86-64-v2 baseline, so on a Core 2 Duo
+        `import numpy` raises "your machine doesn't support X86_V2" while
+        find_spec reports it installed. The installer then reported 8/8
+        present and the player crashed at launch. Required modules must be
+        imported, so a broken build is reported as missing and the distro
+        package is offered instead.
+        """
+        source = DEPS.read_text(encoding="utf-8")
+        probe_body = source.split("PROBE_CODE =", 1)[1].split('"""', 2)[1]
+        required_branch = probe_body.split('if mode != "required":', 1)[1]
+        self.assertIn("import_module", required_branch)
+        # A failed import must be recorded as missing, not as present.
+        self.assertIn("except BaseException:", required_branch)
+
+    def test_probe_marks_an_unimportable_required_module_missing(self):
+        """The probe reports a hard dependency as absent when the import dies."""
+        deps = load_deps_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            fake = Path(tmp) / "mp_broken_probe_mod.py"
+            # find_spec finds the file; importing it raises.
+            fake.write_text("raise RuntimeError('unsupported CPU baseline')\n", encoding="utf-8")
+            # probe_modules starts a subprocess, so the directory has to be on
+            # the child's path.
+            old = os.environ.get("PYTHONPATH", "")
+            os.environ["PYTHONPATH"] = tmp + (os.pathsep + old if old else "")
+            try:
+                required_out = deps.probe_modules(
+                    sys.executable, ["mp_broken_probe_mod"], [], required=["mp_broken_probe_mod"]
+                )
+                optional_out = deps.probe_modules(
+                    sys.executable, ["mp_broken_probe_mod"], [], required=[]
+                )
+            finally:
+                if old:
+                    os.environ["PYTHONPATH"] = old
+                else:
+                    os.environ.pop("PYTHONPATH", None)
+            self.assertIs(required_out.get("mp_broken_probe_mod"), False)
+            self.assertIs(optional_out.get("mp_broken_probe_mod"), True)
 
     def test_every_binary_spec_has_a_package_for_each_manager_it_claims(self):
         deps = load_deps_module()
@@ -231,6 +304,46 @@ class TestDependencyEngine(unittest.TestCase):
         pygobject = next(s for s in deps.SPECS if s["id"] == "PyGObject")
         self.assertEqual(pygobject.get("pip", ""), "")
         self.assertIn("system", pygobject.get("note", "").lower())
+
+    def test_dylib_names_cover_the_macos_spelling(self):
+        """The GLFW spec is Linux-named; Homebrew ships a .dylib.
+
+        Probing `libglfw.so.3` on a Mac reported GLFW missing even though
+        `brew list glfw` was satisfied and /opt/homebrew/lib/libglfw.dylib was
+        right there, which failed the install on a correct machine.
+        """
+        deps = load_deps_module()
+        names = deps._dylib_names("libglfw.so.3")
+        self.assertIn("libglfw.dylib", names)
+        self.assertIn("libglfw.3.dylib", names)
+        self.assertIn("libglfw.so.3", names)
+        # A .so must never survive as part of the stem ("libglfw.so.dylib").
+        self.assertNotIn("libglfw.so.dylib", names)
+        # The reverse direction has to reach the Linux spelling as well; without
+        # a version in the input it can only produce the unversioned name.
+        self.assertIn("libglfw.so", deps._dylib_names("libglfw.dylib"))
+
+    def test_windows_library_lookup_knows_glfw3_dll(self):
+        """The PyPI glfw package ships glfw3.dll, not glfw.dll."""
+        source = DEPS.read_text(encoding="utf-8")
+        windows_fn = source.split("def _which_windows_library", 1)[1].split("\ndef ", 1)[0]
+        self.assertIn('f"{stem}.dll"', windows_fn)
+        self.assertIn("site-packages", source)
+        # `lib` prefix is stripped, because Windows has no libglfw.
+        self.assertIn('startswith("lib")', windows_fn)
+
+    def test_brew_is_invoked_by_its_resolved_path(self):
+        """A bare `brew` failed on a Mac where brew was installed.
+
+        which_binary deliberately searches /opt/homebrew/bin because a bare SSH
+        session has a minimal PATH, but install_command returned the bare word
+        and the run died with FileNotFoundError: 'brew'.
+        """
+        deps = load_deps_module()
+        command = deps.install_command("brew", ["glfw"])
+        self.assertEqual(command[0], deps.which_binary("brew") or "brew")
+        self.assertIn("install", command)
+        self.assertIn("glfw", command)
 
     def test_windows_venv_is_inside_the_install_tree(self):
         """scripts/windows_find_python.cmd checks <install>/venv first."""
@@ -304,6 +417,47 @@ class TestInstallerWiring(unittest.TestCase):
         result = subprocess.run(["bash", "-n", str(INSTALL)], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_installer_picks_the_visualizer_backend(self):
+        """A fresh install must choose Vulkan on NVIDIA and OpenGL otherwise."""
+        self.assertIn("scripts/visualizer_backend.py", self.text)
+        self.assertIn("--recommend-backend", self.text)
+        self.assertIn("--apply-config", self.text)
+        self.assertIn("LIQUID_GLASS_BACKEND", self.text)
+
+    def test_installer_can_be_forced_onto_a_backend(self):
+        self.assertIn("MP_VISUALIZER_BACKEND", self.text)
+
+    def test_installer_installs_the_companion_service(self):
+        """A plain ./install.sh must leave the Web Companion running.
+
+        The service used to be a manual step (`mix_web_companion.sh install`),
+        so a fresh install had desktop shortcuts but no phone dashboard and no
+        autostart after a reboot.
+        """
+        self.assertIn("mix_web_companion.sh", self.text)
+        self.assertIn("MP_INSTALL_COMPANION", self.text)
+        # The wrapper owns the platform service definitions, so the installer
+        # must call it rather than writing a unit of its own.
+        self.assertIn('bash "$MP_COMPANION_SCRIPT" install', self.text)
+        self.assertNotIn("WantedBy=default.target", self.text,
+                         "the installer must not duplicate the unit the wrapper writes")
+        self.assertNotIn("~/.config/systemd/user", self.text,
+                         "the installer must not write the unit path itself")
+
+    def test_installer_companion_step_can_be_disabled(self):
+        """Headless images and kiosks need a way to opt out."""
+        self.assertIn('MP_COMPANION_CHOICE" = "never"', self.text)
+
+    def test_installer_companion_step_skips_windows(self):
+        """Windows has no systemd/launchd user service for the companion."""
+        marker = self.text.index("MP_COMPANION_CHOICE")
+        windows = self.text.index('"$HOST_OS" = "windows"', marker)
+        installer_call = self.text.index('bash "$MP_COMPANION_SCRIPT" install', marker)
+        self.assertLess(windows, installer_call)
+
+    def test_installer_companion_step_reports_the_lan_dashboard(self):
+        self.assertIn("port 8888", self.text)
+
 
 @unittest.skipUnless(
     os.environ.get("MP_RUN_SLOW_INSTALLER_TESTS") == "1",
@@ -343,6 +497,7 @@ class TestInstallerRunsInATempHome(unittest.TestCase):
             "PATH": "/usr/bin:/bin:/usr/local/bin",
             "MP_INSTALL_PYTHON": "never",
             "MP_INSTALL_DEV_DEPS": "never",
+            "MP_INSTALL_ACCOMPANIMENT": "0",
             "TERM": "dumb",
         }
         cls.result = subprocess.run(

@@ -60,6 +60,8 @@ Cover_old.png
 *.mp4
 !MP_loader.mp4
 !assets/MP_loader.mp4
+!Exit_MP_Video.mp4
+!assets/Exit_MP_Video.mp4
 *.mkv
 *.avi
 *.mov
@@ -110,8 +112,6 @@ logs/*
 
 WAN2GP_Monitor_Log.txt
 MP_MIX_MANAGER_INSTALLERS/
-MP_MIX_MANAGER_INSTALLERS/
-MP_MIX_MANAGER_INSTALLERS/
 
 # Stray scratch files from local test/generation runs.
 # Seen in the repo root as bare numeric filenames (81, 143, 268, ...) plus an
@@ -142,6 +142,26 @@ REPORTS/*/
 !REPORTS/MONTHLY_REPORTS/
 !REPORTS/YEARLY_REPORTS/
 
+# MP Auto Tester output: per-host trees pushed to test machines, and the
+# screenshot archive when a run is pointed inside the checkout (the default is
+# ~/MP_TESTER_MIX_MANAGER_SCREENSHOTS, outside the tree).
+MP_AUTO_TESTER_TREE/
+deploy-*.tar.gz
+MP_TESTER_MIX_MANAGER_SCREENSHOTS/
+test-evidence/
+
+# MP_Auto_Tester_Flash.sh is an INTERNAL DREAMWORLDS PRODUCTIONS DEV UTILITY.
+# It is deliberately not published: it contains this studio's private test-bed
+# topology (LAN addresses for the Mac mini / Fedora workstation, the Windows 11
+# and FreeBSD VM paths and VNC endpoints, and the SMB/VM credentials used to
+# drive them). Those are internal infrastructure details, not something a user
+# of MP Mix Manager should receive. Keep the file in the working tree; never
+# commit it.
+#
+# The report builder, the MP Reporter bridge and the Windows agent stay tracked
+# because they are shipped and user-facing; only the controller is internal.
+/MP_Auto_Tester_Flash.sh
+
 # Scratch files that were tracked by accident. Named explicitly because the
 # numeric-only rules above missed them (all four are 7 bytes of "PNGDATA").
 /status
@@ -157,5 +177,24 @@ REPORTS/*/
 /MP_Error.log
 
 # Large sample media belongs in Git LFS or a release asset, not a blob.
+#
+# The exception below is deliberate and load-bearing: the bundled sample track is
+# committed (and already on GitHub), and tests/test_first_run_sample_track.py
+# asserts it is present and over 50 MB. Ignoring new media files while keeping
+# this one tracked matches what the repo actually needs, and a fresh clone's
+# tests keep passing. Moving it to LFS or a release asset is a separate change
+# that has to rewrite history.
+#
+# The bundled track ships as a 16-bit FLAC (63.5 MB). The 24-bit WAV master is
+# 242 MB and GitHub rejects any single file over 100 MB, so the WAV is never
+# committed: it is the mastering source, not a release artifact.
+MP_SAMPLES/*.wav
 MP_SAMPLES/*.flac
+!MP_SAMPLES/MPlanetarian - The Orbits of Planets (Cosmic Dreamworlds Remake).flac
+
+# Review packets are sign-off artifacts for a single piece of work, not shipped
+# documentation. They embed a full copy of a branch's diff, so committing one
+# publishes a stale duplicate of code that already lives in the tree. Keep the
+# file beside the checkout; it is never a release artifact.
+/PI_REVIEW_PACKET.md
 

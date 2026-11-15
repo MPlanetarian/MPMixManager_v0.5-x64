@@ -28,9 +28,15 @@ _mp_python_works() {
 _mp_python_can_import() {
     local bin="$1"
     shift
-    _mp_python_works "$bin" || return 1
+    [ -n "$bin" ] || return 1
+    _mp_python_is_stub "$bin" && return 1
+    if [ ! -f "$bin" ] && [ ! -x "$bin" ]; then
+        return 1
+    fi
     "$bin" - "$@" >/dev/null 2>&1 <<'PY'
 import importlib, sys
+if sys.version_info < (3, 8):
+    sys.exit(1)
 for name in sys.argv[1:]:
     importlib.import_module(name)
 PY

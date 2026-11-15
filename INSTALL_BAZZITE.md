@@ -160,6 +160,25 @@ chmod +x install.sh
    - `~/manager.sh` (Home directory direct launcher)
 5. **Desktop Entry**: Installs `Mix_Archive_Manager.desktop` into `~/.local/share/applications/` and onto your Desktop.
 6. **System tray**: Enables KDE StatusNotifierWatcher, writes `~/.config/autostart/mp-mix-manager-tray.desktop`, and starts the shared MP Mix Manager tray icon.
+7. **Visualizer backend**: Picks the MP Visualizer renderer for this machine.
+   An NVIDIA GPU that advertises a working Vulkan device gets **Vulkan**;
+   everything else gets **OpenGL**. The answer is written to
+   `LIQUID_GLASS_BACKEND` in `config.env` (and in
+   `~/.config/mix-manager/config.env` when that file exists), so the player and
+   the standalone visualizer agree. A backend you already set is left alone.
+
+   Override the detection when you want a specific one:
+
+   ```bash
+   MP_VISUALIZER_BACKEND=opengl ./install.sh
+   MP_VISUALIZER_BACKEND=vulkan ./install.sh
+   ```
+
+   Check what this machine would get without installing anything:
+
+   ```bash
+   python3 scripts/visualizer_backend.py --devices
+   ```
 
 ### Reinstalling / Resetting to a First Install
 

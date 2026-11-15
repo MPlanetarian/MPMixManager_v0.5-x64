@@ -1,5 +1,5 @@
 # ==============================================================================
-# MP Mix Manager v0.5.0 — Python runtime dependencies
+# MP Mix Manager v0.5.3 — Python runtime dependencies
 # ==============================================================================
 # scripts/mp_dependencies.py reads this list, compares it with what the current
 # interpreter can import, and installs whatever is missing (into the per-user
@@ -17,6 +17,14 @@ Pillow>=10.0.0
 sounddevice>=0.4.6
 PyOpenGL>=3.1.6
 
+# GLFW creates the OpenGL window and context for MP Gui, the Liquid Player and
+# the Visualizer. It is loaded through ctypes, so it is a system library, not a
+# Python import: install libglfw3 (Debian/Ubuntu/Raspberry Pi OS), glfw (Fedora,
+# Arch), glfw-devel (openSUSE) or `brew install glfw` (macOS). The pip wheel is
+# a fallback for images without a system package; mp_dependencies.py prefers
+# the system one. Listed here so a manual `pip install -r` still works.
+glfw>=2.6.0
+
 # Optional: powers a secondary feature. mp_dependencies.py reports these and
 # installs them with --optional. The application degrades gracefully without
 # them; each line names the feature it enables.
@@ -27,7 +35,6 @@ reportlab>=4.0         # PDF reports and the printed manual
 matplotlib>=3.7        # charts inside generated reports
 mutagen>=1.46          # metadata tagging when metaflac is absent
 pypdf>=3.9             # PDF merge for scheduled email reports (menu 28)
-yt-dlp>=2024.1.0       # YouTube channel downloads (menu 22)
 
 # The shared tray icon is a PySide6 widget. Linux distros package it as
 # python3-pyside6; pip is the fallback.

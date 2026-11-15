@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **A Bluetooth headset's play button started a video instead of pausing the music** (`scripts/mp_mpris.py`, `MP_Audio_Player.py`, `MP_Audio_Player_Liquid_Glass.py`, `MP_Audio_Player_Liquid_Glass_OpenGL.py`, `tests/test_mpris_headset_keys.py`):
+  - **Symptom.** With the Skullcandy Crusher ANC 2 (and the same for any other Bluetooth headphones) the physical play/pause button did not pause MP Liquid Player. A video started instead, and the mix kept playing.
+  - **Why.** The button arrives as a media key. Plasma gives that key to whichever app registered as a media player. MP Liquid Player never registered, so the press went to a video player or the browser.
+  - **What changed.** The audio daemon now publishes itself as **MP Liquid Player** on the desktop media bus. Play, Pause, Play/Pause, Next, Previous and Stop from the headset run on the mix. The Crusher sends Play for that button even while the mix is already playing, so Play pauses in that case. A video address is refused, so the button cannot open one. A press that arrives twice (the key, then the Bluetooth bridge) changes playback once. Reopen MP Liquid Player so the running daemon picks this up.
+
 ### Removed
 - **The console size lock (the "Oversized or Undersized Window Detected" screen) is gone** (`Mix_Archive_Manager.sh`, `tests/test_console_zoom_guard.py`):
   - **What changed.** The whole guard is deleted: the black full-screen warning, the 90 x 26 to 157 x 44 limit check, the `MP_CONSOLE_ZOOM_*` settings, `MP_CONSOLE_ZOOM_GUARD`, `MP_CONSOLE_ZOOM_CLAMP`, the Konsole black colour scheme it pushed, and the ydotool key injection that tried to zoom the window back. `mp_console_zoom_hold`, `mp_console_zoom_after_menu` and `mp_console_zoom_classify` no longer exist, so nothing pauses the menu or blocks a resize.
@@ -22,6 +28,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Every surface follows.** `--bass-mode` rejects anything outside the three modes, `--list-bass-modes` prints three rows ending at **66.7 %**, and the dial's chip is now cyan, green and amber with no red. The `b` / `B` key and the clickable button step three positions and wrap back to `Normal`.
 
 ### Changed
+- **High on the Crusher Bass Boost dial is a quarter less powerful** (`MP_Audio_Player.py`, `tests/test_bass_boost.py`, `README.md`):
+  - **What changed.** `High` keeps its place on the dial (⅔ of the Crusher curve, after the shared -3 dB trim) and then gives up another quarter of its acoustic power. The peak moves from **+13.7 dB** to **+12.4 dB at 45 Hz**. `Medium` stays at **+5.3 dB** and `Normal` stays a bypass.
+  - **How it is implemented.** `BASS_BOOST_HIGH_EXTRA_TRIM_DB` (1.2494 dB, which is `10·log10(4/3)`) is applied only when `bass_mode_peak_db("High")` runs, so the FIR, the engine status, the CLI and `--list-bass-modes` all show the quieter High. Measured on the designed FIR: 45 Hz +12.4 dB, 50 Hz +12.2 dB, 30 Hz +7.3 dB, 100 Hz +4.6 dB, 250 Hz +0.1 dB, 1 kHz 0.0 dB. Against the previous High the power ratio is 0.75.
 - **The MP Liquid Player playlist footer sits one row lower** (`MP_Audio_Player.py`, `tests/test_liquid_glass_player_features.py`):
   - **What changed.** The `↑/↓: Scroll …` rule at the bottom of the playlist box — the footer line that starts with `Scroll` — now ends up one row further down in MP Liquid Player. The playlist body claims the row that was held back for it, so a 24-row glass window shows one more mix or track and the rule sits directly above the single blank row before the `Vol` status line, the same distance from the bottom as in the CLI player.
   - **Why.** MP Liquid used to reserve one row more than the CLI frame needed, which parked its footer a row higher and left one fewer track visible than the window could show. Navigator placement should not change between the two hosts.
