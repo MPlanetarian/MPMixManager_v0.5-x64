@@ -1,8 +1,32 @@
+> [!IMPORTANT]
+> ## 🎉 MP Mix Manager 0.5.3 Sensorium Update — Out Today
+>
+> Welcome to Dreamworlds Productions... I am delighted to announce that the MP Mix Manager 0.5.3 Sensorium Update is releasing today (15th of November 2026).
+>
+> We are excited to share the new features and send a warm welcome to our new users! macOS users can now enjoy a native Metal Liquid MP Visualizer experience (and it is very smooth!).
+>
+> Users on Windows have a brand new VR Mode, MP Liquid Player has been re-designed from the ground up with performance increases and UI redesigns, and the MP Mix Manager CLI Mode now supports triple monitors with 1 section of menu items on each monitor for easier operation and menu navigation.
+>
+> The MP Audio Player Web Companion also now integrates fully with the MP Harmony Agent, and Playlist now supports both Music and Mix mode and you can switch between them.
+>
+> MP Gui Player has new themes, and there are also several new 3D MP Visualizer themes for OpenGL/Vulkan/Metal. MPlanetarian wishes you a magical journey through sound and 3D with the new MP Mix Manager 0.5.3 (Sensorium).
+>
+> A new theme track (Orbits of Planets - Dreamworlds Remake) is also included from MPlanetarian's Cosmic Dreamworlds Ambient Trance Album as a Welcome Track to get you started before bringing your own Music or Mixes in to the MP Mix Archive Manager.
+>
+> Raspberry Pi users can now also use MP Mix Manager with full support enabled. Windows 11 machines have now also been fully tested with MP Mix Manager and passed all unit tests (1,500+). There is also a new Installer and Uninstaller along with an upgrade path for existing 0.4 users who run the command: `./Mix_Archive_Manager update`.
+>
+> Also there are now 4 new Desktop Shortcuts for MP Gui, MP Mix Manager, MP Liquid Player and MP Visualizer, along with a new System Tray Icon which enables the user to start or exit the applications for MP Mix Manager.
+>
+> Please see the rest of this page to discover even more new features — there are simply too many to list for a short introduction. There were also some demo and release previews published to YouTube as part of promotion for this special release.
+>
+> **- MPlanetarian (Dreamworlds Productions)**
+> **November 15th, 2026**
+
 # MP Mix Manager 0.5.3 Stable (Sensorium) by Dreamworlds Productions (MPlanetarian)
 
-> 📅 **Last Updated:** November 14, 2026 • **Latest Release:** `v0.5.3 Stable (Sensorium)` — released **November 14, 2026**
+> 📅 **Last Updated:** November 15, 2026 • **Latest Release:** `v0.5.3 Stable (Sensorium)` — released **November 15, 2026**
 
-[![Last Updated](https://img.shields.io/badge/Last%20Updated-November%2014%2C%202026-brightgreen.svg)]()
+[![Last Updated](https://img.shields.io/badge/Last%20Updated-November%2015%2C%202026-brightgreen.svg)]()
 [![Version](https://img.shields.io/badge/Version-0.5.3%20Stable%20(Sensorium)-f72585.svg)](VERSION)
 [![Liquid Glass Player](https://img.shields.io/badge/Liquid%20Glass%20Player-OpenGL%20%7C%20Vulkan%20%7C%20Metal-00f0ff.svg)](MP_Audio_Player_Liquid_Glass_OpenGL.py)
 [![MP Liquid Visualizer](https://img.shields.io/badge/MP%20Liquid%20Visualizer-Vulkan%20%7C%20OpenGL%203D%20Audio--Reactive-ff007f.svg)](MP_Liquid_Visualizer.py)
@@ -36,7 +60,7 @@ An enterprise-grade workstation orchestration console and media management suite
 
 > [!TIP]
 > ### 🌟 Welcome to MP Mix Manager v0.5.3 Stable (Sensorium)
-> **November 14, 2026. Welcome from MPlanetarian.** This is the stable Sensorium release, and the direct successor to **0.4.3 Stable (Liquid)**. Thank you for running MP Mix Manager, MP Gui, and the Liquid Transparent Audio Player. The manager, the Liquid Player, and the music library share one glass desktop, and the macOS build in this release is the one on this page.
+> **November 15, 2026. Welcome from MPlanetarian.** This is the stable Sensorium release, and the direct successor to **0.4.3 Stable (Liquid)**. Thank you for running MP Mix Manager, MP Gui, and the Liquid Transparent Audio Player. The manager, the Liquid Player, and the music library share one glass desktop, and the macOS build in this release is the one on this page.
 >
 > Sensorium 0.5.3 Release - Enjoy a Majical Journey through Music & Sound with the MP Visualizer (Included with MP Liquid Player) & the new MP Gui or you can use the MP Mix Manager CLI
 >
@@ -115,7 +139,7 @@ An enterprise-grade workstation orchestration console and media management suite
 ## 🚀 What's New in v0.5.3 Stable (Sensorium)
 
 > [!IMPORTANT]
-> **MP Mix Manager v0.5.3 Stable (Sensorium) — released November 14, 2026.** Sensorium carries every 0.4.3 feature forward and adds **Raspberry Pi support**, the **Crusher Bass Boost** dial, the **exit movie**, the **install-tree resolver** (shortcuts and launchers survive a moved or renamed folder), the **MP Assistant tab**, per-device **theme switching** and a **mini playlist** in the Web Companion, and a **pure HTTP stream** that never touches the host's audio device. It also closes the four wiring gaps 0.5.0 left open — **Hidden Mode**, **The Whitest White**, the **21-format conversion menu** and the **Traktor playlist import** — and adds the **MP Visualizer button**, **TTY lock-out**, **arrow-key preset stepping** and the **Dynamic Waves** preset pair. Everything on this page is wired to a menu, a key or a launcher; see [Closed gaps](#-closed-gaps--previously-in-the-tree-only) for what moved out of the old "not yet on a menu" list.
+> **MP Mix Manager v0.5.3 Stable (Sensorium) — released November 15, 2026.** Sensorium carries every 0.4.3 feature forward and adds **Raspberry Pi support**, the **Crusher Bass Boost** dial, the **exit movie**, the **install-tree resolver** (shortcuts and launchers survive a moved or renamed folder), the **MP Assistant tab**, per-device **theme switching** and a **mini playlist** in the Web Companion, and a **pure HTTP stream** that never touches the host's audio device. It also closes the four wiring gaps 0.5.0 left open — **Hidden Mode**, **The Whitest White**, the **21-format conversion menu** and the **Traktor playlist import** — and adds the **MP Visualizer button**, **TTY lock-out**, **arrow-key preset stepping** and the **Dynamic Waves** preset pair. Everything on this page is wired to a menu, a key or a launcher; see [Closed gaps](#-closed-gaps--previously-in-the-tree-only) for what moved out of the old "not yet on a menu" list.
 
 ### 🆕 New in v0.5.3
 
@@ -271,7 +295,7 @@ Your 0.4 folder is **never modified or deleted**. Converted audio is not moved. 
 | Feature | Where | What you can do |
 | :--- | :--- | :--- |
 | **MP Harmony AI Assistant** | First main-menu row **AI**, **Shift+A** | **Load MP Mix Manager AI Assistant (MP Harmony) (New)**. If Ollama is not answering, the manager asks before starting it. When a distrobox/podman container is present it asks for the container name (default `ollama-container`, or the Ollama container it detects); otherwise it uses the systemd user service or a plain `ollama serve`. Answering no returns straight to the menu. The assistant loads **gpt-oss-pinned:latest**, which is now the **NVIDIA Nemotron 3.5 Bolt E4B** build (8B total / 4B effective) sized to fit a 10 GB GPU such as the RTX 3080. The tag name is unchanged for compatibility; the agent translates turns for its chat template automatically. The previous 20.9B OpenAI gpt-oss weights remain available as **gpt-oss-20b-legacy:latest**. If the tag is missing, the manager describes it and asks before installing it. **Shift+A** on any menu opens the assistant. **Shift+A** on an empty assistant line returns to the manager. |
-| **Linux TTY Desktop Switcher** | Main menu **37**. Exit is **38**. | Linux only. The row is hidden on macOS, Windows, and FreeBSD. Choosing it from Plasma writes `~/.config/mix-manager/tty_audio_mode`, enables **MP Mix Manager TTY Audio Mode**, and drops to tty1. `scripts/mp_tty_kiosk.sh` installs `mp-mix-manager-tty.service`, which runs the manager on `/dev/tty1` and restarts it. Ctrl+Alt+F2 stays a login shell. Playback stays in the terminal player. Liquid Glass, MP Gui, the visualizer, and other desktop windows stay closed. The console is restored on the way out, including after a crash. Choosing it again from the TTY turns the mode off and returns to the Plasma login. Also: `tty`, `tty-mode`, `desktop-cli`. |
+| **Linux TTY Desktop Switcher** | Main menu **37**. Exit is **38**. | Linux only. The row is hidden on macOS, Windows, and FreeBSD. Choosing it from Plasma writes `~/.config/mix-manager/tty_audio_mode`, enables **MP Mix Manager TTY Audio Mode**, and drops to tty1. `scripts/mp_tty_kiosk.sh` installs `mp-mix-manager-tty.service`, which runs the manager on `/dev/tty1` and restarts it. Ctrl+Alt+F2 stays a login shell. Playback stays in the terminal player. Liquid Glass, MP Gui, the visualizer, and other desktop windows stay closed. The console is restored on the way out, including after a crash. Choosing it again from the TTY turns the mode off and returns to the Plasma login. Over SSH the row enables the mode for that login only: the flag file is not written, so the seated Plasma session and its login screen are left alone. Also: `tty`, `tty-mode`, `desktop-cli`. |
 | **Logic Pro library stays out of Music Folders** | Music Folders playlist refresh | The scan skips `Logic Pro Library.bundle`, so those WAV files are not added as tracks. |
 | **A zero-byte WAV does not stop the batch** | Main menu **4**, `Make_SOF_FLAC_CONVERSION.sh` | One empty WAV no longer stops the mixes that are still waiting. |
 
@@ -286,7 +310,7 @@ Your 0.4 folder is **never modified or deleted**. Converted audio is not moved. 
 | **`G` opens MP Gui from the Liquid Player** | Inside the Liquid Player, **`G`** opens MP Gui. In the terminal player, **`G`** still builds a Spek spectrogram. On macOS, and when a fullscreen Terminal is in front, MP Gui is raised. A player opened from MP Gui is raised the same way. |
 | **Menu selection** | The selected menu row uses the theme colour as text. The row background stays clear. The old yellow block and the ▶ ❯ marks are gone. The Favorites button is no longer painted as a yellow block above the playlist. |
 | **Dreamworlds console** | The MPlanetarian Dreamworlds CLI background is black. Each other theme still paints its own dark console pane. |
-| **Header session label** | A desktop Bash terminal shows **CLI Mode** on the right of the main header title. The Linux text console shows **TTY CLI Mode**. MP Gui shows neither. |
+| **Header session label** | A desktop Bash terminal shows **CLI Mode** on the right of the main header title. The Linux text console shows **TTY CLI Mode**. MP Gui shows neither. With **MP Mix Manager TTY Audio Mode** on, the label is **TTY CLI Mode** on any terminal that runs the manager — including an SSH session on a pts, where the device path alone would still say *CLI Mode*. |
 | **Panel edges** | The player header, the playlist corner, and the player panel edge use the theme border colour. Status lines and menu rows stop on the header border. The selection rule is the same length as the section line above it. A blank row sits between the playlist and the volume line. |
 
 ### Windows 10 and 11
