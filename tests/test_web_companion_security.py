@@ -79,7 +79,7 @@ class AllowlistAccessModelTest(unittest.TestCase):
         self.assertTrue(sec.is_allowed_client(("8.8.8.8", 1234), []))
 
     def test_a_configured_allowlist_rejects_an_outside_peer(self):
-        networks = sec.parse_cidr_list("192.168.1.0/24")
+        networks = sec.parse_cidr_list("192.0.2.0/24")
         self.assertFalse(sec.is_allowed_client(("10.0.0.5", 1), networks))
 
 
@@ -88,13 +88,13 @@ class CsrfTest(unittest.TestCase):
         self.assertEqual(sec.validate_mutation({}), "missing_csrf_header")
 
     def test_present_header_passes(self):
-        headers = {sec.REQUIRED_HEADER: "1", "Host": "192.168.1.5:8888"}
+        headers = {sec.REQUIRED_HEADER: "1", "Host": "192.0.2.5:8888"}
         self.assertIsNone(sec.validate_mutation(headers))
 
     def test_cross_origin_is_refused(self):
         headers = {
             sec.REQUIRED_HEADER: "1",
-            "Host": "192.168.1.5:8888",
+            "Host": "192.0.2.5:8888",
             "Origin": "http://evil.example",
         }
         self.assertEqual(sec.validate_mutation(headers), "cross_origin")
@@ -102,8 +102,8 @@ class CsrfTest(unittest.TestCase):
     def test_same_origin_is_accepted(self):
         headers = {
             sec.REQUIRED_HEADER: "1",
-            "Host": "192.168.1.5:8888",
-            "Origin": "http://192.168.1.5:8888",
+            "Host": "192.0.2.5:8888",
+            "Origin": "http://192.0.2.5:8888",
         }
         self.assertIsNone(sec.validate_mutation(headers))
 
@@ -165,16 +165,102 @@ class StreamContainmentTest(unittest.TestCase):
         self.assertIsNone(sec.safe_stream_path(path, []))
 
 
+class StreamRootsCoverEveryLibraryTest(unittest.TestCase):
+    """The stream allow-list must match the library the queue was built from.
+
+    Commit 5e90eb4 replaced the raw `os.path.isfile()` check with containment
+    against `_archive_dirs()` only. The queue, however, is built from the mix
+    archive, the configured music folders or Favorites depending on the active
+    mode, so in Music mode every listed track answered 404: the dashboard drew
+    a correct playlist and refused to play any of it.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.mwc = _load_companion()
+
+    def test_stream_roots_include_the_music_folders(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            music = Path(tmp) / "MUSIC001"
+            music.mkdir()
+            archive = Path(tmp) / "MIX_ARCHIVE"
+            archive.mkdir()
+
+            with mock.patch.object(self.mwc, "_archive_dirs", return_value=[archive]), \
+                    mock.patch.object(self.mwc, "music_folder_roots", return_value=[music]):
+                roots = self.mwc.stream_roots()
+
+            self.assertIn(archive, roots)
+            self.assertIn(music, roots)
+
+    def test_an_smb_mount_track_is_streamable(self):
+        """Playlist paths under ~/MUSIC_SMB must be inside the allow-list.
+
+        Local music folders are not the same thing as the SMB mounts. Leaving
+        the mount root out made every Music-mode tap answer 404.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            mount = Path(tmp) / "MUSIC_SMB"
+            track = mount / "MUSIC003" / "song.mp3"
+            track.parent.mkdir(parents=True)
+            track.write_bytes(b"\x00" * 64)
+            outside = Path(tmp) / "secret.mp3"
+            outside.write_bytes(b"\x00" * 64)
+
+            with mock.patch.object(self.mwc, "_archive_dirs", return_value=[]), \
+                    mock.patch.object(self.mwc, "music_folder_roots", return_value=[]), \
+                    mock.patch.object(self.mwc, "music_mount_roots", return_value=[mount]):
+                roots = self.mwc.stream_roots()
+
+            self.assertEqual(sec.safe_stream_path(track, roots), track.resolve())
+            self.assertIsNone(sec.safe_stream_path(outside, roots))
+
+    def test_a_music_track_is_streamable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            music = Path(tmp) / "MUSIC001"
+            music.mkdir()
+            track = music / "song.flac"
+            track.write_bytes(b"fLaC" + b"\0" * 2000)
+
+            with mock.patch.object(self.mwc, "_archive_dirs", return_value=[]), \
+                    mock.patch.object(self.mwc, "music_folder_roots", return_value=[music]):
+                roots = self.mwc.stream_roots()
+
+            self.assertEqual(sec.safe_stream_path(track, roots), track.resolve())
+
+    def test_containment_still_refuses_outside_every_root(self):
+        """Widening the allow-list must not reopen the arbitrary-file read."""
+        with tempfile.TemporaryDirectory() as tmp:
+            music = Path(tmp) / "MUSIC001"
+            music.mkdir()
+            secret = Path(tmp) / "config.env"
+            secret.write_text('SMTP_PASSWORD="x"\n', encoding="utf-8")
+
+            with mock.patch.object(self.mwc, "_archive_dirs", return_value=[]), \
+                    mock.patch.object(self.mwc, "music_folder_roots", return_value=[music]):
+                roots = self.mwc.stream_roots()
+
+            self.assertIsNone(sec.safe_stream_path(secret, roots))
+            self.assertIsNone(sec.safe_stream_path("/etc/passwd", roots))
+
+    def test_stream_handler_uses_the_combined_roots(self):
+        """Guard the call site: passing `_archive_dirs()` again would regress."""
+        source = Path(self.mwc.__file__).read_text(encoding="utf-8")
+        handler = source.split('url.path == "/api/stream"', 1)[1].split("else:", 1)[0]
+        self.assertIn("stream_roots()", handler)
+        self.assertNotIn("_archive_dirs()", handler)
+
+
 class AllowlistTest(unittest.TestCase):
     def test_empty_list_allows_everyone(self):
         self.assertTrue(sec.is_allowed_client(("8.8.8.8", 1234), []))
 
     def test_listed_network_allows(self):
-        networks = sec.parse_cidr_list("192.168.1.0/24")
-        self.assertTrue(sec.is_allowed_client(("192.168.1.42", 1), networks))
+        networks = sec.parse_cidr_list("192.0.2.0/24")
+        self.assertTrue(sec.is_allowed_client(("192.0.2.42", 1), networks))
 
     def test_unlisted_network_refuses(self):
-        networks = sec.parse_cidr_list("192.168.1.0/24")
+        networks = sec.parse_cidr_list("192.0.2.0/24")
         self.assertFalse(sec.is_allowed_client(("10.0.0.5", 1), networks))
 
     def test_ipv4_mapped_ipv6_is_unwrapped(self):
@@ -419,7 +505,7 @@ class ResponseFramingTest(unittest.TestCase):
         mwc = self.mwc
         saved = mwc.COMPANION_CIDRS
         mwc.COMPANION_CIDRS = sec.parse_cidr_list("10.99.0.0/24")
-        self.handler.client_address = ("192.168.1.50", 1234)
+        self.handler.client_address = ("198.51.100.50", 1234)
         try:
             self.assertFalse(self.handler._client_allowed())
         finally:

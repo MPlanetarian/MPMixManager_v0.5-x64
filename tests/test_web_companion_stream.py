@@ -181,6 +181,121 @@ class Skip30SecondsTest(unittest.TestCase):
         self.assertIn("'seek_forward'", self.html)
         self.assertIn("'seek_backward'", self.html)
 
+    def test_every_skip_reaches_the_host_player(self):
+        """A mirrored phone moved only its silent element, never the sound.
+
+        With a desktop player on air the phone's <audio> element is paused on
+        purpose, so seeking it produced no audible change and the buttons read
+        as dead. The seek must always be forwarded to the server, which owns
+        the resume point and relays the command to the player.
+        """
+        fn = self.html[self.html.index("function skipBy(delta)"):]
+        fn = fn[: fn.index("function seekAudioToWithResume")]
+        self.assertIn("sendAction(delta > 0 ? 'seek_forward' : 'seek_backward')", fn)
+        # The forward must not sit behind an early return for the loaded case.
+        self.assertNotIn("return;\n            }\n            target =", fn)
+
+    def test_an_engaged_page_seeks_itself_to_an_absolute_position(self):
+        """The 30s buttons must move the mix this page is playing.
+
+        A relative seek against a session clock parked at zero jumped the
+        browser back to the start, or moved only the desk player, so the
+        arrows looked dead.
+        """
+        fn = self.html[self.html.index("function skipBy(delta)"):]
+        fn = fn[: fn.index("function seekAudioToWithResume")]
+        self.assertIn("sendAction('seek_to'", fn)
+        self.assertIn("phoneOwnsPlayback()", fn)
+
+    def test_skip_uses_the_seekable_range_when_duration_is_unknown(self):
+        # A live stream reports duration Infinity, which used to park every
+        # press in the pending-seek branch and move nothing.
+        self.assertIn("function audioTimelineEnd(audioEl)", self.html)
+        self.assertIn("audioEl.seekable.end", self.html)
+
+    def test_skip_does_not_strand_a_pending_seek(self):
+        # Parking an offset without applying it meant the next press only
+        # updated the same parked number and the mix never moved.
+        fn = self.html[self.html.index("function skipBy(delta)"):]
+        fn = fn[: fn.index("function seekAudioToWithResume")]
+        self.assertIn("applyPendingSeek()", fn)
+
+    def test_running_off_the_end_of_a_mix_keeps_playing(self):
+        """+30 from the tail advances the queue, so the next mix must not stall.
+
+        The element has already flipped to `ended` when the server names the
+        following file, so a plain audioElIsPlaying() check reported "not
+        playing" and the new mix loaded paused - the button looked like it had
+        stopped the music.
+        """
+        fn = self.html[self.html.index("const prevEl ="):]
+        fn = fn[: fn.index("activeAudioFile = data.active_file")]
+        self.assertIn("prevEl.ended", fn)
+
+
+class PlayPauseIconTest(unittest.TestCase):
+    """The transport glyph names the next action and follows real playback.
+
+    Playing shows Pause, because the tap will pause. Paused or stopped shows
+    Play, because the tap will play. The label used to be painted from the
+    daemon's `state`, so a pause on the phone (screen lock, a call, unplugged
+    headphones) left it on Pause while the room was silent.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.html = mwc.render_html_page(mwc.get_theme_palette(None))
+
+    def test_the_button_starts_on_the_play_glyph(self):
+        self.assertIn('id="btnPlayPause"', self.html)
+        start = self.html.index('id="btnPlayPause"')
+        marker = self.html[start: self.html.index("</button>", start)]
+        self.assertIn("▶ Play", marker)
+        self.assertNotIn("⏸ Pause", marker)
+
+    def test_the_label_is_derived_from_media_events(self):
+        self.assertIn("function paintPlayPauseButton(playing)", self.html)
+        for event in ("'play'", "'pause'", "'playing'", "'ended'"):
+            self.assertIn(
+                f"audioEl.addEventListener({event}, () => syncPlayPauseButton())",
+                self.html,
+            )
+
+    def test_playing_shows_pause_and_paused_shows_play(self):
+        fn = self.html[self.html.index("function paintPlayPauseButton"):]
+        fn = fn[: fn.index("function phoneOwnsPlayback")]
+        playing_branch, paused_branch = fn.split("} else {", 1)
+        self.assertIn("⏸ Pause", playing_branch)
+        self.assertNotIn("▶ Play", playing_branch)
+        self.assertIn("▶ Play", paused_branch)
+        self.assertNotIn("⏸ Pause", paused_branch)
+
+    def test_a_desktop_player_still_drives_the_icon(self):
+        # In host-mirror mode the phone element is deliberately idle, so the
+        # daemon state is the only truth available.
+        self.assertIn("function syncPlayPauseButton(serverState)", self.html)
+        self.assertIn("lastServerState", self.html)
+
+    def test_the_tap_is_forwarded_while_the_desktop_owns_audio(self):
+        fn = self.html[self.html.index("function handlePlayPauseClick()"):]
+        head = fn.split("if (audioEl) {", 1)[0]
+        self.assertIn("phoneOwnsPlayback()", head)
+        self.assertIn("sendAction('play-pause')", head)
+
+    def test_an_engaged_page_sends_play_and_pause_not_a_toggle(self):
+        fn = self.html[self.html.index("function handlePlayPauseClick()"):]
+        fn = fn[: fn.index("function animLoop")]
+        self.assertIn("listenerPaused = true", fn)
+        self.assertIn("sendAction('pause')", fn)
+        self.assertIn("sendAction('play')", fn)
+
+    def test_engaged_transport_targets_the_web_stream(self):
+        self.assertIn("target: 'stream'", self.html)
+        self.assertIn("follow=stream", self.html)
+        self.assertIn("action=adopt_host", self.html)
+        self.assertIn("function resumeAfterNetworkDrop()", self.html)
+        self.assertIn("audioStreamEngaged && activeAudioFile", self.html)
+
 
 class ThemeAndPlaylistUiTest(unittest.TestCase):
     @classmethod
@@ -216,6 +331,79 @@ class ThemeAndPlaylistUiTest(unittest.TestCase):
     def test_mini_playlist_entries_are_selectable(self):
         self.assertIn("select_index", self.html)
         self.assertIn("sendAction('select_index'", self.html)
+
+
+class PhoneEqualiserTest(unittest.TestCase):
+    """The iPhone equaliser reads the element, and a press opens the spectrogram.
+
+    /api/eq answers a phone stream with 24 zeros. Copying those into the bars
+    froze the equaliser while the mix played. Percentage heights inside the
+    flex row also do not resolve on iOS, so a bar that did change level still
+    did not change size.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.html = mwc.render_html_page(mwc.get_theme_palette(None))
+
+    def test_a_press_switches_to_the_dynamic_spectrogram(self):
+        self.assertIn('id="visContainer"', self.html)
+        self.assertIn('onclick="toggleVisualizerMode(event)"', self.html)
+        self.assertIn('id="visSpectrogram"', self.html)
+        self.assertIn("Stream of Frequency (Dynamic Spectrogram)", self.html)
+        self.assertIn("function toggleVisualizerMode", self.html)
+        self.assertIn("function applyVisualizerMode", self.html)
+        self.assertIn("vizMode === 'spectrogram' ? 'bars' : 'spectrogram'", self.html)
+        self.assertIn("mode-spectrogram", self.html)
+        self.assertIn("touch-action: manipulation", self.html)
+        self.assertIn("ontouchend=\"toggleVisualizerMode(event)\"", self.html)
+        canvas = self.html[self.html.index("#visSpectrogram"):]
+        canvas = canvas[:canvas.index(".v-col")]
+        self.assertIn("pointer-events: none", canvas)
+
+    def test_only_two_effects_can_be_selected(self):
+        self.assertIn('id="vizEffectBars"', self.html)
+        self.assertIn('id="vizEffectSpectro"', self.html)
+        self.assertEqual(self.html.count("selectVisualizerMode(event, 'bars')"), 2)
+        self.assertEqual(self.html.count("selectVisualizerMode(event, 'spectrogram')"), 2)
+        self.assertIn("function selectVisualizerMode", self.html)
+        self.assertIn("if (mode !== 'bars' && mode !== 'spectrogram') return;", self.html)
+        self.assertNotIn("selectVisualizerMode(event, 'liquid')", self.html)
+
+    def test_bars_follow_the_phone_element_in_pixels(self):
+        self.assertIn("function ensureAudioGraph", self.html)
+        self.assertIn("createMediaElementSource", self.html)
+        self.assertIn("getByteFrequencyData", self.html)
+        self.assertIn("createScriptProcessor", self.html)
+        self.assertIn("bar.style.height = barPx + 'px'", self.html)
+        self.assertNotIn("bar.style.height = barPct + '%'", self.html)
+        fn = self.html[self.html.index("async function fetchEq"):]
+        fn = fn[:fn.index("function streamUnavailableDetail")]
+        self.assertIn("if (!phoneIsAudible())", fn)
+        self.assertIn("phoneIsAudible", fn)
+
+    def test_engage_seeks_to_the_live_desk_position(self):
+        """A desk player already in the mix must not start the phone at 0.
+
+        The element is often already pointed at the file by the time Engage
+        runs. Seeking only when src was assigned left play() at the old
+        offset, so the web stream and MP Liquid / the CLI disagreed.
+        """
+        fn = self.html[self.html.index("function engageStreamFromServer"):]
+        fn = fn[:fn.index("function handleUnplayableMix")]
+        self.assertIn("liveHostPosition()", fn)
+        self.assertIn("alignPlaybackTo(startAt, hostPlayerActive)", fn)
+        self.assertNotIn("if (mustBind && isFinite(startAt)", fn)
+        self.assertIn("function alignPlaybackTo(pos, fromHost)", self.html)
+        self.assertIn("hostAlignTarget", self.html)
+
+    def test_the_audio_graph_is_opened_inside_the_engage_tap(self):
+        fn = self.html[self.html.index("function activateMobileStream"):]
+        fn = fn[:fn.index("function unlockStreamElement")]
+        self.assertIn("unlockAudioContext()", fn)
+        engage = self.html[self.html.index("function engageStreamFromServer"):]
+        engage = engage[:engage.index("function handleUnplayableMix")]
+        self.assertIn("ensureAudioGraph()", engage)
 
 
 if __name__ == "__main__":

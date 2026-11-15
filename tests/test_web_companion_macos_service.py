@@ -74,6 +74,68 @@ class TestBundleLauncher(unittest.TestCase):
         self.assertIn("compile_bundle_launcher()", self.text)
         self.assertIn("compile_bundle_launcher \"$bundle\" \"$macos_dir/mp-web-companion\"", self.text)
 
+    def test_the_bundle_is_sealed_after_every_resource_is_written(self):
+        """A file written after codesign breaks the seal TCC compares against.
+
+        The installed bundle had Contents/Resources/install_dir added *after*
+        signing, so `codesign --verify` reported "a sealed resource is missing
+        or invalid". macOS then stopped applying a Full Disk Access grant that
+        was still ticked in System Settings, and the archive scan returned
+        nothing.
+        """
+        self.assertIn("seal_bundle()", self.text)
+        writer = self.text[self.text.index("write_launchd_plist()") :]
+        writer = writer[: writer.index("write_service()")]
+        # install_dir is written before the seal, and sealing comes last.
+        self.assertLess(
+            writer.index('Contents/Resources/install_dir"'),
+            writer.index("seal_bundle \"$bundle\""),
+            "install_dir must be written before the bundle is sealed",
+        )
+        # Nothing in the bundle may be written after sealing: that is the bug.
+        after_seal = writer.split("seal_bundle \"$bundle\"", 1)[1]
+        # Only the plist write follows, and it lives outside the bundle.
+        self.assertNotIn('>"$bundle/Contents', after_seal)
+        self.assertNotIn('"$bundle/Contents/Resources/install_dir" >', after_seal)
+
+    def test_the_seal_requirement_is_stable_across_rebuilds(self):
+        """Ad-hoc signing without -r derives a cdhash requirement per build.
+
+        TCC records the requirement it approved, so a rebuild produced a new
+        one and the existing grant never matched again.
+        """
+        fn = self.text[self.text.index("seal_bundle()") :]
+        fn = fn[: fn.index("build_bundle_icon()")]
+        self.assertIn('designated => identifier', fn)
+        self.assertIn("--force --sign -", fn)
+        # A failed seal must be reported, not swallowed by `|| true` alone.
+        self.assertIn("codesign --verify --strict", fn)
+
+    def test_a_broken_seal_is_repaired_on_start(self):
+        """A damaged seal survived reinstall, so `start` has to fix it."""
+        start = self.text[self.text.index("start_service() {") :]
+        start = start[: start.index("\nstop_service")]
+        self.assertIn("codesign --verify --strict", start)
+        self.assertIn("seal_bundle", start)
+
+    def test_an_unresolvable_libpython_is_not_baked_into_the_launcher(self):
+        """`dlopen("")` silently costs the bundle its privacy identity.
+
+        The installed launcher was built with an empty PYTHON_LIB, so dlopen
+        failed and every start took the execl fallback. exec replaces the
+        process image, macOS then judges the archive read as "Python" (seen in
+        tccd's log) and the Full Disk Access grant on the bundle never applied.
+        The server kept running, so nothing looked broken except the empty
+        library.
+        """
+        fn = self.text[self.text.index("compile_bundle_launcher()") :]
+        fn = fn[: fn.index("seal_bundle()")]
+        self.assertIn('if [ -z "${PYTHON_LIB:-}" ]', fn)
+        self.assertIn("loses its privacy identity", fn)
+        self.assertIn('[ ! -f "$PYTHON_LIB" ]', fn)
+        # The guard must come before the heredoc that bakes the paths in.
+        self.assertLess(fn.index("PYTHON_LIB:-"), fn.index('cat >"$src"'))
+
     def test_launcher_keeps_the_bundle_as_parent_of_python(self):
         """It must fork and wait, never exec, or the bundle identity is lost."""
         fn = self.text[self.text.index("compile_bundle_launcher()") :]

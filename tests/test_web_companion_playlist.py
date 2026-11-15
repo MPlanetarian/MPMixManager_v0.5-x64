@@ -10,6 +10,7 @@ These cover the behaviour added on top of the streaming base:
 
 import json
 import os
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -230,18 +231,59 @@ class TestLibraryMode(CompanionTestBase):
         companion.set_library_mode("MUSIC")
         self.assertEqual(companion.build_stream_queue(), [str(track)])
 
-    def test_offline_music_library_falls_back_to_archive_and_reports_it(self):
-        """An unmounted SMB share must not leave the phone with nothing to play."""
+    def test_offline_music_library_does_not_borrow_the_mix_archive(self):
+        """Music mode lists music. An empty music library stays empty.
+
+        Falling through to the mix archive made the Music button say it was
+        loading tracks and then fill the playlist with mixes.
+        """
         mix = _touch_audio(self.home / "MIX_ARCHIVE" / "mix_one.flac")
         self.use_archive([mix])
         self.use_music([])
         companion.set_library_mode("MUSIC")
 
         queue = companion.build_stream_queue()
-        self.assertEqual(queue, [str(mix)])
-        self.assertTrue(companion._queue_source_state["fallback"])
-        self.assertIn("offline", companion._queue_source_state["detail"])
-        self.assertTrue(companion.get_mini_playlist()["library_fallback"])
+        self.assertEqual(queue, [])
+        self.assertNotIn(str(mix), queue)
+        self.assertFalse(companion._queue_source_state["fallback"])
+        self.assertIn("music", companion._queue_source_state["detail"].lower())
+        self.assertFalse(companion.get_mini_playlist()["library_fallback"])
+
+    def test_unmounted_music_playlist_is_listed_instead_of_mixes(self):
+        """The generated playlist is the music list even before the share mounts."""
+        mix = _touch_audio(self.home / "MIX_ARCHIVE" / "mix_one.flac")
+        self.use_archive([mix])
+        missing = self.home / "MUSIC_SMB" / "DATAMAC1" / "Mateh - Oneness.mp3"
+        playlist = self.home / "lists" / "DJ_Tracks_ALL_MUSIC_FOLDERS.json"
+        _write(playlist, json.dumps([{"path": str(missing), "title": "Mateh - Oneness"}]))
+        with patch.object(companion, "music_playlist_candidates", return_value=[playlist]):
+            companion.set_library_mode("MUSIC")
+            queue = companion.build_stream_queue()
+        self.assertEqual(queue, [str(missing)])
+        self.assertFalse(companion._queue_source_state["fallback"])
+        data = companion.get_mini_playlist()
+        self.assertEqual(data["mode"], "MUSIC")
+        self.assertEqual(data["total"], 1)
+        self.assertEqual(data["items"][0]["file"], str(missing))
+        self.assertNotIn(str(mix), data["items"][0]["file"])
+
+    def test_reachability_looks_past_the_first_offline_folder(self):
+        missing = [str(self.home / "offline" / f"track_{i}.mp3") for i in range(40)]
+        good = _touch_audio(self.home / "MUSIC" / "ready.mp3")
+        self.assertTrue(companion._music_sample_reachable(missing + [str(good)]))
+        self.assertFalse(companion._music_sample_reachable(missing))
+
+    def test_service_path_can_see_a_user_local_rclone(self):
+        """systemd starts the companion without ~/.local/bin on PATH."""
+        bindir = self.home / "bin"
+        bindir.mkdir()
+        rclone = bindir / "rclone"
+        rclone.write_text("#!/bin/sh\n", encoding="utf-8")
+        rclone.chmod(0o755)
+        with patch.dict(os.environ, {"PATH": "/usr/bin"}):
+            companion.ensure_user_tool_path([str(bindir)])
+            self.assertEqual(os.environ["PATH"].split(os.pathsep)[0], str(bindir))
+            self.assertEqual(shutil.which("rclone"), str(rclone))
 
     def test_switching_library_resets_to_first_track(self):
         first = _touch_audio(self.home / "MIX_ARCHIVE" / "a.flac")
@@ -309,6 +351,140 @@ class TestMiniPlaylist(CompanionTestBase):
         modes = [m["id"] for m in companion.get_mini_playlist()["modes"]]
         self.assertEqual(modes, ["MIX_ARCHIVE", "MUSIC", "FAVORITES"])
 
+    def test_blank_search_is_the_unfiltered_window(self):
+        files = [_touch_audio(self.home / "MIX_ARCHIVE" / f"mix_{i}.flac") for i in range(4)]
+        self.use_archive(files)
+        data = companion.get_mini_playlist(query="   ")
+        self.assertEqual(data["query"], "")
+        self.assertEqual(data["matched"], 4)
+        self.assertEqual(data["total"], 4)
+        self.assertEqual([item["index"] for item in data["items"]], [0, 1, 2, 3])
+
+    def test_search_filters_the_current_playlist_and_keeps_queue_indexes(self):
+        files = [
+            _touch_audio(self.home / "MIX_ARCHIVE" / "Orbits of Planets.flac"),
+            _touch_audio(self.home / "MIX_ARCHIVE" / "Solar Wind.flac"),
+            _touch_audio(self.home / "MIX_ARCHIVE" / "The Orbits Remix.flac"),
+            _touch_audio(self.home / "MIX_ARCHIVE" / "Quiet Night.flac"),
+        ]
+        self.use_archive(files)
+        companion.set_library_mode("MIX_ARCHIVE")
+
+        data = companion.get_mini_playlist(query="Orbits")
+        self.assertEqual(data["query"], "orbits")
+        self.assertEqual(data["matched"], 2)
+        self.assertEqual(data["total"], 4)
+        self.assertEqual([item["index"] for item in data["items"]], [0, 2])
+        self.assertEqual(data["items"][0]["file"], str(files[0]))
+        self.assertEqual(data["items"][1]["file"], str(files[2]))
+
+    def test_search_requires_every_word(self):
+        files = [
+            _touch_audio(self.home / "MIX_ARCHIVE" / "Orbits of Planets.flac"),
+            _touch_audio(self.home / "MIX_ARCHIVE" / "The Orbits Remix.flac"),
+        ]
+        self.use_archive(files)
+        data = companion.get_mini_playlist(query="orbits remix")
+        self.assertEqual(data["matched"], 1)
+        self.assertEqual(data["items"][0]["index"], 1)
+        self.assertEqual(data["items"][0]["file"], str(files[1]))
+
+    def test_search_ignores_punctuation_and_underscores(self):
+        track = _touch_audio(self.home / "MIX_ARCHIVE" / "Stream_of_Frequency_163.flac")
+        self.use_archive([track])
+        data = companion.get_mini_playlist(query="stream-of 163")
+        self.assertEqual(data["query"], "stream of 163")
+        self.assertEqual(data["matched"], 1)
+        self.assertEqual(data["items"][0]["file"], str(track))
+
+    def test_search_can_match_the_folder_the_track_is_in(self):
+        trance = _touch_audio(self.home / "MUSIC" / "Trance" / "night.mp3")
+        house = _touch_audio(self.home / "MUSIC" / "House" / "night.mp3")
+        self.use_music([trance, house])
+        companion.set_library_mode("MUSIC")
+        data = companion.get_mini_playlist(query="trance night")
+        self.assertEqual(data["matched"], 1)
+        self.assertEqual(data["items"][0]["file"], str(trance))
+
+    def test_search_does_not_look_outside_the_current_playlist(self):
+        mix = _touch_audio(self.home / "MIX_ARCHIVE" / "Orbits of Planets.flac")
+        track = _touch_audio(self.home / "MUSIC" / "Solar Wind.mp3")
+        self.use_archive([mix])
+        self.use_music([track])
+        companion.set_library_mode("MUSIC")
+        data = companion.get_mini_playlist(query="orbits")
+        self.assertEqual(data["matched"], 0)
+        self.assertEqual(data["items"], [])
+        self.assertEqual(data["total"], 1)
+
+    def test_punctuation_only_search_matches_nothing(self):
+        track = _touch_audio(self.home / "MIX_ARCHIVE" / "Orbits.flac")
+        self.use_archive([track])
+        data = companion.get_mini_playlist(query="@@@")
+        self.assertEqual(data["items"], [])
+        self.assertEqual(data["matched"], 0)
+        self.assertEqual(data["total"], 1)
+
+    def test_search_page_reports_matches_beyond_the_visible_rows(self):
+        files = [
+            _touch_audio(self.home / "MIX_ARCHIVE" / f"hit_{i:02d}.flac")
+            for i in range(companion.PLAYLIST_SEARCH_WINDOW + 5)
+        ]
+        self.use_archive(files)
+        data = companion.get_mini_playlist(query="hit")
+        self.assertEqual(len(data["items"]), companion.PLAYLIST_SEARCH_WINDOW)
+        self.assertEqual(data["matched"], len(files))
+        self.assertEqual(data["items"][0]["index"], 0)
+        self.assertEqual(data["items"][-1]["index"], companion.PLAYLIST_SEARCH_WINDOW - 1)
+
+    def test_playing_a_search_hit_uses_its_queue_index(self):
+        files = [
+            _touch_audio(self.home / "MIX_ARCHIVE" / "Alpha.flac"),
+            _touch_audio(self.home / "MIX_ARCHIVE" / "Beta Remix.flac"),
+            _touch_audio(self.home / "MIX_ARCHIVE" / "Gamma.flac"),
+        ]
+        self.use_archive(files)
+        companion.set_library_mode("MIX_ARCHIVE")
+        found = companion.get_mini_playlist(query="remix")
+        self.assertEqual(len(found["items"]), 1)
+        index = found["items"][0]["index"]
+        self.assertEqual(index, 1)
+
+        self.assertFalse(companion.load_stream_session()["playing"])
+        self.assertTrue(companion.control_player("select_index", {
+            "index": [str(index)],
+            "play": ["1"],
+        }))
+        state = companion.load_stream_session()
+        self.assertEqual(state["path"], str(files[1]))
+        self.assertEqual(state["index"], 1)
+        self.assertEqual(state["position_sec"], 0.0)
+        self.assertTrue(state["playing"])
+
+    def test_select_index_without_play_leaves_a_stopped_session_stopped(self):
+        files = [
+            _touch_audio(self.home / "MIX_ARCHIVE" / "Alpha.flac"),
+            _touch_audio(self.home / "MIX_ARCHIVE" / "Beta.flac"),
+        ]
+        self.use_archive(files)
+        companion.control_player("select_index", {"index": ["1"]})
+        state = companion.load_stream_session()
+        self.assertEqual(state["index"], 1)
+        self.assertFalse(state["playing"])
+
+    def test_page_searches_the_playlist_and_plays_the_match(self):
+        page = companion.render_html_page(companion.THEMES["cosmic_supernova"])
+        self.assertIn('id="miniPlSearch"', page)
+        self.assertIn("Search this playlist", page)
+        self.assertIn("Search tracks in the current playlist", page)
+        self.assertIn("onPlaylistSearchInput", page)
+        self.assertIn("playPlaylistTrack", page)
+        self.assertIn("?q=", page)
+        self.assertIn("sendAction('select_index'", page)
+        search_pos = page.index('id="miniPlSearch"')
+        list_pos = page.index('id="miniPlItems"')
+        self.assertLess(search_pos, list_pos)
+
 
 class TestModeSwitchResponsiveness(CompanionTestBase):
     """The Mix/Music buttons must visibly switch, not appear dead."""
@@ -345,14 +521,14 @@ class TestModeSwitchResponsiveness(CompanionTestBase):
         companion.invalidate_queue_cache()
 
         calls = []
-        real_read = companion._read_playlist_file
+        real_read = companion._playlist_entry_paths
 
         def counting_read(path):
             calls.append(path)
             return real_read(path)
 
         with patch.object(companion, "music_playlist_candidates", return_value=[playlist]), \
-             patch.object(companion, "_read_playlist_file", side_effect=counting_read):
+             patch.object(companion, "_playlist_entry_paths", side_effect=counting_read):
             companion.scan_music_files()
             companion.scan_music_files()
             companion.scan_music_files()
@@ -361,7 +537,7 @@ class TestModeSwitchResponsiveness(CompanionTestBase):
 
         # The cache is keyed to the playlist file, so a rewrite re-reads it.
         with patch.object(companion, "music_playlist_candidates", return_value=[playlist]), \
-             patch.object(companion, "_read_playlist_file", side_effect=counting_read):
+             patch.object(companion, "_playlist_entry_paths", side_effect=counting_read):
             _write(playlist, json.dumps([{"path": str(track)}, {"path": str(track)}]))
             self.assertEqual(len(companion.scan_music_files()), 2)
         self.assertEqual(len(calls), 2)
@@ -415,10 +591,12 @@ class TestThemeButton(CompanionTestBase):
         self.assertIn(">Favourites</button>", page)
         self.assertIn('id="miniPlCount"', page)
 
-    def test_page_is_branded_as_the_liquid_player(self):
+    def test_page_is_branded_as_the_audio_player(self):
         page = companion.render_html_page(companion.THEMES["cosmic_supernova"])
-        self.assertIn("MP LIQUID PLAYER (WEB)", page)
-        self.assertIn("<title>MP Liquid Player (Web)", page)
+        self.assertIn("<h1>MP AUDIO PLAYER", page)
+        self.assertIn("<title>MP Audio Player (Web)", page)
+        self.assertIn("MP Audio Player", page)
+        self.assertNotIn("MP LIQUID PLAYER", page)
         self.assertNotIn("MP MIX MANAGER <span", page)
 
     def test_playlist_scrolls_and_shows_five_rows(self):

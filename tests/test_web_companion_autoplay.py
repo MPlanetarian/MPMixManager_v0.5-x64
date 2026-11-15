@@ -380,6 +380,77 @@ class StreamSessionTest(unittest.TestCase):
         second = mwc.get_eq_status()["position_sec"]
         self.assertAlmostEqual(first, second, places=2)
 
+    def test_pause_does_not_start_a_stopped_mix(self):
+        mwc.control_player("pause")
+        mwc.control_player("pause")
+        self.assertFalse(mwc.load_stream_session()["playing"])
+
+    def test_previous_steps_backward_while_shuffle_is_on(self):
+        session = mwc.load_stream_session()
+        session.update(shuffle=True, index=3, path=self.queue[3], playing=True)
+        mwc.save_stream_session(session)
+        mwc.control_player("previous")
+        path, state = mwc.current_stream_file()
+        self.assertEqual(path, self.queue[2])
+        self.assertTrue(state.get("shuffle"))
+
+    def test_stream_target_is_not_forwarded_to_the_desk(self):
+        host = {
+            "path": self.queue[0],
+            "state": "playing",
+            "position_sec": 10,
+            "duration_sec": 600,
+            "pid": os.getpid(),
+        }
+        with mock.patch.object(mwc, "host_player_status", return_value=(host, "ipc_socket")), \
+             mock.patch.object(mwc, "send_player_command") as send:
+            ok = mwc.control_player("next", {"target": ["stream"]})
+        self.assertTrue(ok)
+        send.assert_not_called()
+        path, _state = mwc.current_stream_file()
+        self.assertEqual(path, self.queue[1])
+
+    def test_adopt_host_copies_the_desk_file_into_the_session(self):
+        host = {
+            "path": self.queue[4],
+            "state": "playing",
+            "position_sec": 88,
+            "duration_sec": 600,
+            "pid": os.getpid(),
+        }
+        with mock.patch.object(mwc, "host_player_status", return_value=(host, "ipc_socket")):
+            self.assertTrue(mwc.control_player("adopt_host", {}))
+        state = mwc.load_stream_session()
+        self.assertEqual(state["path"], self.queue[4])
+        self.assertEqual(state["index"], 4)
+        self.assertAlmostEqual(state["position_sec"], 88.0, places=1)
+        self.assertTrue(state["playing"])
+
+    def test_follow_stream_ignores_a_live_desk_player(self):
+        mwc.save_stream_session({
+            "index": 2,
+            "path": self.queue[2],
+            "playing": True,
+            "position_sec": 12,
+            "started_at": 0,
+            "duration_sec": 600,
+        })
+        desk_payload = {
+            "player": "MP Audio Player",
+            "host_player": True,
+            "active_file": "/tmp/other.flac",
+            "state": "playing",
+            "position_sec": 1,
+            "title": "Other",
+            "volume": 10,
+        }
+        with mock.patch.object(mwc, "host_player_payload", return_value=desk_payload):
+            desk = mwc.get_playback_status(None)
+            web = mwc.get_playback_status(None, "stream")
+        self.assertTrue(desk.get("host_player"))
+        self.assertEqual(web["player"], "Web Stream")
+        self.assertEqual(web["active_file"], self.queue[2])
+
     def test_seek_to_moves_the_reported_position(self):
         mwc.control_player("seek_to", {"position": ["240"]})
         self.assertAlmostEqual(mwc.get_eq_status()["position_sec"], 240.0, places=1)
@@ -414,6 +485,151 @@ class StreamSessionTest(unittest.TestCase):
         self.assertEqual(mwc.load_stream_session()["volume"], 100)
         mwc.control_player("set_volume", {"volume": ["-10"]})
         self.assertEqual(mwc.load_stream_session()["volume"], 0)
+
+    def test_mute_toggles_without_forgetting_the_level(self):
+        """Mute has to be reversible. Zeroing the level left unmute impossible."""
+        mwc.control_player("set_volume", {"volume": ["80"]})
+        self.assertTrue(mwc.control_player("mute"))
+        state = mwc.load_stream_session()
+        self.assertTrue(state["muted"])
+        self.assertEqual(state["volume"], 80)
+        eq = mwc.get_eq_status()
+        self.assertTrue(eq["muted"])
+        self.assertEqual(eq["volume"], 80)
+        status = mwc.get_playback_status(None)
+        self.assertTrue(status["muted"])
+        self.assertEqual(status["volume"], 80)
+        mwc.control_player("mute")
+        state = mwc.load_stream_session()
+        self.assertFalse(state["muted"])
+        self.assertEqual(state["volume"], 80)
+
+    def test_volume_buttons_clear_mute_and_stay_in_range(self):
+        mwc.control_player("set_volume", {"volume": ["80"]})
+        mwc.control_player("mute")
+        mwc.control_player("vol_down")
+        state = mwc.load_stream_session()
+        self.assertFalse(state["muted"])
+        self.assertEqual(state["volume"], 75)
+        mwc.control_player("set_volume", {"volume": ["100"]})
+        mwc.control_player("vol_up")
+        self.assertEqual(mwc.load_stream_session()["volume"], 100)
+        mwc.control_player("set_volume", {"volume": ["0"]})
+        mwc.control_player("vol_down")
+        self.assertEqual(mwc.load_stream_session()["volume"], 0)
+
+    def test_engaged_mute_is_not_forwarded_to_the_desk(self):
+        host = {
+            "path": self.queue[0],
+            "state": "playing",
+            "position_sec": 10,
+            "duration_sec": 600,
+            "volume": 40,
+            "muted": False,
+            "pid": os.getpid(),
+        }
+        with mock.patch.object(mwc, "host_player_status", return_value=(host, "ipc_socket")), \
+             mock.patch.object(mwc, "send_player_command") as send:
+            ok = mwc.control_player("mute", {"target": ["stream"]})
+        self.assertTrue(ok)
+        send.assert_not_called()
+        state = mwc.load_stream_session()
+        self.assertTrue(state["muted"])
+        self.assertEqual(state["volume"], 100)
+
+    def test_adopt_keeps_the_desk_level(self):
+        host = {
+            "path": self.queue[4],
+            "state": "playing",
+            "position_sec": 88,
+            "duration_sec": 600,
+            "volume": 35,
+            "muted": True,
+            "pitch_percent": 0,
+            "pid": os.getpid(),
+        }
+        with mock.patch.object(mwc, "host_player_status", return_value=(host, "ipc_socket")):
+            self.assertTrue(mwc.control_player("adopt_host", {}))
+        state = mwc.load_stream_session()
+        self.assertEqual(state["volume"], 35)
+        self.assertTrue(state["muted"])
+
+    def test_pitch_buttons_move_the_stream_and_stay_in_range(self):
+        """[-] / [+] / 0 must change the stream the browser is hearing.
+
+        The session template used to omit pitch, and the stream control path
+        ignored the three actions, so the pill stayed at 0% and the audio
+        element never left 1.0x.
+        """
+        self.assertTrue(mwc.control_player("pitch_up"))
+        self.assertEqual(mwc.load_stream_session()["pitch_percent"], 1)
+        self.assertEqual(mwc.get_eq_status()["pitch_percent"], 1)
+        status = mwc.get_playback_status(None)
+        self.assertEqual(status["pitch_percent"], 1)
+        self.assertAlmostEqual(status["pitch_factor"], 1.01, places=3)
+        mwc.control_player("pitch_down")
+        mwc.control_player("pitch_down")
+        self.assertEqual(mwc.load_stream_session()["pitch_percent"], -1)
+        mwc.control_player("set_pitch", {"percent": ["40"]})
+        self.assertEqual(mwc.load_stream_session()["pitch_percent"], 20)
+        mwc.control_player("set_pitch", {"percent": ["-40"]})
+        self.assertEqual(mwc.load_stream_session()["pitch_percent"], -20)
+        self.assertTrue(mwc.control_player("reset_pitch"))
+        self.assertEqual(mwc.load_stream_session()["pitch_percent"], 0)
+        self.assertEqual(mwc.get_eq_status()["pitch_percent"], 0)
+        # Keys absent from the session template are dropped on the next read.
+        session = mwc.load_stream_session()
+        session["pitch_percent"] = 7
+        mwc.save_stream_session(session)
+        self.assertEqual(mwc.load_stream_session()["pitch_percent"], 7)
+
+    def test_engaged_pitch_is_not_forwarded_to_the_desk(self):
+        host = {
+            "path": self.queue[0],
+            "state": "playing",
+            "position_sec": 10,
+            "duration_sec": 600,
+            "pitch_percent": 4,
+            "pid": os.getpid(),
+        }
+        with mock.patch.object(mwc, "host_player_status", return_value=(host, "ipc_socket")), \
+             mock.patch.object(mwc, "send_player_command") as send:
+            ok = mwc.control_player("pitch_up", {"target": ["stream"]})
+        self.assertTrue(ok)
+        send.assert_not_called()
+        self.assertEqual(mwc.load_stream_session()["pitch_percent"], 1)
+
+    def test_adopt_keeps_the_desk_pitch(self):
+        host = {
+            "path": self.queue[4],
+            "state": "playing",
+            "position_sec": 88,
+            "duration_sec": 600,
+            "pitch_percent": -6,
+            "pid": os.getpid(),
+        }
+        with mock.patch.object(mwc, "host_player_status", return_value=(host, "ipc_socket")):
+            self.assertTrue(mwc.control_player("adopt_host", {}))
+        self.assertEqual(mwc.load_stream_session()["pitch_percent"], -6)
+
+    def test_raising_pitch_does_not_rescore_time_already_played(self):
+        started = time.time() - 100
+        mwc.save_stream_session({
+            "index": 0,
+            "path": self.queue[0],
+            "playing": True,
+            "position_sec": 10.0,
+            "started_at": started,
+            "duration_sec": 600,
+            "pitch_percent": 0,
+        })
+        before = mwc.stream_position(mwc.load_stream_session())
+        self.assertGreater(before, 100)
+        mwc.control_player("set_pitch", {"percent": ["20"]})
+        state = mwc.load_stream_session()
+        self.assertEqual(state["pitch_percent"], 20)
+        self.assertAlmostEqual(state["position_sec"], before, delta=1.0)
+        self.assertGreater(state["started_at"], started)
 
     def test_status_reports_the_stream_player_when_no_host_player_runs(self):
         """With no live player, the phone-facing stream cursor is the fallback."""
@@ -690,6 +906,14 @@ class StreamQueueCacheTest(unittest.TestCase):
     """The page polls several endpoints per second; the queue must be cached."""
 
     def setUp(self):
+        # A read poll starts a background refresh on a worker thread, and that
+        # thread can finish after this setUp has cleared the cache - writing a
+        # fresh built_at and making the next test see a valid cache it did not
+        # build (scan.call_count 0 instead of 1). Let the previous test's
+        # worker land before clearing, so each test starts from its own cache.
+        deadline = time.time() + 5.0
+        while mwc._queue_refresh_active and time.time() < deadline:
+            time.sleep(0.01)
         mwc.invalidate_stream_queue()
         mwc._queue_cache["files"] = []
         mwc._queue_cache["built_at"] = 0.0
@@ -912,6 +1136,39 @@ class EngageButtonTest(unittest.TestCase):
     def setUp(self):
         self.html = mwc.render_html_page(mwc.get_theme_palette(None))
 
+    def test_volume_buttons_drive_a_gain_node(self):
+        """iPhone Safari ignores audio.volume, so the level has to be a GainNode.
+
+        Mute used to assign volume 0, which that browser also ignores, and
+        there was no saved level to restore on the next tap.
+        """
+        self.assertIn("bumpVolume(-5); sendAction('vol_down')", self.html)
+        self.assertIn("bumpVolume(5); sendAction('vol_up')", self.html)
+        self.assertIn("toggleStreamMute(); sendAction('mute')", self.html)
+        self.assertIn("function applyStreamVolume(percent, muted)", self.html)
+        fn = self.html[self.html.index("function setMixLoudness"):]
+        fn = fn[:fn.index("function ensureAudibleGain")]
+        self.assertIn("mixGain.gain.value = gain", fn)
+        self.assertIn("audioEl.volume = 1", fn)
+        self.assertIn("audioEl.muted = false", fn)
+
+    def test_pitch_buttons_retune_the_playing_element(self):
+        """The pitch cluster has to change the element the listener hears.
+
+        Setting playbackRate alone leaves preservesPitch at its default, so
+        the tone stays put and the buttons sound as if they did nothing.
+        """
+        self.assertIn("function applyStreamPitch(percent)", self.html)
+        fn = self.html[self.html.index("function applyStreamPitch(percent)"):]
+        fn = fn[:fn.index("function bumpPitch")]
+        self.assertIn("preservesPitch = false", fn)
+        self.assertIn("webkitPreservesPitch = false", fn)
+        self.assertIn("playbackRate", fn)
+        self.assertIn("bumpPitch(-1); sendAction('pitch_down')", self.html)
+        self.assertIn("bumpPitch(1); sendAction('pitch_up')", self.html)
+        self.assertIn("applyStreamPitch(0); sendAction('reset_pitch')", self.html)
+        self.assertIn("applyStreamPitch(data.pitch_percent)", self.html)
+
     def test_the_stream_element_is_playsinline(self):
         """iOS hands a non-playsinline element to the system player.
 
@@ -921,6 +1178,47 @@ class EngageButtonTest(unittest.TestCase):
         start = self.html.index('<audio id="mobileAudioStream"')
         marker = self.html[start : self.html.index(">", start) + 1]
         self.assertIn("playsinline", marker)
+
+    def test_the_stream_element_stays_in_the_render_tree(self):
+        """iOS Safari rejects play() on an element that is display:none.
+
+        The rejection leaves the Engage gate exactly where it was, so the
+        tap looks dead. The element has to be painted (even at 1px) and it
+        cannot live inside a tab panel, because hiding that panel is
+        display:none on the ancestor.
+        """
+        start = self.html.index('<audio id="mobileAudioStream"')
+        marker = self.html[start : self.html.index(">", start) + 1]
+        self.assertNotIn("display: none", marker)
+        self.assertNotIn("display:none", marker)
+        self.assertIn("phone-audio", marker)
+        self.assertIn('preload="none"', marker)
+        css = self.html[self.html.index(".phone-audio") :]
+        css = css[: css.index("}")]
+        self.assertNotIn("display", css)
+        self.assertNotIn("visibility", css)
+        # Both elements sit on <body>, ahead of any panel that can be hidden.
+        body = self.html.index("<body>")
+        panel = self.html.index('id="panelPlayer"')
+        self.assertLess(self.html.index('id="mobileAudioStream"'), panel)
+        self.assertLess(self.html.index('id="assistantSpeech"'), panel)
+        self.assertGreater(self.html.index('id="mobileAudioStream"'), body)
+
+    def test_an_iphone_does_not_play_before_the_engage_tap(self):
+        """A play() from the status poll is outside the tap.
+
+        iOS rejects it, and the element then will not start when Engage is
+        pressed. The poll must leave the element alone until that tap.
+        """
+        self.assertIn("function needsPlaybackGesture()", self.html)
+        auto = self.html[self.html.index("function maybeAutoStartStream()") :]
+        auto = auto[: auto.index("function syncHostPlayerFile")]
+        self.assertLess(auto.index("needsPlaybackGesture()"), auto.index("engageStreamFromServer"))
+        activate = self.html[self.html.index("function activateMobileStream()") :]
+        activate = activate[: activate.index("function unlockStreamElement")]
+        head = activate.split("fetch(", 1)[0]
+        self.assertIn("engageStreamFromServer(lastServerResume)", head)
+        self.assertIn("ontouchend=\"activateMobileStream(event)\"", self.html)
 
     def test_an_engage_tap_with_no_queue_asks_the_host_to_rescan(self):
         self.assertIn("function rescanForEngage()", self.html)
@@ -941,6 +1239,78 @@ class EngageButtonTest(unittest.TestCase):
         head = fn.split("fetch(", 1)[0]
         self.assertIn("unlockStreamElement()", head,
                       "the unlock must run before the first await")
+
+    def test_the_unlock_clip_is_allowed_by_the_page_csp(self):
+        """A `data:` unlock clip is blocked, and the tap then does nothing.
+
+        The dashboard sends `Content-Security-Policy: … media-src 'self'
+        blob: …`. A `data:audio/wav` clip violates that directive, so `src`
+        fails with MEDIA_ERR_SRC_NOT_SUPPORTED before any sound is possible.
+        The element is still holding that clip when the error arrives, and the
+        media-error handler cannot tell it from a genuinely undecodable mix, so
+        it wrote off the file the listener was about to play. The tap then
+        looked dead: no sound, and the target mix marked unplayable.
+
+        The clip is built as a `blob:` URL, which the policy allows.
+        """
+        self.assertNotIn("data:audio", self.html,
+                         "a data: media source is blocked by this page's CSP")
+        self.assertIn("silentWavBlobUrl", self.html)
+        self.assertIn("URL.createObjectURL", self.html)
+        # The policy the page is actually served with must permit the clip.
+        media_src = ""
+        for name, value in mwc.sec.security_headers():
+            if name == "Content-Security-Policy":
+                for directive in value.split(";"):
+                    directive = directive.strip()
+                    if directive.startswith("media-src"):
+                        media_src = directive
+        self.assertIn("blob:", media_src,
+                      "media-src must allow the blob: unlock clip")
+
+    def test_the_unlock_error_is_not_blamed_on_the_listener_mix(self):
+        """The throwaway clip's error must not mark the real mix unplayable."""
+        handler = self.html[self.html.index("audioEl.addEventListener('error'") :]
+        handler = handler[: handler.index("showRestartNotice")]
+        self.assertIn("__unlocking", handler,
+                      "the error handler must ignore the unlock clip")
+        self.assertIn("beginUnlock", self.html)
+        self.assertIn("endUnlock", self.html)
+
+    def test_a_tap_explanation_survives_the_status_poll(self):
+        """The 2 s poll used to overwrite what the tap had just said.
+
+        A rescan that finds nothing writes a specific explanation. The next
+        /api/status painted "Waiting for the host to queue a mix…" over it, so
+        the listener saw their answer blink away and concluded the button was
+        dead.
+        """
+        sync = self.html[self.html.index("function syncStreamOverlayDetail()") :]
+        sync = sync[: sync.index("function hideStreamOverlay()")]
+        self.assertIn("lastTapExplanation", sync)
+        self.assertIn("TAP_EXPLANATION_HOLD_MS", sync)
+        # And the hold is released once audio really starts.
+        hide = self.html[self.html.index("function hideStreamOverlay()") :]
+        hide = hide[: hide.index("let streamAutoStarted")] if "let streamAutoStarted" in hide else hide
+        self.assertIn("lastTapExplanation = \"\"", hide)
+
+    def test_the_disabled_autoplay_state_is_not_reported_as_a_failure(self):
+        """A phone can still stream when the host did not arm the queue.
+
+        `WEB_COMPANION_AUTOPLAY=false` only stops the host from playing on its
+        own; the queue is built and /api/stream serves it. Calling that
+        "Streaming disabled" put a failure banner over a working player, which
+        reads as "the Engage button does not work".
+        """
+        detail = self.html[self.html.index("function streamUnavailableDetail(data)") :]
+        detail = detail[: detail.index("function updateAutoplayNotice")]
+        self.assertIn("if (state.status === 'disabled') return '';", detail)
+
+        notice = self.html[self.html.index("function updateAutoplayNotice(state)") :]
+        notice = notice[: notice.index("function showRestartNotice")]
+        self.assertIn("disabled: '🎧 Stream ready", notice)
+        self.assertNotIn("⏹ Streaming disabled", notice)
+        self.assertNotIn("Streaming is disabled on the host", self.html)
 
 
 if __name__ == "__main__":

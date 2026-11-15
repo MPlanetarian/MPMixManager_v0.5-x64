@@ -15,6 +15,7 @@
 #   mix_web_companion.sh enable      enable autostart (creating the unit if needed)
 #   mix_web_companion.sh disable     disable autostart
 #   mix_web_companion.sh logs        show the service log
+#   mix_web_companion.sh token       explain that no token is needed (URL only)
 #   mix_web_companion.sh open        open the dashboard in a browser
 #   mix_web_companion.sh <args...>   run the Python server directly
 # ==============================================================================
@@ -154,6 +155,14 @@ service_active() {
     [ -n "$(get_pids)" ]
 }
 
+# Older installs generated ~/.config/mix-manager/companion.token. The companion
+# has no access token any more, so the leftover file is a stale secret with no
+# reader. Remove it on the next start so it cannot be mistaken for something
+# that still grants access.
+remove_stale_token() {
+    rm -f "$LOG_DIR/companion.token" 2>/dev/null || true
+}
+
 # ------------------------------------------------------------------------------
 # Service definition
 # ------------------------------------------------------------------------------
@@ -232,6 +241,25 @@ compile_bundle_launcher() {
     if ! command -v clang >/dev/null 2>&1; then
         echo "  ⚠ clang not found; keeping the shell entry point."
         echo "    (install Xcode Command Line Tools for the 1-grant bundle)"
+        return 0
+    fi
+
+    # An empty PYTHON_LIB bakes `dlopen("")` into the launcher. The launcher
+    # then falls back to execl at startup, which replaces the process image with
+    # the interpreter: TCC attributes the archive read to "Python" (a platform
+    # binary it always denies) and the Full Disk Access grant on the bundle
+    # never applies. This failure is silent in the app - the server still runs,
+    # the phone still connects, and only the library is empty. Refuse to build
+    # in that case so the cause is visible here instead of on the phone.
+    if [ -z "${PYTHON_LIB:-}" ]; then
+        echo "  ⚠ Could not locate libpython for $PYTHON_BIN."
+        echo "    Keeping the shell entry point: a bundle that cannot embed the"
+        echo "    interpreter loses its privacy identity and will be denied."
+        return 0
+    fi
+    if [ ! -f "$PYTHON_LIB" ]; then
+        echo "  ⚠ libpython is missing: $PYTHON_LIB"
+        echo "    Keeping the shell entry point (see above)."
         return 0
     fi
 
@@ -351,15 +379,55 @@ EOF
 
     if clang -O2 -Wall -Wextra -o "$target" "$src" >>"$log" 2>&1; then
         rm -f "$src"
-        # Ad-hoc sign so the identity is stable across rebuilds; TCC keys the
-        # grant to the bundle id, and a stable signature keeps that valid.
-        codesign --force --sign - --identifier "com.mplanetarian.mp-web-companion" \
-            "$bundle" >/dev/null 2>&1 || true
+        # Signing happens in seal_bundle(), after every resource is in place
+        # (Info.plist, install_dir, icon). Signing here and writing a file
+        # afterwards invalidated the seal, which is a separate problem from the
+        # requirement the grant is keyed to - see seal_bundle().
         echo "  ✓ Native bundle launcher built (single Full Disk Access grant)."
     else
         echo "  ⚠ Could not compile the bundle launcher; keeping the shell entry point."
         echo "    See $log"
     fi
+}
+
+# Sign the finished bundle so macOS can match the Full Disk Access grant.
+#
+# Two things had to be true and neither was:
+#
+#   1. The signature covers every file, so it must be made last. The old order
+#      signed inside compile_bundle_launcher() and then wrote
+#      Contents/Resources/install_dir, which made `codesign --verify` report
+#      "a sealed resource is missing or invalid". TCC compares the bundle's
+#      code requirement against what is on disk, and a broken seal reads as a
+#      different (or untrusted) program, so a grant that was visibly present in
+#      System Settings silently stopped applying.
+#
+#   2. Ad-hoc signing without `-r` derives the designated requirement from the
+#      cdhash. Every rebuild therefore produced a new requirement, and TCC
+#      stores the requirement it approved, so the old grant never matched the
+#      new build. Pinning `designated => identifier "..."` makes the identity
+#      stable across rebuilds, which is what an ad-hoc signed app needs for a
+#      grant to survive `restart`.
+seal_bundle() {
+    local bundle="$1"
+    [ -d "$bundle" ] || return 1
+    command -v codesign >/dev/null 2>&1 || return 1
+    local identifier="com.mplanetarian.mp-web-companion"
+    if ! codesign --force --sign - \
+            --identifier "$identifier" \
+            -r="designated => identifier \"$identifier\"" \
+            "$bundle" >/dev/null 2>&1; then
+        echo "  ⚠ Could not sign the companion bundle; the Full Disk Access"
+        echo "    grant may stop applying after a rebuild."
+        return 1
+    fi
+    # Report a damaged seal here rather than letting the phone find it: the
+    # symptom is an empty archive with no error anywhere.
+    if ! codesign --verify --strict "$bundle" >/dev/null 2>&1; then
+        echo "  ⚠ The companion bundle signature does not verify after sealing."
+        return 1
+    fi
+    return 0
 }
 
 build_bundle_icon() {
@@ -506,8 +574,19 @@ EOF
     # keep it resident as the parent of Python; the bundle then stays the
     # responsible process, which is what the privacy grant is recorded against.
     compile_bundle_launcher "$bundle" "$macos_dir/mp-web-companion"
-    # Register after the launcher exists and is signed, so Finder draws the icon
-    # and Settings can list the app immediately.
+    # Remember which tree this bundle runs. The bundle lives in /Applications,
+    # which is shared by every install of MP Mix Manager, so a bundle built
+    # from an older (or test) tree would otherwise keep serving that tree even
+    # after a newer install replaces it.
+    #
+    # This must be written *before* sealing: a file added to a signed bundle
+    # breaks the seal, and a broken seal is what made a granted Full Disk
+    # Access permission stop applying.
+    printf '%s\n' "$APP_DIR" >"$bundle/Contents/Resources/install_dir" 2>/dev/null || true
+    # Seal last, once every resource is in place, then register. Registering an
+    # unsigned or stale-signed bundle is what left Settings showing the app
+    # while macOS refused its archive read.
+    seal_bundle "$bundle" || true
     register_bundle "$bundle"
 
     cat >"$LAUNCHD_PLIST" <<EOF
@@ -557,11 +636,6 @@ EOF
 </plist>
 EOF
     chmod 644 "$LAUNCHD_PLIST"
-    # Remember which tree this bundle runs. The bundle lives in /Applications,
-    # which is shared by every install of MP Mix Manager, so a bundle built
-    # from an older (or test) tree would otherwise keep serving that tree even
-    # after a newer install replaces it.
-    printf '%s\n' "$APP_DIR" >"$bundle/Contents/Resources/install_dir" 2>/dev/null || true
     echo "✓ Wrote launchd agent: $LAUNCHD_PLIST"
     echo "  (app bundle: $bundle)"
 }
@@ -587,6 +661,10 @@ write_service() {
 # ------------------------------------------------------------------------------
 start_service() {
     echo "Starting Mobile Web Companion..."
+    # An install from before token removal left a secret file behind. Nothing
+    # reads it now, so clear it rather than letting a stale credential sit in
+    # the config directory looking meaningful.
+    remove_stale_token
     if is_macos; then
         # The bundle and the launchd agent are shared across installs, so
         # rebuild them when they still point at a different tree. Without this
@@ -609,6 +687,15 @@ start_service() {
                 done
             fi
             write_launchd_plist >/dev/null 2>&1 || true
+        fi
+        # A bundle whose seal does not verify is the failure this release fixes:
+        # its Full Disk Access row stays visible in System Settings but macOS no
+        # longer applies it, so the archive scan returns nothing and the phone
+        # reports a privacy block. Re-seal on every start so the repair lands
+        # without a reinstall.
+        if [ -d "$MAC_BUNDLE" ] && ! codesign --verify --strict "$MAC_BUNDLE" >/dev/null 2>&1; then
+            echo "  (repairing the companion bundle signature)"
+            seal_bundle "$MAC_BUNDLE" || true
         fi
         if [ -f "$LAUNCHD_PLIST" ]; then
             launchctl bootout "gui/$(id -u)/$LAUNCHD_LABEL" >/dev/null 2>&1 || true
@@ -685,6 +772,7 @@ show_status() {
     if service_active; then
         echo "● Mobile Web Companion is RUNNING"
         [ -n "$pids" ] && echo "  • PID(s):         $pids"
+        # No token: the dashboard opens on this URL directly.
         echo "  • Local Address:  http://localhost:${PORT}"
         echo "  • Mobile LAN URL: http://${lan_ip}:${PORT}"
         if is_macos; then
@@ -929,6 +1017,15 @@ case "${1:-}" in
         ;;
     logs)
         [ -f "$LOG_FILE" ] && tail -n "${2:-40}" "$LOG_FILE" || echo "No log at $LOG_FILE"
+        ;;
+    token)
+        # Kept as a signpost, not a command: token auth was removed because a
+        # secret to copy by hand made the dashboard feel broken. Say where the
+        # dashboard actually lives instead of printing nothing.
+        LAN_IP="$(get_lan_ip)"
+        echo "This companion has no access token any more."
+        echo "Open the dashboard directly on any device on this network:"
+        echo "  http://${LAN_IP}:${PORT}"
         ;;
     open|browse)
         LAN_IP="$(get_lan_ip)"

@@ -42,10 +42,10 @@ THEME_COLORS: Dict[str, Tuple[RGB, RGB, RGB]] = {
     "retro_terminal": ((230, 230, 230), (180, 180, 180), (255, 255, 255)),
     "retro_linux_memories": ((45, 45, 45), (21, 83, 158), (26, 30, 33)),
     "into_darkness_void_out": ((0, 0, 0), (0, 0, 0), (0, 0, 0)),
-    "cosmic_dreamworlds_radioactive": ((57, 255, 20), (0, 245, 212), (166, 77, 255)),
-    "cosmic_dreamworlds": ((232, 13, 104), (0, 245, 212), (176, 88, 255)),
-    "orbital_void_reflux": ((0, 240, 255), (157, 78, 221), (255, 0, 127)),
-    "sensorium_interface": ((0, 245, 255), (240, 168, 216), (184, 72, 196)),
+    # Sensorium: bright tangerine, acid chartreuse and electric azure. The warm
+    # mix turns the still-water glass pane into champagne gold, which none of
+    # the other themes produce.
+    "sensorium": ((255, 122, 24), (200, 255, 61), (58, 134, 255)),
     "solarized": ((220, 50, 47), (38, 139, 210), (181, 137, 0)),
     "tokyo": ((247, 118, 142), (122, 162, 247), (187, 154, 247)),
     "monokai": ((249, 38, 114), (166, 226, 46), (102, 217, 239)),
@@ -71,10 +71,7 @@ THEME_LABELS: Dict[str, str] = {
     "retro_terminal": "Retro Terminal",
     "retro_linux_memories": "Retro Linux Memories",
     "into_darkness_void_out": "Into Darkness (Void Out)",
-    "cosmic_dreamworlds_radioactive": "Cosmic Dreamworlds (Radioactive)",
-    "cosmic_dreamworlds": "Cosmic Dreamworlds",
-    "orbital_void_reflux": "Orbital Void Reflux",
-    "sensorium_interface": "Sensorium Interface",
+    "sensorium": "Sensorium",
     "solarized": "Solarized",
     "tokyo": "Tokyo Night",
     "monokai": "Monokai",
@@ -125,45 +122,10 @@ THEME_ALIASES: Dict[str, str] = {
     "cosmic": "cosmic_supernova",
     "supernova": "cosmic_supernova",
     "cosmic_supernova": "cosmic_supernova",
-    "cosmic dreamworlds": "cosmic_dreamworlds",
-    "cosmic dreamworld": "cosmic_dreamworlds",
-    "cosmic dream": "cosmic_dreamworlds",
-    "cosmic_dreamworlds": "cosmic_dreamworlds",
-    "cosmic_dreamworld": "cosmic_dreamworlds",
-    "cosmic_dream": "cosmic_dreamworlds",
-    "cosmic dreamworlds (liquid glass skin)": "cosmic_dreamworlds",
-    "cosmic_dreamworlds_(liquid_glass_skin)": "cosmic_dreamworlds",
-    "cosmic dreamworlds radioactive": "cosmic_dreamworlds_radioactive",
-    "cosmic_dreamworlds_radioactive": "cosmic_dreamworlds_radioactive",
-    "cosmic dreamworlds radioactive (liquid glass skin)": "cosmic_dreamworlds_radioactive",
-    "cosmic_dreamworlds_radioactive_(liquid_glass_skin)": "cosmic_dreamworlds_radioactive",
-    "cosmic_radioactive": "cosmic_dreamworlds_radioactive",
-    "cosmic universe": "cosmic_dreamworlds",
-    "cosmic_universe": "cosmic_dreamworlds",
-    "universe": "cosmic_dreamworlds",
-    "constellation": "cosmic_dreamworlds",
-    "the cosmological horizon": "cosmic_dreamworlds",
-    "cosmological horizon": "cosmic_dreamworlds",
-    "horizon": "cosmic_dreamworlds",
-    # Sensorium / Earth Flipper
-    "sensorium": "sensorium_interface",
-    "sensorium interface": "sensorium_interface",
-    "sensorium_interface": "sensorium_interface",
-    "sensorium interface (liquid glass skin)": "sensorium_interface",
-    "sensorium_interface_(liquid_glass_skin)": "sensorium_interface",
-    "earth flipper": "sensorium_interface",
-    "earth_flipper": "sensorium_interface",
-    "flipper": "sensorium_interface",
-    "yaporigami": "sensorium_interface",
-    "mplanetarian earth flipper": "sensorium_interface",
-    # Orbital Void Reflux
-    "orbital": "orbital_void_reflux",
-    "orbital void": "orbital_void_reflux",
-    "orbital_void": "orbital_void_reflux",
-    "orbital void reflux": "orbital_void_reflux",
-    "orbital_void_reflux": "orbital_void_reflux",
-    "orbital void reflux (liquid glass skin)": "orbital_void_reflux",
-    "orbital_void_reflux_(liquid_glass_skin)": "orbital_void_reflux",
+    # Sensorium
+    "sensorium": "sensorium",
+    "sensorium interface": "sensorium",
+    "sensorium_interface": "sensorium",
     # Terminals and classics
     "unix_terminal": "retro_terminal",
     "retro_unix": "retro_terminal",
@@ -202,8 +164,6 @@ THEME_ALIASES: Dict[str, str] = {
     "dark_vault": "retro_linux_memories",
     "linux_memories": "retro_linux_memories",
     "veracrypt": "retro_linux_memories",
-    "radioactive": "cosmic_dreamworlds_radioactive",
-    "void_reflux": "orbital_void_reflux",
     "into darkness": "into_darkness_void_out",
     "into_darkness": "into_darkness_void_out",
     "into_darkness_void_out": "into_darkness_void_out",
@@ -219,6 +179,52 @@ THEME_ALIASES: Dict[str, str] = {
 }
 
 DEFAULT_THEME = "dreamworlds_ultra"
+
+# Console pane per theme. This mirrors the THEME_BG_* table in
+# Mix_Archive_Manager.sh so a standalone player can paint the same pane the
+# manager paints. The glass hosts do not use it: their pane comes from the
+# shader and must stay transparent. Light panes pair with dark ink so the
+# menu text stays readable. Sensorium and MPlanetarian Dreamworlds are light
+# coral. Stream of Frequency, Cosmic Supernova, Phosphor, Retro Studio and
+# Retro Linux Memories keep their hue as a light tint of the old pane.
+THEME_BACKGROUNDS: Dict[str, RGB] = {
+    "stream_of_frequency": (168, 224, 236),
+    # MPlanetarian Dreamworlds rides the light coral pane and pairs it with
+    # white ink. The alias map resolves this spelling to dreamworlds_ultra for
+    # the renderers, so this entry only mirrors the manager's own pane.
+    "dreamworlds": (240, 128, 128),
+    "dreamworlds_ultra": (85, 74, 107),
+    "dynamic_rainbow_liquid_glass": (52, 16, 8),
+    "cosmic_supernova": (244, 186, 214),
+    "dreamworlds_liquid": (4, 28, 46),
+    "dreamworlds_neon": (28, 4, 48),
+    "retro_studio": (244, 214, 168),
+    "cyber_neon": (40, 4, 18),
+    "phosphor": (186, 236, 176),
+    "ice_cold": (6, 22, 46),
+    "retro_terminal": (0, 0, 0),
+    "sensorium": (240, 128, 128),
+    "retro_linux_memories": (176, 196, 214),
+    "into_darkness_void_out": (0, 0, 0),
+    "cyberpunk": (18, 4, 28),
+    "dracula": (40, 42, 54),
+    "nord": (46, 52, 64),
+    "matrix": (0, 20, 6),
+    "solarized": (0, 43, 54),
+    "tokyo": (12, 16, 40),
+    "monokai": (39, 40, 34),
+    "gruvbox": (60, 56, 54),
+    "emerald": (4, 32, 22),
+    "classic": (0, 0, 48),
+    "the_whitest_white": (255, 255, 255),
+}
+DEFAULT_BACKGROUND: RGB = (12, 12, 20)
+
+
+def theme_background(name: Optional[str]) -> RGB:
+    """Console pane for a theme name, always resolvable."""
+    return THEME_BACKGROUNDS.get(normalize_theme_name(name), DEFAULT_BACKGROUND)
+
 
 
 def normalize_theme_name(name: Optional[str]) -> str:
@@ -266,10 +272,7 @@ def cycle_order() -> List[str]:
     preferred = [
         "dreamworlds_ultra",
         "stream_of_frequency",
-        "sensorium_interface",
-        "cosmic_dreamworlds",
-        "cosmic_dreamworlds_radioactive",
-        "orbital_void_reflux",
+        "sensorium",
         "cosmic_supernova",
         "dynamic_rainbow_liquid_glass",
         "dreamworlds_liquid",

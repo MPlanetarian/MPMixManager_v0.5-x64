@@ -120,6 +120,9 @@ class TestTrayStartupDoesNotAbort(unittest.TestCase):
         qt = text.index("QApplication([])")
         self.assertLess(gate, qt, "the display check must run before QApplication")
 
+    @unittest.skipIf(sys.platform == "win32",
+                     "this builds a POSIX environment (PATH=/usr/bin:/bin, XDG_RUNTIME_DIR); "
+                     "the Windows tray is exercised by scripts/windows_tray.ps1 instead")
     def test_exits_zero_without_a_display(self):
         import subprocess
         import sys
@@ -148,3 +151,69 @@ class TestTrayStartupDoesNotAbort(unittest.TestCase):
         body = text.split("def display_server_ready", 1)[1].split("def run_tray", 1)[0]
         self.assertIn("WAYLAND_DISPLAY", body)
         self.assertIn("DISPLAY", body)
+
+
+class TestConsoleEncoding(unittest.TestCase):
+    """The companion must not die printing its banner on a cp1252 console.
+
+    Found on the Windows 11 VM: the startup banner contains emoji, Windows
+    consoles default to cp1252, and Python raised UnicodeEncodeError while
+    printing it -- before the socket was ever bound. The server exited
+    immediately and the installer still reported success, because it only
+    checked that a process had been spawned.
+    """
+
+    def setUp(self):
+        self.source = (ROOT / "scripts" / "mix_web_companion.py").read_text(encoding="utf-8")
+
+    def test_stdout_is_reconfigured_to_utf8(self):
+        self.assertIn("_make_console_utf8_safe", self.source)
+        body = self.source.split("def _make_console_utf8_safe", 1)[1].split("\ndef ", 1)[0]
+        self.assertIn("reconfigure", body)
+        self.assertIn("utf-8", body)
+        self.assertIn('errors="replace"', body)
+
+    def test_main_calls_it_before_doing_anything_else(self):
+        main = self.source.split("def main():", 1)[1]
+        first = next(line for line in main.splitlines() if line.strip())
+        self.assertIn("_make_console_utf8_safe()", first)
+
+    def test_the_windows_launcher_pins_the_encoding(self):
+        bat = (ROOT / "launch_web_companion.bat").read_text(encoding="utf-8", errors="replace")
+        self.assertIn("PYTHONIOENCODING=utf-8", bat)
+
+
+class TestWindowsLauncherIsIdempotent(unittest.TestCase):
+    """A login must never stack a second companion on the same port.
+
+    The Startup shortcut runs at every sign-in and the installer also starts
+    the companion, so the launcher has to be idempotent. Verified on the
+    Windows 11 VM: without the guard two pythonw processes both listened on
+    8888 (Windows permits it), and the two then disagreed about the stream
+    queue, so the phone got a different answer depending on which one accepted
+    the connection.
+    """
+
+    def setUp(self):
+        self.bat = (ROOT / "launch_web_companion.bat").read_text(encoding="utf-8", errors="replace")
+
+    def test_start_checks_for_a_running_instance_first(self):
+        start = self.bat.split("rem --- background start", 1)[1]
+        self.assertIn("ALREADY", start)
+        self.assertIn("mix_web_companion", start)
+        # The guard must run before any start command.
+        self.assertLess(start.index("ALREADY"), start.index("start """))
+
+    def test_stop_kills_every_matching_process(self):
+        stop = self.bat.split("==\"stop\" (", 1)[1].split("echo MP Web Companion stopped", 1)[0]
+        # Both interpreter names are swept, so a pythonw and a python orphan
+        # cannot both survive a --stop.
+        self.assertIn("pythonw.exe", stop)
+        self.assertIn("python.exe", stop)
+        self.assertEqual(stop.count("taskkill"), 2)
+
+    def test_it_reads_host_and_port_from_config_env(self):
+        """Windows has no wrapper to source the file."""
+        self.assertIn("config.env", self.bat)
+        self.assertIn("WEB_COMPANION_HOST", self.bat)
+        self.assertIn("WEB_COMPANION_PORT", self.bat)

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Start, stop, and query the MP Web Companion from the shared tray icon.
 
-The tray menu offers a single **Start / Stop MP Web Audio** entry whose label
-follows the service state: it reads *Stop* while the companion is serving and
-*Start* while it is not.
+The tray menu offers a single **Start / Stop MP Audio Player (Web)** entry
+whose label follows the service state: it reads *Stop* while the companion is
+serving and *Start* while it is not.
 
 Only Linux is wired up for now. The platform dispatch in :func:`toggle_companion`
 is written as an explicit case-style table so adding macOS/Windows later means
@@ -31,11 +31,11 @@ import urllib.request
 from pathlib import Path
 from typing import Optional
 
-MENU_START = "Start MP Web Audio"
-MENU_STOP = "Stop MP Web Audio"
+MENU_START = "Start MP Audio Player (Web)"
+MENU_STOP = "Stop MP Audio Player (Web)"
 
 ANNOUNCE_PATH = "/api/announce"
-ANNOUNCE_MESSAGE = "MP Audio Web Companion has been restarted"
+ANNOUNCE_MESSAGE = "MP Audio Player (Web) has been restarted"
 # Give connected dashboards one poll cycle to pick the notice up before the
 # service disappears.
 ANNOUNCE_SETTLE_SECONDS = 2.2

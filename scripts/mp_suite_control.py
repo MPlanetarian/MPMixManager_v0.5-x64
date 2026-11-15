@@ -129,11 +129,30 @@ def tty_mode_active() -> bool:
         return False
 
 
+def installed_components() -> set[str]:
+    """The apps this install set up; all four when nothing was recorded."""
+    try:
+        scripts = str(_scripts_dir())
+        if scripts not in sys.path:
+            sys.path.insert(0, scripts)
+        import mp_app_selection as selection  # noqa: WPS433 - sibling module
+
+        return set(selection.read())
+    except Exception:
+        return set(ROLE_ORDER)
+
+
 def app_definitions() -> list[dict[str, str]]:
-    """Static button metadata, in launch order. Never touches the process table."""
+    """Static button metadata, in launch order. Never touches the process table.
+
+    A one-app install only gets its own button: the dashboard must not offer a
+    launch that the tray menu also refuses.
+    """
+    chosen = installed_components()
     return [
         {"id": role, "label": APP_LABELS[role], "icon": APP_ICONS[role]}
         for role in ROLE_ORDER
+        if role in chosen
     ]
 
 
@@ -239,6 +258,7 @@ def app_status() -> dict:
     supported = is_supported()
     tty_mode = supported and tty_mode_active()
     roles = running_roles() if supported else set()
+    chosen = installed_components()
     if supported and not tty_mode:
         _touch_keepalive()
     payload = {
@@ -254,6 +274,7 @@ def app_status() -> dict:
                 "running": role in roles,
             }
             for role in ROLE_ORDER
+            if role in chosen
         ],
         "tray_running": tray_running() if supported else False,
         "visualizer": web_visualizer_status() if supported else {"running": False, "fullscreen": False},
@@ -401,6 +422,9 @@ def launch_app(role: str) -> dict:
     if tty_mode_active():
         # TTY Audio Mode keeps every desktop window closed on purpose.
         return {"success": False, "action": "tty_mode", "app": role}
+    if role not in installed_components():
+        # The installer only set up some of the apps; this one is not here.
+        return {"success": False, "action": "not_installed", "app": role}
     base = base_dir()
     if role in running_roles():
         focused = _focus(role)
@@ -428,6 +452,11 @@ def launch_app(role: str) -> dict:
 # never toggled and never closed.
 # ------------------------------------------------------------------------------
 _visualizer_action_lock = threading.Lock()
+# One Close All sweep at a time. A second tap while the exit movie is playing
+# must not queue a second sweep behind the first.
+_close_lock = threading.Lock()
+_close_thread: Optional[threading.Thread] = None
+_close_rerun = False
 
 
 def _visualizer_state() -> Optional[dict]:
@@ -455,10 +484,11 @@ def web_visualizer_status() -> dict:
     state = _visualizer_state()
     if state is None:
         return {"running": False, "fullscreen": False}
+    phase = state.get("phase") or visualizer_control.PHASE_WINDOWED
     return {
         "running": True,
-        "fullscreen": bool(state.get("fullscreen")),
-        "pending": bool(state.get("pending")),
+        "fullscreen": phase == visualizer_control.PHASE_FULLSCREEN,
+        "pending": phase == visualizer_control.PHASE_PENDING,
         "instance": state.get("instance", ""),
     }
 
@@ -520,19 +550,40 @@ def _web_visualizer_action_locked() -> dict:
             "state": "windowed",
         }
 
-    if state.get("pending"):
+    phase = state.get("phase") or visualizer_control.PHASE_WINDOWED
+
+    if phase == visualizer_control.PHASE_PENDING:
+        # A second tap while the window is still starting cancels it, so the
+        # button keeps walking Off -> Windowed -> Fullscreen -> Off instead of
+        # swallowing the press. The window publishes its own phase within a
+        # frame of opening, so this is a short window on a cold start only.
+        closed = visualizer_control.request_close(state)
+        reset_status_cache()
+        if not closed:
+            return {
+                "success": True,
+                "action": "already_running",
+                "label": APP_LABELS[ROLE_VISUALIZER],
+                "state": "windowed",
+            }
         return {
             "success": True,
-            "action": "already_running",
+            "action": "close",
             "label": APP_LABELS[ROLE_VISUALIZER],
-            "state": "windowed",
+            "state": "closed",
         }
 
-    if not state.get("fullscreen"):
+    if phase != visualizer_control.PHASE_FULLSCREEN:
         toggled = visualizer_control.request_toggle_fullscreen(state)
         if not toggled:
             return {"success": False, "action": "error",
                     "detail": "the visualizer window did not accept the command"}
+        # Record the commanded mode before returning. The window can only apply
+        # a toggle on its next render frame and then republish, so an impatient
+        # second tap would otherwise read the stale "windowed" record and send
+        # a second toggle instead of a close.
+        visualizer_control.record_command(
+            state, visualizer_control.PHASE_FULLSCREEN)
         return {
             "success": True,
             "action": "fullscreen",
@@ -611,33 +662,13 @@ def _fallback_close(base: Path) -> None:
             pass
 
 
-def close_all_apps(base: Optional[Path] = None) -> dict:
-    """Close MP Gui, the CLI manager, the player, and the visualizer.
+def _close_suite(base: Path, before: set[str]) -> tuple[set[str], set[str]]:
+    """Stop the four apps and confirm they are gone. Blocking, by design.
 
-    The shared tray icon is deliberately left alone: it is not one of the four
-    roles, so ``shutdown_suite`` never signals it. The dashboard also asks the
-    tray to stay, because a tray started by a shortcut (rather than autostart)
-    otherwise quits a few seconds after the last window closes.
+    Contains everything the close actually does, so the dashboard can run it off
+    the request thread and the tray menu can run it inline without either one
+    duplicating the ordering the tray relies on.
     """
-    if not is_supported():
-        return {
-            "success": False,
-            "action": "unsupported",
-            "closed": [],
-            "remaining": [],
-            "tray_running": False,
-        }
-    if tty_mode_active():
-        return {
-            "success": False,
-            "action": "tty_mode",
-            "closed": [],
-            "remaining": [],
-            "tray_running": tray_running(),
-        }
-    base = Path(base) if base is not None else base_dir()
-    before = running_roles()
-    reset_status_cache()
     tray = _tray_module()
     if tray is not None:
         # Claim the icon *before* the windows disappear, otherwise a tray that
@@ -659,11 +690,117 @@ def close_all_apps(base: Optional[Path] = None) -> dict:
     while remaining and time.time() < deadline:
         time.sleep(0.15)
         remaining = running_roles()
+    return before - remaining, remaining
 
+
+def _start_background_close(base: Path) -> bool:
+    """Run `_close_suite` off the request thread. False if nothing is running.
+
+    Close All from the phone used to block for ~42 seconds, because the tray
+    plays `Exit_MP_Video.mp4` (40 s) before it stops anything. The dashboard's
+    button spent that whole time spinning and the request could outlive a phone
+    that had already given up. The desktop still plays the movie; the phone now
+    gets its answer immediately and confirms with the normal status poll.
+
+    A press while a sweep is already going is not dropped: it asks for another
+    sweep, which the running worker runs as soon as it finishes. Without that, a
+    user who pressed Close All, reopened something, and pressed again inside the
+    movie's 40 seconds would get nothing at all.
+    """
+    global _close_thread, _close_rerun
+    with _close_lock:
+        before = running_roles()
+        if not before:
+            return False
+        if _close_thread is not None and _close_thread.is_alive():
+            _close_rerun = True
+            return True
+
+        def worker() -> None:
+            global _close_rerun
+            current = before
+            while current:
+                try:
+                    _close_suite(base, current)
+                except Exception:
+                    pass
+                # The next poll must ask the host, not this process's cache.
+                reset_status_cache()
+                with _close_lock:
+                    if not _close_rerun:
+                        return
+                    _close_rerun = False
+                # A press during the previous sweep asked for one more pass.
+                current = running_roles()
+            reset_status_cache()
+
+        # Not a daemon: a half-finished close is worse than a slow shutdown,
+        # and the whole sweep is bounded by the tray's own escalation deadlines.
+        _close_thread = threading.Thread(
+            target=worker, name="mp-close-all", daemon=False)
+        _close_thread.start()
+        return True
+
+
+def close_all_apps(base: Optional[Path] = None, wait: bool = True) -> dict:
+    """Close MP Gui, the CLI manager, the player, and the visualizer.
+
+    The shared tray icon is deliberately left alone: it is not one of the four
+    roles, so ``shutdown_suite`` never signals it. The dashboard also asks the
+    tray to stay, because a tray started by a shortcut (rather than autostart)
+    otherwise quits a few seconds after the last window closes.
+
+    ``wait=False`` answers at once with ``action="closing"`` and finishes the
+    sweep on a background thread; that is what the dashboard uses so a 40-second
+    exit movie does not hold the phone's request open.
+    """
+    if not is_supported():
+        return {
+            "success": False,
+            "action": "unsupported",
+            "closed": [],
+            "remaining": [],
+            "tray_running": False,
+        }
+    if tty_mode_active():
+        return {
+            "success": False,
+            "action": "tty_mode",
+            "closed": [],
+            "remaining": [],
+            "tray_running": tray_running(),
+        }
+    base = Path(base) if base is not None else base_dir()
+    before = running_roles()
+    reset_status_cache()
+
+    if not wait:
+        if not before:
+            # Nothing is open: report a finished close rather than claiming a
+            # sweep started. The tray icon is still left in place.
+            return {
+                "success": True,
+                "action": "close_all",
+                "closed": [],
+                "remaining": [],
+                "tray_running": tray_running(),
+                "closing": False,
+            }
+        started = _start_background_close(base)
+        return {
+            "success": True,
+            "action": "closing",
+            "closed": [],
+            "remaining": sorted(before),
+            "tray_running": tray_running(),
+            "closing": bool(started),
+        }
+
+    closed, remaining = _close_suite(base, before)
     return {
         "success": not remaining,
         "action": "close_all",
-        "closed": sorted(before - remaining),
+        "closed": sorted(closed),
         "remaining": sorted(remaining),
         "tray_running": tray_running(),
     }

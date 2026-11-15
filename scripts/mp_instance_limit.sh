@@ -92,6 +92,55 @@ mp_instance_notify_limit() {
     return 0
 }
 
+# Is this process the last MP Gui / MP Liquid Player window still open?
+# The two roles are counted together: closing one of two open windows returns
+# 1, so the exit video waits for the very last window of either kind.
+# 0 = play the exit video, 1 = another window is still open.
+mp_instance_is_last_window() {
+    local role="${1:-}" helper py
+    helper="$(_mp_instance_helper)" || return 0
+    py="$(_mp_instance_python)" || return 0
+    "$py" "$helper" last-window "$role" >/dev/null 2>&1
+    return $?
+}
+
+# Drop this process's closing marker once the exit video has finished.
+mp_instance_end_closing() {
+    local role="${1:-}" helper py
+    helper="$(_mp_instance_helper)" || return 0
+    py="$(_mp_instance_python)" || return 0
+    "$py" "$helper" end-closing "$role" >/dev/null 2>&1 || true
+    return 0
+}
+
+# Is this process the only window of this role that is open?
+# 0 = yes (play the intro), 1 = another window of this role is already open.
+_mp_instance_is_first_role() {
+    local role="$1" pid="${2:-${BASHPID:-$$}}" helper py value
+    helper="$(_mp_instance_helper)" || return 0
+    py="$(_mp_instance_python)" || return 0
+    value="$("$py" "$helper" count "$role" --exclude-pid "$pid" 2>/dev/null)" || return 0
+    case "$value" in
+        0|'') return 0 ;;
+    esac
+    return 1
+}
+
+# Is this process the only MP Liquid Player window open?
+# The launcher asks before it starts the companion visualizer and execs the
+# host: only the first window of a session plays the intro movie, and it must
+# run before either of those windows exists.
+mp_instance_is_first_player() {
+    _mp_instance_is_first_role player "${1:-${BASHPID:-$$}}"
+}
+
+# Is this process the only MP Gui window open?
+# Same rule as the player: the first window plays Exit_MP_Video.mp4 once,
+# and every later MP Gui opens with no movie at all.
+mp_instance_is_first_gui() {
+    _mp_instance_is_first_role gui "${1:-${BASHPID:-$$}}"
+}
+
 # Raise a window that is already open. Returns non-zero when none is on screen.
 mp_instance_focus() {
     local role="$1" helper py

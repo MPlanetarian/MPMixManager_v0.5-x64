@@ -8,6 +8,8 @@ and workflow transitions across the MP Mix Archive Manager for statistical and
 predictive analytics.
 """
 
+from __future__ import annotations
+
 import os
 import sys
 import time

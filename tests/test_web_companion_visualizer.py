@@ -11,6 +11,7 @@ import os
 import signal
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -177,6 +178,75 @@ class ThreeStateButtonTest(unittest.TestCase):
         self.assertTrue(result["success"])
         self.assertEqual(result["action"], "already_running")
         spawn.assert_not_called()
+
+    def test_a_tap_while_starting_closes_when_the_window_answers(self):
+        """The press must not be swallowed: a second tap cancels the start."""
+        with patch.object(vis, "request_close", return_value=True) as closer, \
+             patch.object(control, "_spawn") as spawn:
+            result = self._run({"instance": "abc123", "pid": 4242,
+                                "pending": True, "fullscreen": False})
+        self.assertTrue(result["success"])
+        self.assertEqual(result["action"], "close")
+        closer.assert_called_once()
+        spawn.assert_not_called()
+
+    def test_pressing_again_before_the_window_republishes_closes_it(self):
+        """The reported bug: press 1 opens, press 2 fullscreens, press 3 closes.
+
+        The window applies a toggle on its next render frame and only then
+        republishes, so a third tap that arrives first used to read the stale
+        "windowed" record and send a *second* toggle -- the window stayed open
+        and the button looked broken.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / vis.STATE_FILE_NAME
+            with patch.object(control, "is_supported", return_value=True), \
+                 patch.object(control, "tty_mode_active", return_value=False), \
+                 patch.object(control, "config_dir", return_value=Path(tmp)), \
+                 patch.object(vis, "state_path", return_value=path), \
+                 patch.object(control, "running_roles", return_value=set()), \
+                 patch.object(vis, "instance_is_live", return_value=True), \
+                 patch.object(vis, "request_toggle_fullscreen", return_value=True), \
+                 patch.object(vis, "request_close", return_value=True) as closer:
+                vis.write_state({"instance": "abc123", "pid": 4242,
+                                 "fullscreen": False}, path)
+                second = control.web_visualizer_action()
+                # The window has not republished yet. Press again at once.
+                third = control.web_visualizer_action()
+        self.assertEqual(second["action"], "fullscreen")
+        self.assertEqual(third["action"], "close",
+                         "the third press must close, not toggle again")
+        closer.assert_called_once()
+
+    def test_a_lost_fullscreen_command_does_not_latch_the_button(self):
+        """A command the window never honoured stops being trusted."""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / vis.STATE_FILE_NAME
+            vis.write_state({"instance": "abc123", "pid": 4242,
+                             "fullscreen": False}, path)
+            vis.record_command({"instance": "abc123", "pid": 4242,
+                                "fullscreen": False},
+                               vis.PHASE_FULLSCREEN, path)
+            state = vis.read_state(path)
+            self.assertEqual(state["phase"], vis.PHASE_FULLSCREEN)
+            # Rewind the stamp past the grace window: the window's own
+            # truthful "windowed" publish wins again.
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            raw["command_at"] = time.time() - (vis.COMMAND_GRACE_SECONDS + 1)
+            path.write_text(json.dumps(raw), encoding="utf-8")
+            self.assertEqual(vis.read_state(path)["phase"], vis.PHASE_WINDOWED)
+
+    def test_recording_a_command_keeps_the_window_identity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / vis.STATE_FILE_NAME
+            vis.write_state({"instance": "abc123", "pid": 4242,
+                             "fullscreen": False}, path)
+            vis.record_command({"instance": "abc123", "pid": 4242},
+                               vis.PHASE_FULLSCREEN, path)
+            state = vis.read_state(path)
+        self.assertEqual(state["instance"], "abc123")
+        self.assertEqual(state["pid"], 4242)
+        self.assertEqual(state["phase"], vis.PHASE_FULLSCREEN)
 
     def test_status_has_no_stray_keys(self):
         with patch.object(control, "_visualizer_state", return_value=None):

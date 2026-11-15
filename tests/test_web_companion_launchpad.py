@@ -9,6 +9,8 @@ signals the shared tray icon.
 
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -170,6 +172,85 @@ class TestCloseAll(unittest.TestCase):
             result = control.close_all_apps(ROOT)
         self.assertFalse(result["success"])
         self.assertEqual(result["action"], "unsupported")
+
+    def test_close_all_can_answer_before_the_suite_is_stopped(self):
+        """The phone must not wait out the 40-second exit movie.
+
+        ``wait=False`` acknowledges immediately and sweeps on a background
+        thread. The launch pad poll is what turns the buttons off.
+        """
+        release = threading.Event()
+        swept = []
+
+        def slow_close(base, before):
+            # Stand in for the exit movie: hold the sweep until the test says go.
+            release.wait(10)
+            swept.append(sorted(before))
+            return set(before), set()
+
+        with patch.object(control, "is_supported", return_value=True), \
+             patch.object(control, "tty_mode_active", return_value=False), \
+             patch.object(control, "running_roles", return_value={"gui", "manager"}), \
+             patch.object(control, "tray_running", return_value=True), \
+             patch.object(control, "_close_suite", side_effect=slow_close), \
+             patch.object(control, "_close_thread", None):
+            started = time.monotonic()
+            result = control.close_all_apps(ROOT, wait=False)
+            elapsed = time.monotonic() - started
+
+            self.assertLess(elapsed, 1.0, "the reply must not block on the sweep")
+            self.assertEqual(result["action"], "closing")
+            self.assertTrue(result["closing"])
+            self.assertEqual(result["remaining"], ["gui", "manager"])
+            self.assertFalse(swept, "the sweep should still be running")
+
+            release.set()
+            for _ in range(100):
+                if swept:
+                    break
+                time.sleep(0.02)
+        self.assertEqual(swept, [["gui", "manager"]])
+
+    def test_a_second_close_all_does_not_stack_a_thread(self):
+        """A repeat press runs one more pass, not a second thread."""
+        release = threading.Event()
+        calls = []
+
+        def slow_close(base, before):
+            calls.append(sorted(before))
+            release.wait(10)
+            return set(before), set()
+
+        with patch.object(control, "is_supported", return_value=True), \
+             patch.object(control, "tty_mode_active", return_value=False), \
+             patch.object(control, "running_roles", return_value={"gui"}), \
+             patch.object(control, "tray_running", return_value=True), \
+             patch.object(control, "_close_suite", side_effect=slow_close), \
+             patch.object(control, "_close_thread", None):
+            first = control.close_all_apps(ROOT, wait=False)
+            second = control.close_all_apps(ROOT, wait=False)
+            release.set()
+            for _ in range(100):
+                if len(calls) >= 2:
+                    break
+                time.sleep(0.02)
+            time.sleep(0.1)
+        self.assertTrue(first["closing"])
+        # The second press is acknowledged and honoured with a follow-up pass,
+        # because the user may have reopened something during the sweep.
+        self.assertTrue(second["closing"])
+        self.assertEqual(len(calls), 2, "one follow-up pass, not a stacked thread")
+
+    def test_close_all_with_nothing_open_reports_done(self):
+        with patch.object(control, "is_supported", return_value=True), \
+             patch.object(control, "tty_mode_active", return_value=False), \
+             patch.object(control, "running_roles", return_value=set()), \
+             patch.object(control, "tray_running", return_value=True), \
+             patch.object(control, "_start_background_close") as starter:
+            result = control.close_all_apps(ROOT, wait=False)
+        self.assertEqual(result["action"], "close_all")
+        self.assertFalse(result["closing"])
+        starter.assert_not_called()
 
 
 class TestKeepalive(unittest.TestCase):
