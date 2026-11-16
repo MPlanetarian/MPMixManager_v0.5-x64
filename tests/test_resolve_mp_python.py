@@ -162,6 +162,56 @@ class GuiInterpreterSelectionTests(unittest.TestCase):
             self.assertIn("resolve_mp_python.sh", text, name)
             self.assertIn("mp_gui_python_bin", text, name)
 
+    def test_gui_resolver_remembers_an_interpreter(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            home = root / "home"
+            cache_dir = home / ".config" / "mix-manager"
+            cache_dir.mkdir(parents=True)
+            remembered = root / "remembered-python3"
+            remembered.write_text(
+                "#!/bin/sh\necho ran > \"$HOME/ran\"\nexit 0\n",
+                encoding="utf-8",
+            )
+            remembered.chmod(remembered.stat().st_mode | stat.S_IEXEC)
+            (cache_dir / "gui_python_bin").write_text(remembered.as_posix() + "\n", encoding="utf-8")
+            script = textwrap.dedent(f"""
+                export HOME="{home.as_posix()}"
+                unset MP_PYTHON_CANDIDATES MP_PYTHON_NO_CACHE MP_PYTHON
+                export SCRIPT_DIR="{root.as_posix()}"
+                source "{RESOLVER.as_posix()}"
+                printf '%s\\n' "$(mp_gui_python_bin)"
+            """)
+            res = _bash(script, env={"HOME": home.as_posix()})
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(res.stdout.strip(), remembered.as_posix())
+        self.assertFalse((home / "ran").exists())
+
+    def test_candidate_list_ignores_a_remembered_interpreter(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            home = root / "home"
+            cache_dir = home / ".config" / "mix-manager"
+            cache_dir.mkdir(parents=True)
+            remembered = root / "remembered-python3"
+            remembered.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            remembered.chmod(remembered.stat().st_mode | stat.S_IEXEC)
+            (cache_dir / "gui_python_bin").write_text(remembered.as_posix() + "\n", encoding="utf-8")
+            good = root / "system-python3"
+            good.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            good.chmod(good.stat().st_mode | stat.S_IEXEC)
+            script = textwrap.dedent(f"""
+                export HOME="{home.as_posix()}"
+                export PATH="{good.as_posix()}:$PATH"
+                export SCRIPT_DIR="{root.as_posix()}"
+                export MP_PYTHON_CANDIDATES="{good.as_posix()}"
+                source "{RESOLVER.as_posix()}"
+                printf '%s\\n' "$(mp_gui_python_bin)"
+            """)
+            res = _bash(script, env={"HOME": home.as_posix()})
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(Path(res.stdout.strip()).resolve(), good.resolve())
+
     def test_visualizer_launcher_uses_the_visualizer_resolver(self):
         text = (BASE_DIR / "scripts" / "launch_liquid_visualizer.sh").read_text(encoding="utf-8")
         self.assertIn("mp_visualizer_python_bin", text)

@@ -139,15 +139,30 @@ class OpenCodeSessionDetectionTest(unittest.TestCase):
                         "the session gate, not return early")
 
     def test_force_is_not_blocked_by_the_session_rule(self):
-        """`--force` is the interactive 'send now' path and must still work."""
+        """`--force` is the interactive 'send now' path and must still work.
+
+        The gate is what this pins, not the build: stop the dispatch at the rate
+        limit so the test never renders a PDF or synthesises audio, which needs
+        optional dependencies (pypdf, a TTS engine) a bare CI host may not have.
+        """
         original_detect = self.mod.active_opencode_sessions
         self.mod.active_opencode_sessions = lambda: 0
+        reached = {}
+
+        def fake_rate_limit(cfg, force=False):
+            reached["force"] = force
+            return False
+
+        original_rate = self.mod.check_rate_limit
+        self.mod.check_rate_limit = fake_rate_limit
         try:
-            # dry_run builds but never sends, so this is safe to call.
-            result = self.mod.execute_email_dispatch(force=True, dry_run=True)
-            self.assertIsInstance(result, bool)
+            self.mod.execute_email_dispatch(force=True)
         finally:
+            self.mod.check_rate_limit = original_rate
             self.mod.active_opencode_sessions = original_detect
+        self.assertIn("force", reached,
+                      "force=True must pass the session gate even with no session")
+        self.assertTrue(reached["force"], "the force flag must reach the rate limit")
 
 
 if __name__ == "__main__":

@@ -1508,8 +1508,25 @@ mp_screen_pick_group() {
 mp_screen_layout_refresh() {
     local _force="${1:-0}" _now _stamp_file _cached="" _pw=""
     _now="$(_ms_now)"
-    [ "$_force" -eq 0 ] && [ "${_MS_LAYOUT_TS:-0}" -gt 0 ] && [ "$((_now - _MS_LAYOUT_TS))" -lt 10 ] && return 0
+    # The display list is reused for a few seconds, but a new terminal size
+    # must be measured again. Otherwise a window that grows after the first
+    # frame stays single-column until the cache expires.
+    local _size_key="${_TERM_COLS:-0}x${_TERM_LINES:-0}"
+    [ "$_force" -eq 0 ] && [ "${_MS_LAYOUT_TS:-0}" -gt 0 ] && [ "$((_now - _MS_LAYOUT_TS))" -lt 10 ] && [ "$_size_key" = "${_MS_LAYOUT_SIZE:-}" ] && return 0
     _MS_LAYOUT_TS="$_now"
+    _MS_LAYOUT_SIZE="$_size_key"
+    # A normal window is one screen wide. kscreen-doctor is only needed once
+    # the console is already wide enough for two panels, or when a caller
+    # forces a probe (the background span request). Doing it on every launch
+    # held the first frame for a few tenths of a second and learned nothing
+    # the single-column draw did not already know.
+    if [ "$_force" -eq 0 ] && [[ "${_TERM_COLS:-0}" =~ ^[0-9]+$ ]] && [ "${_TERM_COLS:-0}" -lt 180 ] && [ "${#_MS_WIDTHS[@]}" -eq 0 ]; then
+        _MS_ON=0
+        _MS_N=1
+        _MS_WANT=1
+        _MS_REASON="window is a single screen"
+        return 0
+    fi
     local -a _all=()
     local _w=""
     while IFS= read -r _w; do
@@ -3074,11 +3091,15 @@ exit_mix_manager() {
 if [ -f "$SCRIPT_DIR/scripts/resolve_mp_python.sh" ]; then
     # shellcheck disable=SC1091
     source "$SCRIPT_DIR/scripts/resolve_mp_python.sh"
-    resolve_mp_python >/dev/null || true
     # Windows keeps the plain resolver; the GTK hosts need PyGObject.
     # MP_PY_BIN is the absolute path for engines and background spawns.
+    # A remembered interpreter is a file read. Importing gi and numpy here
+    # used to start a Python process before the menu existed.
     MP_PY_BIN="$(mp_gui_python_bin 2>/dev/null || true)"
-    [ -n "$MP_PY_BIN" ] || MP_PY_BIN="$(mp_python_bin 2>/dev/null || echo python3)"
+    if [ -z "$MP_PY_BIN" ]; then
+        resolve_mp_python >/dev/null || true
+        MP_PY_BIN="$(mp_python_bin 2>/dev/null || echo python3)"
+    fi
     export MP_PY_BIN
 fi
 OS_TYPE="linux"; case "$UNAME_S" in Darwin*) OS_TYPE="macos"; ;; CYGWIN*|MINGW*|MSYS*) OS_TYPE="windows" ;; FreeBSD*) OS_TYPE="freebsd"; ;; Linux*) if grep -qi microsoft /proc/version 2>/dev/null; then OS_TYPE="wsl"; else OS_TYPE="linux"; fi ;; *) case "${OSTYPE:-}" in msys*|cygwin*|win32*) OS_TYPE="windows" ;; darwin*) OS_TYPE="macos" ;; freebsd*) OS_TYPE="freebsd" ;; *) OS_TYPE="linux" ;; esac ;; esac; export OS_TYPE
@@ -9786,9 +9807,15 @@ ensure_first_run_sample_track() {
 ensure_liquid_glass_first_run_reward() {
     local rew_py="$SCRIPT_DIR/scripts/liquid_glass_reward.py"
     [ ! -f "$rew_py" ] && rew_py="$PWD/scripts/liquid_glass_reward.py"
-    if [ -f "$rew_py" ]; then
-        python3 "$rew_py" || true
+    [ -f "$rew_py" ] || return 0
+    # The welcome screen has to stay in front on a first run. After that the
+    # shortcut check is bookkeeping and must not hold the menu.
+    if [ -f "${HOME}/.config/mix-manager/.liquid_glass_welcomed" ]; then
+        python3 "$rew_py" >/dev/null 2>&1 </dev/null &
+        disown 2>/dev/null || true
+        return 0
     fi
+    python3 "$rew_py" || true
 }
 _ensure_mp_system_tray() {
     if mp_tty_audio_mode_active; then
@@ -9815,42 +9842,23 @@ _cleanup_mix_manager_exit() {
 trap '_cleanup_mix_manager_exit' EXIT INT TERM HUP
 _gamepad_start
 _ensure_mp_system_tray
-# Stretch the console across every matching display before the first frame, so
-# the three-section layout has room for its columns. Best effort: a window
-# manager may decline, and the menu then stays single column.
+# Ask the window manager to stretch the console across the matching displays.
+# Do not wait for it. The old confirm-and-retry loop called kscreen-doctor and
+# slept before the first frame, which held a blank screen for about five
+# seconds whenever the resize was not confirmed. The menu draws at the current
+# size immediately. When the window actually changes size, the layout cache
+# misses and the next frame uses the columns.
 if [ "${MP_SCREEN_ALIGN_TERMINAL:-true}" = "true" ] && ! mp_tty_audio_mode_active && [ "${MP_GUI_SESSION:-0}" != "1" ] && [ "${MP_LIQUID_GLASS:-0}" != "1" ]; then
-    mp_screen_layout_refresh 1
-    # _MS_WANT is what the displays support; _MS_ON only turns on once the
-    # window covers them. Span first, then re-check, and retry a few times
-    # because the window manager may still be mapping the new window.
-    if [ "${_MS_WANT:-1}" -ge 2 ] && [ "${_MS_ON:-0}" -ne 1 ]; then
-        # This block runs at the script's top level, so no "local" here.
-        # Span once, then poll for the window manager to finish resizing. The
-        # old loop always burned four rounds with a fixed sleep between them,
-        # which cost about six seconds before the first menu appeared when the
-        # window never confirmed. Stop at the first confirmation instead, and
-        # only ask again if the first request clearly did not land.
-        _SPAN_TRY=0
-        while [ "$_SPAN_TRY" -lt 2 ]; do
-            _SPAN_TRY=$((_SPAN_TRY + 1))
-            mp_screen_span_console >/dev/null 2>&1 || break
-            _SPAN_POLL=0
-            while [ "$_SPAN_POLL" -lt 5 ]; do
-                _SPAN_POLL=$((_SPAN_POLL + 1))
-                sleep 0.15
-                _MS_LAYOUT_TS=0
-                _MS_PROBE_TS=0
-                update_terminal_geometry 1
-                mp_screen_layout_refresh 1
-                [ "${_MS_ON:-0}" -eq 1 ] && break 2
-            done
-        done
-        # Leave the cached geometry and column split describing the window that
-        # is actually on screen now, so the first draw does not re-probe.
-        _MS_LAYOUT_TS=0
-        update_terminal_geometry 1
+    (
+        # A subshell must not run the manager's EXIT trap when this request
+        # finishes, or it would tear the menu down as the window was spanning.
+        trap - EXIT INT TERM HUP
         mp_screen_layout_refresh 1
-    fi
+        if [ "${_MS_WANT:-1}" -ge 2 ] && [ "${_MS_ON:-0}" -ne 1 ]; then
+            mp_screen_span_console >/dev/null 2>&1 || true
+        fi
+    ) >/dev/null 2>&1 &
+    disown 2>/dev/null || true
 fi
 if mp_tty_audio_mode_active && [ -z "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then :; else display_startup_loader_video 0; fi
 ensure_first_run_equalizer

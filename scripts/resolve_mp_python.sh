@@ -111,12 +111,43 @@ EOF
 # The Liquid Glass window needs PyGObject (Gtk 3, GdkX11, Vte) and numpy.
 # soundfile stays optional: MP_Audio_Player.py imports it in a try/except.
 # Windows does not use GTK, so it keeps the plain resolver.
+_mp_gui_python_cache_file() {
+    [ -n "${HOME:-}" ] || return 1
+    printf '%s\n' "${HOME}/.config/mix-manager/gui_python_bin"
+}
+
+# Remember the interpreter that imported gi and numpy. The check starts
+# Python and imports both modules, which is a couple of tenths of a second
+# and is not needed again until that interpreter disappears. An explicit
+# candidate list is a test or an override, so it never reads or writes the
+# cache.
+_mp_gui_python_remember() {
+    [ -z "${MP_PYTHON_CANDIDATES:-}${MP_PYTHON_NO_CACHE:-}" ] || return 0
+    local bin="$1" cache
+    [[ "$bin" == /* && -x "$bin" ]] || return 0
+    cache="$(_mp_gui_python_cache_file)" || return 0
+    mkdir -p "${cache%/*}" 2>/dev/null || return 0
+    printf '%s\n' "$bin" > "$cache" 2>/dev/null || true
+}
+
 mp_gui_python_bin() {
-    local bin
+    local bin cache
     case "$(uname -s 2>/dev/null)" in
         MINGW*|MSYS*|CYGWIN*) mp_python_bin; return $? ;;
     esac
+    if [ -z "${MP_PYTHON_CANDIDATES:-}${MP_PYTHON_NO_CACHE:-}" ]; then
+        cache="$(_mp_gui_python_cache_file 2>/dev/null || true)"
+        if [ -n "$cache" ] && [ -f "$cache" ]; then
+            IFS= read -r bin < "$cache" || bin=""
+            if [ -n "$bin" ] && [ -x "$bin" ]; then
+                _mp_python_use "$bin"
+                printf '%s\n' "$bin"
+                return 0
+            fi
+        fi
+    fi
     if bin="$(mp_python_with_modules gi numpy 2>/dev/null)" && [ -n "$bin" ]; then
+        _mp_gui_python_remember "$bin"
         printf '%s\n' "$bin"
         return 0
     fi
