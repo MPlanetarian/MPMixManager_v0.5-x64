@@ -38,6 +38,8 @@ THEMES = (
     "gruvbox",
     "emerald",
     "classic",
+    "into_darkness_void_out",
+    "the_whitest_white",
 )
 
 
@@ -68,14 +70,14 @@ class TestCliThemeBackground(unittest.TestCase):
             theme, r, g, b = raw.split("\t")
             seen[theme] = (int(r), int(g), int(b))
         self.assertEqual(set(seen), set(THEMES))
-        # Dreamworlds Ultra is the first-run default. MPlanetarian Dreamworlds
-        # is the second light pane (light coral with white ink), and retro
-        # terminal stays black.
-        self.assertEqual(seen["dreamworlds"], (240, 128, 128))
-        self.assertEqual(seen["dreamworlds_ultra"], (85, 74, 107))
-        # Sensorium is the other light pane: its dark ink is checked in
-        # test_menu_text_theme_ink, so here the colour itself is pinned.
-        self.assertEqual(seen["sensorium"], (240, 128, 128))
+        # The console pane is the glass still-water field. MPlanetarian
+        # Dreamworlds resolves to the same field as Dreamworlds Ultra.
+        # Into Darkness is the void-out black.
+        self.assertEqual(seen["dreamworlds"], seen["dreamworlds_ultra"])
+        self.assertEqual(seen["dreamworlds_ultra"], (186, 180, 220))
+        self.assertEqual(seen["sensorium"], (195, 196, 191))
+        self.assertEqual(seen["into_darkness_void_out"], (0, 0, 0))
+        self.assertEqual(seen["retro_linux_memories"], (158, 171, 191))
         alias = _bash(
             f"""
             set -e
@@ -88,58 +90,39 @@ class TestCliThemeBackground(unittest.TestCase):
         )
         self.assertEqual(alias.returncode, 0, alias.stderr)
         expected_alias = {
-            "default": (85, 74, 107),
-            "mplanetarian": (240, 128, 128),
-            "mplanetarian_dreamworlds": (240, 128, 128),
+            "default": (186, 180, 220),
+            "mplanetarian": (186, 180, 220),
+            "mplanetarian_dreamworlds": (186, 180, 220),
         }
         for raw in alias.stdout.splitlines():
             theme, r, g, b = raw.split("\t")
             self.assertEqual((int(r), int(g), int(b)), expected_alias[theme], theme)
-        colours = [rgb for theme, rgb in seen.items() if theme != "dreamworlds"]
-        self.assertEqual(len(colours), len(set(colours)))
         for theme, (r, g, b) in seen.items():
             for channel in (r, g, b):
                 self.assertGreaterEqual(channel, 0, theme)
                 self.assertLessEqual(channel, 255, theme)
             luma = 0.299 * r + 0.587 * g + 0.114 * b
-            if theme in ("sensorium", "dreamworlds"):
-                self.assertGreaterEqual(
-                    luma, 140,
-                    f"{theme} should keep its light coral pane",
-                )
-            elif theme in (
-                "stream_of_frequency",
-                "cosmic_supernova",
-                "phosphor",
-                "retro_studio",
-            ):
-                self.assertGreaterEqual(
-                    luma, 140,
-                    f"{theme} should keep the light tint of its own colour",
-                )
+            if theme == "into_darkness_void_out":
+                self.assertEqual((r, g, b), (0, 0, 0), theme)
             else:
-                self.assertLess(luma, 90, f"{theme} background is too light for the menu text")
-        # Neighbouring themes in the C-key cycle must be visibly different.
-        cycle = [
-            "stream_of_frequency",
-            "dreamworlds_ultra",
-            "dynamic_rainbow_liquid_glass",
-            "cosmic_supernova",
-            "dreamworlds_liquid",
-            "dreamworlds_neon",
-            "retro_studio",
-            "cyber_neon",
-            "phosphor",
-            "ice_cold",
-            "retro_terminal",
-            "sensorium",
-            "retro_linux_memories",
-        ]
-        for left, right in zip(cycle, cycle[1:] + cycle[:1]):
-            ar, ag, ab = seen[left]
-            br, bg, bb = seen[right]
-            dist = ((ar - br) ** 2 + (ag - bg) ** 2 + (ab - bb) ** 2) ** 0.5
-            self.assertGreaterEqual(dist, 18, f"{left} and {right} backgrounds are too alike")
+                self.assertGreaterEqual(
+                    luma, 140,
+                    f"{theme} should use the pale still-water field",
+                )
+        # Aliases the glass collapses share one field. The other ids stay apart.
+        shared = {
+            "dreamworlds": "dreamworlds_ultra",
+            "dracula": "dreamworlds_neon",
+            "nord": "ice_cold",
+            "matrix": "phosphor",
+            "gruvbox": "retro_studio",
+            "cyberpunk": "cyber_neon",
+            "classic": "retro_terminal",
+        }
+        for alias, canonical in shared.items():
+            self.assertEqual(seen[alias], seen[canonical], alias)
+        own = [rgb for theme, rgb in seen.items() if theme not in shared]
+        self.assertEqual(len(own), len(set(own)))
 
     def test_theme_switch_emits_osc11_for_windows_mac_and_linux(self):
         script = f"""
@@ -159,10 +142,10 @@ class TestCliThemeBackground(unittest.TestCase):
         chunks = res.stdout.split("\n--\n")
         self.assertEqual(len(chunks), 2)
         # BEL form and ST form, so Windows Terminal, Terminal-class Linux, and Konsole all take it.
-        self.assertIn("\033]11;#554a6b\007", chunks[0])
-        self.assertIn("\033]11;#554a6b\033\\", chunks[0])
-        self.assertIn("\033]11;#2d2d2d\007", chunks[1])
-        self.assertIn("\033]11;#2d2d2d\033\\", chunks[1])
+        self.assertIn("\033]11;#bab4dc\007", chunks[0])
+        self.assertIn("\033]11;#bab4dc\033\\", chunks[0])
+        self.assertIn("\033]11;#9eabbf\007", chunks[1])
+        self.assertIn("\033]11;#9eabbf\033\\", chunks[1])
 
     def test_glass_hosts_do_not_take_a_console_background(self):
         script = f"""

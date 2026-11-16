@@ -103,8 +103,12 @@ void main() {
     float title = panelMask(frag, u.panel0);
     float library = panelMask(frag, u.panel1);
     float panel = max(title, library);
-    float themeLum = dot(theme, vec3(0.299, 0.587, 0.114));
-    float darkGlass = 1.0 - step(0.28, themeLum);
+    // The field is the same still water the Vulkan shader, MP Gui, the Liquid
+    // Player and the console manager share. A dim theme used to swap in an
+    // opaque charcoal field here, which made Retro Linux Memories a different
+    // background from the other two apps. Into Darkness is still forced to
+    // black by voidOut below.
+    float darkGlass = 0.0;
 
     vec3 water;
     if (u_hasSkin > 0.5) {

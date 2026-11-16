@@ -180,52 +180,104 @@ THEME_ALIASES: Dict[str, str] = {
 
 DEFAULT_THEME = "dreamworlds_ultra"
 
-# Console pane per theme. This mirrors the THEME_BG_* table in
-# Mix_Archive_Manager.sh so a standalone player can paint the same pane the
-# manager paints. The glass hosts do not use it: their pane comes from the
-# shader and must stay transparent. Light panes pair with dark ink so the
-# menu text stays readable. Sensorium and MPlanetarian Dreamworlds are light
-# coral. Stream of Frequency, Cosmic Supernova, Phosphor and Retro Studio
-# keep their hue as a light tint of the old pane. Retro Linux Memories stays
-# dark gray, like the charcoal field its glass paints.
-THEME_BACKGROUNDS: Dict[str, RGB] = {
-    "stream_of_frequency": (168, 224, 236),
-    # MPlanetarian Dreamworlds rides the light coral pane and pairs it with
-    # white ink. The alias map resolves this spelling to dreamworlds_ultra for
-    # the renderers, so this entry only mirrors the manager's own pane.
-    "dreamworlds": (240, 128, 128),
-    "dreamworlds_ultra": (85, 74, 107),
-    "dynamic_rainbow_liquid_glass": (52, 16, 8),
-    "cosmic_supernova": (244, 186, 214),
-    "dreamworlds_liquid": (4, 28, 46),
-    "dreamworlds_neon": (28, 4, 48),
-    "retro_studio": (244, 214, 168),
-    "cyber_neon": (40, 4, 18),
-    "phosphor": (186, 236, 176),
-    "ice_cold": (6, 22, 46),
-    "retro_terminal": (0, 0, 0),
-    "sensorium": (240, 128, 128),
-    # Dark gray, the same charcoal field the Retro Linux Memories glass paints
-    # (#2d2d2d), so its white console text stays readable.
-    "retro_linux_memories": (45, 45, 45),
-    "into_darkness_void_out": (0, 0, 0),
-    "cyberpunk": (18, 4, 28),
-    "dracula": (40, 42, 54),
-    "nord": (46, 52, 64),
-    "matrix": (0, 20, 6),
-    "solarized": (0, 43, 54),
-    "tokyo": (12, 16, 40),
-    "monokai": (39, 40, 34),
-    "gruvbox": (60, 56, 54),
-    "emerald": (4, 32, 22),
-    "classic": (0, 0, 48),
-    "the_whitest_white": (255, 255, 255),
-}
-DEFAULT_BACKGROUND: RGB = (12, 12, 20)
+# Ids the manager's THEME_BG table paints. Aliases that the glass collapses
+# (dreamworlds, dracula, nord, …) are listed so the shell and this dict can
+# be compared one key at a time.
+_CONSOLE_THEME_IDS: Tuple[str, ...] = (
+    "stream_of_frequency",
+    "dreamworlds",
+    "dreamworlds_ultra",
+    "dynamic_rainbow_liquid_glass",
+    "cosmic_supernova",
+    "dreamworlds_liquid",
+    "dreamworlds_neon",
+    "retro_studio",
+    "cyber_neon",
+    "phosphor",
+    "ice_cold",
+    "retro_terminal",
+    "sensorium",
+    "retro_linux_memories",
+    "into_darkness_void_out",
+    "cyberpunk",
+    "dracula",
+    "nord",
+    "matrix",
+    "solarized",
+    "tokyo",
+    "monokai",
+    "gruvbox",
+    "emerald",
+    "classic",
+    "the_whitest_white",
+)
+
+
+def _theme_mix01(colors: Tuple[RGB, RGB, RGB]) -> Tuple[float, float, float]:
+    """The shader's theme mix: mix(highlight, accent, 0.42) then mix(that, reflection, 0.20)."""
+    hi, accent, refl = ([c / 255.0 for c in rgb] for rgb in colors)
+    blended = tuple(hi[i] + (accent[i] - hi[i]) * 0.42 for i in range(3))
+    return tuple(blended[i] + (refl[i] - blended[i]) * 0.20 for i in range(3))
+
+
+def glass_field_rgb(name: Optional[str]) -> RGB:
+    """Still-water field MP Gui and MP Liquid Player paint for this theme.
+
+    Both glass shaders start from rgb(0.76, 0.80, 0.87) and mix 22% of the
+    theme colour into it. That is the background behind the text. Into
+    Darkness mixes to black, and both shaders then force the pane to opaque
+    black (void out). The console manager paints this same RGB, so pressing
+    C lands on one background in all three apps.
+    """
+    theme = _theme_mix01(theme_colors(name))
+    luma = 0.299 * theme[0] + 0.587 * theme[1] + 0.114 * theme[2]
+    if luma < 0.001:
+        return (0, 0, 0)
+    base = (0.76, 0.80, 0.87)
+    water = tuple(base[i] + (theme[i] - base[i]) * 0.22 for i in range(3))
+    return tuple(max(0, min(255, int(round(channel * 255.0)))) for channel in water)
+
+
+def _relative_luminance(rgb: RGB) -> float:
+    def channel(value: int) -> float:
+        scaled = value / 255.0
+        if scaled <= 0.04045:
+            return scaled / 12.92
+        return ((scaled + 0.055) / 1.055) ** 2.4
+
+    red, green, blue = rgb
+    return 0.2126 * channel(red) + 0.7152 * channel(green) + 0.0722 * channel(blue)
+
+
+def contrast_ratio(fore: RGB, back: RGB) -> float:
+    hi, lo = sorted((_relative_luminance(fore), _relative_luminance(back)), reverse=True)
+    return (hi + 0.05) / (lo + 0.05)
+
+
+def readable_ink(ink: RGB, background: RGB, minimum: float = 4.6) -> RGB:
+    """Pull a hue toward black until it clears `minimum` on `background`.
+
+    The still-water field is pale, so the bright menu hues that were written
+    for a dark console disappear on it. The hue stays; only the lightness
+    moves. Black, and any ink that already clears the floor, are left alone.
+    """
+    if contrast_ratio(ink, background) >= minimum or ink == (0, 0, 0):
+        return ink
+    lo, hi = 0.0, 1.0
+    best: RGB = (0, 0, 0)
+    for _ in range(30):
+        mid = (lo + hi) / 2.0
+        cand = tuple(max(0, min(255, int(round(channel * mid)))) for channel in ink)
+        if contrast_ratio(cand, background) >= minimum:
+            best = cand
+            lo = mid
+        else:
+            hi = mid
+    return best
 
 
 def theme_background(name: Optional[str]) -> RGB:
-    """Console pane for a theme name, always resolvable."""
+    """Console pane for a theme name: the same field the glass paints."""
     return THEME_BACKGROUNDS.get(normalize_theme_name(name), DEFAULT_BACKGROUND)
 
 
@@ -258,6 +310,16 @@ def theme_colors(name: Optional[str]) -> Tuple[RGB, RGB, RGB]:
     """Three colours for a theme name, always resolvable."""
     return THEME_COLORS.get(normalize_theme_name(name),
                             THEME_COLORS[DEFAULT_THEME])
+
+
+# Console pane per theme. Each value is glass_field_rgb(), the still-water
+# colour MP Gui and MP Liquid Player already show. Mix_Archive_Manager.sh
+# mirrors this table in its THEME_BG case. The glass hosts themselves stay
+# transparent: OSC 11 would paint over the shader.
+THEME_BACKGROUNDS: Dict[str, RGB] = {
+    name: glass_field_rgb(name) for name in _CONSOLE_THEME_IDS
+}
+DEFAULT_BACKGROUND: RGB = glass_field_rgb(DEFAULT_THEME)
 
 
 def theme_label(name: Optional[str]) -> str:

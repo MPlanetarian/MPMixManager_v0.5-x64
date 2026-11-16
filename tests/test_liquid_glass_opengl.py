@@ -33,10 +33,9 @@ class TestOpenGLTheme(unittest.TestCase):
 
 
 class TestGlassTextInk(unittest.TestCase):
-    # Themes whose shader paints the opaque charcoal pane rather than the pale
-    # water pane. Retro Linux Memories is the original; Into Darkness (Void Out)
-    # is a pure-black theme, so it is equally a dark pane.
-    DARK_PANES = ("retro_linux_memories", "into_darkness_void_out")
+    # Into Darkness is the void-out black pane. Every other theme, Retro Linux
+    # Memories included, is the pale still-water field.
+    DARK_PANES = ("into_darkness_void_out",)
 
     def test_dark_pane_themes_are_recognised(self):
         for name in THEME_COLORS:
@@ -44,7 +43,8 @@ class TestGlassTextInk(unittest.TestCase):
                 self.assertTrue(theme_uses_dark_glass(name), name)
             else:
                 self.assertFalse(theme_uses_dark_glass(name), name)
-        self.assertTrue(theme_uses_dark_glass("Retro Linux Memories"))
+        self.assertFalse(theme_uses_dark_glass("Retro Linux Memories"))
+        self.assertTrue(theme_uses_dark_glass("into_darkness_void_out"))
         self.assertFalse(theme_uses_dark_glass("cyber_neon"))
         self.assertFalse(theme_uses_dark_glass("dreamworlds_ultra"))
 
@@ -75,7 +75,9 @@ class TestGlassTextInk(unittest.TestCase):
         self.assertEqual(theme_text_rgb("retro_linux_memories"), (255, 183, 20))
 
     def test_default_foreground_follows_the_pane(self):
-        self.assertEqual(glass_foreground_rgb("retro_linux_memories"), (236, 240, 244))
+        self.assertEqual(glass_foreground_rgb("into_darkness_void_out"), (236, 240, 244))
+        pale = glass_foreground_rgb("retro_linux_memories")
+        self.assertTrue(all(channel < 80 for channel in pale))
         ink = glass_foreground_rgb("cyber_neon")
         self.assertTrue(all(channel < 80 for channel in ink))
 
@@ -104,9 +106,11 @@ class TestGlassTextInk(unittest.TestCase):
         with unittest.mock.patch.object(sys.modules["MP_Audio_Player_Liquid_Glass_OpenGL"], "Gdk", gdk):
             for host, theme, dark in (
                 (opengl, "cyber_neon", True),
-                (opengl, "retro_linux_memories", False),
+                (opengl, "retro_linux_memories", True),
+                (opengl, "into_darkness_void_out", False),
                 (vulkan, "cyber_neon", True),
-                (vulkan, "retro_linux_memories", False),
+                (vulkan, "retro_linux_memories", True),
+                (vulkan, "into_darkness_void_out", False),
             ):
                 term = MagicMock()
                 with unittest.mock.patch.dict(sys.modules, {"gi": gi, "gi.repository": repository}):

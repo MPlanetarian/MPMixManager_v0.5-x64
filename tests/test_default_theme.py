@@ -44,7 +44,7 @@ class TestDreamworldsUltraIsDefault(unittest.TestCase):
         self.assertEqual(res.returncode, 0, res.stderr)
         theme, bg = res.stdout.strip().split("\t")
         self.assertEqual(theme, "dreamworlds_ultra")
-        self.assertEqual(bg, "85;74;107")
+        self.assertEqual(bg, "186;180;220")
 
         text = MGR_SH.read_text(encoding="utf-8")
         self.assertIn('[ -n "$saved_theme" ] || saved_theme="dreamworlds_ultra"', text)
@@ -63,7 +63,7 @@ class TestDreamworldsUltraIsDefault(unittest.TestCase):
             theme, bg = probe.stdout.strip().split("\t")
             self.assertEqual(theme, expect, name)
             if expect == "dreamworlds_ultra":
-                self.assertEqual(bg, "85;74;107", name)
+                self.assertEqual(bg, "186;180;220", name)
 
     def test_mp_gui_falls_back_to_ultra(self):
         text = (ROOT / "MP_Gui.sh").read_text(encoding="utf-8")

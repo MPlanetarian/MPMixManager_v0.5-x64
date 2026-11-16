@@ -67,7 +67,7 @@ class TestWhitestWhitePalette(unittest.TestCase):
                 cyan,
             ) = raw.split("|")
             self.assertEqual(theme, "the_whitest_white")
-            self.assertEqual((bg_r, bg_g, bg_b), ("255", "255", "255"))
+            self.assertEqual((bg_r, bg_g, bg_b), ("203", "211", "225"))
             self.assertEqual((fg_r, fg_g, fg_b), ("0", "0", "0"))
             self.assertEqual((num_r, num_g, num_b), ("0", "0", "0"))
             black = "\\033[38;2;0;0;0m"
@@ -138,9 +138,9 @@ class TestWhitestWhiteWiring(unittest.TestCase):
         """
         res = _bash(script)
         self.assertEqual(res.returncode, 0, res.stderr)
-        # White pane for xterm/VTE/Windows Terminal/Konsole, black ink too.
-        self.assertIn("\033]11;#ffffff\007", res.stdout)
-        self.assertIn("\033]11;#ffffff\033\\", res.stdout)
+        # Still-water field for xterm/VTE/Windows Terminal/Konsole, black ink too.
+        self.assertIn("\033]11;#cbd3e1\007", res.stdout)
+        self.assertIn("\033]11;#cbd3e1\033\\", res.stdout)
         self.assertIn("\033]10;#000000\007", res.stdout)
         self.assertIn("\033]10;#000000\033\\", res.stdout)
 

@@ -60,8 +60,8 @@ class TestPlayerThemeBackground(unittest.TestCase):
             player._LAST_TERMINAL_BG = None
             player.apply_terminal_theme_background("dreamworlds_ultra", force=True)
         out = buf.getvalue()
-        self.assertIn("\033]11;#554a6b\007", out)
-        self.assertIn("\033]11;#554a6b\033\\", out)
+        self.assertIn("\033]11;#bab4dc\007", out)
+        self.assertIn("\033]11;#bab4dc\033\\", out)
 
     def test_glass_hosts_stay_transparent(self):
         import MP_Audio_Player as player

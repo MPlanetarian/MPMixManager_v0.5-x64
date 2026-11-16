@@ -108,19 +108,17 @@ class TestRetroLinuxMemoriesTheme(unittest.TestCase):
         self.assertIn("retro_linux_memories", content)
         self.assertIn("Retro Linux Memories", content)
 
-    def test_console_playlist_text_stays_white_on_the_dark_pane(self):
-        """Track names stay white now that the pane is the dark gray field.
+    def test_console_playlist_text_follows_the_still_water_field(self):
+        """The console pane is the pale field the glass paints.
 
-        The console used to be a light slate, and a light console normally
-        switches unselected rows to the theme's dark body ink. The pane is the
-        charcoal #2D2D2D field now, so the playlist keeps white text on both
-        the console and the charcoal glass.
+        Unselected console rows use the theme hue pulled down onto that field.
+        Liquid Glass rows stay white; the glass host sets its own foreground.
         """
         import MP_Audio_Player as player
         from mp_theme_palette import theme_background
 
-        self.assertEqual(theme_background("retro_linux_memories"), (45, 45, 45))
-        self.assertFalse(player.theme_has_light_console("retro_linux_memories"))
+        self.assertEqual(theme_background("retro_linux_memories"), (158, 171, 191))
+        self.assertTrue(player.theme_has_light_console("retro_linux_memories"))
 
         scanner = MagicMock()
         scanner.get_mixes.return_value = [
@@ -165,7 +163,10 @@ class TestRetroLinuxMemoriesTheme(unittest.TestCase):
             self.assertTrue(rows, "plain playlist row was not drawn")
             row = rows[0]
             at = row.find("Mix 02")
-            self.assertEqual(foreground_at(row, at), (255, 255, 255), "liquid" if liquid else "console")
+            if liquid:
+                self.assertEqual(foreground_at(row, at), (255, 255, 255), "liquid")
+            else:
+                self.assertEqual(foreground_at(row, at), (81, 58, 6), "console")
             self.assertNotIn("38;2;255;183;20", row)
             self.assertNotIn("38;2;100;69;0", row[row.find("Mix 02"):])
 

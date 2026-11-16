@@ -10,15 +10,14 @@ White and on the charcoal themes was either invisible or near-black on black.
 
 The rule is now the highest-contrast pair the surface allows:
 
-* **Liquid Glass** paints a pale water pane on every theme except the two
-  charcoal ones (Retro Linux Memories and Into Darkness), so the title is black
-  there and white on those two. ``THEME_DARK_GLASS_INK`` is the same table the
+* **Liquid Glass** paints the pale still-water field on every theme except
+  Into Darkness, whose pane is void-out black. The title is black on the
+  field and white on the void. ``THEME_DARK_GLASS_INK`` is the same table the
   shader's ``theme_uses_dark_glass`` is pinned to by
-  ``tests/test_theme_notice_is_black.py``, so the title cannot drift from the
-  pane it sits on.
-* **The plain console** is a different surface: ``theme_background()`` is dark
-  on eleven themes whose *glass* pane is pale. The ink is therefore asked per
-  surface, and getting that wrong paints black text on a black background.
+  ``tests/test_theme_notice_is_black.py``.
+* **The plain console** paints that same field, via ``theme_background()``,
+  so the title agrees with the glass. The flag stays so a caller still names
+  the surface it is drawing into.
 
 These tests pin the helper, all three render sites (full, Mini, Micro), both
 surfaces, and the two hazards that would silently undo it: the visualizer
@@ -46,7 +45,7 @@ BLACK = (0, 0, 0)
 WHITE = (255, 255, 255)
 _SGR = re.compile(r"\x1b\[([0-9;]*)m")
 THEMES = player.EqualizerVisualizer.THEMES
-CHARCOAL_PANE = {"retro_linux_memories", "into_darkness_void_out"}
+CHARCOAL_PANE = {"into_darkness_void_out"}
 TITLE = "MPlanetarian - Dreamworlds Test Mix 2026.flac"
 
 
@@ -126,11 +125,11 @@ class NowPlayingInkHelperTests(unittest.TestCase):
                 f"{theme} sits on the pale glass pane and needs black",
             )
 
-    def test_glass_is_white_on_the_two_charcoal_themes(self):
+    def test_glass_is_white_on_the_void_theme(self):
         for theme in CHARCOAL_PANE:
             self.assertEqual(
                 player.now_playing_ink(theme, liquid=True), player.NOW_PLAYING_WHITE,
-                f"{theme} paints the charcoal pane and needs white",
+                f"{theme} paints the black void and needs white",
             )
 
     def test_the_glass_choice_matches_the_shader_pane_decision(self):
@@ -145,7 +144,7 @@ class NowPlayingInkHelperTests(unittest.TestCase):
             )
 
     def test_console_uses_background_luminance(self):
-        """The console pane is not the glass pane, and it is usually dark."""
+        """The console pane is the glass field, judged by its luminance."""
         from mp_theme_palette import theme_background
 
         for theme in THEMES:
@@ -157,15 +156,14 @@ class NowPlayingInkHelperTests(unittest.TestCase):
                 f"{theme} console title picked the wrong polarity",
             )
 
-    def test_the_two_surfaces_genuinely_disagree(self):
-        """Guards the reason the flag exists at all.
-
-        If they ever agreed on every theme the parameter would be redundant, and
-        someone would delete it and silently break console mode.
-        """
-        disagree = [t for t in THEMES
-                    if player.now_playing_uses_white(t, True) != player.now_playing_uses_white(t, False)]
-        self.assertTrue(disagree, "the surfaces must differ on at least one theme")
+    def test_console_and_glass_titles_agree(self):
+        """Both surfaces use the still-water field, so the title ink agrees."""
+        for theme in THEMES:
+            self.assertEqual(
+                player.now_playing_uses_white(theme, True),
+                player.now_playing_uses_white(theme, False),
+                theme,
+            )
 
     def test_only_pure_black_or_pure_white_is_ever_returned(self):
         for theme in THEMES:

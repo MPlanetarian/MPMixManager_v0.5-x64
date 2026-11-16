@@ -336,16 +336,17 @@ def theme_rgb(name):
 
 
 def theme_uses_dark_glass(name) -> bool:
-    """Match the shader: a dim theme mix is the opaque charcoal pane.
+    """Match the shader: only a black theme mix is the opaque void pane.
 
-    Retro Linux Memories is that pane, so light text stays readable there.
-    Every other theme is the pale water pane.
+    Into Darkness is that pane, so light text stays readable there. Every
+    other theme, Retro Linux Memories included, is the pale still-water field
+    that MP Gui, the Liquid Player and the console manager share.
     """
     colors = theme_rgb(name)
     blended = tuple(colors[0][i] + (colors[1][i] - colors[0][i]) * 0.42 for i in range(3))
     theme = tuple(blended[i] + (colors[2][i] - blended[i]) * 0.20 for i in range(3))
     luma = (0.299 * theme[0] + 0.587 * theme[1] + 0.114 * theme[2]) / 255.0
-    return luma < 0.28
+    return luma < 0.001
 
 
 def glass_text_rgb(r: int, g: int, b: int, floor: int = 36) -> tuple[int, int, int]:
@@ -370,10 +371,9 @@ def glass_text_rgb(r: int, g: int, b: int, floor: int = 36) -> tuple[int, int, i
 def glass_foreground_rgb(theme_name) -> tuple[int, int, int]:
     """Terminal text ink that stays readable on the active glass pane.
 
-    Most themes draw a pale water pane, where white text disappears, so those
-    use a dark ink. Retro Linux Memories is the opaque charcoal pane, so it
-    keeps a light ink instead. This mirrors ``theme_uses_dark_glass``, which
-    decides which of the two panes the shader will paint.
+    Most themes draw the pale still-water field, where white text disappears,
+    so those use a dark ink. Into Darkness is the opaque black pane, so it
+    keeps a light ink instead. This mirrors ``theme_uses_dark_glass``.
     """
     if theme_uses_dark_glass(theme_name):
         return (236, 240, 244)

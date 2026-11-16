@@ -509,31 +509,31 @@ the_whitest_white|whitest_white|whitest|white|"The Whitest White"|"The Whitest W
 cyberpunk) _menu_id=cyberpunk ;; *) _menu_id=dreamworlds_ultra ;;
 esac
 case "$_menu_id" in
-stream_of_frequency) _mr=255; _mg=237; _mb=20 ;;
-dreamworlds_ultra) _mr=216; _mg=180; _mb=254 ;;
-dynamic_rainbow_liquid_glass) _mr=255; _mg=20; _mb=237 ;;
-cosmic_supernova) _mr=255; _mg=129; _mb=20 ;;
-dreamworlds_liquid) _mr=20; _mg=255; _mb=147 ;;
-dreamworlds_neon) _mr=219; _mg=20; _mb=255 ;;
-retro_studio) _mr=180; _mg=140; _mb=20 ;;
-cyber_neon) _mr=255; _mg=20; _mb=20 ;;
-phosphor) _mr=165; _mg=255; _mb=20 ;;
-ice_cold) _mr=20; _mg=147; _mb=255 ;;
-retro_terminal) _mr=255; _mg=255; _mb=255 ;;
+stream_of_frequency) _mr=92; _mg=86; _mb=7 ;;
+dreamworlds_ultra) _mr=80; _mg=67; _mb=95 ;;
+dynamic_rainbow_liquid_glass) _mr=134; _mg=11; _mb=125 ;;
+cosmic_supernova) _mr=124; _mg=62; _mb=10 ;;
+dreamworlds_liquid) _mr=7; _mg=92; _mb=53 ;;
+dreamworlds_neon) _mr=129; _mg=12; _mb=151 ;;
+retro_studio) _mr=99; _mg=77; _mb=11 ;;
+cyber_neon) _mr=152; _mg=12; _mb=12 ;;
+phosphor) _mr=61; _mg=95; _mb=7 ;;
+ice_cold) _mr=11; _mg=83; _mb=145 ;;
+retro_terminal) _mr=87; _mg=87; _mb=87 ;;
 sensorium) _mr=92; _mg=36; _mb=0 ;;
-retro_linux_memories) _mr=255; _mg=183; _mb=20 ;;
+retro_linux_memories) _mr=81; _mg=58; _mb=6 ;;
 into_darkness_void_out) _mr=255; _mg=255; _mb=255 ;;
-dreamworlds) _mr=255; _mg=20; _mb=129 ;;
-cyberpunk) _mr=200; _mg=0; _mb=180 ;;
-dracula) _mr=255; _mg=20; _mb=75 ;;
-nord) _mr=70; _mg=140; _mb=90 ;;
-matrix) _mr=20; _mg=255; _mb=38 ;;
-solarized) _mr=219; _mg=255; _mb=20 ;;
-tokyo) _mr=255; _mg=75; _mb=20 ;;
-monokai) _mr=56; _mg=255; _mb=20 ;;
-gruvbox) _mr=180; _mg=70; _mb=20 ;;
-emerald) _mr=20; _mg=255; _mb=93 ;;
-classic) _mr=230; _mg=200; _mb=80 ;;
+dreamworlds) _mr=143; _mg=11; _mb=73 ;;
+cyberpunk) _mr=139; _mg=0; _mb=126 ;;
+dracula) _mr=152; _mg=12; _mb=45 ;;
+nord) _mr=46; _mg=91; _mb=59 ;;
+matrix) _mr=8; _mg=100; _mb=15 ;;
+solarized) _mr=65; _mg=76; _mb=6 ;;
+tokyo) _mr=144; _mg=42; _mb=11 ;;
+monokai) _mr=20; _mg=89; _mb=7 ;;
+gruvbox) _mr=138; _mg=53; _mb=15 ;;
+emerald) _mr=7; _mg=91; _mb=33 ;;
+classic) _mr=99; _mg=86; _mb=35 ;;
 the_whitest_white) _mr=0; _mg=0; _mb=0 ;;
 esac
 MENU_NUM="$(printf '\033[38;2;%s;%s;%sm' "$_mr" "$_mg" "$_mb")"
@@ -541,50 +541,39 @@ MENU_NUM_R="$_mr"; MENU_NUM_G="$_mg"; MENU_NUM_B="$_mb"
 # Ink for the option text itself (the [number], the label and its hint). This
 # is the theme's own hue, so switching theme recolours every menu row. 0.5
 # pinned it to MENU_WHITE, which is what made every theme look white.
-# Seven themes have a hue that is too dark on their own pane (as low as 2.1:1),
-# so those are mixed toward white until they reach 4.5:1 — the WCAG AA floor
-# for body text. The hue is kept; only its lightness moves, and only for the
-# themes that need it.
-# Dracula is the one exception: its navigation rows use the palette's soft
-# lavender-gray (190;181;216) instead of the coral-pink accent, so the menu
-# reads light purple-gray on the #282A36 pane. The [numbers] keep the pink
-# MENU_NUM accent above.
-# MPlanetarian Dreamworlds is white by design: its pane is the CSS lightcoral
-# #F08080, and pure white is the ink that theme specifies. It measures 2.6:1,
-# below the AA floor the other themes hold to, so tests/test_menu_text_theme_ink
-# pins the pair instead of measuring it.
+# The console pane is the pale still-water field, so each hue is pulled
+# toward black until it clears 4.5:1 on that field. The hue stays; only the
+# lightness moves. Into Darkness is the black void pane and keeps white.
+# Dracula's rows stay the palette's soft lavender-gray, darkened onto the
+# shared field. The [numbers] keep their own MENU_NUM accent above.
 case "$_menu_id" in
-# Stream of Frequency, Cosmic Supernova, Phosphor and Retro Studio sit on
-# light tints of their own panes, so their row ink is the same hue pulled
-# down until it clears 4.5:1. The hue stays; only the lightness moves.
-# Retro Linux Memories sits on a dark gray pane, where white is the ink.
-stream_of_frequency) _ir=98; _ig=91; _ib=5 ;;
-dreamworlds_ultra) _ir=216; _ig=180; _ib=254 ;;
-dynamic_rainbow_liquid_glass) _ir=255; _ig=20; _ib=237 ;;
-cosmic_supernova) _ir=129; _ig=64; _ib=7 ;;
-dreamworlds_liquid) _ir=20; _ig=255; _ib=147 ;;
-dreamworlds_neon) _ir=219; _ig=20; _ib=255 ;;
-retro_studio) _ir=114; _ig=88; _ib=13 ;;
-cyber_neon) _ir=255; _ig=20; _ib=20 ;;
-phosphor) _ir=67; _ig=105; _ib=6 ;;
-ice_cold) _ir=20; _ig=147; _ib=255 ;;
-retro_terminal) _ir=255; _ig=255; _ib=255 ;;
+stream_of_frequency) _ir=92; _ig=86; _ib=5 ;;
+dreamworlds_ultra) _ir=80; _ig=67; _ib=95 ;;
+dynamic_rainbow_liquid_glass) _ir=134; _ig=11; _ib=125 ;;
+cosmic_supernova) _ir=124; _ig=62; _ib=7 ;;
+dreamworlds_liquid) _ir=7; _ig=92; _ib=53 ;;
+dreamworlds_neon) _ir=129; _ig=12; _ib=151 ;;
+retro_studio) _ir=99; _ig=77; _ib=11 ;;
+cyber_neon) _ir=152; _ig=12; _ib=12 ;;
+phosphor) _ir=61; _ig=95; _ib=5 ;;
+ice_cold) _ir=11; _ig=83; _ib=145 ;;
+retro_terminal) _ir=87; _ig=87; _ib=87 ;;
 sensorium) _ir=43; _ig=10; _ib=16 ;;
-retro_linux_memories) _ir=255; _ig=255; _ib=255 ;;
+retro_linux_memories) _ir=81; _ig=58; _ib=6 ;;
 into_darkness_void_out) _ir=255; _ig=255; _ib=255 ;;
-dreamworlds) _ir=255; _ig=255; _ib=255 ;;
-cyberpunk) _ir=211; _ig=51; _ib=195 ;;
-dracula) _ir=190; _ig=181; _ib=216 ;;
-nord) _ir=116; _ig=169; _ib=131 ;;
-matrix) _ir=20; _ig=255; _ib=38 ;;
-solarized) _ir=219; _ig=255; _ib=20 ;;
-tokyo) _ir=255; _ig=75; _ib=20 ;;
-monokai) _ir=56; _ig=255; _ib=20 ;;
-gruvbox) _ir=214; _ig=153; _ib=126 ;;
-emerald) _ir=20; _ig=255; _ib=93 ;;
-classic) _ir=230; _ig=200; _ib=80 ;;
+dreamworlds) _ir=143; _ig=11; _ib=73 ;;
+cyberpunk) _ir=129; _ig=31; _ib=120 ;;
+dracula) _ir=77; _ig=73; _ib=88 ;;
+nord) _ir=61; _ig=88; _ib=69 ;;
+matrix) _ir=8; _ig=100; _ib=15 ;;
+solarized) _ir=65; _ig=76; _ib=6 ;;
+tokyo) _ir=144; _ig=42; _ib=11 ;;
+monokai) _ir=20; _ig=89; _ib=7 ;;
+gruvbox) _ir=103; _ig=73; _ib=61 ;;
+emerald) _ir=7; _ig=91; _ib=33 ;;
+classic) _ir=99; _ig=86; _ib=35 ;;
 the_whitest_white) _ir=0; _ig=0; _ib=0 ;;
-*) _ir=211; _ig=51; _ib=195 ;;
+*) _ir=80; _ig=67; _ib=95 ;;
 esac
 # MP Gui sits on the same glass as MP Liquid Player. The player's unselected
 # playlist rows are white on that pane, and black on The Whitest White. A
@@ -633,92 +622,58 @@ SEL_BAR="$(printf '\033[48;2;%s;%s;%sm' "$SEL_BAR_R" "$SEL_BAR_G" "$SEL_BAR_B")"
 # uses. Computed from the unbreathing colour so idle breathing cannot flicker.
 SEL_BAR_LUM=$(( (SEL_BAR_R * 299 + SEL_BAR_G * 587 + SEL_BAR_B * 114) / 1000 ))
 if [ "$SEL_BAR_LUM" -ge 140 ]; then SEL_BAR_FG="\033[1;38;2;0;0;0m"; else SEL_BAR_FG="\033[1;38;2;255;255;255m"; fi
-# Pane for the CLI console. Keyed on _menu_id so aliases that share
-# CURRENT_THEME (dreamworlds_neon / dracula, phosphor / matrix) still change
-# the background when the menu cycles. Most panes stay dark so the light text
-# stays readable. Sensorium and MPlanetarian Dreamworlds are already light
-# coral, and The Whitest White is white. Stream of Frequency, Cosmic
-# Supernova, Phosphor and Retro Studio keep their hue and use a light tint of
-# that same colour, paired with the dark ink selected above. Retro Linux
-# Memories stays dark: dark gray (45, 45, 45), the same charcoal field its
-# Liquid Glass pane paints, so its white menu text stays readable.
+# Pane for the CLI console. This is the still-water field MP Gui and MP
+# Liquid Player paint (mix of rgb(194, 204, 222) with 22% of the theme).
+# Aliases the glass collapses share that field, so dreamworlds matches
+# dreamworlds_ultra and dracula matches dreamworlds_neon. Into Darkness is
+# the void-out black both shaders force. Keyed on _menu_id so the table stays
+# aligned with scripts/mp_theme_palette.py glass_field_rgb().
 case "$_menu_id" in
-stream_of_frequency) THEME_BG_R=168; THEME_BG_G=224; THEME_BG_B=236 ;;
-the_whitest_white) THEME_BG_R=255; THEME_BG_G=255; THEME_BG_B=255; THEME_FG_R=0; THEME_FG_G=0; THEME_FG_B=0 ;;
-dreamworlds_ultra) THEME_BG_R=85; THEME_BG_G=74; THEME_BG_B=107 ;;
-dynamic_rainbow_liquid_glass) THEME_BG_R=52; THEME_BG_G=16; THEME_BG_B=8 ;;
-cosmic_supernova) THEME_BG_R=244; THEME_BG_G=186; THEME_BG_B=214 ;;
-dreamworlds_liquid) THEME_BG_R=4; THEME_BG_G=28; THEME_BG_B=46 ;;
-dreamworlds_neon) THEME_BG_R=28; THEME_BG_G=4; THEME_BG_B=48 ;;
-retro_studio) THEME_BG_R=244; THEME_BG_G=214; THEME_BG_B=168 ;;
-cyber_neon) THEME_BG_R=40; THEME_BG_G=4; THEME_BG_B=18 ;;
-phosphor) THEME_BG_R=186; THEME_BG_G=236; THEME_BG_B=176 ;;
-ice_cold) THEME_BG_R=6; THEME_BG_G=22; THEME_BG_B=46 ;;
-retro_terminal) THEME_BG_R=0; THEME_BG_G=0; THEME_BG_B=0 ;;
-sensorium) THEME_BG_R=240; THEME_BG_G=128; THEME_BG_B=128 ;;
-retro_linux_memories) THEME_BG_R=45; THEME_BG_G=45; THEME_BG_B=45 ;;
+stream_of_frequency) THEME_BG_R=168; THEME_BG_G=210; THEME_BG_B=213 ;;
+the_whitest_white) THEME_BG_R=203; THEME_BG_G=211; THEME_BG_B=225; THEME_FG_R=0; THEME_FG_G=0; THEME_FG_B=0 ;;
+dreamworlds_ultra) THEME_BG_R=186; THEME_BG_G=180; THEME_BG_B=220 ;;
+dynamic_rainbow_liquid_glass) THEME_BG_R=188; THEME_BG_G=182; THEME_BG_B=221 ;;
+cosmic_supernova) THEME_BG_R=177; THEME_BG_G=195; THEME_BG_B=225 ;;
+dreamworlds_liquid) THEME_BG_R=169; THEME_BG_G=200; THEME_BG_B=228 ;;
+dreamworlds_neon) THEME_BG_R=174; THEME_BG_G=190; THEME_BG_B=220 ;;
+retro_studio) THEME_BG_R=203; THEME_BG_G=195; THEME_BG_B=178 ;;
+cyber_neon) THEME_BG_R=185; THEME_BG_G=186; THEME_BG_B=215 ;;
+phosphor) THEME_BG_R=169; THEME_BG_G=215; THEME_BG_B=180 ;;
+ice_cold) THEME_BG_R=167; THEME_BG_G=204; THEME_BG_B=223 ;;
+retro_terminal) THEME_BG_R=199; THEME_BG_G=207; THEME_BG_B=221 ;;
+sensorium) THEME_BG_R=195; THEME_BG_G=196; THEME_BG_B=191 ;;
+retro_linux_memories) THEME_BG_R=158; THEME_BG_G=171; THEME_BG_B=191 ;;
 into_darkness_void_out) THEME_BG_R=0; THEME_BG_G=0; THEME_BG_B=0 ;;
-dreamworlds) THEME_BG_R=240; THEME_BG_G=128; THEME_BG_B=128 ;;
-cyberpunk) THEME_BG_R=18; THEME_BG_G=4; THEME_BG_B=28 ;;
-dracula) THEME_BG_R=40; THEME_BG_G=42; THEME_BG_B=54 ;;
-nord) THEME_BG_R=46; THEME_BG_G=52; THEME_BG_B=64 ;;
-matrix) THEME_BG_R=0; THEME_BG_G=20; THEME_BG_B=6 ;;
-solarized) THEME_BG_R=0; THEME_BG_G=43; THEME_BG_B=54 ;;
-tokyo) THEME_BG_R=12; THEME_BG_G=16; THEME_BG_B=40 ;;
-monokai) THEME_BG_R=39; THEME_BG_G=40; THEME_BG_B=34 ;;
-gruvbox) THEME_BG_R=60; THEME_BG_G=56; THEME_BG_B=54 ;;
-emerald) THEME_BG_R=4; THEME_BG_G=32; THEME_BG_B=22 ;;
-classic) THEME_BG_R=0; THEME_BG_G=0; THEME_BG_B=48 ;;
-*) THEME_BG_R=12; THEME_BG_G=12; THEME_BG_B=20 ;;
+dreamworlds) THEME_BG_R=186; THEME_BG_G=180; THEME_BG_B=220 ;;
+cyberpunk) THEME_BG_R=185; THEME_BG_G=186; THEME_BG_B=215 ;;
+dracula) THEME_BG_R=174; THEME_BG_G=190; THEME_BG_B=220 ;;
+nord) THEME_BG_R=167; THEME_BG_G=204; THEME_BG_B=223 ;;
+matrix) THEME_BG_R=169; THEME_BG_G=215; THEME_BG_B=180 ;;
+solarized) THEME_BG_R=184; THEME_BG_G=181; THEME_BG_B=193 ;;
+tokyo) THEME_BG_R=194; THEME_BG_G=190; THEME_BG_B=217 ;;
+monokai) THEME_BG_R=193; THEME_BG_G=189; THEME_BG_B=199 ;;
+gruvbox) THEME_BG_R=203; THEME_BG_G=195; THEME_BG_B=178 ;;
+emerald) THEME_BG_R=158; THEME_BG_G=201; THEME_BG_B=202 ;;
+classic) THEME_BG_R=199; THEME_BG_G=207; THEME_BG_B=221 ;;
+*) THEME_BG_R=186; THEME_BG_G=180; THEME_BG_B=220 ;;
 esac
-# Default ink for the CLI console: light text on the dark panes, black on The
-# Whitest White, and a dark hue on each light pane. MENU_WHITE is the neutral
-# console ink (the Selection: status line and the player's EQ line), and has
-# to follow the pane: white ink on a light pane is invisible. The menu option
-# rows use MENU_INK instead, which is the theme's own hue. MPlanetarian
-# Dreamworlds pins both the exported ink and MENU_WHITE to pure white, as that
-# theme specifies. The glass pane is not these light colours: MP Liquid Player
-# keeps white rows there.
+# Neutral console ink for the Selection: line and the EQ line. The menu rows
+# use MENU_INK, the theme hue. The still-water field is pale, so this neutral
+# is the same dark foreground the glass terminal uses (24, 26, 34). Into
+# Darkness is black and keeps white. The Whitest White keeps black. Inside
+# MP Gui and MP Liquid Player the status line stays white; those windows
+# draw the field in the shader and do not take this OSC colour.
 if [ "${_menu_id:-}" = "the_whitest_white" ]; then
     THEME_FG_R=0; THEME_FG_G=0; THEME_FG_B=0
     MENU_WHITE="\033[38;2;0;0;0m"
-elif [ "${_menu_id:-}" = "dreamworlds" ]; then
-    # MPlanetarian Dreamworlds rides the light coral pane, so pin the ink to
-    # pure white (255;255;255) rather than the near-white neutral default.
-    THEME_FG_R=255; THEME_FG_G=255; THEME_FG_B=255
-    MENU_WHITE="\033[38;2;255;255;255m"
-elif [ "${_menu_id:-}" = "sensorium" ] && [ "${MP_LIQUID_GLASS:-0}" != "1" ] && [ "${MP_GUI_SESSION:-0}" != "1" ]; then
-    # Deep maroon neutral ink on the light coral pane, matching the btop palette.
-    THEME_FG_R=43; THEME_FG_G=10; THEME_FG_B=16
-    MENU_WHITE="\033[38;2;43;10;16m"
 elif [ "${MP_LIQUID_GLASS:-0}" != "1" ] && [ "${MP_GUI_SESSION:-0}" != "1" ]; then
-    case "${_menu_id:-}" in
-    stream_of_frequency)
-        THEME_FG_R=98; THEME_FG_G=91; THEME_FG_B=5
-        MENU_WHITE="\033[38;2;98;91;5m"
-        ;;
-    cosmic_supernova)
-        THEME_FG_R=129; THEME_FG_G=64; THEME_FG_B=7
-        MENU_WHITE="\033[38;2;129;64;7m"
-        ;;
-    phosphor)
-        THEME_FG_R=67; THEME_FG_G=105; THEME_FG_B=6
-        MENU_WHITE="\033[38;2;67;105;6m"
-        ;;
-    retro_studio)
-        THEME_FG_R=114; THEME_FG_G=88; THEME_FG_B=13
-        MENU_WHITE="\033[38;2;114;88;13m"
-        ;;
-    retro_linux_memories)
-        # Main-menu status text is white on the dark gray pane, same as the rows.
+    if [ "${_menu_id:-}" = "into_darkness_void_out" ]; then
         THEME_FG_R=255; THEME_FG_G=255; THEME_FG_B=255
         MENU_WHITE="\033[38;2;255;255;255m"
-        ;;
-    *)
-        THEME_FG_R=226; THEME_FG_G=230; THEME_FG_B=238
-        MENU_WHITE="\033[38;2;255;255;255m"
-        ;;
-    esac
+    else
+        THEME_FG_R=24; THEME_FG_G=26; THEME_FG_B=34
+        MENU_WHITE="\033[38;2;24;26;34m"
+    fi
 else
     THEME_FG_R=226; THEME_FG_G=230; THEME_FG_B=238
     MENU_WHITE="\033[38;2;255;255;255m"

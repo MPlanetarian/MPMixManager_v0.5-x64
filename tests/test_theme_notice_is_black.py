@@ -33,7 +33,7 @@ import MP_Audio_Player as player
 BLACK = "\033[38;2;0;0;0m"
 WHITE_BADGE = "\033[38;2;255;255;255m"
 WHITE_NOTICE = "\033[1;48;2;20;20;28;38;2;255;255;255m"
-DARK_GLASS = {"retro_linux_memories", "into_darkness_void_out"}
+DARK_GLASS = {"into_darkness_void_out"}
 
 
 class ThemeNoticeColourTests(unittest.TestCase):

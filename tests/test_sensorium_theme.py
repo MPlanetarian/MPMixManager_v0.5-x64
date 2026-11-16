@@ -55,7 +55,7 @@ class TestSensoriumTheme(unittest.TestCase):
         )
 
         self.assertEqual(THEME_COLORS["sensorium"], ((255, 122, 24), (200, 255, 61), (58, 134, 255)))
-        self.assertEqual(THEME_BACKGROUNDS["sensorium"], (240, 128, 128))
+        self.assertEqual(THEME_BACKGROUNDS["sensorium"], (195, 196, 191))
         self.assertEqual(THEME_LABELS["sensorium"], "Sensorium")
         for retired in RETIRED:
             self.assertNotIn(retired, THEME_COLORS)
@@ -74,8 +74,9 @@ class TestSensoriumTheme(unittest.TestCase):
 
         self.assertTrue(player.theme_has_light_console("sensorium"))
         self.assertTrue(player.theme_has_light_console("the_whitest_white"))
-        self.assertFalse(player.theme_has_light_console("dreamworlds_ultra"))
-        self.assertFalse(player.theme_has_light_console("retro_linux_memories"))
+        self.assertTrue(player.theme_has_light_console("dreamworlds_ultra"))
+        self.assertTrue(player.theme_has_light_console("retro_linux_memories"))
+        self.assertFalse(player.theme_has_light_console("into_darkness_void_out"))
 
     def test_manager_publishes_palette_background_and_bar(self):
         script = f"""
@@ -94,7 +95,7 @@ class TestSensoriumTheme(unittest.TestCase):
         theme, num, bg, bar, ink = res.stdout.strip().split("\t")
         self.assertEqual(theme, "sensorium")
         self.assertEqual(num, "92;36;0")      # dark tangerine menu number
-        self.assertEqual(bg, "240;128;128")   # light coral pane
+        self.assertEqual(bg, "195;196;191")   # still-water field, same as the glass
         self.assertEqual(bar, "200;255;61")   # chartreuse selection bar
         self.assertEqual(ink, "43;10;16")     # deep maroon menu ink
 

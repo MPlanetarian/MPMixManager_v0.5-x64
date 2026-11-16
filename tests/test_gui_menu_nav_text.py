@@ -128,7 +128,7 @@ printf '%s;%s;%s\\n' "$MENU_INK_R" "$MENU_INK_G" "$MENU_INK_B"
             ["bash", "-c", script], capture_output=True, text=True, env=env
         )
         self.assertEqual(res.returncode, 0, res.stderr)
-        self.assertEqual(res.stdout.strip(), "216;180;254")
+        self.assertEqual(res.stdout.strip(), "80;67;95")
 
 
 if __name__ == "__main__":

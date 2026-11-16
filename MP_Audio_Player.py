@@ -127,11 +127,11 @@ COLOR_MAIN_FG, COLOR_NEON_PINK, COLOR_ELECTRIC_CYAN, WHITE = "\033[38;2;209;209;
 # of those panes, and black disappears into the dark ones.
 COLOR_THEME_NOTICE = "\033[1;48;2;20;20;28;38;2;255;255;255m"
 
-# Two themes paint the opaque charcoal pane instead of the pale one, and black
-# on charcoal is invisible (1.7:1, and 1.0:1 on Into Darkness). Those keep the
-# light ink that every other body line already uses there.
+# Into Darkness paints the opaque black void instead of the pale still-water
+# field, and black on black is invisible. It keeps the light ink that the
+# pale field cannot use. Every other theme, Retro Linux Memories included,
+# shares that pale field with the console manager.
 THEME_DARK_GLASS_INK = {
-    "retro_linux_memories": "\033[1;38;2;236;240;244m",
     "into_darkness_void_out": "\033[1;38;2;236;240;244m",
 }
 # Kept as an alias: the "Color Theme" notice was the first user of this mapping.
@@ -144,17 +144,17 @@ _PLAYING_BADGE_BLACK = "\033[38;2;0;0;0m"
 def dark_glass_ink(theme_name: str, pale_ink: str = _PLAYING_BADGE_BLACK) -> str:
     """Ink that stays readable on this theme's glass pane.
 
-    ``pale_ink`` is used on the pale-pane themes; the two charcoal-pane themes
-    get the light ink instead. The Liquid Glass PLAYING badge uses this. The
-    console PLAYING badge does not: that label is always white. The "Color
-    Theme" notice does not either: that name is always white.
+    ``pale_ink`` is used on the pale still-water field. Into Darkness is the
+    black void pane and gets the light ink instead. The Liquid Glass PLAYING
+    badge uses this. The console PLAYING badge does not: that label is always
+    white. The "Color Theme" notice does not either: that name is always white.
     """
     return THEME_DARK_GLASS_INK.get(theme_name, pale_ink)
 
 
 # The ▶ PLAYING label on the console player. Always white, on every theme.
-# Liquid Glass does not use this: white disappears on the pale pane, and black
-# disappears on the two charcoal panes.
+# Liquid Glass does not use this: white disappears on the pale still-water
+# field, and black disappears on the Into Darkness void.
 _PLAYING_BADGE_WHITE = "\033[38;2;255;255;255m"
 
 
@@ -192,15 +192,14 @@ NOW_PLAYING_WHITE = "\033[1;38;2;255;255;255m"
 def now_playing_uses_white(theme_name: str, liquid: bool = True) -> bool:
     """True when the now-playing title should be white on this surface.
 
-    Liquid Glass: white only on the two charcoal-pane themes. The pane test is
-    ``THEME_DARK_GLASS_INK``, which ``tests/test_theme_notice_is_black.py`` pins
-    to the shader's own ``theme_uses_dark_glass``, so the title cannot drift
-    from the surface it is drawn on.
+    Liquid Glass: white only on Into Darkness, the void-out black pane. The
+    pane test is ``THEME_DARK_GLASS_INK``, which
+    ``tests/test_theme_notice_is_black.py`` pins to the shader's own
+    ``theme_uses_dark_glass``, so the title cannot drift from the surface it
+    is drawn on.
 
-    Console: whatever ink wins against ``theme_background()``. Most themes use
-    a dark console background, which is the opposite of their glass pane, so
-    the two surfaces genuinely disagree and the caller must say which one it
-    is drawing into.
+    Console: whatever ink wins against ``theme_background()``. That background
+    is the same still-water field the glass paints, so the two surfaces agree.
     """
     if liquid:
         return theme_name in THEME_DARK_GLASS_INK
@@ -220,8 +219,8 @@ def now_playing_ink(theme_name: str, liquid: bool = True) -> str:
     """Pure black or pure white for the now-playing title.
 
     The surface decides, not the theme hue. ``liquid`` must describe the host
-    being drawn into: a pale glass pane sits over the same theme's near-black
-    console background, so guessing wrong paints black on black.
+    being drawn into. The console background is the glass field, so the two
+    answers agree; the flag stays so a caller still names the surface.
     """
     return NOW_PLAYING_WHITE if now_playing_uses_white(theme_name, liquid) else NOW_PLAYING_BLACK
 
@@ -4152,31 +4151,30 @@ def theme_body_ansi(theme_name: str) -> str:
     return f"\033[38;2;{red};{green};{blue}m"
 
 
-# The console pane is the same dark gray the glass paints for every theme that
-# keeps a charcoal surface, so console body ink and glass body ink agree and
-# there is no per-theme split left to make.
 def theme_console_body_ansi(theme_name: str) -> str:
     """Body ink for the console pane.
 
-    The console pane can be light even when the glass is not (Sensorium's coral,
-    The Whitest White), but the theme hue in ``THEME_TEXT`` is already pulled
-    down for those. Retro Linux Memories used to be the exception, with a pale
-    slate console and a dark amber ink; the console is now dark gray, so its
-    bright amber reads everywhere and the two surfaces share one ink.
+    The pane is the same still-water field the glass paints, which is pale
+    for every theme except Into Darkness. The theme hue is pulled toward
+    black until it stays readable on that field. Glass hosts keep
+    ``theme_body_ansi`` and do not use this.
     """
-    return theme_body_ansi(theme_name)
+    script_dir = str(Path(__file__).resolve().parent / "scripts")
+    if script_dir not in sys.path:
+        sys.path.insert(0, script_dir)
+    from liquid_glass_opengl import theme_text_rgb
+    from mp_theme_palette import readable_ink, theme_background
+    red, green, blue = readable_ink(theme_text_rgb(theme_name), theme_background(theme_name))
+    return f"\033[38;2;{red};{green};{blue}m"
 
 
 def theme_has_light_console(theme_name: str) -> bool:
     """True when the theme paints a light console pane.
 
-    Sensorium is light coral, The Whitest White is pure white, and Stream of
-    Frequency, Cosmic Supernova, Phosphor and Retro Studio are light tints of
-    their own colours. Those panes need the theme's dark body ink for
-    unselected rows instead of the white ink the dark panes use. Retro Linux
-    Memories is dark gray, so it takes the white ink like every other dark
-    pane. Liquid Glass hosts keep their own glass surface, so callers should
-    only apply this to the console.
+    The console pane is the glass still-water field, so this is true for
+    every theme except Into Darkness, whose field is black. Light panes need
+    the theme's darkened body ink. Liquid Glass hosts keep their own glass
+    surface, so callers should only apply this to the console.
     """
     try:
         script_dir = str(Path(__file__).resolve().parent / "scripts")
@@ -10167,26 +10165,19 @@ class TerminalPlayerUI:
         pal = self.visualizer.get_theme_palette()
         is_lg = bool(os.environ.get("MP_LIQUID_GLASS"))
         text_col = theme_body_ansi(self.visualizer.theme) if is_lg else theme_console_body_ansi(self.visualizer.theme)
-        # Unselected playlist rows read plain white on the dark console panes,
-        # like the MP Gui menu. A per-theme body ink made several themes render
-        # black text on those panes (the retired Liquid Glass skins,
-        # dreamworlds_ultra, cyber_neon and dreamworlds_neon all sat below 25%
-        # luminance), which is unreadable.
-        #
-        # The light panes are the exception: The Whitest White, Sensorium, and
-        # the light tints (Stream of Frequency, Cosmic Supernova, Phosphor,
-        # Retro Studio). White ink there is unreadability in the other
-        # direction, so they keep the theme's dark body ink. Retro Linux
-        # Memories used to be a light slate and needed the same exemption; its
-        # console is now dark gray, so the normal rule gives it white text like
-        # every other dark pane. Liquid Glass hosts are left alone because their
-        # pane comes from the shader, not from theme_background().
+        # Unselected playlist rows. The console pane is the pale still-water
+        # field, so those rows use the theme hue pulled down until it reads.
+        # Into Darkness is the black void and keeps white. Liquid Glass rows
+        # stay white on that same field, and black on The Whitest White; the
+        # glass host sets its own terminal foreground.
         if is_lg:
             light_pane = self.visualizer.theme == "the_whitest_white"
         else:
             light_pane = theme_has_light_console(self.visualizer.theme)
-        if light_pane:
+        if light_pane and is_lg:
             playlist_text_col = theme_body_ansi(self.visualizer.theme)
+        elif light_pane:
+            playlist_text_col = theme_console_body_ansi(self.visualizer.theme)
         else:
             playlist_text_col = WHITE
         g_key = "MP Gui" if is_lg else "Spek"

@@ -31,45 +31,41 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 MGR_SH = BASE_DIR / "Mix_Archive_Manager.sh"
 
 # theme -> (menu ink R, G, B). Every value is published by set_theme_colors.
+# Each hue pulled toward black until it clears 4.5:1 on the still-water field.
+# Into Darkness stays white: its field is the void-out black.
 EXPECTED_INK = {
-    "stream_of_frequency": (98, 91, 5),
+    "stream_of_frequency": (92, 86, 5),
     "sensorium": (43, 10, 16),
-    "dreamworlds": (255, 255, 255),
-    "dynamic_rainbow_liquid_glass": (255, 20, 237),
-    "dreamworlds_liquid": (20, 255, 147),
-    "dreamworlds_ultra": (216, 180, 254),
-    "cosmic_supernova": (129, 64, 7),
-    "retro_linux_memories": (255, 255, 255),
+    "dreamworlds": (143, 11, 73),
+    "dynamic_rainbow_liquid_glass": (134, 11, 125),
+    "dreamworlds_liquid": (7, 92, 53),
+    "dreamworlds_ultra": (80, 67, 95),
+    "cosmic_supernova": (124, 62, 7),
+    "retro_linux_memories": (81, 58, 6),
     "into_darkness_void_out": (255, 255, 255),
-    "retro_terminal": (255, 255, 255),
+    "retro_terminal": (87, 87, 87),
     "the_whitest_white": (0, 0, 0),
-    "dracula": (190, 181, 216),
-    "nord": (116, 169, 131),
-    "matrix": (20, 255, 38),
-    "solarized": (219, 255, 20),
-    "tokyo": (255, 75, 20),
-    "monokai": (56, 255, 20),
-    "gruvbox": (214, 153, 126),
-    "emerald": (20, 255, 93),
-    "classic": (230, 200, 80),
-    "cyberpunk": (211, 51, 195),
-    # Aliases that resolve to their own _menu_id and therefore own ink.
-    "dreamworlds_neon": (219, 20, 255),
-    "retro_studio": (114, 88, 13),
-    "cyber_neon": (255, 20, 20),
-    "phosphor": (67, 105, 6),
-    "ice_cold": (20, 147, 255),
+    "dracula": (77, 73, 88),
+    "nord": (61, 88, 69),
+    "matrix": (8, 100, 15),
+    "solarized": (65, 76, 6),
+    "tokyo": (144, 42, 11),
+    "monokai": (20, 89, 7),
+    "gruvbox": (103, 73, 61),
+    "emerald": (7, 91, 33),
+    "classic": (99, 86, 35),
+    "cyberpunk": (129, 31, 120),
+    "dreamworlds_neon": (129, 12, 151),
+    "retro_studio": (99, 77, 11),
+    "cyber_neon": (152, 12, 12),
+    "phosphor": (61, 95, 5),
+    "ice_cold": (11, 83, 145),
 }
 
-# Rows that are meant to be white: white-on-black themes, the alias that
-# shares their palette, MPlanetarian Dreamworlds (white on light coral), and
-# Retro Linux Memories (white menu text on its dark gray pane). Any other theme
-# must NOT come out white.
+# Into Darkness is the one white-on-black theme. Any other theme must NOT
+# come out white: the still-water field is pale.
 LEGIT_WHITE = {
     "into_darkness_void_out",
-    "retro_terminal",
-    "dreamworlds",
-    "retro_linux_memories",
 }
 
 # Any 256/truecolor background fill means the row is painted on a block again.
@@ -140,25 +136,15 @@ class TestMenuTextThemeInk(unittest.TestCase):
     def test_every_ink_is_readable_on_its_own_pane(self):
         """No theme falls below 4.5:1, the WCAG AA floor for body text.
 
-        ``dreamworlds`` is the one deliberate exception: it pins white ink on
-        the CSS ``lightcoral`` #F08080 pane (2.59:1), the pair that theme
-        specifies. Every other theme, Retro Linux Memories included since its
-        console became dark gray #2D2D2D, is measured against the floor.
+        The pane is the pale still-water field, so every hue has been pulled
+        toward black until it clears the floor. Into Darkness is white on
+        black and clears it easily.
         """
-        DELIBERATE = {
-            "dreamworlds": ((240, 128, 128), (255, 255, 255), 2.0),
-        }
         for raw in _run(DUMP).splitlines():
             theme, _sgr, ink_rgb, pane_rgb = raw.split("|")
             ink = tuple(int(v) for v in ink_rgb.split(";"))
             pane = tuple(int(v) for v in pane_rgb.split(";"))
             ratio = _contrast(ink, pane)
-            if theme in DELIBERATE:
-                want_pane, want_ink, floor = DELIBERATE[theme]
-                self.assertEqual(pane, want_pane, f"{theme}: pane drifted")
-                self.assertEqual(ink, want_ink, f"{theme}: ink should stay white")
-                self.assertGreater(ratio, floor, f"{theme}: white ink is {ratio:.2f}:1")
-                continue
             self.assertGreaterEqual(
                 ratio, 4.5,
                 f"{theme}: menu ink {ink} on pane {pane} is only {ratio:.2f}:1",

@@ -91,11 +91,11 @@ class TestKonsoleThemeScheme(unittest.TestCase):
         scheme = self.home / ".local/share/konsole/MP_Theme_dreamworlds_ultra.colorscheme"
         self.assertTrue(scheme.is_file())
         text = scheme.read_text(encoding="utf-8")
-        self.assertIn("# MP-THEME-BG: 85,74,107", text)
-        self.assertIn("[Background]\nColor=85,74,107", text)
-        self.assertIn("[BackgroundFaint]\nColor=85,74,107", text)
-        self.assertIn("[BackgroundIntense]\nColor=85,74,107", text)
-        self.assertIn("[Foreground]\nColor=226,230,238", text)
+        self.assertIn("# MP-THEME-BG: 186,180,220", text)
+        self.assertIn("[Background]\nColor=186,180,220", text)
+        self.assertIn("[BackgroundFaint]\nColor=186,180,220", text)
+        self.assertIn("[BackgroundIntense]\nColor=186,180,220", text)
+        self.assertIn("[Foreground]\nColor=24,26,34", text)
         self.assertIn("Description=MP Theme dreamworlds_ultra", text)
         # The user's ANSI palette is preserved, not replaced.
         self.assertIn("[Color1]\nColor=178,24,24", text)
