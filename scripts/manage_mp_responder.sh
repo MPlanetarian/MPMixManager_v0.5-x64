@@ -130,10 +130,22 @@ show_status() {
     echo ""
 }
 
+# How many OpenCode sessions are running right now.
+#
+# A session is an `opencode` process attached to a terminal. The
+# `opencode serve --service` daemon is always resident and has no tty, so
+# counting every match would report a session on an idle machine.
+active_opencode_sessions() {
+    local n
+    n="$(ps -eo comm=,tty= 2>/dev/null \
+        | awk '$1 == "opencode" && $2 != "" && $2 != "?" && $2 != "-" {c++} END {print c+0}')"
+    # If ps is unavailable, report one so an announce is not silently dropped.
+    printf '%s' "${n:-1}"
+}
+
 do_action() {
     require_responder || { press_enter; return 1; }
-    case "$1" in
-        start)
+    case "$1" in        start)
             if command -v systemctl >/dev/null 2>&1; then
                 systemctl --user start "$UNIT" 2>/dev/null \
                     && echo -e "${GREEN}✓ Responder started.${NC}" \
@@ -162,7 +174,19 @@ do_action() {
         resume) bash "$RESPONDER" resume ;;
         logs)   bash "$RESPONDER" log 60 ;;
         progress) bash "$RESPONDER" progress ;;
-        gitclone|hourly|update) bash "$RESPONDER" gitclone ;;
+        gitclone|hourly|update)
+            # No OpenCode session, no announce. A report only makes sense while
+            # someone is working in an agent session; on an idle machine it is
+            # noise. MP_RESPONDER_ANNOUNCE_ALWAYS=1 overrides this.
+            local _sessions
+            _sessions="$(active_opencode_sessions)"
+            if [ "${MP_RESPONDER_ANNOUNCE_ALWAYS:-0}" != "1" ] && [ "$_sessions" -eq 0 ]; then
+                echo -e "${YELLOW}No OpenCode session is running; skipping the update.${NC}"
+                echo -e "${DIM}  Set MP_RESPONDER_ANNOUNCE_ALWAYS=1 to announce anyway.${NC}"
+                return 0
+            fi
+            bash "$RESPONDER" gitclone
+            ;;
         status) bash "$RESPONDER" status 5 ;;
     esac
 }

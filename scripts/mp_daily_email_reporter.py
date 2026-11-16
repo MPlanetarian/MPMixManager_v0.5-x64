@@ -2188,12 +2188,57 @@ def send_desktop_notification(title: str, message: str):
         pass
 
 
+def active_opencode_sessions() -> int:
+    """How many OpenCode sessions are running right now.
+
+    A session is an `opencode` process attached to a terminal. The
+    `opencode serve --service` daemon is always resident and has no tty, so
+    counting every match would report a session on an idle machine and the
+    reporter would never be quiet. Only a real TUI session counts.
+    """
+    try:
+        proc = subprocess.run(
+            ["ps", "-eo", "comm=,tty="],
+            capture_output=True, text=True, timeout=10, check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        # If the process list cannot be read, assume a session is active so a
+        # report is not sent on an unknown state.
+        return 1
+    if proc.returncode != 0:
+        return 1
+    count = 0
+    for line in proc.stdout.splitlines():
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        comm, tty = parts[0], parts[1]
+        if comm != "opencode":
+            continue
+        if tty in ("", "?", "-"):
+            continue
+        count += 1
+    return count
+
+
 def execute_email_dispatch(force: bool = False, dry_run: bool = False) -> bool:
     """Main execution function for daily email reporting."""
     cfg = load_config()
 
     if cfg.get("EMAIL_REPORTS_ENABLED", "true").lower() not in ("true", "1", "yes"):
         log_message("INFO", "Email reports are currently disabled in email_config.env.")
+        return False
+
+    # No OpenCode session, no report. A scheduled report is only worth sending
+    # while someone is actually working in an agent session; on an idle machine
+    # it is noise in the inbox. `--force` overrides this, which is what the
+    # interactive "send now" path and the tests use.
+    if not force and not dry_run:
+        sessions = active_opencode_sessions()
+        if sessions == 0:
+            log_message("INFO", "No OpenCode session is running. Skipping the report and the email.")
+            return False
+        log_message("INFO", f"{sessions} OpenCode session(s) running. Report allowed.")
         return False
 
     # Acquire exclusive process lock to guarantee single-instance execution
