@@ -48,14 +48,20 @@ def _collection_xml() -> str:
         _entry("Airbase - Escape.flac", "Airbase", "Escape")
         + _entry("Airbase - Zed.flac", "Airbase", "Zed")
         + _entry("Airbase - Alpha.flac", "Airbase", "Alpha")
+        + _entry("Airbase - Club.flac", "Airbase", "Club (Airbase Extended Mix)")
+        + _entry("Someone - Horizon.flac", "Someone", "Horizon (Airbase Remix)")
+        + _entry("Guest - Night.flac", "Guest", "Night (Luminosity Remix)")
+        + _entry("Other - Airbaseball.flac", "Other Artist", "Airbaseball")
         + _entry("Airbase feat. Someone.flac", "Airbase feat. Someone", "Together")
+        + _entry("Eloquentia & Airbase - Hemisphere.flac", "Eloquentia & Airbase", "Hemisphere (Original Mix)")
+        + _entry("Airbaseball - Game.flac", "Airbaseball", "Game")
         + _entry("Above & Beyond - Sun.flac", "Above & Beyond", "Sun & Moon")
         + _entry("Other - Track.flac", "Other Artist", "Track")
     )
     return (
         '<?xml version="1.0" encoding="UTF-8"?>'
         '<NML VERSION="19">'
-        f'<COLLECTION ENTRIES="6">{tracks}</COLLECTION>'
+        f'<COLLECTION ENTRIES="12">{tracks}</COLLECTION>'
         "<PLAYLISTS>"
         '<NODE TYPE="FOLDER" NAME="$ROOT">'
         '<SUBNODES COUNT="2">'
@@ -108,21 +114,46 @@ class ArtistPlaylistTests(unittest.TestCase):
     def test_exact_artist_is_case_insensitive_and_title_sorted(self):
         result = traktor.create_artist_playlist("  airbase ", "Airbase Live", str(self.collection))
         self.assertTrue(result["ok"], result)
-        self.assertEqual(result["matched"], 3)
+        # Artist-field hits include the exact name and collaborations that
+        # contain it. Horizon comes from the title. Club matches both and is
+        # kept once.
+        self.assertEqual(result["matched"], 7)
+        self.assertEqual(result["removed_duplicates"], 1)
+        self.assertIn("Removed 1 duplicate", result["message"])
         node = self._playlist("Airbase Live")
         self.assertIsNotNone(node)
+        self.assertEqual(node.find("PLAYLIST").attrib["ENTRIES"], "7")
         keys = [item.attrib["KEY"] for item in node.findall(".//PRIMARYKEY")]
         self.assertEqual(
             keys,
             [
                 "/:music/:Airbase - Alpha.flac",
+                "/:music/:Airbase - Club.flac",
                 "/:music/:Airbase - Escape.flac",
+                "/:music/:Eloquentia & Airbase - Hemisphere.flac",
+                "/:music/:Someone - Horizon.flac",
+                "/:music/:Airbase feat. Someone.flac",
                 "/:music/:Airbase - Zed.flac",
             ],
         )
-        self.assertNotIn("/:music/:Airbase feat. Someone.flac", keys)
+        self.assertEqual(len(keys), len(set(keys)))
+        self.assertNotIn("/:music/:Airbaseball - Game.flac", keys)
+        self.assertNotIn("/:music/:Other - Airbaseball.flac", keys)
         self.assertNotIn("/:music/:Other - Track.flac", keys)
+        self.assertNotIn("/:music/:Guest - Night.flac", keys)
         self.assertTrue(list(self.root.glob("collection.nml.bak_*")))
+
+    def test_title_only_credit_is_collected_without_a_duplicate(self):
+        result = traktor.create_artist_playlist("luminosity", "Luminosity Remixes", str(self.collection))
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["matched"], 1)
+        self.assertEqual(result["removed_duplicates"], 0)
+        node = self._playlist("Luminosity Remixes")
+        self.assertEqual(
+            node.find(".//PRIMARYKEY").attrib["KEY"],
+            "/:music/:Guest - Night.flac",
+        )
+        self.assertEqual(node.find("PLAYLIST").attrib["ENTRIES"], "1")
 
     def test_ampersand_artist_matches_the_collection_text(self):
         result = traktor.create_artist_playlist(
@@ -153,8 +184,34 @@ class ArtistPlaylistTests(unittest.TestCase):
         self.assertEqual(unnamed["reason"], "name")
         self.assertEqual(self.collection.read_bytes(), before)
         first = traktor.create_artist_playlist("Airbase", "Friday", str(self.collection))
-        self.assertEqual(first["reason"], "exists")
+        self.assertTrue(first["ok"], first)
+        self.assertEqual(first["reason"], "updated")
+        self.assertEqual(first["added"], 6)
+        self.assertEqual(first["matched"], 7)
         self.assertEqual(self._names().count("Friday"), 1)
+        node = self._playlist("Friday")
+        keys = [item.attrib["KEY"] for item in node.findall(".//PRIMARYKEY")]
+        self.assertEqual(keys[0], "/:music/:Airbase - Escape.flac")
+        self.assertEqual(
+            keys,
+            [
+                "/:music/:Airbase - Escape.flac",
+                "/:music/:Airbase - Alpha.flac",
+                "/:music/:Airbase - Club.flac",
+                "/:music/:Eloquentia & Airbase - Hemisphere.flac",
+                "/:music/:Someone - Horizon.flac",
+                "/:music/:Airbase feat. Someone.flac",
+                "/:music/:Airbase - Zed.flac",
+            ],
+        )
+        self.assertEqual(node.find("PLAYLIST").attrib["ENTRIES"], "7")
+        snapshot = self.collection.read_bytes()
+        second = traktor.create_artist_playlist("Airbase", "Friday", str(self.collection))
+        self.assertTrue(second["ok"], second)
+        self.assertEqual(second["reason"], "unchanged")
+        self.assertEqual(second["added"], 0)
+        self.assertEqual(second["matched"], 7)
+        self.assertEqual(self.collection.read_bytes(), snapshot)
 
     def test_running_traktor_blocks_the_live_collection_only(self):
         with patch.object(traktor, "is_traktor_running", return_value=True):
@@ -252,7 +309,8 @@ class ArtistPlaylistTests(unittest.TestCase):
         self.assertEqual(created.returncode, 0, created.stderr)
         payload = json.loads(created.stdout)
         self.assertTrue(payload["ok"])
-        self.assertEqual(payload["matched"], 3)
+        self.assertEqual(payload["matched"], 7)
+        self.assertEqual(payload["removed_duplicates"], 1)
         listed = subprocess.run(
             [
                 sys.executable, str(SCRIPT),

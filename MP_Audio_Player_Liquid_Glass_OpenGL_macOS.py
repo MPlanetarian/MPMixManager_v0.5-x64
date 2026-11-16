@@ -246,7 +246,11 @@ from liquid_player_visualizer import (
     macos_liquid_player_window_size,
     macos_player_grid,
 )
-from liquid_visualizer_session import stop_companion_playback, stop_companion_visualizer
+from liquid_visualizer_session import (
+    stop_companion_for_mode,
+    stop_companion_playback,
+    stop_companion_visualizer,
+)
 try:  # The four-window cap ships beside the host; a lone copy still runs.
     from mp_instance_limit import host_allowed, notify_limit
 except ImportError:
@@ -1459,6 +1463,9 @@ class OpenGLGlassHost:
             if self.renderer:
                 self.renderer.close()
                 self.renderer = None
+            # Retire the companion now, not after the movie: leaving it up put
+            # a full-size visualizer on the desktop with nothing in front of it.
+            stop_companion_for_mode(self.mode, player_gui=True)
             self._play_exit_video_after_close()
 
         return True
@@ -1519,11 +1526,11 @@ def main():
         play_player_intro(mode)
         host.run()
     finally:
-        if manager:
-            stop_companion_playback()
-            stop_companion_visualizer(force=True, for_gui=True)
-        else:
-            stop_companion_visualizer()
+        # The companion is already retired when host.run() returns normally;
+        # this catches a raise before that point. An embed check must never
+        # touch a companion the user is watching.
+        if not embed:
+            stop_companion_for_mode(mode, player_gui=True)
 
 
 if __name__ == "__main__":

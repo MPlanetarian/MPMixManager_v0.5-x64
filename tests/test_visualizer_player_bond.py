@@ -14,6 +14,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -523,6 +524,155 @@ class TestEachHostSpawnsItsOwnCompanion(unittest.TestCase):
              patch.object(sess, "_has_proc_environ", return_value=False):
             self.assertEqual(sess.companion_visualizer_pids(for_gui=False), [100, 200])
             self.assertEqual(sess.companion_visualizer_pids(for_gui=True), [100, 200])
+
+
+class TestACompanionClosesWithItsHost(unittest.TestCase):
+    """A companion must never outlive the window it is the background of.
+
+    `stop_companion_visualizer` covers an orderly close, but it runs in the
+    *host* process. When the host is SIGKILLed — the tray's Close All, a
+    script, a crash, a logout — nothing runs it, and the visualizer was left
+    hovering over the desktop with no window in front of it. The companion now
+    watches for its host and closes itself.
+    """
+
+    # Shortened so the behaviour is exercised in milliseconds. The shipped
+    # values are asserted separately below.
+    SHORT_START = 0.3
+    SHORT_GONE = 0.2
+
+    def setUp(self):
+        self.renderer = _renderer(vis, "LiquidVisualizerOpenGLRenderer")
+        self.renderer._bond_locked = True
+        self.renderer.request_close = MagicMock()
+
+    def _short_graces(self):
+        """Patch the shipped graces down; the real values are checked below."""
+        return patch.multiple(
+            "visualizer_player_bond",
+            HOST_START_GRACE_SECONDS=self.SHORT_START,
+            HOST_GONE_GRACE_SECONDS=self.SHORT_GONE,
+        )
+
+    def _poll(self, host_running, seconds, tick=0.02):
+        """Poll like a frame loop and return how long until it closed."""
+        started = time.monotonic()
+        with self._short_graces(), \
+             patch.object(self.renderer, "_bond_host_running", return_value=host_running):
+            while time.monotonic() - started < seconds:
+                self.renderer._close_if_host_is_gone()
+                if self.renderer.request_close.called:
+                    return time.monotonic() - started
+                time.sleep(tick)
+        return None
+
+    def test_a_killed_host_takes_the_companion_with_it(self):
+        self.renderer._host_was_seen = True
+        waited = self._poll(False, self.SHORT_GONE + 2.0)
+        self.assertIsNotNone(waited, "the companion outlived its host")
+        self.renderer.request_close.assert_called_once_with()
+
+    def test_a_live_host_keeps_the_companion_open(self):
+        self.assertIsNone(self._poll(True, 1.0))
+        self.renderer.request_close.assert_not_called()
+
+    def test_a_slow_launch_is_not_a_dead_host(self):
+        """MP_Gui.sh spawns the visualizer before it execs the host."""
+        # The host has never been seen: the start-up grace applies, so a
+        # window that is still waiting for its host stays open.
+        self.assertIsNone(self._poll(False, self.SHORT_START * 0.6))
+        self.renderer.request_close.assert_not_called()
+        # Once the longer grace does elapse, it closes.
+        self.assertIsNotNone(self._poll(False, self.SHORT_START + 2.0))
+
+    def test_the_shipped_graces_are_long_enough_for_a_launch(self):
+        import visualizer_player_bond as bond
+
+        self.assertGreaterEqual(bond.HOST_START_GRACE_SECONDS, 10.0)
+        self.assertGreaterEqual(bond.HOST_GONE_GRACE_SECONDS, 1.0)
+        self.assertLessEqual(bond.HOST_GONE_GRACE_SECONDS, 5.0)
+
+    def test_an_unobservable_host_never_closes_a_window(self):
+        """Windows and macOS have no /proc, so the probe cannot answer."""
+        self.assertIsNone(self._poll(None, 1.0))
+        self.renderer.request_close.assert_not_called()
+
+    def test_a_detached_z_window_is_never_closed(self):
+        self.renderer._bond_detached = True
+        self.assertIsNone(self._poll(False, 1.0))
+        self.renderer.request_close.assert_not_called()
+
+    def test_the_close_happens_once(self):
+        self.renderer._host_was_seen = True
+        self.assertIsNotNone(self._poll(False, self.SHORT_GONE + 2.0))
+        with patch.object(self.renderer, "_bond_host_running", return_value=False):
+            for _ in range(50):
+                self.renderer._close_if_host_is_gone()
+        self.renderer.request_close.assert_called_once_with()
+
+    def test_the_probe_is_throttled(self):
+        """The probe walks /proc, so it must not run once per frame."""
+        probe = MagicMock(return_value=True)
+        with patch("visualizer_player_bond.HOST_CHECK_INTERVAL", 0.1), \
+             patch.object(self.renderer, "_bond_host_running", probe):
+            started = time.monotonic()
+            # ~100 frames in 0.35 s, but at most one probe per 0.1 s.
+            while time.monotonic() - started < 0.35:
+                self.renderer._close_if_host_is_gone()
+                time.sleep(0.003)
+        self.assertLessEqual(probe.call_count, 6)
+        self.assertGreaterEqual(probe.call_count, 1)
+
+    def test_both_backends_get_the_watchdog(self):
+        from visualizer_player_bond import PlayerBondMixin
+
+        for module, name in ((vis, "LiquidVisualizerOpenGLRenderer"),
+                             (vulkan_vis, "LiquidVisualizerVulkanRenderer")):
+            with self.subTest(backend=name):
+                self.assertIs(getattr(getattr(module, name), "_close_if_host_is_gone"),
+                              PlayerBondMixin._close_if_host_is_gone)
+
+
+class TestTheCompanionGoesBeforeTheExitMovie(unittest.TestCase):
+    """The window behind MP Gui must be gone when the menu closes.
+
+    The host destroyed its own glass, then played the movie, and only then ran
+    the cleanup in `main()`'s `finally`. For the whole clip its full-size
+    visualizer sat alone on the desktop — the "visualizer still open" report.
+    """
+
+    def test_every_host_retires_the_companion_where_it_closes(self):
+        for name in (
+            "MP_Audio_Player_Liquid_Glass.py",
+            "MP_Audio_Player_Liquid_Glass_OpenGL.py",
+            "MP_Audio_Player_Liquid_Glass_macOS.py",
+            "MP_Audio_Player_Liquid_Glass_OpenGL_macOS.py",
+        ):
+            text = (SCRIPTS.parent / name).read_text(encoding="utf-8")
+            with self.subTest(host=name):
+                # The companion stop has to sit in the teardown, immediately
+                # after the window is destroyed - not only in main()'s finally,
+                # which runs once the movie has finished.
+                stop_at = text.index("stop_companion_for_mode(")
+                before = text[max(0, stop_at - 1200):stop_at]
+                self.assertTrue(
+                    "self.close(" in before or "renderer.close()" in before,
+                    f"{name} stops the companion without closing its own window first",
+                )
+                # And the movie must come after that stop, not before it.
+                after = text[stop_at:]
+                self.assertIn("ExitVideo", after[:1200])
+
+    def test_a_manager_close_stops_playback_and_its_own_companion(self):
+        import liquid_visualizer_session as sess
+
+        with patch.object(sess, "stop_companion_playback") as playback, \
+             patch.object(sess, "stop_companion_visualizer") as visualizer:
+            sess.stop_companion_for_mode("MANAGER")
+        playback.assert_called_once_with()
+        # Not forced: up to four MP Gui windows share one companion, and
+        # stop_companion_visualizer keeps it while another one is still up.
+        visualizer.assert_called_once_with(for_gui=True)
 
 
 if __name__ == "__main__":

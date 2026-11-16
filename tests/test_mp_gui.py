@@ -225,7 +225,13 @@ class TestGuiLauncher(unittest.TestCase):
         Both hosts share one visualizer process list. The GUI companion carries
         MP_VISUALIZER_MATCH_GUI=1, and passing ``for_gui=True`` is what keeps a
         GUI close from blanking the background behind an open Liquid Player.
+
+        Every host now routes that decision through ``stop_companion_for_mode``
+        so the companion is retired *before* the exit movie, not after it.
         """
+        import liquid_visualizer_session as sess
+        from unittest.mock import patch
+
         for name in (
             "MP_Audio_Player_Liquid_Glass_OpenGL.py",
             "MP_Audio_Player_Liquid_Glass.py",
@@ -234,9 +240,29 @@ class TestGuiLauncher(unittest.TestCase):
         ):
             text = (ROOT / name).read_text(encoding="utf-8")
             self.assertIn('os.environ["MP_GUI_SESSION"] = "1"', text)
-            self.assertIn("stop_companion_playback()", text)
-            self.assertIn("stop_companion_visualizer(force=True, for_gui=True)", text)
-            self.assertIn("stop_companion_visualizer()", text)
+            self.assertIn("stop_companion_for_mode(", text)
+
+        with patch.object(sess, "stop_companion_playback") as playback, \
+             patch.object(sess, "stop_companion_visualizer") as visualizer:
+            sess.stop_companion_for_mode("MANAGER")
+        playback.assert_called_once_with()
+        visualizer.assert_called_once_with(for_gui=True)
+
+        # A player close retires only the player's companion, and leaves
+        # playback to the player daemon.
+        with patch.object(sess, "stop_companion_playback") as playback, \
+             patch.object(sess, "stop_companion_visualizer") as visualizer:
+            sess.stop_companion_for_mode("NORMAL")
+        playback.assert_not_called()
+        visualizer.assert_called_once_with()
+
+        # The tracklist viewer is not a player window: it must not close a
+        # player's companion.
+        with patch.object(sess, "stop_companion_playback") as playback, \
+             patch.object(sess, "stop_companion_visualizer") as visualizer:
+            sess.stop_companion_for_mode("TRACKLIST", player_gui=False)
+        playback.assert_not_called()
+        visualizer.assert_not_called()
 
 
 class TestMpGuiFocusWithoutWmctrl(unittest.TestCase):

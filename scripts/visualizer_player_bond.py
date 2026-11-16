@@ -21,6 +21,7 @@ import os
 import shutil
 import subprocess
 import time
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 try:
@@ -31,6 +32,27 @@ except ImportError:
 # Title prefixes of the two Liquid Glass hosts a companion can belong behind.
 PLAYER_TITLE = "MP Audio Player (Liquid Glass"
 GUI_TITLE = "MP Mix Manager (Liquid Glass"
+
+# How long a locked companion waits for the host it has *never* seen before
+# closing itself.
+#
+# The host is a separate process, so nothing in this one is guaranteed to hear
+# the host exit when it was killed rather than closed: the tray's hard close, a
+# signal from a script, a crash. The window then sat behind nothing at all. The
+# grace covers the gap between a launcher spawning the visualizer and exec'ing
+# the host (MP_Gui.sh starts the child first, and a Pi can take several seconds
+# to map the glass), so a normal slow start is never mistaken for a dead host.
+HOST_START_GRACE_SECONDS = 15.0
+
+# How long a companion that has already been behind its host waits after the
+# host disappears. Nothing has to start up any more, so this only needs to
+# cover the host's own teardown and one probe interval.
+HOST_GONE_GRACE_SECONDS = 2.0
+
+# How often the companion re-probes for its host. The probe walks /proc, so it
+# must not run once per frame; a second is far below the time a user could
+# notice, and the grace period means the exact last poll does not matter.
+HOST_CHECK_INTERVAL = 1.0
 
 
 class PlayerBondMixin:
@@ -46,6 +68,11 @@ class PlayerBondMixin:
     bond comes from the process the player launched, not from a state file the
     user could flip, and Z/double-click cannot detach it or take it fullscreen.
     Any other visualizer window is free to move, resize and fullscreen.
+
+    A locked companion is also only ever a background: it closes itself once
+    the host it belongs behind has been gone for a moment, so a host that is
+    killed without running its own cleanup cannot leave the window stranded
+    (see ``_close_if_host_is_gone``).
 
     The same mixin serves two hosts. The Liquid Player publishes to
     ``liquid_player_window.json``; MP Gui publishes to
@@ -72,6 +99,13 @@ class PlayerBondMixin:
         # A window opened later (Z) is explicitly detached: it must not adopt
         # the player's rectangle just because a companion is already running.
         self._bond_detached = os.environ.get("MP_VISUALIZER_DETACHED") == "1"
+        # When this companion first noticed that no host was running, and
+        # whether it has already closed itself for that reason. See
+        # ``_close_if_host_is_gone``.
+        self._host_gone_since = 0.0
+        self._host_gone_closed = False
+        self._host_check_at = 0.0
+        self._host_was_seen = False
 
     # -- eligibility ------------------------------------------------------
     def _bonding_applies(self) -> bool:
@@ -124,6 +158,94 @@ class PlayerBondMixin:
     def _bond_host_title(self) -> str:
         """Title prefix of the window this bond must stack against."""
         return GUI_TITLE if self._bond_targets_gui() else PLAYER_TITLE
+
+    def _bond_host_running(self) -> Optional[bool]:
+        """True/False for the host this companion belongs behind, None if unknown.
+
+        A companion is started before its host in two of the launch paths
+        (``MP_Gui.sh`` spawns the visualizer, then execs the host), so "no host
+        yet" is normal for the first moment of a launch. The caller pairs this
+        with ``HOST_START_GRACE_SECONDS`` so a slow start is never read as a
+        dead host.
+
+        Only the host *kind* this window was started for counts: a GUI
+        companion must not be kept alive by a Liquid Player, and the reverse
+        holds too. Windows and macOS have no ``/proc``, so the probe cannot see
+        another process there and returns None: an unverifiable host is never
+        treated as a dead one, because that would close a working window.
+        """
+        if not Path("/proc").is_dir():
+            return None
+        try:
+            from liquid_player_visualizer import (
+                liquid_gui_host_running,
+                liquid_player_host_running,
+            )
+        except ImportError:
+            from scripts.liquid_player_visualizer import (
+                liquid_gui_host_running,
+                liquid_player_host_running,
+            )
+        try:
+            if self._bond_targets_gui():
+                running = liquid_gui_host_running()
+            else:
+                running = liquid_player_host_running()
+        except Exception:
+            return None
+        # None means "not observable here"; keep it that way instead of
+        # collapsing it to False via bool().
+        return None if running is None else bool(running)
+
+    def _close_if_host_is_gone(self) -> bool:
+        """Close a locked companion once the window behind it has exited.
+
+        The companion is only ever a background for its host, so when the host
+        goes away the companion must not stay on screen as a free-floating
+        window. ``stop_companion_visualizer`` already closes it on an orderly
+        exit; this covers the paths where the host never runs its cleanup —
+        ``SIGKILL``, the tray's hard close, a crash, a logout.
+
+        The probe walks /proc, so it runs at most once every
+        ``HOST_CHECK_INTERVAL``. Between probes only a grace period that is
+        already running can expire, which is what closes the window. A host
+        that was never seen gets the longer ``HOST_START_GRACE_SECONDS``, so a
+        slow launch is not mistaken for a dead one; once the companion has been
+        behind its host, ``HOST_GONE_GRACE_SECONDS`` applies.
+
+        Returns True when this call closed the window.
+        """
+        if not self._bond_is_locked() or getattr(self, "_bond_detached", False):
+            return False
+        if getattr(self, "_host_gone_closed", False):
+            return False
+        now = time.monotonic()
+        if now >= getattr(self, "_host_check_at", 0.0):
+            self._host_check_at = now + HOST_CHECK_INTERVAL
+            running = self._bond_host_running()
+            if running is None or running:
+                # A host that is up, or cannot be observed at all, clears the
+                # timer: the next disappearance starts a fresh grace period.
+                self._host_gone_since = 0.0
+                if running:
+                    self._host_was_seen = True
+                return False
+            if self._host_gone_since <= 0.0:
+                self._host_gone_since = now
+                return False
+        seen_at = getattr(self, "_host_gone_since", 0.0)
+        if seen_at <= 0.0:
+            return False
+        grace = (HOST_GONE_GRACE_SECONDS if getattr(self, "_host_was_seen", False)
+                 else HOST_START_GRACE_SECONDS)
+        if now - seen_at < grace:
+            return False
+        self._host_gone_closed = True
+        try:
+            self.request_close()
+        except Exception:
+            pass
+        return True
 
     def _bond_read_geometry(self) -> Optional[tuple]:
         """Published (x, y, width, height) for the host this bond follows."""
@@ -412,6 +534,11 @@ class PlayerBondMixin:
     def _sync_player_bond(self) -> None:
         """Keep the standalone visualizer directly behind the Liquid Player."""
         if not self._bonding_applies():
+            return
+        # The host can disappear without ever running its own shutdown (tray
+        # hard close, SIGKILL, a crash). Check that first: a companion with no
+        # window behind it must close instead of hovering over the desktop.
+        if self._close_if_host_is_gone():
             return
         now = time.monotonic()
         if now < getattr(self, "_player_bonded_at", 0.0):

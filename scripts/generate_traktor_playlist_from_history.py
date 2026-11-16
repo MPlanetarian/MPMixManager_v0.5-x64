@@ -8,8 +8,11 @@ it into collection.nml under the default $ROOT playlist folder.
 The same helpers are imported by MP_Fav_Playlist_Track_Exporter.py so the
 Favorites exporter can create a playlist for the exact tracks it just copied.
 The Tracklist menu's artist playlist tool uses them too: it scans the
-collection for one artist name, then inserts, renames, or removes a playlist
-with the same backup and write path.
+collection artist field for one name, then the title field, and inserts a
+playlist. A field matches when it contains the name as a whole phrase, so a
+collaboration or remix credit is included. A track found by both searches is
+written once. When the named playlist already exists, only tracks that are
+not already in it are added. Duplicate rows are removed after that write.
 
 Interactive use (Manager menu option 17 > 3):
     python3 scripts/generate_traktor_playlist_from_history.py
@@ -880,29 +883,191 @@ def load_playlist_tree(collection_path: str) -> Dict[str, Any]:
     return _public_tree(folders, playlists)
 
 
-def tracks_for_artist(collection_path: str, artist_name: str) -> List[Dict[str, Any]]:
-    """Collection entries whose ARTIST field is exactly this name.
+def _artist_name_pattern(artist_name: str) -> Optional[re.Pattern]:
+    """Match the artist name as a whole phrase inside a cleaned field."""
+    wanted = _clean_label(artist_name).casefold()
+    if not wanted:
+        return None
+    return re.compile(r"(?<![\w])" + re.escape(wanted) + r"(?![\w])")
 
-    Matching ignores case and repeated spaces. A different artist, including
-    a collaboration that only starts with the name, is left out.
+
+def _track_sort_key(track: Dict[str, Any]) -> Tuple:
+    return (
+        _clean_label(str(track.get("title") or "")).casefold(),
+        _clean_label(str(track.get("file") or "")).casefold(),
+        str(track.get("pkey") or ""),
+    )
+
+
+def tracks_for_artist(collection_path: str, artist_name: str) -> List[Dict[str, Any]]:
+    """Tracks for this artist from the artist field, then from the title.
+
+    Each pass keeps a track when the field contains the artist name as a
+    whole phrase, ignoring case and repeated spaces. That includes an exact
+    artist, a collaboration such as "Airbase feat. Someone" or
+    "Eloquentia & Airbase", and a title credit such as
+    "Horizon (Airbase Remix)". A longer word that merely starts with the
+    name, such as "Airbaseball", is left out. A track that matches both
+    fields is listed twice. create_artist_playlist removes that duplicate
+    from the playlist after the playlist has been written.
     """
     wanted = _clean_label(artist_name).casefold()
     if not wanted:
         return []
+    name_pattern = _artist_name_pattern(artist_name)
     by_pkey, _ = _index_tracks(ET.parse(collection_path).getroot())
-    matched = [
-        track
-        for track in by_pkey.values()
-        if _clean_label(str(track.get("artist") or "")).casefold() == wanted
-    ]
-    matched.sort(
-        key=lambda track: (
-            _clean_label(str(track.get("title") or "")).casefold(),
-            _clean_label(str(track.get("file") or "")).casefold(),
-            str(track.get("pkey") or ""),
-        )
-    )
+    from_artist: List[Dict[str, Any]] = []
+    from_title: List[Dict[str, Any]] = []
+    for track in by_pkey.values():
+        artist_text = _clean_label(str(track.get("artist") or "")).casefold()
+        title = _clean_label(str(track.get("title") or "")).casefold()
+        if name_pattern is not None and artist_text and name_pattern.search(artist_text):
+            from_artist.append(track)
+        if name_pattern is not None and title and name_pattern.search(title):
+            from_title.append(track)
+    matched = from_artist + from_title
+    matched.sort(key=_track_sort_key)
     return matched
+
+
+def _playlist_node_by_name(root: ET.Element, playlist_name: str) -> Optional[ET.Element]:
+    """The first playlist whose name matches, ignoring case and repeated spaces."""
+    wanted = _clean_label(playlist_name).casefold()
+    if not wanted:
+        return None
+    for candidate in root.findall(".//NODE"):
+        if candidate.attrib.get("TYPE") != "PLAYLIST":
+            continue
+        if _clean_label(str(candidate.attrib.get("NAME") or "")).casefold() == wanted:
+            return candidate
+    return None
+
+
+def _playlist_primary_keys(content: Optional[ET.Element]) -> List[str]:
+    if content is None:
+        return []
+    keys: List[str] = []
+    for entry in content.findall("ENTRY"):
+        primary = entry.find("PRIMARYKEY")
+        keys.append(str(primary.attrib.get("KEY", "") if primary is not None else "").strip())
+    return keys
+
+
+def add_missing_tracks_to_playlist(
+    collection_path: str,
+    playlist_name: str,
+    tracks: Sequence[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Append tracks whose PRIMARYKEY is not already in this playlist.
+
+    Existing rows stay in place. The file is rewritten only when a track is added.
+    """
+    name = _clean_label(playlist_name)
+    path = Path(collection_path)
+    if not name:
+        return {"ok": False, "added": 0, "kept": 0, "message": "A playlist name is required."}
+    try:
+        tree = ET.parse(path)
+    except Exception as exc:
+        return {"ok": False, "added": 0, "kept": 0, "message": f"Could not read collection.nml: {exc}"}
+    node = _playlist_node_by_name(tree.getroot(), name)
+    if node is None:
+        return {"ok": False, "added": 0, "kept": 0, "message": f"Playlist '{name}' was not found."}
+    content = node.find("PLAYLIST")
+    if content is None:
+        content = ET.SubElement(
+            node,
+            "PLAYLIST",
+            {"ENTRIES": "0", "TYPE": "LIST", "UUID": uuid.uuid4().hex},
+        )
+    existing = {key for key in _playlist_primary_keys(content) if key}
+    added = 0
+    for track in tracks:
+        key = str(track.get("pkey") or "").strip()
+        if not key or key in existing:
+            continue
+        entry = ET.SubElement(content, "ENTRY")
+        ET.SubElement(entry, "PRIMARYKEY", {"TYPE": "TRACK", "KEY": key})
+        existing.add(key)
+        added += 1
+    kept = len(list(content.findall("ENTRY")))
+    if added == 0:
+        return {
+            "ok": True,
+            "added": 0,
+            "kept": kept,
+            "message": f"Playlist '{name}' already contains every matching track.",
+        }
+    content.attrib["ENTRIES"] = str(kept)
+    saved, detail = _save_nml(path, tree)
+    if not saved:
+        return {"ok": False, "added": 0, "kept": kept, "message": detail}
+    return {
+        "ok": True,
+        "added": added,
+        "kept": kept,
+        "backup": detail,
+        "message": f"Added {added} new track(s) to playlist '{name}'. {kept} tracks now. Backup: {detail}",
+    }
+
+
+def remove_duplicate_playlist_entries(collection_path: str, playlist_name: str) -> Dict[str, Any]:
+    """Remove later copies of the same track from a playlist that was just written.
+
+    Identity is the Traktor PRIMARYKEY. The first row stays. The collection
+    file is rewritten only when at least one duplicate is removed.
+    """
+    name = _clean_label(playlist_name)
+    path = Path(collection_path)
+    if not name:
+        return {"ok": False, "removed": 0, "kept": 0, "message": "A playlist name is required."}
+    try:
+        tree = ET.parse(path)
+    except Exception as exc:
+        return {"ok": False, "removed": 0, "kept": 0, "message": f"Could not read collection.nml: {exc}"}
+    node = None
+    for candidate in tree.getroot().findall(".//NODE"):
+        if candidate.attrib.get("TYPE") == "PLAYLIST" and candidate.attrib.get("NAME") == name:
+            node = candidate
+            break
+    if node is None:
+        return {"ok": False, "removed": 0, "kept": 0, "message": f"Playlist '{name}' was not found."}
+    content = node.find("PLAYLIST")
+    if content is None:
+        return {"ok": True, "removed": 0, "kept": 0, "message": f"Playlist '{name}' has no entries."}
+    seen: set = set()
+    removed = 0
+    for entry in list(content.findall("ENTRY")):
+        primary = entry.find("PRIMARYKEY")
+        key = str(primary.attrib.get("KEY", "") if primary is not None else "").strip()
+        if not key or key not in seen:
+            if key:
+                seen.add(key)
+            continue
+        content.remove(entry)
+        removed += 1
+    kept = len(list(content.findall("ENTRY")))
+    if removed == 0:
+        return {
+            "ok": True,
+            "removed": 0,
+            "kept": kept,
+            "message": f"Playlist '{name}' has no duplicate tracks.",
+        }
+    content.attrib["ENTRIES"] = str(kept)
+    saved, detail = _save_nml(path, tree)
+    if not saved:
+        return {"ok": False, "removed": 0, "kept": kept, "message": detail}
+    return {
+        "ok": True,
+        "removed": removed,
+        "kept": kept,
+        "backup": detail,
+        "message": (
+            f"Removed {removed} duplicate track(s) from playlist '{name}'. "
+            f"{kept} tracks remain. Backup: {detail}"
+        ),
+    }
 
 
 def suggest_artists(
@@ -990,10 +1155,14 @@ def create_artist_playlist(
     cfg: Optional[Dict[str, str]] = None,
     close_traktor: bool = False,
 ) -> Dict[str, Any]:
-    """Scan the collection and write one playlist that contains only this artist.
+    """Scan the collection and write one playlist for this artist.
 
-    The playlist is inserted with insert_playlist_into_collection, under the
-    same $ROOT folder the history generator uses.
+    Tracks come from an artist field that contains the name, then from titles
+    that contain the name. A new playlist is inserted with
+    insert_playlist_into_collection, under the same $ROOT folder the history
+    generator uses. When that playlist name already exists, tracks already in
+    it stay, and only missing matches are added. Duplicate tracks are then
+    removed from that playlist.
     """
     artist = _clean_label(artist_name)
     playlist = _clean_label(playlist_name)
@@ -1010,18 +1179,7 @@ def create_artist_playlist(
     path, blocked = _prepare_collection_write(collection_path, cfg, close_traktor)
     if blocked is not None or path is None:
         return blocked or {"ok": False, "reason": "collection", "message": "collection.nml was not found."}
-    if _playlist_name_taken(str(path), playlist):
-        return {
-            "ok": False,
-            "reason": "exists",
-            "message": (
-                f"A playlist named '{playlist}' already exists. "
-                "Rename that playlist or choose another name."
-            ),
-            "collection": str(path),
-            "playlist": playlist,
-            "artist": artist,
-        }
+    exists = _playlist_name_taken(str(path), playlist)
     try:
         matched = tracks_for_artist(str(path), artist)
     except Exception as exc:
@@ -1032,6 +1190,22 @@ def create_artist_playlist(
             suggestions = suggest_artists(str(path), artist)
         except Exception:
             suggestions = []
+        if exists:
+            return {
+                "ok": True,
+                "reason": "unchanged",
+                "message": (
+                    f"Playlist '{playlist}' was left as it is. "
+                    f"No tracks in the Traktor collection use the artist name '{artist}'."
+                ),
+                "artist": artist,
+                "playlist": playlist,
+                "matched": 0,
+                "added": 0,
+                "removed_duplicates": 0,
+                "suggestions": suggestions,
+                "collection": str(path),
+            }
         return {
             "ok": False,
             "reason": "no_match",
@@ -1039,22 +1213,105 @@ def create_artist_playlist(
             "artist": artist,
             "playlist": playlist,
             "matched": 0,
+            "added": 0,
             "suggestions": suggestions,
             "collection": str(path),
         }
-    ok, message = insert_playlist_into_collection(str(path), playlist, matched)
-    if ok:
+    if exists:
+        added_result = add_missing_tracks_to_playlist(str(path), playlist, matched)
+        if not added_result.get("ok"):
+            return {
+                "ok": False,
+                "reason": "write",
+                "message": str(added_result.get("message") or "Could not update the playlist."),
+                "artist": artist,
+                "playlist": playlist,
+                "matched": 0,
+                "added": 0,
+                "removed_duplicates": 0,
+                "suggestions": [],
+                "collection": str(path),
+            }
+        added = int(added_result.get("added") or 0)
+        kept = int(added_result.get("kept") or 0)
+        if added == 0:
+            return {
+                "ok": True,
+                "reason": "unchanged",
+                "message": (
+                    f"Playlist '{playlist}' already contains every matching track. "
+                    f"{kept} tracks."
+                ),
+                "artist": artist,
+                "playlist": playlist,
+                "matched": kept,
+                "added": 0,
+                "removed_duplicates": 0,
+                "suggestions": [],
+                "collection": str(path),
+            }
+        message = (
+            f"Added {added} new track(s) to '{playlist}'. "
+            f"Artist filter: {artist} (artist field or title contains the name)."
+        )
+    else:
+        ok, message = insert_playlist_into_collection(str(path), playlist, matched)
+        if not ok:
+            return {
+                "ok": False,
+                "reason": "write",
+                "message": message,
+                "artist": artist,
+                "playlist": playlist,
+                "matched": 0,
+                "added": 0,
+                "removed_duplicates": 0,
+                "suggestions": [],
+                "collection": str(path),
+            }
+        added = 0
+        kept = 0
         message = (
             f"{message} Artist filter: {artist} "
-            "(exact name, case-insensitive), sorted by title."
+            "(artist field or title contains the name), sorted by title."
         )
+    deduped = remove_duplicate_playlist_entries(str(path), playlist)
+    if not deduped.get("ok"):
+        return {
+            "ok": False,
+            "reason": "write",
+            "message": (
+                f"{message} The playlist was written, but duplicate tracks "
+                f"could not be removed: {deduped.get('message')}"
+            ),
+            "artist": artist,
+            "playlist": playlist,
+            "matched": 0,
+            "added": added,
+            "removed_duplicates": 0,
+            "suggestions": [],
+            "collection": str(path),
+        }
+    removed = int(deduped.get("removed") or 0)
+    kept = int(deduped.get("kept") or 0)
+    if exists:
+        message = (
+            f"Added {added} new track(s) to '{playlist}'. Playlist now has {kept} tracks. "
+            f"Artist filter: {artist} (artist field or title contains the name)."
+        )
+    if removed:
+        message += f" Removed {removed} duplicate track(s) from '{playlist}'."
+    if not exists:
+        added = kept
     return {
-        "ok": ok,
-        "reason": "written" if ok else "write",
+        "ok": True,
+        "reason": "updated" if exists else "written",
         "message": message,
         "artist": artist,
         "playlist": playlist,
-        "matched": len(matched) if ok else 0,
+        "matched": kept,
+        "added": added,
+        "removed_duplicates": removed,
         "suggestions": [],
         "collection": str(path),
     }

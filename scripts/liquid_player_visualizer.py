@@ -590,16 +590,21 @@ def read_published_gui_window_size() -> Optional[tuple]:
     return int(record[0]), int(record[1])
 
 
-def _glass_host_running(manager: bool) -> bool:
-    """True when a Liquid Glass host is up. Manager and player are separate."""
+def _glass_host_running(manager: bool) -> Optional[bool]:
+    """True/False for a running Liquid Glass host, None when it can't be seen.
+
+    Manager and player are separate. ``None`` means this platform has no
+    ``/proc`` (Windows, macOS): the host is simply not observable from here,
+    which is different from "not running" and must not be read as the latter.
+    """
     root = Path("/proc")
     if not root.is_dir():
-        return False
+        return None
     marker = b"MP_Audio_Player_Liquid_Glass"
     try:
         entries = os.listdir(root)
     except OSError:
-        return False
+        return None
     for entry in entries:
         if not entry.isdigit():
             continue
@@ -612,12 +617,12 @@ def _glass_host_running(manager: bool) -> bool:
     return False
 
 
-def liquid_player_host_running() -> bool:
+def liquid_player_host_running() -> Optional[bool]:
     """True when a Liquid Player host is up. The Manager GUI does not count."""
     return _glass_host_running(False)
 
 
-def liquid_gui_host_running() -> bool:
+def liquid_gui_host_running() -> Optional[bool]:
     """True when MP Gui's Liquid Glass host is up."""
     return _glass_host_running(True)
 

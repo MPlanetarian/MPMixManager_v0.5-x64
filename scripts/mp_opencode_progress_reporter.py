@@ -11,6 +11,10 @@ What it does
       1. A TEXT report  - a plain-text email body plus a .txt attachment.
       2. An AUDIO report - a Stephen Hawking Matrix voice MP3 attachment.
 
+    A briefing is only produced while at least one session is running. When
+    nothing is running the reporter exits before writing a report, synthesising
+    audio or opening SMTP, so an idle workstation generates no mail at all.
+
     Session state comes from the running OpenCode service over its local HTTP
     API. When the service is not reachable the reporter falls back to a
     read-only scan of ~/.local/share/opencode/opencode.db, so a briefing is
@@ -24,7 +28,7 @@ Rate limiting
     send. --force overrides the bucket for a manual dispatch.
 
 Usage
-    mp_opencode_progress_reporter.py --send        Send if this bucket is due
+    mp_opencode_progress_reporter.py --send        Send if due and a session runs
     mp_opencode_progress_reporter.py --force       Send now, ignoring the bucket
     mp_opencode_progress_reporter.py --dry-run     Build both reports, no email
     mp_opencode_progress_reporter.py --status      Show configuration & history
@@ -145,7 +149,6 @@ def load_config() -> dict:
         "OPENCODE_PROGRESS_RECIPIENTS": "",
         "OPENCODE_PROGRESS_SUBJECT_PREFIX": "OpenCode Agent Progress",
         "OPENCODE_PROGRESS_TTS_ENABLED": "true",
-        "OPENCODE_PROGRESS_SEND_WHEN_IDLE": "true",
         "OPENCODE_PROGRESS_INCLUDE_TOOL_CALLS": "true",
         "OPENCODE_PROGRESS_MAX_SESSIONS": str(DEFAULT_MAX_SESSIONS),
         "OPENCODE_PROGRESS_MAX_MESSAGES": str(DEFAULT_MAX_MESSAGES),
@@ -557,11 +560,22 @@ def normalize_record(session: dict) -> dict:
     return record
 
 
-def build_report_data(cfg: dict, window_start: float, window_end: float) -> dict:
-    """Collect every running session and reduce it to report-ready records."""
+def build_report_data(cfg: dict, window_start: float, window_end: float,
+                      collected: tuple = None) -> dict:
+    """Collect every running session and reduce it to report-ready records.
+
+    ``collected`` lets a caller that has already probed the machine (the
+    dispatch gate that decides whether to send at all) pass the same list in.
+    Without it the two calls could disagree and an empty briefing could slip
+    past a gate that saw a session a moment earlier.
+    """
     limit = cfg_int(cfg, "OPENCODE_PROGRESS_MAX_SESSIONS", DEFAULT_MAX_SESSIONS)
     msg_limit = cfg_int(cfg, "OPENCODE_PROGRESS_MAX_MESSAGES", DEFAULT_MAX_MESSAGES)
-    sessions, source, note = collect_running_sessions(limit)
+    if collected is not None:
+        sessions, source, note = collected
+        sessions = sessions[:limit]
+    else:
+        sessions, source, note = collect_running_sessions(limit)
 
     titles = {s["id"]: s["title"] for s in sessions}
     records = []
@@ -1141,15 +1155,32 @@ def _dispatch_locked(cfg: dict, minutes: int, force: bool,
                     % minutes)
         return True
 
-    if truthy(cfg.get("OPENCODE_PROGRESS_SEND_WHEN_IDLE"), True) is False:
-        current, _source, _note = collect_running_sessions(1)
-        if not current:
-            log_message("INFO", "no running sessions and idle briefings are off; skipping")
+    collected = None
+    if not force and not dry_run:
+        # No running session, no briefing. A scheduled report is only useful
+        # while an agent is actually working; on an idle machine it is just
+        # another email in the inbox, so the timer stays silent instead of
+        # mailing "0 running". `--force` is the interactive "send now" path and
+        # is not gated, which is also what the daily reporter does.
+        collected = collect_running_sessions(
+            cfg_int(cfg, "OPENCODE_PROGRESS_MAX_SESSIONS", DEFAULT_MAX_SESSIONS))
+        if not collected[0]:
+            log_message("INFO", "no OpenCode sessions are running (%s); "
+                                "no report and no email" % collected[1])
             return True
     start, end = window_bounds(state, minutes)
-    data = build_report_data(cfg, start, end)
+    data = build_report_data(cfg, start, end, collected)
     log_message("INFO", "collected %d running session(s) from %s"
                 % (len(data["sessions"]), data["source"]))
+
+    if not data["sessions"] and not dry_run:
+        # Belt and braces for the manual paths: even a forced dispatch must not
+        # build an empty report or email one. Nothing running means nothing to
+        # say, so the dispatch stops before writing files or synthesising audio.
+        # A dry run is different: it is an explicit preview request, sends
+        # nothing, and must still be able to show the empty-report rendering.
+        log_message("INFO", "no OpenCode sessions are running; nothing to report")
+        return True
 
     stamp = datetime.fromtimestamp(end).strftime("%Y-%m-%d_%H-%M-%S")
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -1300,9 +1331,7 @@ def print_status():
     print("  Audio report:       %s" % (
         "Stephen Hawking MP3" if truthy(cfg.get("OPENCODE_PROGRESS_TTS_ENABLED"), True)
         else "disabled"))
-    print("  Idle briefings:     %s" % (
-        "sent" if truthy(cfg.get("OPENCODE_PROGRESS_SEND_WHEN_IDLE"), True)
-        else "suppressed"))
+    print("  Idle briefings:     never (no session, no report, no email)")
     print("  OpenCode service:   %s" % (endpoint.get("url") or "not running"))
     print("  Report directory:   %s" % REPORTS_DIR)
     print("  Audio directory:    %s" % TTS_DIR)

@@ -450,7 +450,7 @@ class TestDispatch(unittest.TestCase):
                                return_value=self._cfg(OPENCODE_PROGRESS_RECIPIENTS="",
                                                       EMAIL_RECIPIENTS="")):
             with mock.patch.object(self.mod, "collect_running_sessions",
-                                   return_value=([], "opencode api", "")):
+                                   return_value=([_session()], "opencode api", "")):
                 with mock.patch.object(self.mod, "synthesize_audio",
                                        return_value={"mp3": None, "wav": None,
                                                      "size_kb": 0}):
@@ -462,7 +462,7 @@ class TestDispatch(unittest.TestCase):
         with mock.patch.object(self.mod, "load_config",
                                return_value=self._cfg(SMTP_PASSWORD="")):
             with mock.patch.object(self.mod, "collect_running_sessions",
-                                   return_value=([], "opencode api", "")):
+                                   return_value=([_session()], "opencode api", "")):
                 with mock.patch.object(self.mod, "synthesize_audio",
                                        return_value={"mp3": None, "wav": None,
                                                      "size_kb": 0}):
@@ -470,14 +470,68 @@ class TestDispatch(unittest.TestCase):
                         self.assertFalse(self.mod.execute_dispatch(force=True))
                         smtp.assert_not_called()
 
-    def test_idle_briefings_can_be_suppressed(self):
-        cfg = self._cfg(OPENCODE_PROGRESS_SEND_WHEN_IDLE="false")
+    def test_no_session_means_no_email_and_no_report(self):
+        """The scheduled path must stay silent when no agent is running.
+
+        This is the bug that mattered: with the old default, an idle machine
+        still built a text report and a spoken "0 agent sessions running"
+        briefing and mailed both every ten minutes.
+        """
+        cfg = self._cfg()
+        with mock.patch.object(self.mod, "load_config", return_value=cfg):
+            with mock.patch.object(self.mod, "collect_running_sessions",
+                                   return_value=([], "opencode api", "")):
+                with mock.patch.object(self.mod, "synthesize_audio") as synth:
+                    with mock.patch.object(self.mod.smtplib, "SMTP") as smtp:
+                        self.assertTrue(self.mod.execute_dispatch(force=False))
+                        smtp.assert_not_called()
+                        synth.assert_not_called()
+        self.assertEqual(list(self.paths["REPORTS_DIR"].glob("*.txt")), [],
+                         "an idle window must not leave a report behind")
+
+    def test_the_old_send_when_idle_switch_no_longer_forces_empty_mail(self):
+        """A stale `OPENCODE_PROGRESS_SEND_WHEN_IDLE="true"` must not send.
+
+        Installs that still carry the old opt-in line were the reason the
+        mail kept arriving after the feature became activity-only.
+        """
+        cfg = self._cfg(OPENCODE_PROGRESS_SEND_WHEN_IDLE="true")
         with mock.patch.object(self.mod, "load_config", return_value=cfg):
             with mock.patch.object(self.mod, "collect_running_sessions",
                                    return_value=([], "opencode api", "")):
                 with mock.patch.object(self.mod.smtplib, "SMTP") as smtp:
-                    self.assertTrue(self.mod.execute_dispatch(force=True))
+                    self.assertTrue(self.mod.execute_dispatch(force=False))
                     smtp.assert_not_called()
+
+    def test_a_running_session_still_gets_its_briefing(self):
+        session = _session()
+        session["messages"] = []
+        audio_file = Path(self.tmp.name) / "brief.mp3"
+        audio_file.write_bytes(b"ID3fake")
+
+        class FakeSMTP:
+            def __init__(self, host, port, timeout=40, context=None):
+                self.sent = 0
+            def ehlo(self):
+                return None
+            def starttls(self, context=None):
+                return None
+            def login(self, user, password):
+                return None
+            def sendmail(self, user, recipients, payload):
+                self.sent += 1
+            def quit(self):
+                return None
+
+        with mock.patch.object(self.mod, "load_config", return_value=self._cfg()):
+            with mock.patch.object(self.mod, "collect_running_sessions",
+                                   return_value=([session], "opencode api", "")):
+                with mock.patch.object(self.mod, "synthesize_audio",
+                                       return_value={"mp3": audio_file, "wav": None,
+                                                     "size_kb": 1.0}):
+                    with mock.patch.object(self.mod.smtplib, "SMTP", FakeSMTP):
+                        self.assertTrue(self.mod.execute_dispatch(force=False))
+        self.assertEqual(len(list(self.paths["REPORTS_DIR"].glob("*.txt"))), 1)
 
     def test_recipients_fall_back_to_the_daily_list(self):
         cfg = self._cfg(OPENCODE_PROGRESS_RECIPIENTS="")

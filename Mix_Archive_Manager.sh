@@ -2585,6 +2585,29 @@ _theme_file_name() {
 local _tf="$HOME/.config/mix-manager/theme"
 [ -f "$_tf" ] && tr -d ' \t\n\r' < "$_tf" 2>/dev/null || printf '%s' ""
 }
+# The header, performance and stats caches store finished lines with the ANSI
+# colours already expanded, so every one of them is wrong the moment the
+# palette changes. Without this a theme switch repainted the menu chrome and
+# left the banner above it in the previous theme until a refresh worker ran
+# (30 s cache lock, 60 s spawn gate). Drop the files, blank the in-memory
+# copies so the next frame is drawn in the new palette, and pull the refresh
+# forward instead of waiting for the gate.
+_invalidate_theme_caches() {
+_CACHED_STATS_CORE=""; _CACHED_CLOUD_STATUS=""; _CACHED_WEATHER_DISPLAY=""
+_CACHED_PLANETS_DISPLAY=""; _CACHED_AUDIO_IFACE_DISPLAY=""; _CACHED_ALARM_CLOCK_STATUS=""
+_CACHED_OS_BADGE=""; _CACHED_OS_UPDATE_STATUS=""; _CACHED_TOP_5_BADGE=""
+_CACHED_NOW_PLAYING=""; _CACHED_PERF_DISPLAY=""
+# _CACHED_INTERNET_STATUS is a plain "online"/"offline" string, so it needs no
+# repaint. Everything else above is either colour-bearing or derived from it.
+# The throttles go to zero so the next tick re-probes instead of serving a
+# cache that is now empty.
+_LAST_STATS_CHECK=0; _LAST_CLOUD_CHECK=0; _LAST_WEATHER_CHECK=0; _LAST_PLANETS_CHECK=0
+_LAST_AUDIO_IFACE_CHECK=0; _LAST_OS_UPDATE_CHECK=0; _LAST_INTERNET_CHECK=0
+_LAST_ALARM_STATUS_CHECK=0; _LAST_TOP_5_CHECK=0; _LAST_PERF_CHECK=0; _LAST_HDR_REFRESH_SPAWN=0
+local _d="$HOME/.config/mix-manager"
+rm -f "$_d/header_cache.env" "$_d/perf_display.cache" "$_d/perf_display.stamp" \
+      "$_d/.header_refresh_stamp" 2>/dev/null || true
+}
 sync_theme_from_file() {
 # _LAST_THEME_APPLIED remembers the file value already on screen. The
 # signature compares the palette that actually got painted (not the raw name),
@@ -2597,6 +2620,9 @@ _saved="$(_theme_file_name)"
 _LAST_THEME_APPLIED="$_saved"
 set_theme_colors "$_saved"
 [ "$_before" = "${MENU_NUM:-}|${MENU_INK:-}|${SEL_BAR:-}|${THEME_BG_R:-},${THEME_BG_G:-},${THEME_BG_B:-}" ] && return 1
+# The caches were painted in the palette we just left, so they have to go
+# here too: this is the path a C press in MP Gui or the Liquid Player takes.
+declare -F _invalidate_theme_caches >/dev/null 2>&1 && _invalidate_theme_caches
 _apply_cli_theme_background
 return 0
 }
@@ -2791,8 +2817,12 @@ _restore_cli_theme_background() {
     _apply_windows_console_background 0 0 0 restore
     _apply_macos_terminal_background 0 0 0 restore
 }
+# Caches holding pre-painted lines are dropped by _invalidate_theme_caches,
+# defined above next to sync_theme_from_file: both the C key here and a theme
+# picked in another window have to clear them.
 save_theme() {
 local new_theme="$1"; mkdir -p "$HOME/.config/mix-manager" 2>/dev/null; echo "$new_theme" > "$HOME/.config/mix-manager/theme" 2>/dev/null; set_theme_colors "$new_theme"
+_invalidate_theme_caches
 # We just painted this value, so the watcher must not treat our own write as
 # an external change on the next tick.
 _LAST_THEME_APPLIED="$new_theme"
@@ -2836,8 +2866,28 @@ for ((i=0; i<n; i++)); do
 done
 save_theme "${_cycle[$next]}"
 }
+# Point btop at this theme's palette. The old body used GNU `sed -i`, which
+# BSD sed rejects ("invalid command code f"), so on macOS btop stayed on
+# Default forever and the theme only ever landed in ~/.config/btop/themes.
+# Rewrite through a temp file instead: that is portable, and it leaves no
+# sed backup litter behind.
 _sync_btop_theme() {
-local th="${1:-$CURRENT_THEME}" tn="" bd="$HOME/.config/btop"; [ "$th" = "dreamworlds_ultra" ] && tn="Dreamworlds_Ultra_MP_Mix_Manager"; [ "$th" = "cosmic_supernova" ] && tn="Cosmic_Supernova_MP_Mix_Manager"; [ "$th" = "stream_of_frequency" ] && tn="Stream_of_Frequency_MP_Mix_Manager"; [ "$th" = "sensorium" ] && tn="Sensorium_MP_Mix_Manager"; [ "$th" = "retro_linux_memories" ] && tn="Retro_Linux_Memories_MP_Mix_Manager"; [ "$th" = "the_whitest_white" ] && tn="The_Whitest_White_MP_Mix_Manager"; [ -z "$tn" ] || [ ! -d "$bd" ] && return 0; mkdir -p "$bd/themes" 2>/dev/null; [ -f "$SCRIPT_DIR/themes/${tn}.theme" ] && cp -p "$SCRIPT_DIR/themes/${tn}.theme" "$bd/themes/" 2>/dev/null; [ -f "$bd/btop.conf" ] && sed -i "s|^color_theme = .*|color_theme = \"${tn}\"|" "$bd/btop.conf" 2>/dev/null
+local th="${1:-$CURRENT_THEME}" tn="" bd="$HOME/.config/btop"
+case "$th" in
+    dreamworlds_ultra)     tn="Dreamworlds_Ultra_MP_Mix_Manager" ;;
+    cosmic_supernova)      tn="Cosmic_Supernova_MP_Mix_Manager" ;;
+    stream_of_frequency)   tn="Stream_of_Frequency_MP_Mix_Manager" ;;
+    sensorium)             tn="Sensorium_MP_Mix_Manager" ;;
+    retro_linux_memories)  tn="Retro_Linux_Memories_MP_Mix_Manager" ;;
+    the_whitest_white)     tn="The_Whitest_White_MP_Mix_Manager" ;;
+    *) return 0 ;;
+esac
+[ -d "$bd" ] || return 0
+mkdir -p "$bd/themes" 2>/dev/null || true
+[ -f "$SCRIPT_DIR/themes/${tn}.theme" ] && cp -p "$SCRIPT_DIR/themes/${tn}.theme" "$bd/themes/" 2>/dev/null
+[ -f "$bd/btop.conf" ] || return 0
+local tmp="$bd/btop.conf.$$.tmp"
+sed "s|^color_theme = .*|color_theme = \"${tn}\"|" "$bd/btop.conf" > "$tmp" 2>/dev/null && mv -f "$tmp" "$bd/btop.conf" 2>/dev/null || rm -f "$tmp" 2>/dev/null || true
 }
 load_theme; _STOP_AUDIO_ON_EXIT=0; _MP_AUDIO_DAEMON_STOPPED=0
 _mp_player_pid_alive() {
@@ -4502,11 +4552,25 @@ if [ "${WAN2GP_CONFIGURED:-false}" = "true" ] && [ -n "${WAN2GP_OUTPUTS:-}" ] &&
 }
 _LAST_INTERNET_CHECK=0; _CACHED_INTERNET_STATUS=""
 load_header_cache() {
-local c_file="$HOME/.config/mix-manager/header_cache.env"; if [ -f "$c_file" ]; then source "$c_file" 2>/dev/null || true; local now="${EPOCHSECONDS:-0}"; [ "$now" -eq 0 ] && now=$(date +%s 2>/dev/null || echo 0); _LAST_STATS_CHECK="$now"; _LAST_CLOUD_CHECK="$now"; _LAST_WEATHER_CHECK="$now"; _LAST_PLANETS_CHECK="$now"; _LAST_AUDIO_IFACE_CHECK="$now"; _LAST_OS_UPDATE_CHECK="$now"; _LAST_INTERNET_CHECK="$now"; _LAST_ALARM_STATUS_CHECK="$now"; fi
+local c_file="$HOME/.config/mix-manager/header_cache.env"
+# These lines carry baked ANSI colours, so a cache written under a different
+# palette is unusable even if it still parses. save_header_cache() stamps the
+# theme that painted it and save_theme()/sync_theme_from_file() delete the
+# file; this catches the remaining case, a refresh worker that started before
+# the switch and wrote its finished lines after the invalidation ran.
+if [ -f "$c_file" ]; then
+    local _cache_theme=""
+    _cache_theme="$(sed -n 's/^_CACHED_THEME=//p' "$c_file" 2>/dev/null | head -n 1 | tr -d "'\"")"
+    local _live_theme="$(_theme_file_name 2>/dev/null)"
+    if [ -n "$_cache_theme" ] && [ -n "$_live_theme" ] && [ "$_cache_theme" != "$_live_theme" ]; then
+        rm -f "$c_file" 2>/dev/null || true
+    fi
+fi
+if [ -f "$c_file" ]; then source "$c_file" 2>/dev/null || true; local now="${EPOCHSECONDS:-0}"; [ "$now" -eq 0 ] && now=$(date +%s 2>/dev/null || echo 0); _LAST_STATS_CHECK="$now"; _LAST_CLOUD_CHECK="$now"; _LAST_WEATHER_CHECK="$now"; _LAST_PLANETS_CHECK="$now"; _LAST_AUDIO_IFACE_CHECK="$now"; _LAST_OS_UPDATE_CHECK="$now"; _LAST_INTERNET_CHECK="$now"; _LAST_ALARM_STATUS_CHECK="$now"; fi
 command -v _reflow_audio_iface_display >/dev/null 2>&1 && _reflow_audio_iface_display
 }
 save_header_cache() {
-local c_dir="$HOME/.config/mix-manager"; [ ! -d "$c_dir" ] && mkdir -p "$c_dir" 2>/dev/null || true; local c_file="$c_dir/header_cache.env"; local c_tmp="$c_file.$$.tmp"; { printf '_CACHED_STATS_CORE=%q\n' "${_CACHED_STATS_CORE:-}"; printf '_CACHED_CLOUD_STATUS=%q\n' "${_CACHED_CLOUD_STATUS:-}"; printf '_CACHED_WEATHER_DISPLAY=%q\n' "${_CACHED_WEATHER_DISPLAY:-}"; printf '_CACHED_PLANETS_DISPLAY=%q\n' "${_CACHED_PLANETS_DISPLAY:-}"; printf '_CACHED_AUDIO_IFACE_DISPLAY=%q\n' "${_CACHED_AUDIO_IFACE_DISPLAY:-}"; printf '_CACHED_ALARM_CLOCK_STATUS=%q\n' "${_CACHED_ALARM_CLOCK_STATUS:-}"; printf '_CACHED_OS_BADGE=%q\n' "${_CACHED_OS_BADGE:-}"; printf '_CACHED_OS_UPDATE_STATUS=%q\n' "${_CACHED_OS_UPDATE_STATUS:-}"; printf '_CACHED_INTERNET_STATUS=%q\n' "${_CACHED_INTERNET_STATUS:-online}"; printf '_CACHED_TOP_5_BADGE=%q\n' "${_CACHED_TOP_5_BADGE:-}"; printf '_CACHED_NOW_PLAYING=%q\n' "${_CACHED_NOW_PLAYING:-}"; } > "$c_tmp" 2>/dev/null && mv -f "$c_tmp" "$c_file" 2>/dev/null || rm -f "$c_tmp" 2>/dev/null || true
+local c_dir="$HOME/.config/mix-manager"; [ ! -d "$c_dir" ] && mkdir -p "$c_dir" 2>/dev/null || true; local c_file="$c_dir/header_cache.env"; local c_tmp="$c_file.$$.tmp"; { printf '_CACHED_THEME=%q\n' "${CURRENT_THEME:-}"; printf '_CACHED_STATS_CORE=%q\n' "${_CACHED_STATS_CORE:-}"; printf '_CACHED_CLOUD_STATUS=%q\n' "${_CACHED_CLOUD_STATUS:-}"; printf '_CACHED_WEATHER_DISPLAY=%q\n' "${_CACHED_WEATHER_DISPLAY:-}"; printf '_CACHED_PLANETS_DISPLAY=%q\n' "${_CACHED_PLANETS_DISPLAY:-}"; printf '_CACHED_AUDIO_IFACE_DISPLAY=%q\n' "${_CACHED_AUDIO_IFACE_DISPLAY:-}"; printf '_CACHED_ALARM_CLOCK_STATUS=%q\n' "${_CACHED_ALARM_CLOCK_STATUS:-}"; printf '_CACHED_OS_BADGE=%q\n' "${_CACHED_OS_BADGE:-}"; printf '_CACHED_OS_UPDATE_STATUS=%q\n' "${_CACHED_OS_UPDATE_STATUS:-}"; printf '_CACHED_INTERNET_STATUS=%q\n' "${_CACHED_INTERNET_STATUS:-online}"; printf '_CACHED_TOP_5_BADGE=%q\n' "${_CACHED_TOP_5_BADGE:-}"; printf '_CACHED_NOW_PLAYING=%q\n' "${_CACHED_NOW_PLAYING:-}"; } > "$c_tmp" 2>/dev/null && mv -f "$c_tmp" "$c_file" 2>/dev/null || rm -f "$c_tmp" 2>/dev/null || true
 }
 header_cache_signature() {
 printf -v "$1" '%s' "${_CACHED_STATS_CORE:-}|${_CACHED_CLOUD_STATUS:-}|${_CACHED_WEATHER_DISPLAY:-}|${_CACHED_PLANETS_DISPLAY:-}|${_CACHED_AUDIO_IFACE_DISPLAY:-}|${_CACHED_ALARM_CLOCK_STATUS:-}|${_CACHED_OS_UPDATE_STATUS:-}|${_CACHED_INTERNET_STATUS:-}|${_CACHED_TOP_5_BADGE:-}|${_CACHED_NOW_PLAYING:-}"
@@ -7702,7 +7766,12 @@ done
 }
 _LAST_PERF_CHECK=0; _CACHED_PERF_DISPLAY=""
 get_system_perf_stats() {
-local now="${EPOCHSECONDS:-0}"; [ "$now" -eq 0 ] && printf -v now '%(%s)T' -1 2>/dev/null; [ "${now:-0}" -eq 0 ] && now=$(date +%s 2>/dev/null || echo 0); local _perf_dir="${HOME}/.config/mix-manager"; local _perf_file="${_perf_dir}/perf_display.cache"; local _perf_stamp="${_perf_dir}/perf_display.stamp"; local _perf_last=0; if [ -f "$_perf_stamp" ]; then read -r _perf_last < "$_perf_stamp" 2>/dev/null || _perf_last=0; fi; [[ "${_perf_last:-}" =~ ^[0-9]+$ ]] || _perf_last=0; local _perf_fresh=0; if [ -f "$_perf_file" ] && [ $((now - _perf_last)) -lt 30 ]; then _perf_fresh=1; fi; if [ "$_perf_fresh" -eq 1 ] || [ "${_MENU_CURSOR_LOCK:-0}" -eq 1 ]; then if [ -f "$_perf_file" ]; then local _perf_cached=""; IFS= read -r _perf_cached < "$_perf_file" || true; if [ -n "$_perf_cached" ]; then _CACHED_PERF_DISPLAY="$_perf_cached"; printf '%b\n' "$_perf_cached"; return 0; fi; fi; if [ "${_MENU_CURSOR_LOCK:-0}" -eq 1 ]; then return 0; fi; fi; if [ $((now - _LAST_PERF_CHECK)) -lt 5 ] && [ -n "$_CACHED_PERF_DISPLAY" ]; then echo -e "$_CACHED_PERF_DISPLAY"; return 0; fi; _LAST_PERF_CHECK="$now"; local cpu_info="" ram_info="" disk_info=""; if [ "$OS_TYPE" = "windows" ] || [ "$OS_TYPE" = "wsl" ]; then cpu_info="Active"; elif [ -f /proc/loadavg ]; then local l1 l5 _; read -r l1 l5 _ < /proc/loadavg; cpu_info="${l1} (1m), ${l5} (5m)"; elif [ "$OS_TYPE" = "macos" ] || [ "$OS_TYPE" = "freebsd" ]; then local raw_load l1 l5; raw_load=$(sysctl -n vm.loadavg 2>/dev/null); raw_load="${raw_load#\{ }"; raw_load="${raw_load% \}}"; read -r l1 l5 _ <<< "$raw_load"; [ -n "$l1" ] && cpu_info="${l1} ${l5}" || cpu_info="Active"; else cpu_info="Active"; fi; if [ -f /proc/meminfo ]; then local mem_total="" mem_avail="" mem_used mem_total_g mem_used_g mem_pct key val; while read -r key val _; do case "$key" in MemTotal:*)     mem_total="$val" ;; MemAvailable:*) mem_avail="$val" ;; esac; [ -n "$mem_total" ] && [ -n "$mem_avail" ] && break; done < /proc/meminfo; if [ -n "$mem_total" ] && [ -n "$mem_avail" ] && [ "$mem_total" -gt 0 ]; then mem_used=$((mem_total - mem_avail)); mem_total_g="$((mem_total / 1048576)).$(( (mem_total % 1048576) * 10 / 1048576 ))"; mem_used_g="$((mem_used / 1048576)).$(( (mem_used % 1048576) * 10 / 1048576 ))"; mem_pct=$(( (mem_used * 100) / mem_total )); ram_info="${mem_used_g}G/${mem_total_g}G (${mem_pct}%)"; fi; elif [ "$OS_TYPE" = "freebsd" ]; then local mem_bytes page_size free_pages mem_total_g mem_used_g mem_pct; mem_bytes=$(sysctl -n hw.physmem 2>/dev/null); page_size=$(sysctl -n hw.pagesize 2>/dev/null || echo 4096); free_pages=$(sysctl -n vm.stats.vm.v_free_count 2>/dev/null || echo 0); if [ -n "$mem_bytes" ] && [ "$mem_bytes" -gt 0 ]; then local free_bytes=$(( free_pages * page_size )); local used_bytes=$(( mem_bytes - free_bytes )); mem_total_g="$((mem_bytes / 1073741824)).$(( (mem_bytes % 1073741824) * 10 / 1073741824 ))"; mem_used_g="$((used_bytes / 1073741824)).$(( (used_bytes % 1073741824) * 10 / 1073741824 ))"; mem_pct=$(( (used_bytes * 100) / mem_bytes )); ram_info="${mem_used_g}G/${mem_total_g}G (${mem_pct}%)"; fi; fi; [ -z "$ram_info" ] && ram_info="Available"; local mix_target="${MIX_ARCHIVE_DIR:-$SCRIPT_DIR/MIX_ARCHIVE}"; local d_avail="" d_pct="" a="" p=""; while read -r _ _ _ a p _; do [ -n "$a" ] && [ "$a" != "Avail" ] && d_avail="$a" && d_pct="$p"; done < <(df -h "$mix_target" 2>/dev/null); if [ -n "$d_avail" ]; then disk_info="${d_avail} free (${d_pct} used)"; else disk_info="Mounted"; fi; _CACHED_PERF_DISPLAY="  ${BOLD}${CYAN}⚡ CPU Load:${NC} ${cpu_info}  ${BOLD}${BLUE}│${NC}  ${BOLD}${CYAN}🧠 RAM:${NC} ${ram_info}  ${BOLD}${BLUE}│${NC}  ${BOLD}${CYAN}💾 Mix Drive Free:${NC} ${disk_info}"; mkdir -p "$_perf_dir" 2>/dev/null || true; local _perf_tmp="${_perf_file}.$$"; printf '%s\n' "$_CACHED_PERF_DISPLAY" > "$_perf_tmp" 2>/dev/null && mv -f "$_perf_tmp" "$_perf_file" 2>/dev/null || rm -f "$_perf_tmp" 2>/dev/null || true; printf '%s\n' "$now" > "$_perf_stamp" 2>/dev/null || true; echo -e "$_CACHED_PERF_DISPLAY"
+local now="${EPOCHSECONDS:-0}"; [ "$now" -eq 0 ] && printf -v now '%(%s)T' -1 2>/dev/null; [ "${now:-0}" -eq 0 ] && now=$(date +%s 2>/dev/null || echo 0); local _perf_dir="${HOME}/.config/mix-manager"; local _perf_file="${_perf_dir}/perf_display.cache"; local _perf_stamp="${_perf_dir}/perf_display.stamp"; local _perf_last=0; if [ -f "$_perf_stamp" ]; then read -r _perf_last < "$_perf_stamp" 2>/dev/null || _perf_last=0; fi; [[ "${_perf_last:-}" =~ ^[0-9]+$ ]] || _perf_last=0
+# The line below carries baked colours, so a cache painted under another
+# theme is discarded rather than shown. The theme is the second line; a
+# cache written before that line existed has no stamp and is accepted.
+if [ -f "$_perf_file" ]; then local _perf_theme=""; _perf_theme="$(sed -n '2p' "$_perf_file" 2>/dev/null | tr -d ' \r')"; local _perf_live="$(_theme_file_name 2>/dev/null)"; if [ -n "$_perf_theme" ] && [ -n "$_perf_live" ] && [ "$_perf_theme" != "$_perf_live" ]; then rm -f "$_perf_file" "$_perf_stamp" 2>/dev/null || true; _perf_last=0; fi; fi
+local _perf_fresh=0; if [ -f "$_perf_file" ] && [ $((now - _perf_last)) -lt 30 ]; then _perf_fresh=1; fi; if [ "$_perf_fresh" -eq 1 ] || [ "${_MENU_CURSOR_LOCK:-0}" -eq 1 ]; then if [ -f "$_perf_file" ]; then local _perf_cached=""; IFS= read -r _perf_cached < "$_perf_file" || true; if [ -n "$_perf_cached" ]; then _CACHED_PERF_DISPLAY="$_perf_cached"; printf '%b\n' "$_perf_cached"; return 0; fi; fi; if [ "${_MENU_CURSOR_LOCK:-0}" -eq 1 ]; then return 0; fi; fi; if [ $((now - _LAST_PERF_CHECK)) -lt 5 ] && [ -n "$_CACHED_PERF_DISPLAY" ]; then echo -e "$_CACHED_PERF_DISPLAY"; return 0; fi; _LAST_PERF_CHECK="$now"; local cpu_info="" ram_info="" disk_info=""; if [ "$OS_TYPE" = "windows" ] || [ "$OS_TYPE" = "wsl" ]; then cpu_info="Active"; elif [ -f /proc/loadavg ]; then local l1 l5 _; read -r l1 l5 _ < /proc/loadavg; cpu_info="${l1} (1m), ${l5} (5m)"; elif [ "$OS_TYPE" = "macos" ] || [ "$OS_TYPE" = "freebsd" ]; then local raw_load l1 l5; raw_load=$(sysctl -n vm.loadavg 2>/dev/null); raw_load="${raw_load#\{ }"; raw_load="${raw_load% \}}"; read -r l1 l5 _ <<< "$raw_load"; [ -n "$l1" ] && cpu_info="${l1} ${l5}" || cpu_info="Active"; else cpu_info="Active"; fi; if [ -f /proc/meminfo ]; then local mem_total="" mem_avail="" mem_used mem_total_g mem_used_g mem_pct key val; while read -r key val _; do case "$key" in MemTotal:*)     mem_total="$val" ;; MemAvailable:*) mem_avail="$val" ;; esac; [ -n "$mem_total" ] && [ -n "$mem_avail" ] && break; done < /proc/meminfo; if [ -n "$mem_total" ] && [ -n "$mem_avail" ] && [ "$mem_total" -gt 0 ]; then mem_used=$((mem_total - mem_avail)); mem_total_g="$((mem_total / 1048576)).$(( (mem_total % 1048576) * 10 / 1048576 ))"; mem_used_g="$((mem_used / 1048576)).$(( (mem_used % 1048576) * 10 / 1048576 ))"; mem_pct=$(( (mem_used * 100) / mem_total )); ram_info="${mem_used_g}G/${mem_total_g}G (${mem_pct}%)"; fi; elif [ "$OS_TYPE" = "freebsd" ]; then local mem_bytes page_size free_pages mem_total_g mem_used_g mem_pct; mem_bytes=$(sysctl -n hw.physmem 2>/dev/null); page_size=$(sysctl -n hw.pagesize 2>/dev/null || echo 4096); free_pages=$(sysctl -n vm.stats.vm.v_free_count 2>/dev/null || echo 0); if [ -n "$mem_bytes" ] && [ "$mem_bytes" -gt 0 ]; then local free_bytes=$(( free_pages * page_size )); local used_bytes=$(( mem_bytes - free_bytes )); mem_total_g="$((mem_bytes / 1073741824)).$(( (mem_bytes % 1073741824) * 10 / 1073741824 ))"; mem_used_g="$((used_bytes / 1073741824)).$(( (used_bytes % 1073741824) * 10 / 1073741824 ))"; mem_pct=$(( (used_bytes * 100) / mem_bytes )); ram_info="${mem_used_g}G/${mem_total_g}G (${mem_pct}%)"; fi; fi; [ -z "$ram_info" ] && ram_info="Available"; local mix_target="${MIX_ARCHIVE_DIR:-$SCRIPT_DIR/MIX_ARCHIVE}"; local d_avail="" d_pct="" a="" p=""; while read -r _ _ _ a p _; do [ -n "$a" ] && [ "$a" != "Avail" ] && d_avail="$a" && d_pct="$p"; done < <(df -h "$mix_target" 2>/dev/null); if [ -n "$d_avail" ]; then disk_info="${d_avail} free (${d_pct} used)"; else disk_info="Mounted"; fi; _CACHED_PERF_DISPLAY="  ${BOLD}${CYAN}⚡ CPU Load:${NC} ${cpu_info}  ${BOLD}${BLUE}│${NC}  ${BOLD}${CYAN}🧠 RAM:${NC} ${ram_info}  ${BOLD}${BLUE}│${NC}  ${BOLD}${CYAN}💾 Mix Drive Free:${NC} ${disk_info}"; mkdir -p "$_perf_dir" 2>/dev/null || true; local _perf_tmp="${_perf_file}.$$"; printf '%s\n%s\n' "$_CACHED_PERF_DISPLAY" "${CURRENT_THEME:-}" > "$_perf_tmp" 2>/dev/null && mv -f "$_perf_tmp" "$_perf_file" 2>/dev/null || rm -f "$_perf_tmp" 2>/dev/null || true; printf '%s\n' "$now" > "$_perf_stamp" 2>/dev/null || true; echo -e "$_CACHED_PERF_DISPLAY"
 }
 _maybe_refresh_perf_cache() {
 local now="${EPOCHSECONDS:-0}"; [ "$now" -eq 0 ] && printf -v now '%(%s)T' -1 2>/dev/null; [ "${now:-0}" -eq 0 ] && now=$(date +%s 2>/dev/null || echo 0); local stamp="${HOME}/.config/mix-manager/perf_display.stamp"; local last=0; [ -f "$stamp" ] && { read -r last < "$stamp" 2>/dev/null || last=0; }; [[ "$last" =~ ^[0-9]+$ ]] || last=0; [ $((now - last)) -lt 30 ] && return 0; if [ -n "${_PERF_REFRESH_PID:-}" ] && kill -0 "$_PERF_REFRESH_PID" 2>/dev/null; then return 0; fi
@@ -8252,7 +8321,7 @@ local p_args=(--template "${t_n:-podcast_publisher}" --preview); [ -n "$ep_q" ] 
         8) python3 "$py_script" --list-contacts; press_enter ;;
         9) python3 "$py_script" --add-contact; press_enter ;;
         10) local l_file="$SCRIPT_DIR/assets/promo_logs/sent_promo_emails.log"; [ ! -f "$l_file" ] && [ -f "./assets/promo_logs/sent_promo_emails.log" ] && l_file="./assets/promo_logs/sent_promo_emails.log"; echo -e "\n${BOLD}${CYAN}=== OUTREACH & DELIVERY LOGS ===${NC}\n"; [ -s "$l_file" ] && tail -n 35 "$l_file" || echo -e "${DIM}No sent emails or drafts logged yet.${NC}"; echo ""; press_enter ;;
-        11) echo -e "\n${BOLD}${CYAN}=== CONFIGURE SENDER PROFILE & SMTP SERVER ===${NC}\n"; read -r -p "Sender Full Name [${PROMO_SENDER_NAME:-MPlanetarian}]: " n_name; read -r -p "Sender Email Address [${PROMO_SENDER_EMAIL}]: " n_email; read -r -p "SMTP Host (e.g. smtp.gmail.com) [${SMTP_HOST}]: " n_host; read -r -p "SMTP Port [${SMTP_PORT:-587}]: " n_port; read -r -p "SMTP Username / Login Email [${SMTP_USER}]: " n_user; read -r -s -p "SMTP Password / App Password (leave blank to keep existing): " n_pass; echo ""; local cfg="$SCRIPT_DIR/config.env" sed_args=(); [ ! -f "$cfg" ] && [ -f "./config.env" ] && cfg="./config.env"; [ -n "$n_name" ]  && { PROMO_SENDER_NAME="$n_name";  sed_args+=(-e "s|^PROMO_SENDER_NAME=.*|PROMO_SENDER_NAME=\"$n_name\"|"); }; [ -n "$n_email" ] && { PROMO_SENDER_EMAIL="$n_email"; sed_args+=(-e "s|^PROMO_SENDER_EMAIL=.*|PROMO_SENDER_EMAIL=\"$n_email\"|"); }; [ -n "$n_host" ]  && { SMTP_HOST="$n_host";          sed_args+=(-e "s|^SMTP_HOST=.*|SMTP_HOST=\"$n_host\"|"); }; [ -n "$n_port" ]  && { SMTP_PORT="$n_port";          sed_args+=(-e "s|^SMTP_PORT=.*|SMTP_PORT=\"$n_port\"|"); }; [ -n "$n_user" ]  && { SMTP_USER="$n_user";          sed_args+=(-e "s|^SMTP_USER=.*|SMTP_USER=\"$n_user\"|"); }; [ -n "$n_pass" ]  && { SMTP_PASSWORD="$n_pass";      sed_args+=(-e "s|^SMTP_PASSWORD=.*|SMTP_PASSWORD=\"$n_pass\"|"); }; [ ${#sed_args[@]} -gt 0 ] && sed -i "${sed_args[@]}" "$cfg" 2>/dev/null || true; echo -e "\n${GREEN}✔ Outreach settings updated in ${cfg}!${NC}"; press_enter ;;
+        11) echo -e "\n${BOLD}${CYAN}=== CONFIGURE SENDER PROFILE & SMTP SERVER ===${NC}\n"; read -r -p "Sender Full Name [${PROMO_SENDER_NAME:-MPlanetarian}]: " n_name; read -r -p "Sender Email Address [${PROMO_SENDER_EMAIL}]: " n_email; read -r -p "SMTP Host (e.g. smtp.gmail.com) [${SMTP_HOST}]: " n_host; read -r -p "SMTP Port [${SMTP_PORT:-587}]: " n_port; read -r -p "SMTP Username / Login Email [${SMTP_USER}]: " n_user; read -r -s -p "SMTP Password / App Password (leave blank to keep existing): " n_pass; echo ""; local cfg="$SCRIPT_DIR/config.env" sed_args=(); [ ! -f "$cfg" ] && [ -f "./config.env" ] && cfg="./config.env"; [ -n "$n_name" ]  && { PROMO_SENDER_NAME="$n_name";  sed_args+=(-e "s|^PROMO_SENDER_NAME=.*|PROMO_SENDER_NAME=\"$n_name\"|"); }; [ -n "$n_email" ] && { PROMO_SENDER_EMAIL="$n_email"; sed_args+=(-e "s|^PROMO_SENDER_EMAIL=.*|PROMO_SENDER_EMAIL=\"$n_email\"|"); }; [ -n "$n_host" ]  && { SMTP_HOST="$n_host";          sed_args+=(-e "s|^SMTP_HOST=.*|SMTP_HOST=\"$n_host\"|"); }; [ -n "$n_port" ]  && { SMTP_PORT="$n_port";          sed_args+=(-e "s|^SMTP_PORT=.*|SMTP_PORT=\"$n_port\"|"); }; [ -n "$n_user" ]  && { SMTP_USER="$n_user";          sed_args+=(-e "s|^SMTP_USER=.*|SMTP_USER=\"$n_user\"|"); }; [ -n "$n_pass" ]  && { SMTP_PASSWORD="$n_pass";      sed_args+=(-e "s|^SMTP_PASSWORD=.*|SMTP_PASSWORD=\"$n_pass\"|"); }; if [ ${#sed_args[@]} -gt 0 ]; then local cfg_tmp="$cfg.$$.tmp"; if sed "${sed_args[@]}" "$cfg" > "$cfg_tmp" 2>/dev/null; then mv -f "$cfg_tmp" "$cfg" 2>/dev/null || rm -f "$cfg_tmp" 2>/dev/null; else rm -f "$cfg_tmp" 2>/dev/null; fi; fi; echo -e "\n${GREEN}✔ Outreach settings updated in ${cfg}!${NC}"; press_enter ;;
         0|[qQ]|[eE][xX][iI][tT]|ESC) return 0 ;;
         *) echo -e "\n${RED}Invalid option!${NC}"; sleep 1.2 ;;
     esac
@@ -9131,7 +9200,7 @@ generate_traktor_artist_playlist_menu() {
             hdr="  ${YELLOW}collection.nml was not found. Set TRAKTOR_COLLECTION_PATH in config.env.${NC}\n"
         fi
         local opts=(
-            "1|Create Playlist from Artist Name|(You name the artist and the playlist)"
+            "1|Create Playlist from Artist Name|(Name in the artist field or the title. An existing playlist gains the missing tracks)"
             "2|Rename a Traktor Playlist|(Open the folder, pick the playlist, type the new name)"
             "3|Remove a Traktor Playlist|(Open the folder, then remove that playlist)"
             "4|View Playlist Folders|(Open a folder to see the playlists inside it)"

@@ -258,6 +258,32 @@ def stop_companion_visualizer(force: bool = False, for_gui: bool = False) -> Non
             _signal_visualizer(pid, _kill_signal())
 
 
+def stop_companion_for_mode(mode: Optional[str], player_gui: bool = True) -> None:
+    """Close the companion window belonging to the host that is closing.
+
+    The host calls this as soon as its own window is destroyed, which is
+    *before* the exit movie plays. The companion used to be retired only after
+    the movie, so MP Gui's background window sat alone on the desktop for the
+    whole clip — exactly the "the visualizer is still there" report.
+
+    ``MP Gui`` also stops playback, because the menu is the thing that started
+    it. The Liquid Player and the tracklist viewer stop their own companion
+    only.
+
+    The stop is *not* forced. Up to four MP Gui windows share one companion
+    (``MP_Gui.sh`` only spawns a second when none is running), so closing one
+    of several must leave the background of the others alone —
+    ``stop_companion_visualizer`` already skips the kill while another window
+    of the same kind is up, and this host is excluded from that count.
+    Forcing it here blanked the background of every other MP Gui window.
+    """
+    if (mode or "").upper() == "MANAGER":
+        stop_companion_playback()
+        stop_companion_visualizer(for_gui=True)
+    elif player_gui:
+        stop_companion_visualizer()
+
+
 def _playback_engine_pids() -> list[int]:
     """MP Audio Player engines. Liquid Glass host windows are not engines."""
     me = os.getpid()

@@ -163,9 +163,10 @@ class TestWhitestWhiteWiring(unittest.TestCase):
         self.assertIn("The Whitest White MP Mix Manager", text)
         self.assertIn('save_theme "the_whitest_white"', text)
         self.assertIn('_sync_btop_theme "$new_theme"', text)
-        self.assertIn(
-            '[ "$th" = "the_whitest_white" ] && tn="The_Whitest_White_MP_Mix_Manager";',
+        # _sync_btop_theme maps the theme id to the shipped btop palette name.
+        self.assertRegex(
             text,
+            r"the_whitest_white\)\s+tn=\"The_Whitest_White_MP_Mix_Manager\"",
         )
 
     def test_first_run_welcome_banner_is_black_on_white(self):

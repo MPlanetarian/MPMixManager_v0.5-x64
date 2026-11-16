@@ -941,6 +941,8 @@ scripts/mp_opencode_progress_reporter.sh dry-run       # build text + audio, no 
 
   Both attachments use the MP Reporter SMTP account; `OPENCODE_PROGRESS_INTERVAL_MINUTES` and `OPENCODE_PROGRESS_RECIPIENTS` (falling back to `EMAIL_RECIPIENTS`) live in `~/MP_REPORTER/email_config.env`. Text and audio land in `REPORTS/OPENCODE_PROGRESS` and `TTS_AUDIO/OPENCODE_PROGRESS`, pruned to the newest 288 briefings. The daily 1-email-per-day limit is untouched: this reporter keeps its own interval bucket.
 
+  A briefing is only built and emailed **while at least one OpenCode session is running**. When nothing is running the timer exits before it writes a report, synthesises audio or touches SMTP, so an idle workstation never generates mail. `--force` and `--dry-run` remain available for an explicit manual send or preview.
+
 ---
 
 ## 🧪 Spotlight: MP Auto Tester — Cross-System Test & Screenshot Harness

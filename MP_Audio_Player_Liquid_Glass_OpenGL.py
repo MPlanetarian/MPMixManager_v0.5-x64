@@ -61,7 +61,11 @@ def _slider_fragment_source(glsl: str) -> bytes:
 
 from desktop_launch_screen import window_launch_origin  # noqa: E402
 from liquid_glass_font import default_liquid_glass_font  # noqa: E402
-from liquid_visualizer_session import stop_companion_playback, stop_companion_visualizer  # noqa: E402
+from liquid_visualizer_session import (  # noqa: E402
+    stop_companion_for_mode,
+    stop_companion_playback,
+    stop_companion_visualizer,
+)
 try:  # The four-window cap ships beside the host; a lone copy still runs.
     from mp_instance_limit import host_allowed, notify_limit  # noqa: E402
 except ImportError:
@@ -1402,13 +1406,20 @@ class GlassHost:
         """Tear the host down, then play the exit movie on the last MP window.
 
         The window is destroyed first, so closing the player disappears at
-        once instead of sitting on screen for the whole movie. The movie then
-        plays on its own, once, and closes itself when it ends, is skipped, or
-        reaches its timeout. Every other MP Gui and MP Liquid Player window is
-        counted first: one of several open windows closes silently and the
-        movie waits for the last one.
+        once instead of sitting on screen for the whole movie. The companion
+        visualizer is retired at the same moment: it is the background of this
+        window, and leaving it up while the movie plays put a full-size
+        raymarch window on the desktop with nothing in front of it. The movie
+        then plays on its own, once, and closes itself when it ends, is
+        skipped, or reaches its timeout. Every other MP Gui and MP Liquid
+        Player window is counted first: one of several open windows closes
+        silently and the movie waits for the last one.
         """
         self.close()
+        # An embed check is a probe, not a close: it must never take a
+        # companion the user is watching down with it.
+        if not self.embed_check:
+            stop_companion_for_mode(self.mode, player_gui=self.mode != "TRACKLIST")
         if not self.embed_check and self.mode in ("NORMAL", "MANAGER", "MINI", "MICRO"):
             video = ExitVideo(self.mode)
             try:
@@ -2009,11 +2020,11 @@ def main(argv):
             print("LIQUID_GLASS_EMBED_OK", flush=True)
         return 0
     finally:
-        if manager:
-            stop_companion_playback()
-            stop_companion_visualizer(force=True, for_gui=True)
-        elif player_gui:
-            stop_companion_visualizer()
+        # The companion is already retired by _close_then_exit_video(); this
+        # catches a raise before it gets there. An embed check must not touch
+        # a companion at all.
+        if not embed:
+            stop_companion_for_mode(mode, player_gui=player_gui)
 
 
 if __name__ == "__main__":

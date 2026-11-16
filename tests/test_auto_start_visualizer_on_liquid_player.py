@@ -201,7 +201,7 @@ class TestAutoStartVisualizerOnLiquidPlayer(unittest.TestCase):
             "MP_Audio_Player_Liquid_Glass_macOS.py",
         ):
             text = (ROOT_DIR / name).read_text(encoding="utf-8")
-            self.assertIn("stop_companion_visualizer()", text)
+            self.assertIn("stop_companion_for_mode(", text)
 
     @patch("liquid_visualizer_session._signal_visualizer")
     @patch("liquid_visualizer_session._alive", return_value=False)
