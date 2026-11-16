@@ -462,7 +462,7 @@ local theme_name="${1:-dreamworlds_ultra}"; NC='\033[0m' BOLD='\033[1m' DIM='\03
 RED='\033[38;2;240;32;24m'; GREEN='\033[38;2;76;217;123m'; YELLOW='\033[38;2;245;237;106m'; BLUE='\033[38;2;48;49;131m'; MAGENTA='\033[38;2;151;79;249m'; CYAN='\033[38;2;0;242;255m'; CURRENT_THEME="stream_of_frequency" ;;
 sensorium|sensorium_interface|"Sensorium"|"Sensorium Interface")
 RED='\033[38;2;94;20;15m'; GREEN='\033[38;2;38;61;0m'; YELLOW='\033[38;2;74;52;0m'; BLUE='\033[38;2;11;47;107m'; MAGENTA='\033[38;2;92;36;0m'; CYAN='\033[38;2;10;58;72m'; CURRENT_THEME="sensorium" ;;
-dreamworlds|mplanetarian_dreamworlds|mplanetarian) RED='\033[38;2;237;37;78m' GREEN='\033[38;2;0;229;255m' YELLOW='\033[38;2;255;170;0m'; BLUE='\033[38;2;155;89;182m' MAGENTA='\033[38;2;247;37;133m' CYAN='\033[38;2;0;193;228m'; CURRENT_THEME="dreamworlds" ;;
+dreamworlds|mplanetarian_dreamworlds|mplanetarian) RED='\033[38;2;237;37;78m' GREEN='\033[38;2;0;229;255m' YELLOW='\033[38;2;255;170;0m'; BLUE='\033[38;2;155;89;182m' MAGENTA='\033[38;2;150;95;225m' CYAN='\033[38;2;0;193;228m'; CURRENT_THEME="dreamworlds" ;;
 dynamic_rainbow_liquid_glass|dynamic_liquid_glass_rainbow|dynamic_rainbow|rainbow_liquid_glass|rainbow|"Dynamic Liquid Glass [Rainbow Colours] (New)"|"Dynamic Liquid Glass [Rainbow Colours]"|"Dynamic Liquid Glass")
 RED='\033[38;2;255;45;142m'; GREEN='\033[38;2;0;242;254m'; YELLOW='\033[38;2;255;215;0m'; BLUE='\033[38;2;90;130;255m'; MAGENTA='\033[38;2;176;88;255m'; CYAN='\033[38;2;0;242;254m'; CURRENT_THEME="dynamic_rainbow_liquid_glass" ;;
 dreamworlds_liquid|mp_dreamworlds_liquid_transparency|liquid_transparency|liquid|glass|"MP Dreamworlds Liquid Transparency"|"MP Dreamworlds Liquid Transparency [Special Edition]")
@@ -523,7 +523,7 @@ retro_terminal) _mr=87; _mg=87; _mb=87 ;;
 sensorium) _mr=92; _mg=36; _mb=0 ;;
 retro_linux_memories) _mr=81; _mg=58; _mb=6 ;;
 into_darkness_void_out) _mr=255; _mg=255; _mb=255 ;;
-dreamworlds) _mr=143; _mg=11; _mb=73 ;;
+dreamworlds) _mr=150; _mg=95; _mb=225 ;;
 cyberpunk) _mr=139; _mg=0; _mb=126 ;;
 dracula) _mr=152; _mg=12; _mb=45 ;;
 nord) _mr=46; _mg=91; _mb=59 ;;
@@ -561,7 +561,7 @@ retro_terminal) _ir=87; _ig=87; _ib=87 ;;
 sensorium) _ir=43; _ig=10; _ib=16 ;;
 retro_linux_memories) _ir=81; _ig=58; _ib=6 ;;
 into_darkness_void_out) _ir=255; _ig=255; _ib=255 ;;
-dreamworlds) _ir=143; _ig=11; _ib=73 ;;
+dreamworlds) _ir=150; _ig=95; _ib=225 ;;
 cyberpunk) _ir=129; _ig=31; _ib=120 ;;
 dracula) _ir=77; _ig=73; _ib=88 ;;
 nord) _ir=61; _ig=88; _ib=69 ;;
@@ -644,7 +644,7 @@ retro_terminal) THEME_BG_R=199; THEME_BG_G=207; THEME_BG_B=221 ;;
 sensorium) THEME_BG_R=195; THEME_BG_G=196; THEME_BG_B=191 ;;
 retro_linux_memories) THEME_BG_R=158; THEME_BG_G=171; THEME_BG_B=191 ;;
 into_darkness_void_out) THEME_BG_R=0; THEME_BG_G=0; THEME_BG_B=0 ;;
-dreamworlds) THEME_BG_R=186; THEME_BG_G=180; THEME_BG_B=220 ;;
+dreamworlds) THEME_BG_R=0; THEME_BG_G=0; THEME_BG_B=0 ;;
 cyberpunk) THEME_BG_R=185; THEME_BG_G=186; THEME_BG_B=215 ;;
 dracula) THEME_BG_R=174; THEME_BG_G=190; THEME_BG_B=220 ;;
 nord) THEME_BG_R=167; THEME_BG_G=204; THEME_BG_B=223 ;;

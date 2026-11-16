@@ -36,7 +36,7 @@ MGR_SH = BASE_DIR / "Mix_Archive_Manager.sh"
 EXPECTED_INK = {
     "stream_of_frequency": (92, 86, 5),
     "sensorium": (43, 10, 16),
-    "dreamworlds": (143, 11, 73),
+    "dreamworlds": (150, 95, 225),
     "dynamic_rainbow_liquid_glass": (134, 11, 125),
     "dreamworlds_liquid": (7, 92, 53),
     "dreamworlds_ultra": (80, 67, 95),

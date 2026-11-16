@@ -71,9 +71,11 @@ class TestCliThemeBackground(unittest.TestCase):
             seen[theme] = (int(r), int(g), int(b))
         self.assertEqual(set(seen), set(THEMES))
         # The console pane is the glass still-water field. MPlanetarian
-        # Dreamworlds resolves to the same field as Dreamworlds Ultra.
-        # Into Darkness is the void-out black.
-        self.assertEqual(seen["dreamworlds"], seen["dreamworlds_ultra"])
+        # Dreamworlds is the one theme painted on black, because that is the
+        # field its Liquid Glass skin uses; its menu ink is lightened to match
+        # (see tests/test_menu_text_theme_ink.py). Into Darkness is also the
+        # void-out black.
+        self.assertEqual(seen["dreamworlds"], (0, 0, 0))
         self.assertEqual(seen["dreamworlds_ultra"], (186, 180, 220))
         self.assertEqual(seen["sensorium"], (195, 196, 191))
         self.assertEqual(seen["into_darkness_void_out"], (0, 0, 0))
@@ -91,8 +93,8 @@ class TestCliThemeBackground(unittest.TestCase):
         self.assertEqual(alias.returncode, 0, alias.stderr)
         expected_alias = {
             "default": (186, 180, 220),
-            "mplanetarian": (186, 180, 220),
-            "mplanetarian_dreamworlds": (186, 180, 220),
+            "mplanetarian": (0, 0, 0),
+            "mplanetarian_dreamworlds": (0, 0, 0),
         }
         for raw in alias.stdout.splitlines():
             theme, r, g, b = raw.split("\t")
@@ -102,16 +104,21 @@ class TestCliThemeBackground(unittest.TestCase):
                 self.assertGreaterEqual(channel, 0, theme)
                 self.assertLessEqual(channel, 255, theme)
             luma = 0.299 * r + 0.587 * g + 0.114 * b
-            if theme == "into_darkness_void_out":
+            if theme in ("into_darkness_void_out", "dreamworlds"):
+                # Dreamworlds is painted on the same void-out black as Into
+                # Darkness: that is the field its Liquid Glass skin uses, and
+                # its menu ink is lightened to stay readable on it.
                 self.assertEqual((r, g, b), (0, 0, 0), theme)
             else:
                 self.assertGreaterEqual(
                     luma, 140,
                     f"{theme} should use the pale still-water field",
                 )
-        # Aliases the glass collapses share one field. The other ids stay apart.
+        # Aliases the glass collapses share one field, apart from Dreamworlds,
+        # which is deliberately black while Dreamworlds Ultra keeps the pale
+        # field.
         shared = {
-            "dreamworlds": "dreamworlds_ultra",
+            "dreamworlds_ultra": "dreamworlds_ultra",
             "dracula": "dreamworlds_neon",
             "nord": "ice_cold",
             "matrix": "phosphor",
@@ -122,7 +129,10 @@ class TestCliThemeBackground(unittest.TestCase):
         for alias, canonical in shared.items():
             self.assertEqual(seen[alias], seen[canonical], alias)
         own = [rgb for theme, rgb in seen.items() if theme not in shared]
-        self.assertEqual(len(own), len(set(own)))
+        # Dreamworlds and Into Darkness are both the void-out black by design,
+        # so one duplicate is expected; every other field stays distinct.
+        self.assertEqual(len(set(own)), len(own) - 1,
+                         "only Dreamworlds and Into Darkness may share a field")
 
     def test_theme_switch_emits_osc11_for_windows_mac_and_linux(self):
         script = f"""

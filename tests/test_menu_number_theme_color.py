@@ -19,7 +19,7 @@ MGR_SH = BASE_DIR / "Mix_Archive_Manager.sh"
 # pale still-water field. Sensorium was already dark enough.
 EXPECTED = {
     "stream_of_frequency": "92;86;7",
-    "dreamworlds": "143;11;73",
+    "dreamworlds": "150;95;225",
     "dreamworlds_ultra": "80;67;95",
     "dynamic_rainbow_liquid_glass": "134;11;125",
     "cosmic_supernova": "124;62;10",
