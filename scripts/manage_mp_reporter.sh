@@ -1104,11 +1104,10 @@ main_menu() {
         echo -e "  ${BOLD}${CYAN}14)${NC} View / Inspect MP_Error.log                     ${DIM}(Error logging audit)${NC}"
         echo -e "  ${BOLD}${CYAN}15)${NC} Launch Standalone MP Reporter Menu              ${DIM}(Full MP_Reporter.sh CLI)${NC}"
         echo -e "  ${BOLD}${CYAN}16)${NC} Stephen Hawking Video Reports                   ${DIM}(WAN2GP Infinite Talk AI Generation)${NC}"
-        echo -e "  ${BOLD}${CYAN}17)${NC} MP Audio Responder & Harmony Voice Control      ${DIM}(Narration service, voice & engine)${NC}"
         echo ""
         echo -e "  ${BOLD}${CYAN}0)${NC} Return to Main Menu ${DIM}(or Esc / q)${NC}\n"
 
-        read -r -p "Enter choice [0-17]: " choice || true
+        read -r -p "Enter choice [0-16]: " choice || true
         case "$choice" in
             1) view_reports_menu ;;
             2) view_calendar_menu ;;
@@ -1185,9 +1184,6 @@ main_menu() {
             16|video|hawking-video|infinite-talk)
                 generate_hawking_video_report_menu
                 ;;
-            17|responder|audio-responder|voice)
-                bash "$SCRIPT_DIR/scripts/manage_mp_responder.sh"
-                ;;
             0|[qQ]|[eE][xX][iI][tT])
                 return 0
                 ;;
@@ -1208,10 +1204,6 @@ case "${1:-}" in
         ;;
     video|hawking-video|infinite-talk)
         generate_hawking_video_report_menu
-        ;;
-    responder|audio-responder|voice)
-        shift || true
-        bash "$SCRIPT_DIR/scripts/manage_mp_responder.sh" "$@"
         ;;
     calendar|cal|12-months)
         view_calendar_menu
@@ -1240,7 +1232,7 @@ case "${1:-}" in
         main_menu
         ;;
     *)
-        echo "Usage: $(basename "$0") {view|video|calendar|schedule|edit|create|email|opencode-progress|responder|run}"
+        echo "Usage: $(basename "$0") {view|video|calendar|schedule|edit|create|email|opencode-progress|run}"
         exit 1
         ;;
 esac

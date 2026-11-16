@@ -1,13 +1,12 @@
-"""MP Harmony integration with MP Reporter and the MP Audio Responder.
+"""MP Harmony integration with MP Reporter.
 
-These tests pin the three links that make Harmony a first-class speech source:
+These tests pin the links that make Harmony a first-class speech source:
 
   * mp_harmony_tts.py speaks through the bridge's OpenAI-compatible endpoint
     and stores one shared voice setting,
   * mp_harmony_archive.py copies Harmony pairs into TTS_AUDIO/HARMONY once,
     idempotently, and never copies a half-written WAV,
-  * the Responder can select Harmony as its speech engine and falls back when
-    the bridge is down, and MP Reporter exposes a menu for both.
+  * MP Reporter exposes Harmony audio in its reports.
 
 The tests do not require a running bridge; anything that would need one is
 skipped, and the rest runs against temporary directories.
@@ -26,22 +25,7 @@ ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / "scripts"
 TTS = SCRIPTS / "mp_harmony_tts.py"
 ARCHIVE = SCRIPTS / "mp_harmony_archive.py"
-RESPONDER_MENU = SCRIPTS / "manage_mp_responder.sh"
 REPORTER_MENU = SCRIPTS / "manage_mp_reporter.sh"
-RESPONDER_CANDIDATES = (
-    Path.home() / "MP_AI_Agent_Audio_Responder-0.1-x64" / "MP_OpenCode_Audio_Responder.sh",
-    Path.home() / "Documents" / "BASH_SCRIPTS" / "MP_OpenCode_Audio_Responder.sh",
-)
-
-
-def _find_responder():
-    for candidate in RESPONDER_CANDIDATES:
-        if candidate.is_file():
-            return candidate
-    return RESPONDER_CANDIDATES[0]
-
-
-RESPONDER = _find_responder()
 
 sys.path.insert(0, str(SCRIPTS))
 
@@ -204,104 +188,10 @@ class TestHarmonyArchive(unittest.TestCase):
             self.assertEqual(data["pending"], 1)
 
 
-class TestResponderEngine(unittest.TestCase):
-    """The responder's embedded engine selects Harmony when asked."""
-
-    def _load_engine(self, engine: str):
-        if not RESPONDER.is_file():
-            self.skipTest("audio responder script not installed")
-        text = RESPONDER.read_text(encoding="utf-8")
-        start = text.index("exec python3 -u - <<'PYEOF'")
-        start = text.index("\n", start) + 1
-        end = text.index("\nPYEOF", start)
-        tmp = Path(tempfile.mkdtemp(prefix="responder-engine-"))
-        env_keys = {
-            "STATE_DIR": "state",
-            "LOG_FILE": "r.log",
-            "LOCK_FILE": "r.lock",
-            "PAUSE_FILE": "paused",
-            "STATE_FILE": "state.json",
-            "MP_OPENCODE_TTS_ENGINE": engine,
-        }
-        old = {}
-        for key, val in env_keys.items():
-            old[key] = os.environ.get(key)
-            os.environ[key] = str(tmp / val) if key != "MP_OPENCODE_TTS_ENGINE" else val
-        try:
-            ns = {"__name__": "responder_engine"}
-            exec(compile(text[start:end], "<responder>", "exec"), ns)
-        finally:
-            for key, val in old.items():
-                if val is None:
-                    os.environ.pop(key, None)
-                else:
-                    os.environ[key] = val
-        return ns
-
-    def test_engine_setting_is_read(self):
-        ns = self._load_engine("harmony-first")
-        self.assertEqual(ns["TTS_ENGINE"], "harmony-first")
-
-    def test_harmony_engine_produces_audio_when_the_bridge_is_up(self):
-        ns = self._load_engine("harmony")
-        tts = ns.get("HARMONY_TTS")
-        if tts is None or not tts.available():
-            self.skipTest("MP Harmony bridge is not running")
-        with tempfile.TemporaryDirectory() as td:
-            wav, txt = ns["synthesise"]("responder engine test", Path(td), "probe")
-            self.assertIsNotNone(wav)
-            self.assertTrue(Path(wav).is_file())
-
-    def test_harmony_only_falls_through_instead_of_failing(self):
-        ns = self._load_engine("harmony")
-        # Point the client at a dead port so Harmony cannot answer.
-        if ns.get("HARMONY_TTS") is not None:
-            ns["HARMONY_TTS"].base_url = "http://127.0.0.1:1"
-        with tempfile.TemporaryDirectory() as td:
-            # No espeak/ffmpeg guarantee, so only assert it does not raise.
-            try:
-                ns["synthesise"]("fallback probe", Path(td), "probe")
-            except Exception as exc:  # pragma: no cover
-                self.fail(f"synthesise raised instead of falling back: {exc}")
-
-    def test_script_parses(self):
-        if not RESPONDER.is_file():
-            self.skipTest("audio responder script not installed")
-        result = _run(["bash", "-n", str(RESPONDER)])
-        self.assertEqual(result.returncode, 0, result.stderr)
-
-    def test_voice_command_reports_the_shared_setting(self):
-        if not RESPONDER.is_file():
-            self.skipTest("audio responder script not installed")
-        result = _run(["bash", str(RESPONDER), "voice"], timeout=30)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("Voice:", result.stdout)
-        self.assertIn("Engine:", result.stdout)
-
-
 class TestMenus(unittest.TestCase):
-    def test_responder_menu_parses_and_reports_status(self):
-        result = _run(["bash", "-n", str(RESPONDER_MENU)])
-        self.assertEqual(result.returncode, 0, result.stderr)
-        result = _run(["bash", str(RESPONDER_MENU), "status"], timeout=60)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("MP AUDIO RESPONDER", result.stdout)
-        self.assertIn("Speech engine", result.stdout)
-
-    def test_reporter_menu_exposes_the_responder(self):
-        text = REPORTER_MENU.read_text(encoding="utf-8")
-        self.assertIn("MP Audio Responder & Harmony Voice Control", text)
-        self.assertIn("manage_mp_responder.sh", text)
-        self.assertIn("responder|audio-responder|voice", text)
-
     def test_reporter_shell_parses(self):
         result = _run(["bash", "-n", str(REPORTER_MENU)])
         self.assertEqual(result.returncode, 0, result.stderr)
-
-    def test_reporter_cli_routes_to_the_responder_menu(self):
-        result = _run(["bash", str(REPORTER_MENU), "responder", "status"], timeout=60)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("MP AUDIO RESPONDER", result.stdout)
 
 
 class TestReporterIntegration(unittest.TestCase):

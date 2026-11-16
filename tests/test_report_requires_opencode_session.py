@@ -2,8 +2,8 @@
 """No OpenCode session means no report and no e-mail.
 
 A scheduled report is only useful while someone is actually working in an agent
-session. On an idle machine it is inbox noise, so the daily email reporter and
-the responder's hourly announce both check first.
+session. On an idle machine it is inbox noise, so the daily email reporter
+checks first.
 
 These tests pin the parts that break silently:
 
@@ -12,23 +12,17 @@ These tests pin the parts that break silently:
     would report a session on a machine nobody is using;
   * an unreadable process list errs toward *sending*, so a broken `ps` cannot
     silently swallow a report forever;
-  * `--force` still sends, which is what the interactive path uses;
-  * the shell helper in `manage_mp_responder.sh` applies the same rule and can
-    be overridden with `MP_RESPONDER_ANNOUNCE_ALWAYS=1`.
+  * `--force` still sends, which is what the interactive path uses.
 """
 
 from __future__ import annotations
 
 import importlib.util
-import os
-import re
-import subprocess
 import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 REPORTER = ROOT / "scripts" / "mp_daily_email_reporter.py"
-RESPONDER = ROOT / "scripts" / "manage_mp_responder.sh"
 
 
 def _load_reporter():
@@ -127,34 +121,6 @@ class OpenCodeSessionDetectionTest(unittest.TestCase):
             self.assertIsInstance(result, bool)
         finally:
             self.mod.active_opencode_sessions = original_detect
-
-
-class ResponderAnnounceRuleTest(unittest.TestCase):
-    """The shell front end applies the same rule, with an env override."""
-
-    def setUp(self):
-        self.text = RESPONDER.read_text(encoding="utf-8")
-
-    def test_the_helper_counts_only_real_sessions(self):
-        self.assertIn("active_opencode_sessions()", self.text)
-        block = self.text[self.text.index("active_opencode_sessions()"):]
-        block = block[:block.index("}")]
-        self.assertIn("tty", block)
-        self.assertIn("$2 != \"?\"", block)
-
-    def test_the_announce_is_gated_on_a_session(self):
-        idx = self.text.index("gitclone|hourly|update)")
-        block = self.text[idx:idx + 900]
-        self.assertIn("active_opencode_sessions", block)
-        self.assertIn("skipping the update", block)
-
-    def test_there_is_an_escape_hatch(self):
-        self.assertIn("MP_RESPONDER_ANNOUNCE_ALWAYS", self.text)
-
-    def test_the_shell_helper_parses(self):
-        res = subprocess.run(["bash", "-n", str(RESPONDER)],
-                             capture_output=True, text=True)
-        self.assertEqual(res.returncode, 0, res.stderr)
 
 
 if __name__ == "__main__":

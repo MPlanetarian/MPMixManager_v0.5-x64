@@ -148,6 +148,16 @@ REPORTS/*/
 MP_AUTO_TESTER_TREE/
 deploy-*.tar.gz
 MP_TESTER_MIX_MANAGER_SCREENSHOTS/
+
+# MP Auto Responder is a separate program. It is not part of MP Mix Manager
+# and must not be published with this repository.
+scripts/manage_mp_responder.sh
+MP_OpenCode_Audio_Responder.sh
+MP_AI_Agent_Audio_Responder*/
+tests/test_opencode_audio_responder_loop.py
+tests/test_responder_hourly_update.py
+tests/test_responder_other_agents.py
+tests/test_responder_session_progress.py
 test-evidence/
 
 # MP_Auto_Tester_Flash.sh is an INTERNAL DREAMWORLDS PRODUCTIONS DEV UTILITY.

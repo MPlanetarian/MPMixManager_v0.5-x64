@@ -11,8 +11,8 @@ The contract now:
   * a Matrix voice that cannot be cloned falls back to another *Matrix* voice
     (Stephen Hawking), never to the generic Piper narrator,
   * the fallback is reported, so a stopped XTTS service is visible,
-  * the shared voice setting is what both MP Reporter and the Audente Responder
-    read, so they cannot disagree.
+  * the shared voice setting is what MP Reporter reads, so every report
+    speaks in the voice written there.
 """
 
 import os
@@ -81,7 +81,7 @@ class TestSharedVoiceSetting(unittest.TestCase):
             self.skipTest("shared voice setting has not been written yet")
         value = VOICE_FILE.read_text(encoding="utf-8").strip()
         self.assertEqual(value, "jenny",
-                         "MP Reporter and the Audio Responder must agree on one voice")
+                         "the shared voice setting must stay on Jenny")
 
     def test_tts_client_defaults_are_consistent(self):
         text = TTS_CLIENT.read_text(encoding="utf-8")
@@ -105,35 +105,6 @@ class TestSharedVoiceSetting(unittest.TestCase):
         func = source[start:end]
         self.assertIn('return "jenny"', func,
                       "the agent must default to a voice it can always render")
-
-
-class TestResponderVoiceResolution(unittest.TestCase):
-    def test_responder_reads_the_shared_setting(self):
-        candidates = (
-            HOME / "MP_AI_Agent_Audio_Responder-0.1-x64" / "MP_OpenCode_Audio_Responder.sh",
-            HOME / "Documents" / "BASH_SCRIPTS" / "MP_OpenCode_Audio_Responder.sh",
-        )
-        responder = next((p for p in candidates if p.is_file()), None)
-        if responder is None:
-            self.skipTest("audio responder is not installed")
-        text = responder.read_text(encoding="utf-8")
-        # With no explicit MP_OPENCODE_TTS_VOICE the client reads the shared file.
-        self.assertIn("HarmonyTTS(voice=TTS_VOICE or None)", text)
-
-    def test_service_does_not_pin_a_different_voice(self):
-        """An explicit per-service voice would let the two programs disagree."""
-        try:
-            result = subprocess.run(
-                ["systemctl", "--user", "show", "-p", "Environment", "--value",
-                 "mp-opencode-audio-responder.service"],
-                capture_output=True, text=True, timeout=10)
-        except Exception:
-            self.skipTest("systemctl is not available")
-        env = result.stdout
-        if "MP_OPENCODE_TTS_VOICE" in env:
-            match = re.search(r"MP_OPENCODE_TTS_VOICE=(\S+)", env)
-            self.assertEqual(match.group(1).strip('"'), "stephen_hawking_matrix",
-                             "the service is pinned to a different voice")
 
 
 class TestXttsStaysOff(unittest.TestCase):

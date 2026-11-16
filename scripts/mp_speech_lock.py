@@ -4,9 +4,8 @@
 # ------------------------------------------------------------------------------
 # Several programs on this machine produce speech or alert sounds:
 #
-#   * the MP Audio Responder  (prompts, responses, system errors, briefings)
 #   * MP Reporter's email timer (a confirmation chime after a send)
-#   * one-shot announcements  (a CLI run while the service is live)
+#   * one-shot announcements  (a CLI run while a report is being read)
 #
 # They used to play independently, so a chime or a second announcement could
 # start on top of a 140-second narration. This module serialises them with a

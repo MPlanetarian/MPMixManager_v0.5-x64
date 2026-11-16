@@ -76,20 +76,20 @@ if [ -z "$LOCAL_HISTORY_DIR" ] || [ ! -d "$LOCAL_HISTORY_DIR" ]; then
 for cand in "${MIX_ARCHIVE_DIR:-$PWD}/Traktor 3.11.1/History" "./Traktor 3.11.1/History" "/run/media/$USER/WD BLACK B/MIX_ARCHIVE/Traktor 3.11.1/History" "/run/media/mplanetarian/WD BLACK B/MIX_ARCHIVE/Traktor 3.11.1/History" "/Volumes/WD BLACK B/MIX_ARCHIVE/Traktor 3.11.1/History" "/Volumes/MIX_ARCHIVE/Traktor 3.11.1/History" "/Volumes/DATAMAC3/MIX_ARCHIVE/Traktor 3.11.1/History" "/d/MIX_ARCHIVE/Traktor 3.11.1/History" "D:/MIX_ARCHIVE/Traktor 3.11.1/History" "/mnt/d/MIX_ARCHIVE/Traktor 3.11.1/History" "$HOME/Documents/Native Instruments/Traktor 3.11.1/History" "$HOME/Native Instruments/Traktor 3.11.1/History"; do if [ -d "$cand" ]; then LOCAL_HISTORY_DIR="$cand"; break; fi; done
 fi
 load_conversion_theme() {
-local mgr="" cand fn_src saved_theme="dreamworlds"
+local mgr="" cand fn_src saved_theme="dreamworlds_ultra"
 for cand in "$SCRIPT_DIR/Mix_Archive_Manager.sh" "$PARENT_DIR/Mix_Archive_Manager.sh" "${MIX_ARCHIVE_DIR:-}/Mix_Archive_Manager.sh" "$HOME/MP_Mix_Manager_v0.3/Mix_Archive_Manager.sh"; do if [ -f "$cand" ]; then mgr="$cand"; break; fi; done
 if [ -n "$mgr" ]; then fn_src="$(awk '/^set_theme_colors\(\)/{f=1} f{print} f&&/^}/{exit}' "$mgr" 2>/dev/null || true)"; if [ -n "$fn_src" ]; then eval "$fn_src"; fi; fi
 if ! declare -F set_theme_colors >/dev/null 2>&1; then
 set_theme_colors() {
 NC='\033[0m'; BOLD='\033[1m'; DIM='\033[2m'
-case "${1:-dreamworlds}" in
+case "${1:-dreamworlds_ultra}" in
 cosmic_supernova|supernova|cosmic) RED='\033[38;2;255;51;102m'; GREEN='\033[38;2;0;245;212m'; YELLOW='\033[38;2;254;228;64m'; BLUE='\033[38;2;94;96;206m'; MAGENTA='\033[38;2;224;86;253m'; CYAN='\033[38;2;76;201;240m'; CURRENT_THEME="cosmic_supernova" ;;
-*) RED='\033[38;2;237;37;78m'; GREEN='\033[38;2;0;229;255m'; YELLOW='\033[38;2;255;170;0m'; BLUE='\033[38;2;155;89;182m'; MAGENTA='\033[38;2;247;37;133m'; CYAN='\033[38;2;0;193;228m'; CURRENT_THEME="dreamworlds" ;;
+*) RED='\033[38;2;255;0;0m'; GREEN='\033[38;2;0;255;0m'; YELLOW='\033[38;2;255;153;51m'; BLUE='\033[38;2;102;102;255m'; MAGENTA='\033[38;2;166;77;255m'; CYAN='\033[38;2;153;153;255m'; CURRENT_THEME="dreamworlds_ultra" ;;
 esac
 }
 fi
 if [ -f "$HOME/.config/mix-manager/theme" ]; then IFS= read -r saved_theme < "$HOME/.config/mix-manager/theme" 2>/dev/null || true; saved_theme="${saved_theme//[[:space:]]/}"; fi
-set_theme_colors "${saved_theme:-dreamworlds}"
+set_theme_colors "${saved_theme:-dreamworlds_ultra}"
 if [ ! -t 1 ] || [ -n "${NO_COLOR:-}" ]; then NC=''; BOLD=''; DIM=''; RED=''; GREEN=''; YELLOW=''; BLUE=''; MAGENTA=''; CYAN=''; fi; return 0
 }
 load_conversion_theme

@@ -301,7 +301,7 @@ set_theme_colors() {
             CURRENT_THEME="classic"
             THEME_DISPLAY_NAME="Classic ANSI"
             ;;
-        cyberpunk|cyber|*)
+        cyberpunk|cyber)
             RED='\033[38;5;196m'
             GREEN='\033[38;5;48m'
             YELLOW='\033[38;5;226m'
@@ -310,6 +310,17 @@ set_theme_colors() {
             CYAN='\033[38;5;51m'
             CURRENT_THEME="cyberpunk"
             THEME_DISPLAY_NAME="Cyberpunk"
+            ;;
+        *)
+            RED='\033[38;2;255;0;0m'
+            GREEN='\033[38;2;0;255;0m'
+            YELLOW='\033[38;2;255;153;51m'
+            BLUE='\033[38;2;102;102;255m'
+            MAGENTA='\033[38;2;166;77;255m'
+            CYAN='\033[38;2;153;153;255m'
+            WHITE='\033[38;2;216;180;254m'
+            CURRENT_THEME="dreamworlds_ultra"
+            THEME_DISPLAY_NAME="Dreamworlds Ultra"
             ;;
     esac
 }

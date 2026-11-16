@@ -52,6 +52,19 @@ class TestDreamworldsUltraIsDefault(unittest.TestCase):
         self.assertIn("1|MPlanetarian Dreamworlds|", text)
         self.assertNotIn("1|MPlanetarian Dreamworlds [Default]", text)
 
+        # An empty call and a name this build does not know both land on Ultra.
+        # Cyberpunk stays available when it is asked for by name.
+        for name, expect in (("", "dreamworlds_ultra"), ("not-a-theme", "dreamworlds_ultra"), ("cyberpunk", "cyberpunk")):
+            probe = subprocess.run(
+                ["bash", "-c", script.replace('set_theme_colors\n', f'set_theme_colors "{name}"\n', 1)],
+                capture_output=True, text=True, cwd=str(ROOT),
+            )
+            self.assertEqual(probe.returncode, 0, probe.stderr)
+            theme, bg = probe.stdout.strip().split("\t")
+            self.assertEqual(theme, expect, name)
+            if expect == "dreamworlds_ultra":
+                self.assertEqual(bg, "85;74;107", name)
+
     def test_mp_gui_falls_back_to_ultra(self):
         text = (ROOT / "MP_Gui.sh").read_text(encoding="utf-8")
         self.assertIn('THEME_NAME="dreamworlds_ultra"', text)
@@ -80,6 +93,41 @@ class TestDreamworldsUltraIsDefault(unittest.TestCase):
                     os.environ.pop(key, None)
                 with patch.object(mwc.Path, "home", return_value=Path(tmp)):
                     self.assertEqual(mwc.get_current_theme_id(None), "dreamworlds_ultra")
+
+    def test_conversion_script_defaults_to_ultra(self):
+        for path in (ROOT / "Make_SOF_FLAC_CONVERSION.sh", ROOT / "scripts" / "Make_SOF_FLAC_CONVERSION.sh"):
+            text = path.read_text(encoding="utf-8")
+            self.assertIn('saved_theme="dreamworlds_ultra"', text)
+            self.assertIn('case "${1:-dreamworlds_ultra}"', text)
+            self.assertIn('set_theme_colors "${saved_theme:-dreamworlds_ultra}"', text)
+            self.assertNotIn('saved_theme="dreamworlds"', text)
+            self.assertNotIn('CURRENT_THEME="dreamworlds"', text)
+
+        text = (ROOT / "Make_SOF_FLAC_CONVERSION.sh").read_text(encoding="utf-8")
+        start = text.index("load_conversion_theme() {")
+        end = text.index("\n}\nload_conversion_theme\n", start) + 2
+        with tempfile.TemporaryDirectory() as tmp:
+            res = subprocess.run(
+                ["bash", "-c", text[start:end] + "\n"
+                 "SCRIPT_DIR=/tmp PARENT_DIR=/tmp MIX_ARCHIVE_DIR=/tmp load_conversion_theme\n"
+                 "printf '%s\\n' \"$CURRENT_THEME\"\n"],
+                capture_output=True, text=True, cwd=str(ROOT),
+                env={"HOME": tmp, "PATH": os.environ.get("PATH", "")},
+            )
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(res.stdout.strip(), "dreamworlds_ultra")
+
+    def test_bridge_defaults_to_ultra(self):
+        import mp_software_bridge as bridge
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch.object(bridge, "MM_THEME_FILE", root / "missing-mm"), \
+                 patch.object(bridge, "CONGEN_THEME_FILE", root / "missing-cg"):
+                self.assertEqual(
+                    bridge.get_theme_names(),
+                    ("dreamworlds_ultra", "dreamworlds_ultra"),
+                )
 
     def test_tracklist_viewer_defaults_to_ultra(self):
         text = (ROOT / "scripts" / "view_tracklist_console.sh").read_text(encoding="utf-8")

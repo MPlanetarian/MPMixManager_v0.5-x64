@@ -224,8 +224,8 @@ def get_audio_player_state() -> Dict[str, Any]:
 
 def get_theme_names() -> Tuple[str, str]:
     """Returns (mix_manager_theme, congen_theme)."""
-    mm_t = "dreamworlds"
-    cg_t = "dreamworlds"
+    mm_t = "dreamworlds_ultra"
+    cg_t = "dreamworlds_ultra"
     if MM_THEME_FILE.exists():
         try:
             val = MM_THEME_FILE.read_text(encoding="utf-8").strip()

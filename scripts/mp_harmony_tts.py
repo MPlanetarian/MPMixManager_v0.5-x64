@@ -6,9 +6,8 @@
 # (POST /v1/audio/speech). It renders the 11 Matrix voices (Morpheus, Agent
 # Smith, Neo, Trinity, Oracle, Zion, Stephen Hawking) locally and returns a WAV.
 #
-# MP Reporter and the MP Audio Responder both use this module instead of
-# shelling out to a separate TTS engine, so a single voice setting drives every
-# spoken output on the machine.
+# MP Reporter uses this module instead of shelling out to a separate TTS
+# engine, so a single voice setting drives its spoken output.
 #
 # Used as a library:
 #     from mp_harmony_tts import HarmonyTTS

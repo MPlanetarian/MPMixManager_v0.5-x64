@@ -1,9 +1,8 @@
 """One announcement at a time.
 
-Everything that produces sound on this machine used to play independently: the
-MP Audio Responder, MP Reporter's email chime, and any one-shot `progress` or
-`gitclone` run. A chime or a second briefing could start in the middle of a
-140-second narration.
+Everything that produces sound on this machine used to play independently:
+MP Reporter's email chime and any one-shot announcement. A chime or a second
+briefing could start in the middle of a 140-second narration.
 
 These tests pin the shared lock that serialises them:
 
@@ -11,7 +10,7 @@ These tests pin the shared lock that serialises them:
   * a non-blocking caller can decline instead of queueing,
   * the lock is released when the holder exits, even on an exception,
   * different processes contend for the same lock,
-  * the Responder and MP Reporter both take it before playing.
+  * MP Reporter takes it before playing.
 """
 
 import os
@@ -27,19 +26,7 @@ ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / "scripts"
 LOCK_MODULE = SCRIPTS / "mp_speech_lock.py"
 
-RESPONDER_CANDIDATES = (
-    Path.home() / "MP_AI_Agent_Audio_Responder-0.1-x64" / "MP_OpenCode_Audio_Responder.sh",
-    Path.home() / "Documents" / "BASH_SCRIPTS" / "MP_OpenCode_Audio_Responder.sh",
-)
-
 sys.path.insert(0, str(SCRIPTS))
-
-
-def _responder() -> Path:
-    for candidate in RESPONDER_CANDIDATES:
-        if candidate.is_file():
-            return candidate
-    return RESPONDER_CANDIDATES[0]
 
 
 class TestLockModule(unittest.TestCase):
@@ -133,39 +120,6 @@ class TestLockModule(unittest.TestCase):
             env={**os.environ, "MP_SPEECH_LOCK": str(self.path)})
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("free", result.stdout.lower())
-
-
-@unittest.skipUnless(_responder().is_file(), "audio responder is not installed")
-class TestResponderUsesTheLock(unittest.TestCase):
-    def setUp(self):
-        self.source = _responder().read_text(encoding="utf-8")
-
-    def test_play_audio_holds_the_lock(self):
-        start = self.source.index("def play_audio(wav):")
-        end = self.source.index("\ndef ", start + 1)
-        func = self.source[start:end]
-        self.assertIn("_speech_lock()", func,
-                      "play_audio must serialise with every other speaker")
-        # The lock must wrap the playback, not sit beside it.
-        self.assertLess(func.index("with _speech_lock()"), func.index("Popen"))
-
-    def test_speech_lock_is_resolved_from_the_manager_tree(self):
-        self.assertIn("_find_speech_lock", self.source)
-        self.assertIn("mp_speech_lock.py", self.source)
-
-    def test_missing_helper_does_not_break_playback(self):
-        start = self.source.index("def _speech_lock():")
-        end = self.source.index("\ndef ", start + 1)
-        func = self.source[start:end]
-        self.assertIn("nullcontext", func,
-                      "a missing helper must degrade to playing immediately")
-
-    def test_stale_briefings_are_dropped_not_delayed(self):
-        self.assertIn("PROGRESS_MAX_AGE", self.source)
-        start = self.source.index("def handle_progress_job")
-        end = self.source.index("\ndef ", start + 1)
-        self.assertIn("stale", self.source[start:end].lower(),
-                      "a briefing queued behind a long announcement must not be read late")
 
 
 class TestReporterUsesTheLock(unittest.TestCase):

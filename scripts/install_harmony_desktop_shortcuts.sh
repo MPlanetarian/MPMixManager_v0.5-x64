@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # scripts/install_harmony_desktop_shortcuts.sh
-# Purpose: Put the MP Harmony Agent, MP Reporter and MP Audio Responder
-#          shortcuts on the Desktop.
+# Purpose: Put the MP Harmony Agent and MP Reporter shortcuts on the Desktop.
 #
-# These three programs are separate from MP Mix Manager, so their shortcuts are
+# These programs are separate from MP Mix Manager, so their shortcuts are
 # not written by install_desktop_shortcuts.py (which owns the four manager
 # entries). This script owns theirs and can be re-run at any time: existing
 # entries are replaced, so an old path is corrected rather than duplicated.
@@ -48,18 +47,6 @@ desktop_dir() {
 
 DESKTOP="$(desktop_dir)"
 APPS="${MP_APPLICATIONS_DIR:-$HOME/.local/share/applications}"
-
-# The responder is a separate git checkout; resolve it the same way the menu does.
-find_responder() {
-    local cand
-    for cand in \
-        "$HOME/MP_AI_Agent_Audio_Responder-0.1-x64/MP_OpenCode_Audio_Responder.sh" \
-        "$HOME/Documents/BASH_SCRIPTS/MP_OpenCode_Audio_Responder.sh"; do
-        [ -f "$cand" ] && { printf '%s\n' "$cand"; return 0; }
-    done
-    return 1
-}
-RESPONDER="$(find_responder || true)"
 
 # Terminal wrapper. Konsole is what every existing entry on this desktop uses;
 # the fallbacks keep the shortcut usable on another desktop session. A plain
@@ -160,14 +147,6 @@ emit_reporter() {
         "application-pdf"
 }
 
-emit_responder_voice() {
-    local rsp="$MP_ROOT/scripts/manage_mp_responder.sh"
-    write_entry "MP Audio Responder - Voice Control" \
-        "Narration service, speech engine and shared Harmony voice" \
-        "$(terminal_cmd "MP Audio Responder - Voice Control" "bash '$rsp'")" \
-        "audio-volume-high"
-}
-
 ALL_NAMES=(
     "MP Harmony Agent (Chat)"
     "MP Harmony - Start Server"
@@ -178,7 +157,6 @@ ALL_NAMES=(
     "MP Reporter - Run Daily Now"
     "MP Reporter - Status"
     "MP Reporter - View Latest"
-    "MP Audio Responder - Voice Control"
 )
 
 do_install() {
@@ -186,12 +164,11 @@ do_install() {
         echo -e "${RED}Desktop directory not found: $DESKTOP${NC}" >&2
         exit 1
     fi
-    echo -e "${BOLD}Installing MP Harmony, Reporter and Responder shortcuts${NC}"
+    echo -e "${BOLD}Installing MP Harmony and MP Reporter shortcuts${NC}"
     echo -e "${DIM}  Desktop: $DESKTOP${NC}"
     echo ""
     emit_harmony
     emit_reporter
-    emit_responder_voice
     echo ""
 
     # Mirror into the application menu so the entries are searchable too.
@@ -204,10 +181,6 @@ do_install() {
             && update-desktop-database "$APPS" >/dev/null 2>&1 || true
     fi
 
-    if [ -z "$RESPONDER" ]; then
-        echo -e "${YELLOW}  Note: the MP Audio Responder script was not found;"
-        echo -e "  its Voice Control shortcut will report that when opened.${NC}"
-    fi
     if [ ! -f "$HOME/OpenAI/MP_Harmony_Agent/MP_Harmony_Agent.py" ]; then
         echo -e "${YELLOW}  Note: the MP Harmony Agent is not installed yet."
         echo -e "  Install it with: scripts/install_harmony_agent.sh install${NC}"
@@ -218,7 +191,7 @@ do_install() {
 
 do_remove() {
     local n
-    echo -e "${BOLD}Removing MP Harmony, Reporter and Responder shortcuts${NC}"
+    echo -e "${BOLD}Removing MP Harmony and MP Reporter shortcuts${NC}"
     for n in "${ALL_NAMES[@]}"; do
         rm -f "$DESKTOP/$n.desktop" "$APPS/$n.desktop" 2>/dev/null && echo -e "  ${DIM}removed $n${NC}"
     done

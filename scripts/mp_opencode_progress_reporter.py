@@ -974,7 +974,7 @@ def prune_archives(keep: int = 288):
 def play_confirmation_alert(sound_file: str):
     """Short audible confirmation once SMTP accepts the message.
 
-    Waits for the shared speech lock first: the MP Audio Responder may be in the
+    Waits for the shared speech lock first: another announcement may be in the
     middle of a long narration, and a chime on top of it is exactly the overlap
     this lock exists to prevent. A short timeout means a stuck announcement can
     never block the email pipeline.

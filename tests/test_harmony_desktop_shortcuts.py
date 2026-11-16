@@ -1,6 +1,6 @@
-"""Desktop shortcuts for MP Harmony, MP Reporter and the MP Audio Responder.
+"""Desktop shortcuts for MP Harmony and MP Reporter.
 
-These three are separate programs, so install_desktop_shortcuts.py does not own
+These are separate programs, so install_desktop_shortcuts.py does not own
 their entries. This suite pins the contract of the script that does:
 
   * every shortcut is a valid .desktop file,
@@ -18,7 +18,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 INSTALLER = ROOT / "scripts" / "install_harmony_desktop_shortcuts.sh"
-MANAGER_SCRIPTS = ROOT / "scripts"
 
 EXPECTED = [
     "MP Harmony Agent (Chat)",
@@ -30,7 +29,6 @@ EXPECTED = [
     "MP Reporter - Run Daily Now",
     "MP Reporter - Status",
     "MP Reporter - View Latest",
-    "MP Audio Responder - Voice Control",
 ]
 
 
@@ -171,12 +169,6 @@ class TestReporterCommandsAreReal(ShortcutTestBase):
             text = self.entry(name).read_text(encoding="utf-8")
             self.assertIn("manage_harmony_agent.sh", text, name)
             self.assertIn(f" {verb}", text, name)
-
-    def test_voice_control_uses_the_responder_menu(self):
-        self.install()
-        text = self.entry("MP Audio Responder - Voice Control").read_text(encoding="utf-8")
-        self.assertIn("manage_mp_responder.sh", text)
-        self.assertTrue((MANAGER_SCRIPTS / "manage_mp_responder.sh").is_file())
 
 
 class TestInstallerHook(unittest.TestCase):

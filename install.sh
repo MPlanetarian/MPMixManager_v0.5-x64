@@ -807,7 +807,6 @@ link "$SCRIPT_DIR/scripts/kc_stop_ollama.sh" "ollama-stop"
 link "$SCRIPT_DIR/scripts/manage_ollama.sh" "manage-ollama"
 link "$SCRIPT_DIR/scripts/manage_harmony_agent.sh" "manage-harmony"
 link "$SCRIPT_DIR/scripts/install_harmony_agent.sh" "install-harmony"
-link "$SCRIPT_DIR/scripts/manage_mp_responder.sh" "manage-responder"
 link "$SCRIPT_DIR/scripts/mp_harmony_tts.py" "mp-harmony-tts"
 link "$SCRIPT_DIR/scripts/kc_launch_beszel_hub_and_agent.sh" "beszel-hub-and-agent"
 link "$SCRIPT_DIR/scripts/beszel.sh" "beszel"
@@ -1185,12 +1184,12 @@ else
     update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
     echo -e "${GREEN}      ✓ Application, WAN2GP, Ollama, Beszel, and dsh-mobile shortcuts installed.${NC}"
 
-    # MP Harmony, MP Reporter and the MP Audio Responder are separate programs,
-    # so their shortcuts are owned by their own installer. Offer them here only
-    # when the user asked for the agent, so a plain manager install is unchanged.
+    # MP Harmony and MP Reporter are separate programs, so their shortcuts are
+    # owned by their own installer. Offer them here only when the user asked
+    # for the agent, so a plain manager install is unchanged.
     if [ "${MP_HARMONY_WANT:-0}" -eq 1 ] && [ -f "$SCRIPT_DIR/scripts/install_harmony_desktop_shortcuts.sh" ]; then
         if bash "$SCRIPT_DIR/scripts/install_harmony_desktop_shortcuts.sh" >/dev/null 2>&1; then
-            echo -e "${GREEN}      ✓ MP Harmony, MP Reporter and MP Audio Responder desktop shortcuts installed.${NC}"
+            echo -e "${GREEN}      ✓ MP Harmony and MP Reporter desktop shortcuts installed.${NC}"
         else
             echo -e "${YELLOW}      ⚠ The MP Harmony/Reporter shortcuts could not be created.${NC}"
             echo -e "${DIM}        Retry with: scripts/install_harmony_desktop_shortcuts.sh${NC}"
