@@ -4,7 +4,7 @@
 # Location: /home/mplanetarian/Documents/BASH_SCRIPTS/switch-to-plasma-wayland.sh
 # Purpose: Switch Desktop from X11 to Plasma Wayland for HDR gaming on Hisense
 #          4K TV, set Hisense as primary display, ensure HDMI ALSA audio output,
-#          suppress MPlanetarian video playback, and load Steam Big Picture Mode.
+#          suppress video playback, and load Steam Big Picture Mode.
 # ==============================================================================
 
 set -e
@@ -95,8 +95,8 @@ echo -e "${GREEN}[✓] Plasma Wayland (plasma.desktop) preselected for next sess
 # 4. Gracefully close X11 background applications (preserving terminal/manager)
 echo ""
 echo -e "${BOLD}${BLUE}[4/5] Closing open desktop application windows...${NC}"
-if [ -x "/home/mplanetarian/Desktop/DESKTOP/close_allapps.sh" ]; then
-    /home/mplanetarian/Desktop/DESKTOP/close_allapps.sh >/dev/null 2>&1 || true
+if [ -x "$HOME/Desktop/DESKTOP/close_allapps.sh" ]; then
+    "$HOME/Desktop/DESKTOP/close_allapps.sh" >/dev/null 2>&1 || true
 fi
 pkill -f "play_mplanetarian" 2>/dev/null || true
 pkill -f "MPlanetarian" 2>/dev/null || true

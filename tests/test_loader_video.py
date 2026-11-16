@@ -27,6 +27,22 @@ BASH_BIN = find_bash()
 
 
 class TestLoaderVideoIntegration(unittest.TestCase):
+    def setUp(self):
+        # The startup logo is now remembered per session, so a test that runs
+        # after a real launch would see the marker and skip. Give every test an
+        # empty config directory of its own.
+        import tempfile
+        self._home = tempfile.TemporaryDirectory()
+        self._old_home = os.environ.get("HOME")
+        os.environ["HOME"] = self._home.name
+
+    def tearDown(self):
+        if self._old_home is None:
+            os.environ.pop("HOME", None)
+        else:
+            os.environ["HOME"] = self._old_home
+        self._home.cleanup()
+
     def test_find_loader_video_path_finds_mp_loader(self):
         script_posix = str(SCRIPT).replace('\\', '/')
         cmd = [BASH_BIN, script_posix, "--path"]
@@ -74,6 +90,60 @@ class TestLoaderVideoIntegration(unittest.TestCase):
         res = subprocess.run([BASH_BIN, "-c", script], cwd=str(BASE_DIR), capture_output=True, text=True)
         self.assertEqual(res.returncode, 0)
         self.assertIn("SKIPPED_CONFIG", res.stdout)
+
+    def test_logo_plays_once_per_session(self):
+        """The first launch plays the logo; a second launch skips it."""
+        script = r"""
+        set -e
+        source scripts/display_loader_video.sh
+        is_manager_already_open() { return 1; }
+        _loader_skip_requested() { return 1; }
+        _launch_borderless_video() { player_pid=999999; echo "PLAYER_STARTED"; return 0; }
+        export SHOW_LOADER_VIDEO="true"
+        display_startup_loader_video 0
+        echo "FIRST_DONE"
+        display_startup_loader_video 0
+        echo "SECOND_DONE"
+        """
+        res = subprocess.run([BASH_BIN, "-c", script], cwd=str(BASE_DIR), capture_output=True, text=True)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(res.stdout.count("PLAYER_STARTED"), 1, res.stdout)
+        self.assertIn("SECOND_DONE", res.stdout)
+
+    def test_logo_replays_in_a_new_session(self):
+        """A changed session key makes the next launch show the logo again."""
+        script = r"""
+        set -e
+        source scripts/display_loader_video.sh
+        is_manager_already_open() { return 1; }
+        _loader_skip_requested() { return 1; }
+        _launch_borderless_video() { player_pid=999999; echo "PLAYER_STARTED"; return 0; }
+        export SHOW_LOADER_VIDEO="true"
+        _loader_session_key() { printf 'session-one'; }
+        display_startup_loader_video 0
+        _loader_session_key() { printf 'session-two'; }
+        display_startup_loader_video 0
+        """
+        res = subprocess.run([BASH_BIN, "-c", script], cwd=str(BASE_DIR), capture_output=True, text=True)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(res.stdout.count("PLAYER_STARTED"), 2, res.stdout)
+
+    def test_forced_loader_ignores_the_session_marker(self):
+        """An explicit force=1 still plays, which the installer and tests use."""
+        script = r"""
+        set -e
+        source scripts/display_loader_video.sh
+        is_manager_already_open() { return 1; }
+        _loader_skip_requested() { return 1; }
+        _launch_borderless_video() { player_pid=999999; echo "PLAYER_STARTED"; return 0; }
+        export SHOW_LOADER_VIDEO="false"
+        display_startup_loader_video 0
+        display_startup_loader_video 1
+        """
+        res = subprocess.run([BASH_BIN, "-c", script], cwd=str(BASE_DIR), capture_output=True, text=True)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(res.stdout.count("PLAYER_STARTED"), 1, res.stdout)
+
 
     def test_skips_when_cli_initial_action_set(self):
         script = r"""

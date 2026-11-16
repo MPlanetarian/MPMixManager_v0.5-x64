@@ -4152,20 +4152,18 @@ def theme_body_ansi(theme_name: str) -> str:
     return f"\033[38;2;{red};{green};{blue}m"
 
 
-# Amber pulled down until it clears 4.5:1 on the light slate console. The glass
-# pane stays charcoal, so theme_body_ansi keeps the bright amber (255, 183, 20)
-# there. Playlist rows do not use this: that theme's track names stay white.
-_RETRO_LINUX_CONSOLE_INK = "\033[38;2;100;69;0m"
-
-
+# The console pane is the same dark gray the glass paints for every theme that
+# keeps a charcoal surface, so console body ink and glass body ink agree and
+# there is no per-theme split left to make.
 def theme_console_body_ansi(theme_name: str) -> str:
-    """Body ink for the console pane, which can be light when the glass is not.
+    """Body ink for the console pane.
 
-    Retro Linux Memories is the split: its console is a light slate and its
-    glass stays charcoal. Everywhere else the two surfaces share ``theme_body_ansi``.
+    The console pane can be light even when the glass is not (Sensorium's coral,
+    The Whitest White), but the theme hue in ``THEME_TEXT`` is already pulled
+    down for those. Retro Linux Memories used to be the exception, with a pale
+    slate console and a dark amber ink; the console is now dark gray, so its
+    bright amber reads everywhere and the two surfaces share one ink.
     """
-    if str(theme_name or "").strip().lower() == "retro_linux_memories":
-        return _RETRO_LINUX_CONSOLE_INK
     return theme_body_ansi(theme_name)
 
 
@@ -4173,12 +4171,12 @@ def theme_has_light_console(theme_name: str) -> bool:
     """True when the theme paints a light console pane.
 
     Sensorium is light coral, The Whitest White is pure white, and Stream of
-    Frequency, Cosmic Supernova, Phosphor, Retro Studio and Retro Linux
-    Memories are light tints of their own colours. Those panes need the theme's
-    dark body ink for unselected rows instead of the white ink the dark panes
-    use. Retro Linux Memories is the exception among the light tints: its
-    playlist text stays white. Liquid Glass hosts keep their own glass surface,
-    so callers should only apply this to the console.
+    Frequency, Cosmic Supernova, Phosphor and Retro Studio are light tints of
+    their own colours. Those panes need the theme's dark body ink for
+    unselected rows instead of the white ink the dark panes use. Retro Linux
+    Memories is dark gray, so it takes the white ink like every other dark
+    pane. Liquid Glass hosts keep their own glass surface, so callers should
+    only apply this to the console.
     """
     try:
         script_dir = str(Path(__file__).resolve().parent / "scripts")
@@ -10179,14 +10177,15 @@ class TerminalPlayerUI:
         # the light tints (Stream of Frequency, Cosmic Supernova, Phosphor,
         # Retro Studio). White ink there is unreadability in the other
         # direction, so they keep the theme's dark body ink. Retro Linux
-        # Memories is a light slate as well, and its playlist text stays white
-        # on that pane. Liquid Glass hosts are left alone because their pane
-        # comes from the shader, not from theme_background().
+        # Memories used to be a light slate and needed the same exemption; its
+        # console is now dark gray, so the normal rule gives it white text like
+        # every other dark pane. Liquid Glass hosts are left alone because their
+        # pane comes from the shader, not from theme_background().
         if is_lg:
             light_pane = self.visualizer.theme == "the_whitest_white"
         else:
             light_pane = theme_has_light_console(self.visualizer.theme)
-        if light_pane and self.visualizer.theme != "retro_linux_memories":
+        if light_pane:
             playlist_text_col = theme_body_ansi(self.visualizer.theme)
         else:
             playlist_text_col = WHITE

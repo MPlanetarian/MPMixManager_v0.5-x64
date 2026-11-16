@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 send_promo_email.py - Promotional & Publisher Outreach Email System
-Part of MP Mix Archive Manager
+Part of MP Mix Archive Manager (MP_Mix_Manager_v0.3)
 
 Automates professional outreach to promoters, event organizers, podcast publishers,
 radio syndicators, record labels, and dance music media with rich HTML & Plaintext
@@ -63,7 +63,7 @@ def load_config():
         "PROMO_WEBSITE_URL": os.environ.get("PROMO_WEBSITE_URL", "https://mplanetarian.com"),
         "PROMO_BIO": (
             "MPlanetarian is an electronic music producer, DJ, and sound designer curating the 'Stream of Frequency' "
-            "audiop mix series. Spanning deep progressive, melodic journey trance, and driving uplifting sounds, "
+            "audio mix series. Spanning deep progressive, melodic journey trance, and driving uplifting sounds, "
             "each episode is mastered in pristine 32-bit lossless audio accompanied by comprehensive tracklists and 4K visuals."
         ),
         "PROMO_TECH_RIDER": (
@@ -581,11 +581,13 @@ def render_email_content(template_id, context):
     # 1. PODCAST NETWORK & SYNDICATION PITCH
     # --------------------------------------------------------------------------
     if template_id == "podcast_publisher":
+        # Python 3.8 rejects a backslash inside an f-string expression.
+        _note_promo = ("NOTE:\n" + custom_msg + "\n\n") if custom_msg else ""
         text_body = f"""Dear {recip_name} and the {recip_org} editorial team,
 
 I hope this email finds you well.
 
-My name is {sender_name}, and I am reaching out to introduce our audio electronic music podcast series, 'Stream of Frequency', for consideration regarding syndication, distribution, or featured editorial placement on {recip_org}.
+My name is {sender_name}, and I am reaching out to introduce our Audio electronic music podcast series, 'Stream of Frequency', for consideration regarding syndication, distribution, or featured editorial placement on {recip_org}.
 
 ABOUT THE SERIES:
 'Stream of Frequency' is a masterfully curated journey bridging melodic progressive house, deep organic grooves, and driving uplifting trance. Each episode is engineered with meticulous attention to transitions and mastered at high resolution (32-bit lossless FLAC), accompanied by comprehensive cue tracklists, acoustic spectrograms, and 4K visual accompaniments.
@@ -605,8 +607,7 @@ WHY IT FITS {recip_org.upper()}:
 - Dedicated listener engagement across progressive, melodic, and trance demographics.
 - Full rights clarity and complete track attribution for all featured artists and labels.
 
-_note_1 = f"NOTE:\n{custom_msg}\n\n" if custom_msg else ""
-{_note_1}We would be thrilled to provide a dedicated syndication package, bespoke station IDs, or exclusive guest editions tailored to {recip_org}.
+{_note_promo}We would be thrilled to provide a dedicated syndication package, bespoke station IDs, or exclusive guest editions tailored to {recip_org}.
 
 Thank you very much for your time and consideration.
 
@@ -707,8 +708,8 @@ Tracklist ({track_count} tracks):
 TECHNICAL SETUP & RIDER:
 {rider}
 
-_note_2 = f"NOTE FOR {recip_org.upper()}:\n{custom_msg}\n\n" if custom_msg else ""
-{_note_2}High-resolution press photos, logos, and technical documentation are attached or available at:
+_note_1 = f"NOTE FOR {recip_org.upper()}:\n{custom_msg}\n\n" if custom_msg else ""
+{_note_1}High-resolution press photos, logos, and technical documentation are attached or available at:
 {cfg.get("PROMO_WEBSITE_URL", "")}
 
 We would love to collaborate for an upcoming date or guest mix session. Please let us know if you need any additional promotional assets or schedule availability.
@@ -791,7 +792,7 @@ YouTube: {youtube_url}
     # --------------------------------------------------------------------------
     elif template_id == "episode_promo":
         # Python 3.8 rejects a backslash inside an f-string expression.
-        editorial_note = f"EDITORIAL NOTE:\n{custom_msg}\n\n" if custom_msg else ""
+        editorial_note = ("EDITORIAL NOTE:\n" + custom_msg + "\n\n") if custom_msg else ""
         text_body = f"""Hello {recip_name},
 
 We are thrilled to announce the brand new episode of 'Stream of Frequency':
@@ -806,7 +807,7 @@ Listen on Apple Podcasts: {podcast_url}
 Watch in 4K UHD on YouTube: {youtube_url}
 
 ABOUT THIS EPISODE:
-Featuring {track_count} handpicked progressive and trance records, seamlessly mixed and mastered at audio 32-bit sample depth.
+Featuring {track_count} handpicked progressive and trance records, seamlessly mixed and mastered at Audio 32-bit sample depth.
 
 TRACKLIST:
 {tl_plain}
@@ -947,9 +948,8 @@ Email: {sender_email}
     # 5. RADIO GUEST MIX & SYNDICATION SUBMISSION
     # --------------------------------------------------------------------------
     elif template_id == "radio_guestmix":
-        # Python 3.8 (the documented minimum) rejects a backslash inside an
-        # f-string expression, so the note is built first and interpolated.
-        special_note = f"SPECIAL NOTE:\n{custom_msg}\n\n" if custom_msg else ""
+        # Python 3.8 rejects a backslash inside an f-string expression.
+        special_note = ("SPECIAL NOTE:\n" + custom_msg + "\n\n") if custom_msg else ""
         text_body = f"""Dear {recip_name} and {recip_org} Programming Team,
 
 I am pleased to submit a guest mix edition of 'Stream of Frequency' for airplay consideration on your station.

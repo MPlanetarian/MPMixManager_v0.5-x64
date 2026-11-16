@@ -184,11 +184,15 @@ def detect_audio_subsystem():
             pass
     info["alsa_cards"] = alsa_cards
     
-    # Check Bluetooth Audio Devices
+    # Check Bluetooth Audio Devices. The module lives beside this file in
+    # scripts/, and also one directory down when this copy is at the repo root.
     try:
-        scripts_dir = Path(__file__).resolve().parent
-        if str(scripts_dir) not in sys.path:
-            sys.path.insert(0, str(scripts_dir))
+        here = Path(__file__).resolve().parent
+        for scripts_dir in (here, here / "scripts"):
+            if (scripts_dir / "monitor_bluetooth_audio.py").is_file():
+                if str(scripts_dir) not in sys.path:
+                    sys.path.insert(0, str(scripts_dir))
+                break
         from monitor_bluetooth_audio import get_bluetooth_audio_status
         bt_st = get_bluetooth_audio_status()
         if bt_st.get("bluetooth_connected"):

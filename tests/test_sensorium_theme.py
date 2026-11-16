@@ -75,7 +75,7 @@ class TestSensoriumTheme(unittest.TestCase):
         self.assertTrue(player.theme_has_light_console("sensorium"))
         self.assertTrue(player.theme_has_light_console("the_whitest_white"))
         self.assertFalse(player.theme_has_light_console("dreamworlds_ultra"))
-        self.assertTrue(player.theme_has_light_console("retro_linux_memories"))
+        self.assertFalse(player.theme_has_light_console("retro_linux_memories"))
 
     def test_manager_publishes_palette_background_and_bar(self):
         script = f"""

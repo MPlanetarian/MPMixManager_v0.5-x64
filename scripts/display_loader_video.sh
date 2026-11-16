@@ -582,6 +582,49 @@ _close_video_player() {
     return 0
 }
 
+# Key that changes when the graphical session changes. The startup logo is
+# shown once per session, so an idle desktop that is already logged in does not
+# replay ten seconds of movie every time the manager is reopened. The boot id
+# plus the login session id covers a reboot, a logout, and a switch between
+# Wayland and X11 in one value.
+_loader_session_key() {
+    local _boot="" _sess="" _f=""
+    for _f in /proc/sys/kernel/random/boot_id /proc/stat; do
+        [ -r "$_f" ] || continue
+        if [ "$_f" = "/proc/stat" ]; then
+            _boot="$(awk '/^btime /{print $2; exit}' "$_f" 2>/dev/null || true)"
+        else
+            _boot="$(tr -d '\-\r\n' < "$_f" 2>/dev/null || true)"
+        fi
+        [ -n "$_boot" ] && break
+    done
+    _sess="${XDG_SESSION_ID:-}"
+    if [ -z "$_sess" ] && command -v loginctl >/dev/null 2>&1; then
+        _sess="$(loginctl --no-legend list-sessions 2>/dev/null | awk -v u="${USER:-}" '$3 == u {print $1; exit}' || true)"
+    fi
+    printf '%s-%s-%s' "${_boot:-none}" "${_sess:-none}" "${XDG_SESSION_TYPE:-none}"
+}
+
+# Returns 0 when this session has already shown the startup logo.
+_loader_already_played_this_session() {
+    local _dir="${HOME}/.config/mix-manager" _marker=""
+    _marker="${_dir}/loader_video_session"
+    [ -f "$_marker" ] || return 1
+    [ "$(cat "$_marker" 2>/dev/null || true)" = "$(_loader_session_key)" ]
+}
+
+_loader_mark_session_played() {
+    local _dir="${HOME}/.config/mix-manager" _tmp=""
+    mkdir -p "$_dir" 2>/dev/null || return 0
+    _tmp="${_dir}/loader_video_session.$$.tmp"
+    if printf '%s\n' "$(_loader_session_key)" > "$_tmp" 2>/dev/null; then
+        mv -f "$_tmp" "${_dir}/loader_video_session" 2>/dev/null || rm -f "$_tmp" 2>/dev/null || true
+    else
+        rm -f "$_tmp" 2>/dev/null || true
+    fi
+    return 0
+}
+
 # Display loader video whilst manager is loading
 display_startup_loader_video() {
     local force="${1:-0}"
@@ -589,6 +632,13 @@ display_startup_loader_video() {
 
     # Respect user configuration disable switch
     if [ "$force" -ne 1 ] && [ "${SHOW_LOADER_VIDEO:-true}" = "false" ]; then
+        return 0
+    fi
+
+    # The logo is a first-open-of-the-session flourish. Reopening the manager
+    # on an already logged-in desktop must not wait for the whole clip again,
+    # which is what made a second launch feel like it had hung.
+    if [ "$force" -ne 1 ] && _loader_already_played_this_session; then
         return 0
     fi
 
@@ -621,6 +671,10 @@ display_startup_loader_video() {
     # Launch the borderless always-on-top window.
     local player_pid=""
     _launch_borderless_video "$loader_vid" "MP Mix Archive Manager" || true
+
+    # Remember that this session has had its logo, whether the movie finishes,
+    # times out, or is skipped. Later launches go straight to the menu.
+    [ -n "$player_pid" ] && _loader_mark_session_played
 
     # Warm up caches in parallel while video is loading
     if command -v load_header_cache &>/dev/null; then

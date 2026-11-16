@@ -108,18 +108,19 @@ class TestRetroLinuxMemoriesTheme(unittest.TestCase):
         self.assertIn("retro_linux_memories", content)
         self.assertIn("Retro Linux Memories", content)
 
-    def test_console_playlist_text_stays_white_on_the_light_slate(self):
-        """Track names stay white after the pane becomes a light slate.
+    def test_console_playlist_text_stays_white_on_the_dark_pane(self):
+        """Track names stay white now that the pane is the dark gray field.
 
-        A light console normally switches unselected rows to the theme's body
-        ink. For this theme that ink is amber, and the playlist has to stay
-        white on both the light console and the charcoal glass.
+        The console used to be a light slate, and a light console normally
+        switches unselected rows to the theme's dark body ink. The pane is the
+        charcoal #2D2D2D field now, so the playlist keeps white text on both
+        the console and the charcoal glass.
         """
         import MP_Audio_Player as player
         from mp_theme_palette import theme_background
 
-        self.assertEqual(theme_background("retro_linux_memories"), (176, 196, 214))
-        self.assertTrue(player.theme_has_light_console("retro_linux_memories"))
+        self.assertEqual(theme_background("retro_linux_memories"), (45, 45, 45))
+        self.assertFalse(player.theme_has_light_console("retro_linux_memories"))
 
         scanner = MagicMock()
         scanner.get_mixes.return_value = [

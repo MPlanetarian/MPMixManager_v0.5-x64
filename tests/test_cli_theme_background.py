@@ -112,7 +112,6 @@ class TestCliThemeBackground(unittest.TestCase):
                 "cosmic_supernova",
                 "phosphor",
                 "retro_studio",
-                "retro_linux_memories",
             ):
                 self.assertGreaterEqual(
                     luma, 140,
@@ -162,8 +161,8 @@ class TestCliThemeBackground(unittest.TestCase):
         # BEL form and ST form, so Windows Terminal, Terminal-class Linux, and Konsole all take it.
         self.assertIn("\033]11;#554a6b\007", chunks[0])
         self.assertIn("\033]11;#554a6b\033\\", chunks[0])
-        self.assertIn("\033]11;#b0c4d6\007", chunks[1])
-        self.assertIn("\033]11;#b0c4d6\033\\", chunks[1])
+        self.assertIn("\033]11;#2d2d2d\007", chunks[1])
+        self.assertIn("\033]11;#2d2d2d\033\\", chunks[1])
 
     def test_glass_hosts_do_not_take_a_console_background(self):
         script = f"""

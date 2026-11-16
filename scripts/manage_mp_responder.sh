@@ -15,6 +15,8 @@
 #   manage_mp_responder.sh start|stop|restart|pause|resume
 #   manage_mp_responder.sh voice [NAME]   Show or set the shared Harmony voice
 #   manage_mp_responder.sh engine [MODE]  Show or set the speech backend
+#   manage_mp_responder.sh gitclone   Speak the hourly update now
+#                                     (unique cloners + Swansea weather)
 #   manage_mp_responder.sh archive    Sync Harmony audio into MP Reporter
 # ==============================================================================
 set -uo pipefail
@@ -160,6 +162,7 @@ do_action() {
         resume) bash "$RESPONDER" resume ;;
         logs)   bash "$RESPONDER" log 60 ;;
         progress) bash "$RESPONDER" progress ;;
+        gitclone|hourly|update) bash "$RESPONDER" gitclone ;;
         status) bash "$RESPONDER" status 5 ;;
     esac
 }
@@ -263,10 +266,11 @@ main_menu() {
         echo -e "  ${BOLD}${CYAN}9)${NC} Tail Responder Log"
         echo -e "  ${BOLD}10)${NC} Harmony Audio → Reporter Archive   ${DIM}(sync TTS_AUDIO/HARMONY)${NC}"
         echo -e "  ${BOLD}${CYAN}11)${NC} Announce Session Progress Now    ${DIM}(speak the 10-minute briefing on demand)${NC}"
+        echo -e "  ${BOLD}${CYAN}12)${NC} Announce Hourly Update Now   ${DIM}(unique cloners + Swansea weather)${NC}"
         echo ""
         echo -e "  ${BOLD}${CYAN}0)${NC} Return to the AI Reporting menu ${DIM}(or Esc / q)${NC}\n"
 
-        read -r -p "Enter choice [0-11]: " choice || true
+        read -r -p "Enter choice [0-12]: " choice || true
         case "$choice" in
             1) do_action start; press_enter ;;
             2) do_action stop; press_enter ;;
@@ -303,6 +307,11 @@ main_menu() {
                 echo -e "Narrating the session progress briefing..."
                 bash "$RESPONDER" progress
                 press_enter ;;
+            12)
+                safe_clear
+                echo -e "Announcing the hourly update (unique cloners + Swansea weather)..."
+                bash "$RESPONDER" gitclone
+                press_enter ;;
             0|q|Q|"") return 0 ;;
             *) echo -e "\n${RED}Invalid option!${NC}"; sleep 1 ;;
         esac
@@ -312,6 +321,7 @@ main_menu() {
 case "${1:-}" in
     status)  show_status ;;
     start|stop|restart|pause|resume|logs|progress) do_action "$1" ;;
+    gitclone|hourly|update) do_action gitclone ;;
     voice)
         shift || true
         if [ -n "${1:-}" ]; then python3 "$TTS_PY" --set-voice "$1"; else python3 "$TTS_PY" --voice; fi
@@ -335,7 +345,7 @@ case "${1:-}" in
         ;;
     "") main_menu ;;
     *)
-        echo "Usage: $(basename "$0") {status|start|stop|restart|pause|resume|progress|voice [NAME]|engine [MODE]|archive|logs}" >&2
+        echo "Usage: $(basename "$0") {status|start|stop|restart|pause|resume|progress|gitclone|voice [NAME]|engine [MODE]|archive|logs}" >&2
         exit 2
         ;;
 esac

@@ -76,7 +76,7 @@ if [ -z "$LOCAL_HISTORY_DIR" ] || [ ! -d "$LOCAL_HISTORY_DIR" ]; then
 for cand in "${MIX_ARCHIVE_DIR:-$PWD}/Traktor 3.11.1/History" "./Traktor 3.11.1/History" "/run/media/$USER/WD BLACK B/MIX_ARCHIVE/Traktor 3.11.1/History" "/run/media/mplanetarian/WD BLACK B/MIX_ARCHIVE/Traktor 3.11.1/History" "/Volumes/WD BLACK B/MIX_ARCHIVE/Traktor 3.11.1/History" "/Volumes/MIX_ARCHIVE/Traktor 3.11.1/History" "/Volumes/DATAMAC3/MIX_ARCHIVE/Traktor 3.11.1/History" "/d/MIX_ARCHIVE/Traktor 3.11.1/History" "D:/MIX_ARCHIVE/Traktor 3.11.1/History" "/mnt/d/MIX_ARCHIVE/Traktor 3.11.1/History" "$HOME/Documents/Native Instruments/Traktor 3.11.1/History" "$HOME/Native Instruments/Traktor 3.11.1/History"; do if [ -d "$cand" ]; then LOCAL_HISTORY_DIR="$cand"; break; fi; done
 fi
 load_conversion_theme() {
-local mgr="" cand fn_src saved_theme="dreamworlds_ultra"
+local mgr="" cand fn_src saved_theme="dreamworlds"
 for cand in "$SCRIPT_DIR/Mix_Archive_Manager.sh" "$PARENT_DIR/Mix_Archive_Manager.sh" "${MIX_ARCHIVE_DIR:-}/Mix_Archive_Manager.sh" "$HOME/MP_Mix_Manager_v0.3/Mix_Archive_Manager.sh"; do if [ -f "$cand" ]; then mgr="$cand"; break; fi; done
 if [ -n "$mgr" ]; then fn_src="$(awk '/^set_theme_colors\(\)/{f=1} f{print} f&&/^}/{exit}' "$mgr" 2>/dev/null || true)"; if [ -n "$fn_src" ]; then eval "$fn_src"; fi; fi
 if ! declare -F set_theme_colors >/dev/null 2>&1; then
@@ -89,12 +89,71 @@ esac
 }
 fi
 if [ -f "$HOME/.config/mix-manager/theme" ]; then IFS= read -r saved_theme < "$HOME/.config/mix-manager/theme" 2>/dev/null || true; saved_theme="${saved_theme//[[:space:]]/}"; fi
-set_theme_colors "${saved_theme:-dreamworlds_ultra}"
+set_theme_colors "${saved_theme:-dreamworlds}"
 if [ ! -t 1 ] || [ -n "${NO_COLOR:-}" ]; then NC=''; BOLD=''; DIM=''; RED=''; GREEN=''; YELLOW=''; BLUE=''; MAGENTA=''; CYAN=''; fi; return 0
 }
 load_conversion_theme
 SOF_RULE_HEAVY="══════════════════════════════════════════════════════════════════════"; SOF_RULE_LIGHT="──────────────────────────────────────────────────────────────────────"
 themed_header() { printf '%b\n  %b\n%b\n' "${BOLD}${BLUE}${SOF_RULE_HEAVY}${NC}" "${BOLD}${2:-$MAGENTA}${1}${NC}" "${BOLD}${BLUE}${SOF_RULE_HEAVY}${NC}"; }
+# ------------------------------------------------------------------------------
+# Shared format registry bridge
+#
+# Every output format (21 of them) lives in scripts/audio_conversion_suite.py.
+# The shell asks it rather than keeping a second copy, so the menu and the
+# encoder can never disagree about what is available.
+# ------------------------------------------------------------------------------
+_sof_suite() {
+local py="$SCRIPT_DIR/scripts/audio_conversion_suite.py"
+[ -f "$py" ] || py="$PARENT_DIR/scripts/audio_conversion_suite.py"
+[ -f "$py" ] || py="$PWD/scripts/audio_conversion_suite.py"
+[ -f "$py" ] || return 1
+python3 "$py" "$@" 2>/dev/null
+}
+sob_format_count() {
+local n; n="$(_sof_suite count)"; n="${n//[[:space:]]/}"
+case "$n" in ''|*[!0-9]*) echo 21 ;; *) echo "$n" ;; esac
+}
+sob_format_choices() { _sof_suite choices; }
+sob_format_map() { _sof_suite format-map; }
+# Plain key list, one per line: used wherever only the target keys matter.
+sob_keys() { sob_format_choices | cut -d'|' -f1; }
+# Folder that a target publishes into, named per the registry key. A multi-format
+# run therefore publishes one folder per format, e.g. ${SOB_KEY^^}_CONVERTED_OUTPUTS.
+sob_folder_for() { printf '%s_CONVERTED_OUTPUTS' "${1^^}"; }
+# The published folder list, spelled once so the loop and the tests agree.
+SOB_FOLDER_SUFFIX="_CONVERTED_OUTPUTS"
+# key -> container extension / cover capability, from the registry.
+sob_format_ext() {
+local key="$1" k e _l _c
+while IFS='|' read -r k e _l _c; do
+[ "$k" = "$key" ] && { printf '%s' "$e"; return 0; }
+done < <(sob_format_map)
+printf '%s' "$key"
+}
+sob_format_supports_cover() {
+local key="$1" k _e _l c
+while IFS='|' read -r k _e _l c; do
+[ "$k" = "$key" ] && { [ "$c" = "1" ] && return 0 || return 1; }
+done < <(sob_format_map)
+return 1
+}
+# One row per output format for the picker: "key|label|note".
+sob_status_line() {
+printf '%b' "  ${BOLD}${CYAN}Audio Output Formats Available: ${BOLD}${GREEN}$(sob_format_count)${NC}  ${DIM}│${NC}  ${DIM}${BLUE}${SOF_RULE_LIGHT}${NC}\n"
+}
+# Show what the last runs produced before a new batch starts, so the operator
+# can see the previous tally rather than only the post-run summary.
+sob_show_previous_stats() {
+local py="$SCRIPT_DIR/scripts/audio_conversion_suite.py"
+[ -f "$py" ] || py="$PARENT_DIR/scripts/audio_conversion_suite.py"
+[ -f "$py" ] || py="$PWD/scripts/audio_conversion_suite.py"
+[ -f "$py" ] || return 0
+local out; out="$(python3 "$py" stats 2>/dev/null)"
+if [ -z "$out" ]; then return 0; fi
+themed_header "📈  PREVIOUS CONVERSION STATISTICS" "$CYAN"
+printf '%s\n' "$out"
+return 0
+}
 select_menu_option() {
 local prompt_title="$1" subtitle="$2"; local -n _items_ref="$3"; local def_index="${4:-0}" _out_var="$5" total="${#_items_ref[@]}"
 if [ "$total" -eq 0 ]; then [ -n "$_out_var" ] && printf -v "$_out_var" "%s" "" || REPLY=""; return 0; fi
@@ -151,74 +210,230 @@ printf '\033[?25h\n' >/dev/tty; local res_k=""; IFS='|' read -r res_k _ _ <<< "$
 [ -n "$_out_var" ] && printf -v "$_out_var" "%s" "$res_k" || REPLY="$res_k"; return 0
 }
 choose_conversion_output() {
-OUTPUT_FORMAT="${SOF_OUTPUT_FORMAT:-}"; case "$OUTPUT_FORMAT" in flac|mp3|wav|mp4|ogg) return 0 ;; esac; OUTPUT_FORMAT=""
+OUTPUT_FORMAT="${SOF_OUTPUT_FORMAT:-}"
+# Accept a single registry key or "any" (every format). Older callers pass
+# flac/mp3/wav/mp4/ogg, which are all registry keys, so they keep working.
+case "$OUTPUT_FORMAT" in
+any|ALL|all) OUTPUT_FORMAT="any"; return 0 ;;
+esac
+local _k
+while IFS='|' read -r _k _ _; do
+if [ "$_k" = "$OUTPUT_FORMAT" ]; then return 0; fi
+done < <(sob_format_choices)
+OUTPUT_FORMAT=""
 if ! has_interactive_tty; then OUTPUT_FORMAT="flac"; return 0; fi
-local format_opts=(
-"flac|FLAC lossless|(Default, 24-bit PCM Archive)"
-"mp3|MP3 320 kbps|(High Quality CBR with Cover & Tags)"
-"wav|WAV 24-bit|(Studio Master PCM)"
-"mp4|MP4 YouTube Video|(1080p, Still Cover Art)"
-"ogg|OGG Vorbis|(320 kbps / Quality 8)"
-"0|Cancel|(Exit conversion)"
-)
+local format_opts=() _key _label _note
+while IFS='|' read -r _key _label _note; do
+[ -z "$_key" ] && continue
+format_opts+=("${_key}|${_label}|(${_note})")
+done < <(sob_format_choices)
+format_opts+=("any|Convert to EVERY Format|(Batch all $(sob_format_count) output formats)")
+format_opts+=("0|Cancel|(Exit conversion)")
+sob_status_line >/dev/tty
 local chosen_fmt=""
 select_menu_option "CHOOSE CONVERSION OUTPUT FORMAT" "The audio files in this folder are ready to convert." format_opts 0 chosen_fmt
 case "$chosen_fmt" in
-flac|1) OUTPUT_FORMAT="flac" ;;
-mp3|2)  OUTPUT_FORMAT="mp3" ;;
-wav|3)  OUTPUT_FORMAT="wav" ;;
-mp4|4)  OUTPUT_FORMAT="mp4" ;;
-ogg|5)  OUTPUT_FORMAT="ogg" ;;
+any|ALL|all) OUTPUT_FORMAT="any" ;;
 0|[qQ]|ESC) echo "Conversion cancelled." >/dev/tty; exit 0 ;;
-*) OUTPUT_FORMAT="flac" ;;
+"") OUTPUT_FORMAT="flac" ;;
+*)
+# select_menu_option returns the key it resolved, including numbered picks.
+local _valid=0
+while IFS='|' read -r _key _ _; do
+[ "$_key" = "$chosen_fmt" ] && { _valid=1; break; }
+done < <(sob_format_choices)
+if [ "$_valid" -eq 1 ]; then OUTPUT_FORMAT="$chosen_fmt"; else OUTPUT_FORMAT="flac"; fi ;;
 esac
 }
 CUSTOM_ARTIST="${SOF_ARTIST:-}"; CUSTOM_TITLE="${SOF_TITLE:-}"; CUSTOM_ALBUM="${SOF_ALBUM:-}"; CUSTOM_YEAR="${SOF_YEAR:-}"; CUSTOM_GENRE="${SOF_GENRE:-}"; CUSTOM_COMMENT="${SOF_COMMENT:-}"; CUSTOM_COVER_IMAGE="${SOF_COVER_IMAGE:-}"
+CUSTOM_BACK_COVER="${SOF_BACK_COVER:-}"; CUSTOM_DISC_IMAGE="${SOF_DISC_IMAGE:-}"; CUSTOM_DISC="${SOF_DISC:-}"; CUSTOM_DISC_TOTAL="${SOF_DISC_TOTAL:-}"
+SOB_SKIP_REMAINING_METADATA="${SOB_SKIP_REMAINING_METADATA:-0}"
+# Saved presets live in the suite's config JSON so the manager can reuse them.
+_sob_preset_list() {
+local json; json="$(_sof_suite presets)"
+if [ -z "$json" ]; then return 0; fi
+python3 -c '
+import json,sys
+try: d=json.loads(sys.argv[1])
+except Exception: sys.exit(0)
+for name in sorted((d.get("presets") or {})):
+    print(name)
+' "$json" 2>/dev/null
+}
+_sob_apply_preset() {
+local name="$1" json kv k v
+json="$(_sof_suite presets)"
+[ -z "$json" ] && return 1
+while IFS='=' read -r k v; do
+[ -z "$k" ] && continue
+case "$k" in
+artist) CUSTOM_ARTIST="$v" ;;
+title) CUSTOM_TITLE="$v" ;;
+album) CUSTOM_ALBUM="$v" ;;
+year|date) CUSTOM_YEAR="$v" ;;
+genre) CUSTOM_GENRE="$v" ;;
+comment) CUSTOM_COMMENT="$v" ;;
+disc) CUSTOM_DISC="$v" ;;
+disctotal) CUSTOM_DISC_TOTAL="$v" ;;
+esac
+done < <(python3 -c '
+import json,sys
+try: d=json.loads(sys.argv[1])
+except Exception: sys.exit(0)
+p=(d.get("presets") or {}).get(sys.argv[2]) or {}
+for k,v in p.items():
+    print(f"{k}={v}")
+' "$json" "$name" 2>/dev/null)
+return 0
+}
+_sob_save_preset_prompt() {
+local name
+read -r -p "Preset name to save these tags as: " name </dev/tty || name=""
+name="$(printf '%s' "$name" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+[ -z "$name" ] && { echo " -> No name given; preset not saved." >/dev/tty; return 0; }
+local py="$SCRIPT_DIR/scripts/audio_conversion_suite.py"
+[ -f "$py" ] || py="$PARENT_DIR/scripts/audio_conversion_suite.py"
+[ -f "$py" ] || py="$PWD/scripts/audio_conversion_suite.py"
+[ -f "$py" ] || return 0
+python3 -c '
+import json,sys
+from pathlib import Path
+sys.path.insert(0, str(Path(sys.argv[1]).resolve().parent))
+import audio_conversion_suite as s
+name=sys.argv[2]
+vals={}
+for pair in sys.argv[3:]:
+    k,_,v=pair.partition("=")
+    if v: vals[k]=v
+s.save_preset(name, vals)
+' "$py" "$name" \
+"artist=${CUSTOM_ARTIST:-}" "title=${CUSTOM_TITLE:-}" "album=${CUSTOM_ALBUM:-}" \
+"year=${CUSTOM_YEAR:-}" "genre=${CUSTOM_GENRE:-}" "comment=${CUSTOM_COMMENT:-}" \
+"disc=${CUSTOM_DISC:-}" "disctotal=${CUSTOM_DISC_TOTAL:-}" 2>/dev/null \
+&& echo " -> Saved preset '$name'." >/dev/tty \
+|| echo " -> Could not save the preset." >/dev/tty
+}
+sob_manage_presets() {
+local py="$SCRIPT_DIR/scripts/audio_conversion_suite.py"
+[ -f "$py" ] || py="$PARENT_DIR/scripts/audio_conversion_suite.py"
+[ -f "$py" ] || py="$PWD/scripts/audio_conversion_suite.py"
+[ -f "$py" ] || { echo " -> Preset store unavailable." >/dev/tty; return 0; }
+local preset_opts=() name
+while IFS= read -r name; do
+[ -n "$name" ] && preset_opts+=("p:${name}|Load preset: ${name}|")
+done < <(_sob_preset_list)
+preset_opts+=("add|Add a Custom Metadata Field|(extra ffmpeg -metadata key)")
+preset_opts+=("del|Delete a Saved Preset|")
+preset_opts+=("0|Back to Tag Settings|")
+local choice=""
+select_menu_option "METADATA PRESETS & CUSTOM FIELDS" "Reuse a saved tag set, or extend the tag list." preset_opts 0 choice
+case "$choice" in
+p:*)
+local ip_name="${choice#p:}"
+if _sob_apply_preset "$ip_name"; then
+echo " -> Loaded preset '$ip_name'." >/dev/tty
+fi ;;
+add)
+local fname
+read -r -p "Custom metadata field name (e.g. conductor, label): " fname </dev/tty || fname=""
+fname="$(printf '%s' "$fname" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+if [ -n "$fname" ]; then
+python3 "$py" add-custom-field "$fname" >/dev/null 2>&1 \
+&& echo " -> Added custom field '$fname'." >/dev/tty \
+|| echo " -> Could not add the field." >/dev/tty
+fi ;;
+del)
+local dname
+read -r -p "Preset name to delete: " dname </dev/tty || dname=""
+if [ -n "$dname" ]; then
+python3 -c '
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(sys.argv[1]).resolve().parent))
+import audio_conversion_suite as s
+print("deleted" if s.delete_preset(sys.argv[2]) else "missing")
+' "$py" "$dname" 2>/dev/null | grep -q deleted \
+&& echo " -> Deleted preset '$dname'." >/dev/tty \
+|| echo " -> No preset named '$dname'." >/dev/tty
+fi ;;
+*) return 0 ;;
+esac
+}
 configure_conversion_metadata_and_cover() {
 if ! has_interactive_tty; then return 0; fi
 local tag_opts=(
 "n|Keep Standard Tags & Default Cover|(Default, automatic detection)"
 "y|Customize Audio Tags & Select Cover Art|(Artist, Title, Album, Year, Cover)"
+"p|Manage Metadata Presets & Custom Fields|(Load, save, add extra fields)"
 )
 local tag_choice="" in_art="" in_tit="" in_alb="" def_year in_yr="" in_gen="" in_com="" discovered_covers=() sp img dc already cov_choice="" custom_path=""
 select_menu_option "AUDIO ID TAGS & COVER ARTWORK SETTINGS" "Would you like to set custom tags or custom cover art?" tag_opts 0 tag_choice
-case "$tag_choice" in [yY]*) ;; *) echo " -> Using standard default tags and cover art." >/dev/tty; return 0 ;; esac
+case "$tag_choice" in
+[pP]*) sob_manage_presets; return 0 ;;
+[yY]*) ;;
+*) echo " -> Using standard default tags and cover art." >/dev/tty; return 0 ;;
+esac
 printf '\n--- Audio Metadata / ID Tags (Press Enter to keep default) ---\n' >/dev/tty; def_year="$(date +%Y)"
-read -r -p "Artist Name [MPlanetarian]: " in_art </dev/tty || in_art=""; CUSTOM_ARTIST="${in_art:-MPlanetarian}"
-read -r -p "Mix / Track Title [Auto-detect from filename]: " in_tit </dev/tty || in_tit=""; CUSTOM_TITLE="$in_tit"
-read -r -p "Album / Series Name [Stream of Frequency]: " in_alb </dev/tty || in_alb=""; CUSTOM_ALBUM="${in_alb:-Stream of Frequency}"
-read -r -p "Release Year [$def_year]: " in_yr </dev/tty || in_yr=""; CUSTOM_YEAR="${in_yr:-$def_year}"
-read -r -p "Genre [Electronic / Trance]: " in_gen </dev/tty || in_gen=""; CUSTOM_GENRE="${in_gen:-Electronic / Trance}"
-read -r -p "Comment / Description [Stream of Frequency Mix Archive]: " in_com </dev/tty || in_com=""; CUSTOM_COMMENT="${in_com:-Stream of Frequency Mix Archive}"
+# Offering the saved presets up front means a repeat run is one keystroke.
+if [ -n "$(_sob_preset_list)" ]; then
+local usep=""
+read -r -p "Load a saved preset first? [name, or Enter to skip]: " usep </dev/tty || usep=""
+if [ -n "$usep" ] && _sob_apply_preset "$usep"; then
+echo " -> Loaded preset '$usep'; press Enter on the prompts to keep its values." >/dev/tty
+fi
+fi
+read -r -p "Artist Name [MPlanetarian]: " in_art </dev/tty || in_art=""; CUSTOM_ARTIST="${in_art:-${CUSTOM_ARTIST:-MPlanetarian}}"
+read -r -p "Mix / Track Title [Auto-detect from filename]: " in_tit </dev/tty || in_tit=""; CUSTOM_TITLE="${in_tit:-${CUSTOM_TITLE:-}}"
+read -r -p "Album / Series Name [Stream of Frequency]: " in_alb </dev/tty || in_alb=""; CUSTOM_ALBUM="${in_alb:-${CUSTOM_ALBUM:-Stream of Frequency}}"
+read -r -p "Release Year [$def_year]: " in_yr </dev/tty || in_yr=""; CUSTOM_YEAR="${in_yr:-${CUSTOM_YEAR:-$def_year}}"
+read -r -p "Genre [Electronic / Trance]: " in_gen </dev/tty || in_gen=""; CUSTOM_GENRE="${in_gen:-${CUSTOM_GENRE:-Electronic / Trance}}"
+read -r -p "Comment / Description [Stream of Frequency Mix Archive]: " in_com </dev/tty || in_com=""; CUSTOM_COMMENT="${in_com:-${CUSTOM_COMMENT:-Stream of Frequency Mix Archive}}"
+# Disc sets: a multi-part mix needs disc/disc-total tags so players group it.
+local in_disc=""
+read -r -p "Disc number for this set [Enter to skip, e.g. 1/3]: " in_disc </dev/tty || in_disc=""
+if [ -n "$in_disc" ]; then
+case "$in_disc" in
+*/*) CUSTOM_DISC="${in_disc%%/*}"; CUSTOM_DISC_TOTAL="${in_disc#*/}" ;;
+*) CUSTOM_DISC="$in_disc" ;;
+esac
+fi
 for sp in "./Cover.png" "./assets/Cover.png" "./COVERS" "$SCRIPT_DIR/COVERS" "${MIX_ARCHIVE_DIR:-}/COVERS" "${MIX_ARCHIVE_DIR:-}/SOF_PODCAST_COVER_ART"; do
 if [ -f "$sp" ]; then already=0; for dc in "${discovered_covers[@]}"; do if [ "$dc" = "$sp" ]; then already=1; break; fi; done; if [ "$already" -eq 0 ]; then discovered_covers+=("$sp"); fi
 elif [ -d "$sp" ]; then shopt -s nullglob nocaseglob; for img in "$sp"/*.png "$sp"/*.jpg "$sp"/*.jpeg; do if [ -f "$img" ]; then already=0; for dc in "${discovered_covers[@]}"; do if [ "$dc" = "$img" ]; then already=1; break; fi; done; if [ "$already" -eq 0 ]; then discovered_covers+=("$img"); fi; fi; done; shopt -u nullglob nocaseglob; fi
 done
-local cover_opts=(
-"1|Default Cover Image|(${COVER_ART:-Cover.png})"
-)
-local c_idx=2
+_sob_pick_artwork() {
+local label="$1" var_name="$2"; local opts=("1|Default Cover Image|(${COVER_ART:-Cover.png})") idx=2 cov c2 cp=""
 for cov in "${discovered_covers[@]}"; do
-if [ "$c_idx" -gt 9 ]; then break; fi
-cover_opts+=("${c_idx}|Existing: ${cov##*/}|(${cov})")
-c_idx=$((c_idx + 1))
+[ "$idx" -gt 9 ] && break
+opts+=("${idx}|Existing: ${cov##*/}|(${cov})"); idx=$((idx + 1))
 done
-cover_opts+=("c|Enter Full Path to Custom Image|(PNG / JPG or drag & drop)")
-select_menu_option "COVER ARTWORK IMAGE SELECTION" "Choose cover artwork image to embed in converted audio:" cover_opts 0 cov_choice
-case "$cov_choice" in
-""|1) echo " -> Selected default cover image." >/dev/tty ;;
-[cC]|[cC][uU][sS][tT][oO][mM])
-read -r -p "Enter full path to cover image (or drag & drop): " custom_path </dev/tty || custom_path=""
-custom_path="${custom_path#[\"\']}"; custom_path="${custom_path%[\"\']}"; custom_path="$(eval echo "$custom_path")"
-if [ -n "$custom_path" ] && [ -f "$custom_path" ]; then CUSTOM_COVER_IMAGE="$custom_path"; echo " -> Custom cover art verified: $CUSTOM_COVER_IMAGE" >/dev/tty
-else echo " -> Warning: File '$custom_path' not found. Using default cover." >/dev/tty; fi ;;
+opts+=("c|Enter Full Path to Custom Image|(PNG / JPG or drag & drop)")
+opts+=("n|None|(skip this artwork)")
+local sel=""
+select_menu_option "$label" "Choose the artwork image to embed:" opts 0 sel
+case "$sel" in
+""|1) printf -v "$var_name" '%s' "" ;;
+[cC])
+read -r -p "Enter full path to image (or drag & drop): " cp </dev/tty || cp=""
+cp="${cp#[\"\']}"; cp="${cp%[\"\']}"; cp="$(eval echo "$cp" 2>/dev/null)"
+if [ -n "$cp" ] && [ -f "$cp" ]; then printf -v "$var_name" '%s' "$cp"; echo " -> Verified: $cp" >/dev/tty
+else echo " -> Warning: '$cp' not found; skipping." >/dev/tty; printf -v "$var_name" '%s' ""; fi ;;
+[nN]) printf -v "$var_name" '%s' "" ;;
 [2-9])
-local target_idx=$((cov_choice - 2))
-if [ "$target_idx" -lt "${#discovered_covers[@]}" ]; then CUSTOM_COVER_IMAGE="${discovered_covers[$target_idx]}"; echo " -> Selected existing cover: $CUSTOM_COVER_IMAGE" >/dev/tty
-else echo " -> Invalid selection. Using default cover." >/dev/tty; fi ;;
-*) echo " -> Invalid selection. Using default cover." >/dev/tty ;;
+local ti=$((sel - 2))
+if [ "$ti" -lt "${#discovered_covers[@]}" ]; then printf -v "$var_name" '%s' "${discovered_covers[$ti]}"; echo " -> Selected: ${discovered_covers[$ti]}" >/dev/tty
+else echo " -> Invalid selection; skipping." >/dev/tty; printf -v "$var_name" '%s' ""; fi ;;
+*) printf -v "$var_name" '%s' "" ;;
 esac
-printf '\n%s\n' "$S50" "Configured Tag Summary:" "  Artist:  ${CUSTOM_ARTIST:-MPlanetarian}" "  Title:   ${CUSTOM_TITLE:-[Auto-detect from filename]}" "  Album:   ${CUSTOM_ALBUM:-Stream of Frequency}" "  Year:    ${CUSTOM_YEAR:-$def_year}" "  Genre:   ${CUSTOM_GENRE:-Electronic / Trance}" "  Cover:   ${CUSTOM_COVER_IMAGE:-Default ($COVER_ART)}" "$S50" "" >/dev/tty
+}
+_sob_pick_artwork "FRONT Cover Artwork Selection" CUSTOM_COVER_IMAGE
+_sob_pick_artwork "BACK Cover Artwork Selection" CUSTOM_BACK_COVER
+_sob_pick_artwork "DISC Image Selection" CUSTOM_DISC_IMAGE
+printf '\n%s\n' "$S50" "Configured Tag Summary:" "  Artist:  ${CUSTOM_ARTIST:-MPlanetarian}" "  Title:   ${CUSTOM_TITLE:-[Auto-detect from filename]}" "  Album:   ${CUSTOM_ALBUM:-Stream of Frequency}" "  Year:    ${CUSTOM_YEAR:-$def_year}" "  Genre:   ${CUSTOM_GENRE:-Electronic / Trance}" "  Disc:    ${CUSTOM_DISC:-[none]}${CUSTOM_DISC_TOTAL:+/$CUSTOM_DISC_TOTAL}" "  Cover:   ${CUSTOM_COVER_IMAGE:-Default ($COVER_ART)}" "  Back Cover: ${CUSTOM_BACK_COVER:-[none]}" "  Disc Image: ${CUSTOM_DISC_IMAGE:-[none]}" "$S50" "" >/dev/tty
+local savep=""
+read -r -p "Save these tags as a preset for next time? [y/N]: " savep </dev/tty || savep=""
+[[ "$savep" =~ ^[yY] ]] && _sob_save_preset_prompt
+return 0
 }
 
 get_session_base_name() {
@@ -441,6 +656,108 @@ python3 -c 'import json,sys; ts,fmt,fn,fp,sz,ssz,dur,out=sys.argv[1:9]; d={"time
 printf "[%s] [COMPLETED] [%-4s] %10s | %s\n" "$ts_human" "${fmt^^}" "$(fmt_bytes "$size")" "$fname" >> "$txt" 2>/dev/null || true
 }
 show_conversion_forecast() { themed_header "📊  CONVERSION FORECAST (PREDICTIVE ANALYTICS)" "$CYAN"; printf '%b\n' "  ${BOLD}${CYAN}Source files:${NC}     ${1} file(s), $(fmt_bytes "$2")" "  ${BOLD}${CYAN}Mix duration:${NC}     $(fmt_hms "$3")   ${DIM}(${4:-?} Hz / ${5:-?} ch)${NC}" "  ${BOLD}${CYAN}Output format:${NC}    ${OUTPUT_LABEL}" "  ${BOLD}${CYAN}Output file:${NC}      ${output_path}" "  ${BOLD}${CYAN}Predicted size:${NC}   ${BOLD}${GREEN}~$(fmt_bytes "$6")${NC}  ${DIM}(refined live while converting)${NC}" "${BOLD}${BLUE}${SOF_RULE_HEAVY}${NC}"; }
+# ------------------------------------------------------------------------------
+# Staged output
+#
+# A run writes into SOB_STAGE_ROOT and only publishes into the real
+# *_CONVERTED_OUTPUTS folder once every requested format finished. A cancelled
+# or failed batch therefore leaves no half-made folder behind, which is what
+# made an incomplete archive look converted.
+# ------------------------------------------------------------------------------
+sob_stage_begin() {
+SOB_STAGE_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/sof_stage_XXXXXX" 2>/dev/null || mktemp -d /tmp/sof_stage_XXXXXX)"
+SOB_STAGE_ROOT="${SOB_STAGE_ROOT%$'\r'}"
+SOB_STAGE_DIR="$SOB_STAGE_ROOT/out"
+SOB_STAGE_SPEK="$SOB_STAGE_ROOT/spek"
+mkdir -p "$SOB_STAGE_DIR" "$SOB_STAGE_SPEK" 2>/dev/null || true
+export SOB_STAGE_ROOT SOB_STAGE_DIR SOB_STAGE_SPEK
+}
+sob_stage_cleanup() {
+[ -n "${SOB_STAGE_ROOT:-}" ] && rm -rf "$SOB_STAGE_ROOT" 2>/dev/null
+return 0
+}
+# ------------------------------------------------------------------------------
+# Per-format encode
+#
+# The ffmpeg argv comes from the registry, so adding a format there is enough --
+# the shell never grows another encoder case. Formats that cannot carry artwork
+# get a warning instead of a failed encode.
+# ------------------------------------------------------------------------------
+sob_meta_json() {
+python3 -c '
+import json,sys
+pairs={}
+for pair in sys.argv[1:]:
+    k,_,v=pair.partition("=")
+    if v: pairs[k]=v
+print(json.dumps(pairs))
+' "$@" 2>/dev/null || echo '{}'
+}
+# Percentage of the previous audit kept for stats only; kept tiny on purpose.
+sob_encode_one() {
+local key="$1" src="$2" dest="$3" cover="$4" back="$5" discimg="$6"
+local title="$7" dur="$8" pred="$9"
+local ext; ext="$(sob_format_ext "$key")"
+local -a argv=()
+local meta_json; meta_json="$(sob_meta_json \
+"artist=${eff_artist:-}" "album=${eff_album:-}" "title=${eff_title:-}" \
+"date=${eff_year:-}" "genre=${eff_genre:-}" "comment=${eff_comment:-}" \
+"disc=${CUSTOM_DISC:-}" "disctotal=${CUSTOM_DISC_TOTAL:-}")"
+local py="$SCRIPT_DIR/scripts/audio_conversion_suite.py"
+[ -f "$py" ] || py="$PARENT_DIR/scripts/audio_conversion_suite.py"
+[ -f "$py" ] || py="$PWD/scripts/audio_conversion_suite.py"
+[ -f "$py" ] || { echo "ERROR: audio_conversion_suite.py not found."; return 1; }
+# Records are NUL separated because titles and paths contain spaces.
+while IFS= read -r -d '' part; do argv+=("$part"); done < <(
+python3 "$py" command "$src" "$key" "$dest" --metadata "$meta_json" \
+--front-cover "${cover:-}" --back-cover "${back:-}" --disc-image "${discimg:-}" --argv 2>/dev/null)
+if [ ${#argv[@]} -eq 0 ]; then echo "ERROR: Could not build the ${key^^} command."; return 1; fi
+local label; label="${SOB_FMT_LABEL[$key]:-${key^^}}"
+echo " -> Encoding ${SOB_KEY^^} (${ext}) with cover art and tags..."
+if run_ffmpeg_with_progress "Encoding ${SOB_KEY^^}" "$dur" "$pred" "${argv[@]:1}"; then return 0; fi
+return 1
+}
+# A format without cover support must say so rather than fail the encode.
+sob_cover_warning() {
+local key="$1" cover="$2" back="$3" discimg="$4"
+if [ -z "$cover$back$discimg" ]; then return 0; fi
+if ! sob_format_supports_cover "$key"; then
+printf ' -> Note: %s cannot store embedded artwork; the images apply to the other formats in this batch.\n' "${SOB_FMT_LABEL[$key]:-${key^^}}"
+fi
+return 0
+}
+# Batch escape hatch: once the operator is tired of answering per-file prompts,
+# one answer covers the rest of the run.
+sob_skip_remaining() {
+if [ "${SOB_SKIP_REMAINING_METADATA:-0}" = "1" ]; then return 0; fi
+return 1
+}
+# Publish the staged tree. Only called after the batch reported success, and the
+# mkdir that creates a published folder sits behind that check on purpose.
+sob_promote_staged_output() {
+[ -n "${SOB_STAGE_DIR:-}" ] || return 0
+if [ "${all_groups_successful:-false}" != "true" ]; then
+echo " -> Batch did not finish cleanly; staged output discarded (no new *_CONVERTED_OUTPUTS folder published)."
+return 0
+fi
+local item name final dest_root
+shopt -s nullglob
+for item in "$SOB_STAGE_DIR"/*; do
+[ -d "$item" ] || continue
+name="${item##*/}"
+dest_root="${SOB_PROMOTE_ROOTS[$name]:-}"
+[ -z "$dest_root" ] && continue
+final="$dest_root/$name"
+mkdir -p "$final"
+# Move the files, not the folder, so an existing folder is merged rather than
+# replaced.
+while IFS= read -r -d '' f; do
+mv -f "$f" "$final/" 2>/dev/null || true
+done < <(find "$item" -maxdepth 1 -type f -print0 2>/dev/null)
+done
+shopt -u nullglob
+return 0
+}
 archive_snapshot() {
 local dir="$1" ext="$2" snap=""; if [ ! -d "$dir" ]; then echo "0 0"; return 0; fi
 snap=$(python3 -c 'import os,sys;d,e=sys.argv[1],"."+sys.argv[2].lower();c=b=0
@@ -459,7 +776,7 @@ added_count=$(( ${after_count:-0} - ${ARCHIVE_BEFORE_COUNT:-0} )); added_bytes=$
 growth=$(awk -v a="$added_bytes" -v b="${ARCHIVE_BEFORE_BYTES:-0}" 'BEGIN { if (b > 0) printf "+%.2f%%", a / b * 100; else print "new archive" }')
 free_bytes=$(df -Pk "$OUTPUT_DIR" 2>/dev/null | awk 'NR == 2 { printf "%d", $4 * 1024 }' || echo 0)
 echo ""; themed_header "📀  MIX ARCHIVE STATS - ACCUMULATION AFTER THIS CONVERSION" "$MAGENTA"
-printf '%b\n' "  ${BOLD}${CYAN}Archive folder:${NC}   $(get_abs_path "$OUTPUT_DIR" 2>/dev/null || echo "$OUTPUT_DIR")" "  ${BOLD}${CYAN}Format:${NC}           ${OUTPUT_LABEL} (*.${OUTPUT_EXT})" "${DIM}${BLUE}${SOF_RULE_LIGHT}${NC}" "  ${BOLD}${CYAN}Mixes before:${NC}     $(printf '%-8s' "${ARCHIVE_BEFORE_COUNT:-0}") ${BOLD}${CYAN}Size before:${NC} $(fmt_bytes "${ARCHIVE_BEFORE_BYTES:-0}")" "  ${BOLD}${GREEN}Newly added:${NC}      ${BOLD}${GREEN}$(printf '%-8s' "+${added_count}")${NC} ${BOLD}${GREEN}Size added:${NC}  ${BOLD}${GREEN}+$(fmt_bytes "$added_bytes")${NC}" "  ${BOLD}${YELLOW}Mixes now:${NC}        ${BOLD}${YELLOW}$(printf '%-8s' "${after_count:-0}")${NC} ${BOLD}${YELLOW}Size now:${NC}    ${BOLD}${YELLOW}$(fmt_bytes "${after_bytes:-0}")${NC}" "  ${BOLD}${CYAN}Archive growth:${NC}   ${growth} by size"
+printf '%b\n' "  ${BOLD}${CYAN}Archive folder:${NC}   $(get_abs_path "$OUTPUT_DIR" 2>/dev/null || echo "$OUTPUT_DIR")" "  ${BOLD}${CYAN}Format:${NC}           ${OUTPUT_LABEL} (*.${OUTPUT_EXT})" "${DIM}${BLUE}${SOF_RULE_LIGHT}${NC}" "  ${BOLD}${CYAN}Mixes before:${NC}     $(printf '%-8s' "${ARCHIVE_BEFORE_COUNT:-0}") ${BOLD}${CYAN}Size before:${NC} $(fmt_bytes "${ARCHIVE_BEFORE_BYTES:-0}")" "  ${BOLD}${GREEN}Newly added:${NC}      ${BOLD}${GREEN}$(printf '%-8s' "+${added_count}")${NC} ${BOLD}${GREEN}Size added:${NC}  ${BOLD}${GREEN}+$(fmt_bytes "$added_bytes")${NC}" "  ${BOLD}${YELLOW}Mixes now:${NC}        ${BOLD}${YELLOW}$(printf '%-8s' "${after_count:-0}")${NC} ${BOLD}${YELLOW}Size now:${NC}    ${BOLD}${YELLOW}$(fmt_bytes "$after_bytes")${NC}" "  ${BOLD}${CYAN}Archive growth:${NC}   ${growth} by size"
 if [ "${free_bytes:-0}" -gt 0 ] 2>/dev/null; then printf '%b\n' "  ${BOLD}${CYAN}Free space left:${NC}  $(fmt_bytes "$free_bytes") on the archive drive"; fi
 printf '%b\n' "${DIM}${BLUE}${SOF_RULE_LIGHT}${NC}" "  ${BOLD}${MAGENTA}Added in this batch:${NC}"
 for f in "${newly_exported_flacs[@]}"; do if [ -f "$f" ]; then sz=$(file_size_bytes "$f"); dur=$(probe_duration_seconds "$f"); printf '%b\n' "   ${BOLD}${GREEN}✓${NC} ${f##*/}  ${DIM}│${NC} ${BOLD}$(fmt_bytes "$sz")${NC} ${DIM}│${NC} $(fmt_hms "$dur")"; fi; done
@@ -538,16 +855,37 @@ esac; return 0
 run_sof_conversion() {
 choose_conversion_output
 configure_conversion_metadata_and_cover
-case "$OUTPUT_FORMAT" in
-mp3) OUTPUT_EXT="mp3"; OUTPUT_LABEL="MP3"; OUTPUT_DIR="${MP3_OUTPUT_DIR:-MP3_CONVERTED_OUTPUTS}" ;;
-wav) OUTPUT_EXT="wav"; OUTPUT_LABEL="WAV"; OUTPUT_DIR="${WAV_OUTPUT_DIR:-WAV_CONVERTED_OUTPUTS}" ;;
-mp4) OUTPUT_EXT="mp4"; OUTPUT_LABEL="MP4"; OUTPUT_DIR="${MP4_OUTPUT_DIR:-MP4_CONVERTED_OUTPUTS}" ;;
-ogg) OUTPUT_EXT="ogg"; OUTPUT_LABEL="OGG"; OUTPUT_DIR="${OGG_OUTPUT_DIR:-OGG_CONVERTED_OUTPUTS}" ;;
-*)   OUTPUT_FORMAT="flac"; OUTPUT_EXT="flac"; OUTPUT_LABEL="FLAC" ;;
-esac
-if [ "$OUTPUT_FORMAT" != "flac" ] && [ -n "${MIX_ARCHIVE_DIR:-}" ] && [ -d "$MIX_ARCHIVE_DIR" ] && [[ "$OUTPUT_DIR" != /* ]]; then OUTPUT_DIR="$MIX_ARCHIVE_DIR/${OUTPUT_DIR#./}"; fi
-START_TIME=$(date '+%Y-%m-%d %H:%M:%S'); START_SECONDS=${EPOCHSECONDS:-$(date +%s)}; _CUR_YEAR="${START_TIME%%-*}"; mkdir -p "$OUTPUT_DIR" "$ARCHIVE_DIR" "$SPEK_DIR"; : > "$LOG_FILE"; exec > >(tee -a "$LOG_FILE") 2>&1
-printf '%s\n%s conversion started at: %s\n%s\n' "$S50" "$OUTPUT_LABEL" "$START_TIME" "$S50"
+# Resolve the requested output into a list of registry keys. "any" means every
+# format the registry advertises, which is what the batch-all mode selects.
+declare -a TARGET_KEYS=()
+SOB_BATCH_ALL=0
+if [ "$OUTPUT_FORMAT" = "any" ]; then
+SOB_BATCH_ALL=1
+while IFS='|' read -r _tk _tl _tn; do
+[ -n "$_tk" ] && TARGET_KEYS+=("$_tk")
+done < <(sob_format_choices)
+else
+TARGET_KEYS=("$OUTPUT_FORMAT")
+fi
+if [ ${#TARGET_KEYS[@]} -eq 0 ]; then echo "ERROR: No output formats resolved."; exit 1; fi
+# Per-target output folder name, extension and label, all from the registry.
+declare -A SOB_FMT_EXT=() SOB_FMT_FOLDER=() SOB_FMT_LABEL=()
+declare -A SOB_PROMOTE_ROOTS=()
+for _tk in "${TARGET_KEYS[@]}"; do
+SOB_FMT_EXT["$_tk"]="$(sob_format_ext "$_tk")"
+SOB_FMT_FOLDER["$_tk"]="$(sob_folder_for "$_tk")"
+SOB_FMT_LABEL["$_tk"]="${_tk^^}"
+done
+OUTPUT_FORMAT="${TARGET_KEYS[0]}"; OUTPUT_EXT="${SOB_FMT_EXT[${TARGET_KEYS[0]}]}"; OUTPUT_LABEL="${SOB_FMT_LABEL[${TARGET_KEYS[0]}]}"
+START_TIME=$(date '+%Y-%m-%d %H:%M:%S'); START_SECONDS=${EPOCHSECONDS:-$(date +%s)}; _CUR_YEAR="${START_TIME%%-*}"
+# Only the archive and the spectrogram folder are needed up front. The
+# *_CONVERTED_OUTPUTS trees are created by sob_promote_staged_output after the
+# batch succeeds, so a failed run cannot leave an empty marker folder behind.
+mkdir -p "$ARCHIVE_DIR" "$SPEK_DIR"; sob_stage_begin; : > "$LOG_FILE"; exec > >(tee -a "$LOG_FILE") 2>&1
+if [ "$SOB_BATCH_ALL" -eq 1 ]; then printf '%s\n%s conversion started at: %s (%d formats)\n%s\n' "$S50" "BATCH-ALL" "$START_TIME" "${#TARGET_KEYS[@]}" "$S50"
+else printf '%s\n%s conversion started at: %s\n%s\n' "$S50" "$OUTPUT_LABEL" "$START_TIME" "$S50"; fi
+sob_status_line
+sob_show_previous_stats
 if [ -d "$LOCAL_HISTORY_DIR" ]; then echo " -> Traktor History directory located successfully at: $LOCAL_HISTORY_DIR"
 elif [ -n "${TRAKTOR_HISTORY_DIR:-}" ]; then LOCAL_HISTORY_DIR="$TRAKTOR_HISTORY_DIR"; echo " -> WARNING: Traktor History directory was missing. It will be created if the share can be reached."
 else echo " -> WARNING: Traktor History directory not found at specified path!"; fi
@@ -564,7 +902,7 @@ for arg in "$@"; do clean_arg="${arg//[$'\r\n']/}"; if [ -f "$clean_arg" ]; then
 echo "Multi-file/Explicit target mode enabled. Total targets: ${#TARGET_FILES[@]}"
 fi
 GROUP_TMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/sof_groups_XXXXXX" 2>/dev/null || mktemp -d /tmp/sof_groups_XXXXXX)
-trap 'rm -rf "$GROUP_TMP_DIR" "${OPTIMIZED_COVER:-}" 2>/dev/null || true' EXIT; declare -a group_keys=()
+trap 'rm -rf "$GROUP_TMP_DIR" "${OPTIMIZED_COVER:-}" 2>/dev/null; sob_stage_cleanup' EXIT; declare -a group_keys=()
 if [ ${#TARGET_FILES[@]} -gt 0 ]; then search_list=("${TARGET_FILES[@]}")
 else
 search_list=(); shopt -s nullglob nocaseglob
@@ -574,10 +912,15 @@ fi
 total_size_bytes=0
 for file in "${search_list[@]}"; do
 if [ ! -e "$file" ]; then continue; fi; abs_file=$(get_abs_path "$file"); if [ ! -f "$abs_file" ]; then continue; fi
+size=$(file_size_bytes "$abs_file")
+if [ "${size:-0}" -eq 0 ]; then
+echo " -> WARNING: Skipping zero-byte WAV file: ${abs_file##*/}"
+continue
+fi
 file_hash=$(get_str_hash "$abs_file"); if [ -f "$GROUP_TMP_DIR/seen_${file_hash}" ]; then continue; fi; : > "$GROUP_TMP_DIR/seen_${file_hash}"
 base_name=$(get_session_base_name "$file"); base_name="${base_name##*/}"; base_hash=$(get_str_hash "$base_name")
 if [ ! -f "$GROUP_TMP_DIR/group_${base_hash}.base" ]; then printf '%s\n' "$base_name" > "$GROUP_TMP_DIR/group_${base_hash}.base"; group_keys+=("$base_hash"); fi
-printf '%s\n' "$abs_file" >> "$GROUP_TMP_DIR/group_${base_hash}.wavs"; size=$(file_size_bytes "$abs_file"); total_size_bytes=$((total_size_bytes + ${size:-0}))
+printf '%s\n' "$abs_file" >> "$GROUP_TMP_DIR/group_${base_hash}.wavs"; total_size_bytes=$((total_size_bytes + ${size:-0}))
 done
 total_groups=${#group_keys[@]}; if [ "$total_groups" -eq 0 ]; then echo "Error: No matching .wav files found to process."; exit 1; fi
 echo "Found $total_groups unique audio session group(s) to process."
@@ -612,20 +955,41 @@ for p in sorted([l.strip().replace("\r", "") for l in sys.stdin if l.strip()], k
 fi
 first_wav="${current_wavs[0]%$'\r'}"; group_wav_dir="${first_wav%/*}"; group_wav_real="$(cd "$group_wav_dir" 2>/dev/null && pwd -P || echo "$group_wav_dir")"; target_archive_dir=""
 for arch_d in "${all_mix_archive_roots[@]}"; do arch_real="$(cd "$arch_d" 2>/dev/null && pwd -P || echo "$arch_d")"; if [ "$group_wav_real" = "$arch_real" ] || [[ "$group_wav_real" == "$arch_real"/* ]]; then target_archive_dir="$arch_d"; break; fi; done
-if [ -n "$target_archive_dir" ] && [ -d "$target_archive_dir" ]; then group_out_dir="$target_archive_dir/${OUTPUT_LABEL}_CONVERTED_OUTPUTS"; group_arch_dir="$target_archive_dir/CONVERTED_WAV_FILES"; group_spek_dir="$target_archive_dir/SPEK_OUTPUTS"
-else group_out_dir="$OUTPUT_DIR"; group_arch_dir="$ARCHIVE_DIR"; group_spek_dir="$SPEK_DIR"; fi
-mkdir -p "$group_out_dir" "$group_arch_dir" "$group_spek_dir"
+if [ -n "$target_archive_dir" ] && [ -d "$target_archive_dir" ]; then group_arch_dir="$target_archive_dir/CONVERTED_WAV_FILES"; group_spek_dir="$target_archive_dir/SPEK_OUTPUTS"
+else group_arch_dir="$ARCHIVE_DIR"; group_spek_dir="$SPEK_DIR"; fi
+mkdir -p "$group_arch_dir" "$group_spek_dir"
 clean_base="$base"; while [[ "$clean_base" == *__* ]]; do clean_base="${clean_base//__/_}"; done
 if [[ "$clean_base" != *"MPlanetarian"* ]]; then normalized_name="MPlanetarian - Stream of Frequency - ${clean_base}"; else normalized_name="$clean_base"; fi
+# Every run stages into group_out_dir; the archive folder is only written by
+# sob_promote_staged_output once the whole batch has succeeded.
+group_out_dir="$SOB_STAGE_DIR"
 output_filename="${normalized_name}.${OUTPUT_EXT}"; output_path="${group_out_dir}/${output_filename}"; tracklist_filename="${normalized_name}.txt"; tracklist_path="${group_out_dir}/${tracklist_filename}"
-if [ "$OUTPUT_FORMAT" != "flac" ] && [ -s "$output_path" ]; then echo "Processing Group [$counter/$total_groups]: Session ID '$base'"; echo " -> Output ${OUTPUT_LABEL} file already exists ($output_path). Leaving the source WAV in place."; counter=$((counter + 1)); echo "$D50"; continue; fi
-existing_flac=""
-if [ "$OUTPUT_FORMAT" = "flac" ]; then for fdir in "${flac_check_dirs[@]}"; do if [ -f "$fdir/$output_filename" ] && [ -s "$fdir/$output_filename" ]; then existing_flac="$fdir/$output_filename"; break; fi; done; fi
-if [ -n "$existing_flac" ]; then
-echo "Processing Group [$counter/$total_groups]: Session ID '$base'"; echo " -> Output FLAC file already exists in archive ($existing_flac). Skipping conversion."
-for w in "${current_wavs[@]}"; do if [ -f "$w" ]; then mv "$w" "$group_arch_dir/"; fi; successfully_processed_wavs+=("$w"); done; counter=$((counter + 1)); echo "$D50"; continue
+# "Already converted" is decided against the published archives, because the
+# stage starts empty on every run. A group is skipped only when every requested
+# format is already there. It takes its context as arguments so it can live at
+# top level, beside the other helpers.
+sob_group_already_done() {
+local name="$1" archive_dir="$2"; shift 2
+local -a keys=("$@")
+local _t _dn _fdir
+for _t in "${keys[@]}"; do
+_dn="${archive_dir}/${SOB_FMT_FOLDER[$_t]}"
+if [ "$_t" = "flac" ]; then
+for _fdir in "${flac_check_dirs[@]}"; do
+[ -s "$_fdir/${name}.${SOB_FMT_EXT[$_t]}" ] && continue 2
+done
 fi
-spek_image="${group_spek_dir}/${normalized_name}_spectrogram.png"; readable_title="${base//_/ }"
+[ -s "$_dn/${name}.${SOB_FMT_EXT[$_t]}" ] || return 1
+done
+return 0
+}
+if sob_group_already_done "$normalized_name" "${target_archive_dir:-$PWD}" "${TARGET_KEYS[@]}"; then
+echo "Processing Group [$counter/$total_groups]: Session ID '$base'"
+echo " -> Every requested output already exists in the archive. Leaving the source files in place."
+for w in "${current_wavs[@]}"; do if [ -f "$w" ]; then mv "$w" "$group_arch_dir/"; fi; successfully_processed_wavs+=("$w"); done
+counter=$((counter + 1)); echo "$D50"; continue
+fi
+spek_image="${SOB_STAGE_DIR}/${normalized_name}_spectrogram.png"; readable_title="${base//_/ }"
 echo "Processing Group [$counter/$total_groups]: Session ID '$base'"; echo " -> Standardized Output Name: '$normalized_name'"
 ref_name="$base"; if [ ${#current_wavs[@]} -gt 0 ]; then ref_name="${current_wavs[0]##*/}"; fi
 session_year=""; session_month=""; session_day=""; session_hour=""; session_min=""
@@ -659,12 +1023,27 @@ eff_artist="${CUSTOM_ARTIST:-MPlanetarian}"; eff_artist="${eff_artist%$'\r'}"; e
 read -r audio_duration conv_duration conv_sr conv_ch < <(ffprobe -v error -select_streams a:0 -show_entries stream=sample_rate,channels -show_entries format=duration -of default=noprint_wrappers=1 "$session_audio" 2>/dev/null | awk -F= '/^sample_rate=/{sr=$2}/^channels=/{ch=$2}/^duration=/{d=$2}END{gsub(/\r/,"",sr);gsub(/\r/,"",ch);gsub(/\r/,"",d);if(sr+0<=0)sr=44100;if(ch+0<=0)ch=2;cd=(d+0>0)?int(d+0.5):0;print(d!=""?d:"0"),cd,sr,ch}' || echo "0 0 44100 2")
 conv_source_bytes=$(file_size_bytes "$session_audio"); conv_pred_bytes=$(predict_output_bytes "$OUTPUT_FORMAT" "$conv_duration" "$conv_sr" "$conv_ch" "$conv_source_bytes")
 show_conversion_forecast "${#current_wavs[@]}" "$conv_source_bytes" "$conv_duration" "$conv_sr" "$conv_ch" "$conv_pred_bytes"
-meta_args=(-metadata artist="$eff_artist" -metadata album="$eff_album" -metadata title="$eff_title" -metadata date="$eff_year" -metadata genre="$eff_genre" -metadata comment="$eff_comment")
 conversion_status=1
-case "$OUTPUT_FORMAT" in
-mp3) echo " -> Converting to MP3 320 kbps with cover art and tags..."; if run_ffmpeg_with_progress "Encoding MP3 320k ($readable_title)" "$conv_duration" "$conv_pred_bytes" -y -i "$session_audio" -i "$OPTIMIZED_COVER" -map 0:a -map 1:v -c:v mjpeg -id3v2_version 3 -metadata:s:v title="Album cover" -metadata:s:v comment="Cover (front)" -c:a libmp3lame -b:a 320k "${meta_args[@]}" "$output_path"; then conversion_status=0; fi ;;
-wav) echo " -> Converting to 24-bit WAV with tags..."; if run_ffmpeg_with_progress "Mastering 24-bit WAV ($readable_title)" "$conv_duration" "$conv_pred_bytes" -y -i "$session_audio" -c:a pcm_s24le "${meta_args[@]}" "$output_path"; then conversion_status=0; fi ;;
-mp4)
+# One pass per requested format. Each target stages into its own folder so a
+# multi-format batch publishes one published folder per format.
+declare -a group_produced=()
+for SOB_KEY in "${TARGET_KEYS[@]}"; do
+OUTPUT_FORMAT="$SOB_KEY"; OUTPUT_EXT="${SOB_FMT_EXT[$SOB_KEY]}"; OUTPUT_LABEL="${SOB_FMT_LABEL[$SOB_KEY]}"
+group_out_dir="${SOB_STAGE_DIR}/${SOB_FMT_FOLDER[$SOB_KEY]}"
+mkdir -p "$group_out_dir"
+output_filename="${normalized_name}.${OUTPUT_EXT}"; output_path="${group_out_dir}/${output_filename}"
+# The published location is what an existing-file check has to look at, since
+# the stage is always empty at the start of a run.
+case "${SOB_FMT_FOLDER[$SOB_KEY]}" in
+FLAC_CONVERTED_OUTPUTS) final_dir="${target_archive_dir:-$OUTPUT_DIR}"; final_dir="${final_dir:-$PWD}/FLAC_CONVERTED_OUTPUTS" ;;
+*) final_dir="${target_archive_dir:-$PWD}/${SOB_FMT_FOLDER[$SOB_KEY]}" ;;
+esac
+SOB_PROMOTE_ROOTS["${SOB_FMT_FOLDER[$SOB_KEY]}"]="${final_dir%/*}"
+if [ -s "$final_dir/$output_filename" ]; then
+echo " -> ${OUTPUT_LABEL} already exists in the archive ($final_dir/$output_filename). Skipping this format."
+continue
+fi
+if [ "$SOB_KEY" = "mp4" ]; then
 if [ "${MP4_ENCODER_READY:-0}" != "1" ]; then
 MP4_VCODEC="libx264"; MP4_VENC_ARGS="-preset medium -crf 20"
 if ffmpeg -f lavfi -i color=c=black:s=64x64 -frames:v 1 -c:v h264_nvenc -f null - >/dev/null 2>&1; then MP4_VCODEC="h264_nvenc"; MP4_VENC_ARGS="-preset p4 -cq 21 -g 60"; fi
@@ -672,16 +1051,34 @@ MP4_ACODEC="aac"; if ffmpeg -encoders 2>/dev/null | grep -q "libfdk_aac"; then M
 fi
 total_sec=$(printf "%.0f" "${audio_duration:-0}"); fade_filter=""; if [ "$total_sec" -ge 12 ]; then fade_filter=",fade=t=in:st=0:d=5:color=black,fade=t=out:st=$((total_sec - 5)):d=5:color=black"; fi
 echo " -> Rendering 1080p YouTube MP4 from the cover art..."
-if run_ffmpeg_with_progress "Rendering 1080p YouTube MP4 ($readable_title)" "${total_sec:-$conv_duration}" "$conv_pred_bytes" -y -loop 1 -framerate 30 -t "$audio_duration" -i "$selected_cover" -i "$session_audio" -vf "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2:black${fade_filter},format=yuv420p" -c:v "$MP4_VCODEC" $MP4_VENC_ARGS -c:a "$MP4_ACODEC" -b:a 320k -movflags +faststart "${meta_args[@]}" "$output_path"; then conversion_status=0; fi ;;
-ogg) echo " -> Converting to Ogg Vorbis (320 kbps / quality 8) with tags..."; if run_ffmpeg_with_progress "Encoding Ogg Vorbis Q8 ($readable_title)" "$conv_duration" "$conv_pred_bytes" -y -i "$session_audio" -c:a libvorbis -q:a 8 "${meta_args[@]}" "$output_path"; then conversion_status=0; fi ;;
-*) echo " -> Converting to FLAC with cover art and tags..."; if run_ffmpeg_with_progress "Encoding 24-bit FLAC Level 12 ($readable_title)" "$conv_duration" "$conv_pred_bytes" -y -i "$session_audio" -i "$OPTIMIZED_COVER" -c:a flac -sample_fmt s32 -compression_level 12 -map 0:a -map 1:v "${meta_args[@]}" -disposition:v:0 attached_pic "$output_path"; then conversion_status=0; fi ;;
-esac
+if run_ffmpeg_with_progress "Rendering 1080p YouTube MP4 ($readable_title)" "${total_sec:-$conv_duration}" "$conv_pred_bytes" -y -loop 1 -framerate 30 -t "$audio_duration" -i "$selected_cover" -i "$session_audio" -vf "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2:black${fade_filter},format=yuv420p" -c:v "$MP4_VCODEC" $MP4_VENC_ARGS -c:a "$MP4_ACODEC" -b:a 320k -movflags +faststart "${meta_args[@]}" "$output_path"; then
+group_produced+=("$output_path")
+else
+conversion_status=1; all_groups_successful=false
+fi
+continue
+fi
+# Formats that cannot carry artwork are noted rather than failed.
+sob_cover_warning "$SOB_KEY" "$OPTIMIZED_COVER" "$CUSTOM_BACK_COVER" "$CUSTOM_DISC_IMAGE"
+# Only formats the registry says support artwork get the images attached.
+local_cover=""; [ "$(sob_format_supports_cover "$SOB_KEY" && echo 1 || echo 0)" = "1" ] && local_cover="$OPTIMIZED_COVER"
+echo " -> Encoding ${SOB_KEY^^} (${OUTPUT_EXT}) with cover art and tags..."
+if sob_encode_one "$SOB_KEY" "$session_audio" "$output_path" "$local_cover" "$CUSTOM_BACK_COVER" "$CUSTOM_DISC_IMAGE" "$readable_title" "$conv_duration" "$conv_pred_bytes"; then
+group_produced+=("$output_path")
+else
+echo "ERROR: FFmpeg conversion failed for group '$base' (${OUTPUT_LABEL})."
+conversion_status=1; all_groups_successful=false
+fi
+done
 if [ -n "$concat_list" ]; then rm -f "$concat_list" "$session_audio"; fi
-if [ $conversion_status -ne 0 ]; then echo "ERROR: FFmpeg conversion failed for group '$base'!"; rm -f "$OPTIMIZED_COVER"; all_groups_successful=false; exit 1; fi
-final_out_sz=$(file_size_bytes "$output_path"); log_conversion_event "$output_path" "$OUTPUT_FORMAT" "$conv_duration" "$final_out_sz" "$conv_source_bytes"; newly_exported_flacs+=("$output_path")
-spek_image="${spek_image%$'\r'}"
-if [ ! -f "$spek_image" ]; then echo -e "${BOLD}${CYAN} -> Generating 1080p Spectrogram Analysis (${spek_image##*/})...${NC}"; run_ffmpeg_with_progress "Generating Spectrogram" "$conv_duration" 250000 -y -i "$output_path" -lavfi "showspectrumpic=s=1920x1080:mode=combined:color=intensity:scale=log" -frames:v 1 "$spek_image"; fi
-printf '\n%s\n✓ Audio Conversion Finished: %s\n%s\n' "$S50" "${output_path##*/}" "$S50"; ask_split=""
+if [ $conversion_status -ne 0 ] || [ ${#group_produced[@]} -eq 0 ]; then echo "ERROR: Conversion batch for '$base' did not complete."; rm -f "$OPTIMIZED_COVER"; all_groups_successful=false; exit 1; fi
+for _out in "${group_produced[@]}"; do
+final_out_sz=$(file_size_bytes "$_out"); log_conversion_event "$_out" "$(basename "$(dirname "$_out")" | cut -d_ -f1)" "$conv_duration" "$final_out_sz" "$conv_source_bytes"; newly_exported_flacs+=("$_out")
+done
+# The spectrogram is staged as well; it is published with the audio.
+spek_image="${SOB_STAGE_DIR}/${normalized_name}_spectrogram.png"
+if [ ! -f "$spek_image" ]; then echo -e "${BOLD}${CYAN} -> Generating 1080p Spectrogram Analysis (${spek_image##*/})...${NC}"; run_ffmpeg_with_progress "Generating Spectrogram" "$conv_duration" 250000 -y -i "${group_produced[0]}" -lavfi "showspectrumpic=s=1920x1080:mode=combined:color=intensity:scale=log" -frames:v 1 "$spek_image"; fi
+printf '\n%s\n✓ Audio Conversion Finished: %s\n%s\n' "$S50" "${group_produced[0]##*/}" "$S50"; ask_split=""
 if [ "$skip_all_splits" = true ]; then
     echo " -> Skipping splitting (Skip All enabled)." >/dev/tty
 else
@@ -689,9 +1086,18 @@ else
         local split_opts=(
             "n|Skip Once|(Keep mix as single file; ask again for next mix)"
             "a|Skip All|(Keep all remaining mixes as single files)"
+            "s|Skip the rest of the batch|(Stop all remaining per-file prompts)"
             "y|Split into Separate Parts / Sets|(Launch Split_FLAC_File.sh)"
         )
-        select_menu_option "SPLIT MIX FILE" "Would you like to split '${output_path##*/}' into separate parts/sets?" split_opts 0 ask_split
+        if sob_skip_remaining; then
+            echo " -> SKIP REMAINING is set: not asking again for this batch." >/dev/tty
+        else
+            select_menu_option "SPLIT MIX FILE" "Would you like to split '${group_produced[0]##*/}' into separate parts/sets?" split_opts 0 ask_split
+            case "$ask_split" in
+                [sS]*) SOB_SKIP_REMAINING_METADATA=1
+                       echo " -> Set to skip the rest of the batch; no more per-file prompts." >/dev/tty ;;
+            esac
+        fi
     fi
     case "$ask_split" in
         [yY]|[yY][eE][sS]|3) splitter_bin=""; for sc in "$SCRIPT_DIR/Split_FLAC_File.sh" "$SCRIPT_DIR/scripts/Split_FLAC_File.sh" "./Split_FLAC_File.sh"; do if [ -f "$sc" ]; then splitter_bin="$sc"; break; fi; done; if [ -n "$splitter_bin" ]; then bash "$splitter_bin" "$output_path" </dev/tty || true; else echo "WARNING: Split_FLAC_File.sh not found!" >/dev/tty; fi ;;
@@ -704,12 +1110,22 @@ for w in "${current_wavs[@]}"; do if [ -f "$w" ]; then mv "$w" "$group_arch_dir/
 review_converted_tracklist; rm -f "$OPTIMIZED_COVER"; counter=$((counter + 1)); echo "$D50"
 done
 if [ "$all_groups_successful" = true ] && [ ${#successfully_processed_wavs[@]} -gt 0 ]; then echo "All conversions completed successfully. All source WAV files archived."; fi
+# Staged output is published only now, after every group reported success.
+sob_promote_staged_output
+if [ ${#newly_exported_flacs[@]} -gt 0 ] && [ "${all_groups_successful:-false}" = "true" ]; then
+printf '%s\n' "Published output folders:"
+local _rname _rdir
+for _rname in "${!SOB_PROMOTE_ROOTS[@]}"; do
+_rdir="${SOB_PROMOTE_ROOTS[$_rname]}"
+[ -d "$_rdir/$_rname" ] && printf '   %s\n' "$_rdir/$_rname"
+done
+fi
 PLAYLIST_NAME="SOF_Batch_Export_$(date +%Y-%m-%d).m3u"
 if [ ${#newly_exported_flacs[@]} -gt 0 ]; then
 echo "Generating M3U playlist: $PLAYLIST_NAME..."; printf '%s\n' "${newly_exported_flacs[@]}" > "$PLAYLIST_NAME"; echo "Playlist generated successfully at: $PLAYLIST_NAME"
 for arch_d in "${all_mix_archive_roots[@]}"; do if [ -d "$arch_d/PLAYLISTS_GENERATED" ]; then cp "$PLAYLIST_NAME" "$arch_d/PLAYLISTS_GENERATED/" 2>/dev/null || true; fi; done
 fi
-printf '%s\nCONVERSION COMPLETE\n%s\n' "$S50" "$S50"; listen_to_converted_audio; post_conversion_tasks
+printf '%s\nCONVERSION COMPLETE\n%s\n' "$S50" "$S50"; sob_stage_cleanup; listen_to_converted_audio; post_conversion_tasks
 }
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
 run_sof_conversion "$@"

@@ -63,7 +63,7 @@ EXPECTED_INK = {
 
 # Rows that are meant to be white: white-on-black themes, the alias that
 # shares their palette, MPlanetarian Dreamworlds (white on light coral), and
-# Retro Linux Memories (white menu text on its light slate). Any other theme
+# Retro Linux Memories (white menu text on its dark gray pane). Any other theme
 # must NOT come out white.
 LEGIT_WHITE = {
     "into_darkness_void_out",
@@ -140,14 +140,13 @@ class TestMenuTextThemeInk(unittest.TestCase):
     def test_every_ink_is_readable_on_its_own_pane(self):
         """No theme falls below 4.5:1, the WCAG AA floor for body text.
 
-        Two themes specify white ink on a light pane, below the AA floor.
-        ``dreamworlds`` is white on the CSS ``lightcoral`` #F08080 (2.59:1).
-        ``retro_linux_memories`` is white on its light slate #B0C4D6. Both
-        pairs are pinned here instead of being measured against 4.5:1.
+        ``dreamworlds`` is the one deliberate exception: it pins white ink on
+        the CSS ``lightcoral`` #F08080 pane (2.59:1), the pair that theme
+        specifies. Every other theme, Retro Linux Memories included since its
+        console became dark gray #2D2D2D, is measured against the floor.
         """
         DELIBERATE = {
             "dreamworlds": ((240, 128, 128), (255, 255, 255), 2.0),
-            "retro_linux_memories": ((176, 196, 214), (255, 255, 255), 1.5),
         }
         for raw in _run(DUMP).splitlines():
             theme, _sgr, ink_rgb, pane_rgb = raw.split("|")

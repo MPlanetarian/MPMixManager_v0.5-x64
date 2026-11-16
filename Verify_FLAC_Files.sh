@@ -3,6 +3,9 @@
 # Setup colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
 NC='\033[0m'
 BOLD='\033[1m'
 
@@ -12,6 +15,7 @@ PARENT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 # Source config.env if present
 for cfg in "$SCRIPT_DIR/config.env" "$PARENT_DIR/config.env" "$PWD/config.env" "${MIX_ARCHIVE_DIR:-}/config.env"; do
     if [ -f "$cfg" ]; then
+        # shellcheck source=/dev/null
         source "$cfg"
         break
     fi
@@ -32,14 +36,47 @@ echo "==================================================" | tee -a "$LOG_FILE"
 
 # Discover all FLAC directories
 flac_scan_dirs=()
-dirs=("$MIX_ARCHIVE_DIR/FLAC_CONVERTED_OUTPUTS" "$MIX_ARCHIVE_DIR" "$OUTPUT_DIR:-FLAC_CONVERTED_OUTPUTS" "$EXTRA_MIX_ARCHIVE_DIRS")
-for d in "${dirs[@]}"; do
-    d="${d:-$PWD}"
-    d=$(cd "$d" && pwd)
-    if [ -d "$d" ]; then
-        flac_scan_dirs+=("$d")
+
+if [ -n "${MIX_ARCHIVE_DIR:-}" ] && [ -d "$MIX_ARCHIVE_DIR/FLAC_CONVERTED_OUTPUTS" ]; then
+    flac_scan_dirs+=("$(cd "$MIX_ARCHIVE_DIR/FLAC_CONVERTED_OUTPUTS" && pwd)")
+elif [ -n "${MIX_ARCHIVE_DIR:-}" ] && [ -d "$MIX_ARCHIVE_DIR" ]; then
+    flac_scan_dirs+=("$(cd "$MIX_ARCHIVE_DIR" && pwd)")
+elif [ -d "${OUTPUT_DIR:-FLAC_CONVERTED_OUTPUTS}" ]; then
+    flac_scan_dirs+=("$(cd "${OUTPUT_DIR:-FLAC_CONVERTED_OUTPUTS}" && pwd)")
+fi
+
+if [ -n "${EXTRA_MIX_ARCHIVE_DIRS:-}" ]; then
+    EXTRA_DIRS=()
+    if [[ "$EXTRA_MIX_ARCHIVE_DIRS" == *";"* || "$EXTRA_MIX_ARCHIVE_DIRS" == *","* || "$EXTRA_MIX_ARCHIVE_DIRS" == *$'\n'* ]]; then
+        IFS=';,'$'\n' read -ra EXTRA_DIRS <<< "$EXTRA_MIX_ARCHIVE_DIRS"
+    elif [[ "$EXTRA_MIX_ARCHIVE_DIRS" =~ :[a-zA-Z]: ]]; then
+        _fixed="$(printf '%s' "$EXTRA_MIX_ARCHIVE_DIRS" | sed -E 's/:([a-zA-Z]:)/;\1/g')"
+        IFS=';' read -ra EXTRA_DIRS <<< "$_fixed"
+    elif [[ ! "$EXTRA_MIX_ARCHIVE_DIRS" =~ ^[a-zA-Z]: && "$EXTRA_MIX_ARCHIVE_DIRS" == *":"* ]]; then
+        IFS=':' read -ra EXTRA_DIRS <<< "$EXTRA_MIX_ARCHIVE_DIRS"
+    else
+        EXTRA_DIRS=("$EXTRA_MIX_ARCHIVE_DIRS")
     fi
-done
+    for ed in "${EXTRA_DIRS[@]}"; do
+        ed="$(echo "$ed" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/^["'"'"']//' -e 's/["'"'"']$//')"
+        [ -z "$ed" ] && continue
+        ed="${ed//\\//}"
+        if [[ ! "$ed" =~ ^[a-zA-Z]:/$ && "$ed" != "/" ]]; then
+            ed="${ed%/}"
+        fi
+        if [ -d "$ed/FLAC_CONVERTED_OUTPUTS" ]; then
+            cand="$(cd "$ed/FLAC_CONVERTED_OUTPUTS" && pwd)"
+            [[ ! " ${flac_scan_dirs[*]} " =~ " ${cand} " ]] && flac_scan_dirs+=("$cand")
+        elif [ -d "$ed" ]; then
+            cand="$(cd "$ed" && pwd)"
+            [[ ! " ${flac_scan_dirs[*]} " =~ " ${cand} " ]] && flac_scan_dirs+=("$cand")
+        fi
+    done
+fi
+
+if [ ${#flac_scan_dirs[@]} -eq 0 ]; then
+    flac_scan_dirs+=("$PWD")
+fi
 
 echo "Active Archive Directories to Verify:" | tee -a "$LOG_FILE"
 for d in "${flac_scan_dirs[@]}"; do
@@ -50,9 +87,11 @@ echo "--------------------------------------------------" | tee -a "$LOG_FILE"
 shopt -s nullglob nocaseglob
 flac_files=()
 for d in "${flac_scan_dirs[@]}"; do
-    for f in "$d"/*.flac; do
-        [ -f "$f" ] && flac_files+=("$f")
-    done
+    if [ -d "$d" ]; then
+        for f in "$d"/*.flac; do
+            [ -f "$f" ] && flac_files+=("$f")
+        done
+    fi
 done
 
 if [ ${#flac_files[@]} -eq 0 ]; then
@@ -64,12 +103,14 @@ echo "Scanning ${#flac_files[@]} FLAC files across all archives for corruption..
 echo "This will decode each file to verify completeness. Please wait..."
 echo "--------------------------------------------------"
 
+# Run parallel checks and capture outputs using all available CPU cores
 results=$(printf '%s\n' "${flac_files[@]}" | xargs -d '\n' -P "$(nproc)" -I {} bash -c '
     flac="{}"
     filename=$(basename "$flac")
     error_output=$(ffmpeg -v error -i "$flac" -f null - 2>&1)
     status=$?
     if [ $status -ne 0 ] || [ -n "$error_output" ]; then
+        # Clean newlines from error detail to keep output parsable on a single line
         clean_detail=$(echo "$error_output" | tr "\n" " ")
         echo "FAIL|$flac|$status|$clean_detail"
     else
@@ -87,18 +128,24 @@ while IFS='|' read -r status flac err_code err_detail; do
     if [ "$status" = "FAIL" ]; then
         echo -e "Checking: $filename ... ${RED}CORRUPT${NC}"
         echo "[CORRUPT] $flac - Error status: $err_code. Detail: $err_detail" >> "$LOG_FILE"
+        
+        # Move corrupt FLAC file
         mv "$flac" "$CORRUPT_DIR/"
         echo " -> Moved to $CORRUPT_DIR/" | tee -a "$LOG_FILE"
+        
+        # Also move corresponding tracklist if exists
         flac_base="${filename%.*}"
         txt_path="${file_dir}/${flac_base}.txt"
         if [ -f "$txt_path" ]; then
             mv "$txt_path" "$CORRUPT_DIR/"
             echo " -> Moved tracklist $(basename "$txt_path") to $CORRUPT_DIR/" >> "$LOG_FILE"
         fi
+        
         ((corrupt_count++))
     else
         echo -e "Checking: $filename ... ${GREEN}OK${NC}"
     fi
+    
     ((checked_count++))
 done <<< "$results"
 
@@ -107,4 +154,4 @@ echo "Verification complete across all archives." | tee -a "$LOG_FILE"
 echo "Total checked: $checked_count" | tee -a "$LOG_FILE"
 echo "Total corrupt moved: $corrupt_count" | tee -a "$LOG_FILE"
 echo "Log file: $LOG_FILE" | tee -a "$LOG_FILE"
-echo "==================================================" | tee -a "$LOG_FILE" # 158 to 110
+echo "==================================================" | tee -a "$LOG_FILE"

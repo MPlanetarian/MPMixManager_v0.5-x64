@@ -196,13 +196,25 @@ migrate_installation_path() {
         if [ -f "$target_dir/scripts/install_windows_user.sh" ]; then
             bash "$target_dir/scripts/install_windows_user.sh" "$target_dir" >/dev/null 2>&1 || true
         fi
-    else
+    elif [ "$OS_TYPE" = "macos" ]; then
+        if [ -d "$HOME/Desktop" ]; then
+            ln -sf "$target_dir/manager_macos.command" "$HOME/Desktop/Mix Archive Manager.command" 2>/dev/null || true
+        fi
         if command -v python3 >/dev/null 2>&1 && [ -f "$target_dir/scripts/install_desktop_shortcuts.py" ]; then
             python3 "$target_dir/scripts/install_desktop_shortcuts.py" --root "$target_dir" >/dev/null 2>&1 || true
         fi
         if command -v python3 >/dev/null 2>&1 && [ -f "$target_dir/scripts/mp_system_tray.py" ]; then
             python3 "$target_dir/scripts/mp_system_tray.py" --install >/dev/null 2>&1 || true
         fi
+    else
+        # Linux and FreeBSD. The shortcuts resolve the tree at launch.
+        if command -v python3 >/dev/null 2>&1 && [ -f "$target_dir/scripts/install_desktop_shortcuts.py" ]; then
+            python3 "$target_dir/scripts/install_desktop_shortcuts.py" --root "$target_dir" >/dev/null 2>&1 || true
+        fi
+        if command -v python3 >/dev/null 2>&1 && [ -f "$target_dir/scripts/mp_system_tray.py" ]; then
+            python3 "$target_dir/scripts/mp_system_tray.py" --install >/dev/null 2>&1 || true
+        fi
+        command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
     fi
     
     if [ "$mode_opt" = "2" ]; then

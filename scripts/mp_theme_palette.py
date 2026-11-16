@@ -185,8 +185,9 @@ DEFAULT_THEME = "dreamworlds_ultra"
 # manager paints. The glass hosts do not use it: their pane comes from the
 # shader and must stay transparent. Light panes pair with dark ink so the
 # menu text stays readable. Sensorium and MPlanetarian Dreamworlds are light
-# coral. Stream of Frequency, Cosmic Supernova, Phosphor, Retro Studio and
-# Retro Linux Memories keep their hue as a light tint of the old pane.
+# coral. Stream of Frequency, Cosmic Supernova, Phosphor and Retro Studio
+# keep their hue as a light tint of the old pane. Retro Linux Memories stays
+# dark gray, like the charcoal field its glass paints.
 THEME_BACKGROUNDS: Dict[str, RGB] = {
     "stream_of_frequency": (168, 224, 236),
     # MPlanetarian Dreamworlds rides the light coral pane and pairs it with
@@ -204,7 +205,9 @@ THEME_BACKGROUNDS: Dict[str, RGB] = {
     "ice_cold": (6, 22, 46),
     "retro_terminal": (0, 0, 0),
     "sensorium": (240, 128, 128),
-    "retro_linux_memories": (176, 196, 214),
+    # Dark gray, the same charcoal field the Retro Linux Memories glass paints
+    # (#2d2d2d), so its white console text stays readable.
+    "retro_linux_memories": (45, 45, 45),
     "into_darkness_void_out": (0, 0, 0),
     "cyberpunk": (18, 4, 28),
     "dracula": (40, 42, 54),

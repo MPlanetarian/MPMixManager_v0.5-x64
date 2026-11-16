@@ -62,6 +62,13 @@ if [ "$(id -u)" -ne 0 ] && [ "$DRY_RUN" -eq 0 ]; then
     exit 1
 fi
 
+if [ "$ASSUME_YES" -ne 1 ] && [ "$DRY_RUN" -eq 0 ]; then
+    echo "Refusing to change NoMachine without --yes." >&2
+    echo "Preview with: $0 --dry-run" >&2
+    echo "Apply with: sudo $0 --yes" >&2
+    exit 1
+fi
+
 run() {
     if [ "$DRY_RUN" -eq 1 ]; then
         printf '  [dry-run] %s\n' "$*"
@@ -144,13 +151,13 @@ else
     ACTIVE_AUTH="$(find "$X11_RUNTIME_DIR" -maxdepth 2 -name 'xauth_*' 2>/dev/null | head -n 1 || true)"
     if [ -n "$ACTIVE_AUTH" ]; then
         echo "  found $ACTIVE_AUTH"
-        run install -m 0644 -o "$TARGET_USER" -g "$TARGET_USER" "$ACTIVE_AUTH" "$TARGET_HOME/.Xauthority"
+        run install -m 0600 -o "$TARGET_USER" -g "$TARGET_USER" "$ACTIVE_AUTH" "$TARGET_HOME/.Xauthority"
         # 0711 lets the NX transport traverse the home directory without
         # listing it. Do not widen this to 0755: the home directory usually
         # holds private data and only traversal is needed.
         run chmod 0711 "$TARGET_HOME"
         if [ -d /var/NX/nx ]; then
-            run install -m 0644 -o "$NX_USER" -g "$NX_USER" "$ACTIVE_AUTH" /var/NX/nx/.Xauthority
+            run install -m 0600 -o "$NX_USER" -g "$NX_USER" "$ACTIVE_AUTH" /var/NX/nx/.Xauthority
         fi
     else
         echo "  skipped: no xauth_* file under $X11_RUNTIME_DIR"

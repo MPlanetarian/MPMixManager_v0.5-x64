@@ -557,7 +557,7 @@ case "$_menu_id" in
 # Stream of Frequency, Cosmic Supernova, Phosphor and Retro Studio sit on
 # light tints of their own panes, so their row ink is the same hue pulled
 # down until it clears 4.5:1. The hue stays; only the lightness moves.
-# Retro Linux Memories is a light slate too, and its main-menu text is white.
+# Retro Linux Memories sits on a dark gray pane, where white is the ink.
 stream_of_frequency) _ir=98; _ig=91; _ib=5 ;;
 dreamworlds_ultra) _ir=216; _ig=180; _ib=254 ;;
 dynamic_rainbow_liquid_glass) _ir=255; _ig=20; _ib=237 ;;
@@ -638,9 +638,10 @@ if [ "$SEL_BAR_LUM" -ge 140 ]; then SEL_BAR_FG="\033[1;38;2;0;0;0m"; else SEL_BA
 # the background when the menu cycles. Most panes stay dark so the light text
 # stays readable. Sensorium and MPlanetarian Dreamworlds are already light
 # coral, and The Whitest White is white. Stream of Frequency, Cosmic
-# Supernova, Phosphor, Retro Studio and Retro Linux Memories keep their hue
-# and use a light tint of that same colour, paired with the dark ink selected
-# above. Retro Linux Memories was the charcoal slate (26, 30, 33).
+# Supernova, Phosphor and Retro Studio keep their hue and use a light tint of
+# that same colour, paired with the dark ink selected above. Retro Linux
+# Memories stays dark: dark gray (45, 45, 45), the same charcoal field its
+# Liquid Glass pane paints, so its white menu text stays readable.
 case "$_menu_id" in
 stream_of_frequency) THEME_BG_R=168; THEME_BG_G=224; THEME_BG_B=236 ;;
 the_whitest_white) THEME_BG_R=255; THEME_BG_G=255; THEME_BG_B=255; THEME_FG_R=0; THEME_FG_G=0; THEME_FG_B=0 ;;
@@ -655,7 +656,7 @@ phosphor) THEME_BG_R=186; THEME_BG_G=236; THEME_BG_B=176 ;;
 ice_cold) THEME_BG_R=6; THEME_BG_G=22; THEME_BG_B=46 ;;
 retro_terminal) THEME_BG_R=0; THEME_BG_G=0; THEME_BG_B=0 ;;
 sensorium) THEME_BG_R=240; THEME_BG_G=128; THEME_BG_B=128 ;;
-retro_linux_memories) THEME_BG_R=176; THEME_BG_G=196; THEME_BG_B=214 ;;
+retro_linux_memories) THEME_BG_R=45; THEME_BG_G=45; THEME_BG_B=45 ;;
 into_darkness_void_out) THEME_BG_R=0; THEME_BG_G=0; THEME_BG_B=0 ;;
 dreamworlds) THEME_BG_R=240; THEME_BG_G=128; THEME_BG_B=128 ;;
 cyberpunk) THEME_BG_R=18; THEME_BG_G=4; THEME_BG_B=28 ;;
@@ -709,7 +710,7 @@ elif [ "${MP_LIQUID_GLASS:-0}" != "1" ] && [ "${MP_GUI_SESSION:-0}" != "1" ]; th
         MENU_WHITE="\033[38;2;114;88;13m"
         ;;
     retro_linux_memories)
-        # Main-menu status text is white on the light slate, same as the rows.
+        # Main-menu status text is white on the dark gray pane, same as the rows.
         THEME_FG_R=255; THEME_FG_G=255; THEME_FG_B=255
         MENU_WHITE="\033[38;2;255;255;255m"
         ;;
@@ -1807,7 +1808,14 @@ JSEOF
                 if [ -z "$_id" ]; then _id=0; fi
                 if "$_qdbus" org.kde.KWin "/Scripting/Script$_id" org.kde.kwin.Script.run >/dev/null 2>&1 || \
                    "$_qdbus" org.kde.KWin /Scripting org.kde.kwin.Scripting.start >/dev/null 2>&1; then
-                    sleep 0.5
+                    # KWin runs the script asynchronously. A short settle is
+                    # enough for it to act; the caller polls the real window
+                    # size afterwards and knows when the resize has landed.
+                    # Do not wait for an exact pixel match here: a decorated
+                    # window is a few pixels narrower than the desktop, so the
+                    # request is never met literally and the wait would always
+                    # run to its cap.
+                    sleep 0.1
                     "$_qdbus" org.kde.KWin "/Scripting/Script$_id" org.kde.kwin.Script.stop >/dev/null 2>&1 || true
                     "$_qdbus" org.kde.KWin /Scripting org.kde.kwin.Scripting.unloadScript "$_name" >/dev/null 2>&1 || true
                     return 0
@@ -4531,7 +4539,7 @@ command -v update_mp_bridge_action &>/dev/null && update_mp_bridge_action "$acti
 run_sub_script() {
 local script_name="$1"; shift; local bash_bin="${BASH:-bash}" rc=0 t_start="${EPOCHSECONDS:-$(date +%s 2>/dev/null || echo 0)}"
 track_user_activity "Run Script: $script_name" "script_execution" 0 "pending" "Args: $*"
-if [ -x "$SCRIPT_DIR/scripts/$script_name" ]; then "$SCRIPT_DIR/scripts/$script_name" "$@"; rc=$?; elif [ -f "$SCRIPT_DIR/scripts/$script_name" ]; then "$bash_bin" "$SCRIPT_DIR/scripts/$script_name" "$@"; rc=$?; elif [ -x "$SCRIPT_DIR/$script_name" ]; then "$SCRIPT_DIR/$script_name" "$@"; rc=$?; elif [ -f "$SCRIPT_DIR/$script_name" ]; then "$bash_bin" "$SCRIPT_DIR/$script_name" "$@"; elif [ -x "./$script_name" ]; then "./$script_name" "$@"; rc=$?; elif [ -f "./$script_name" ]; then "$bash_bin" "./$script_name" "$@"; elif command -v "$script_name" &>/dev/null; then "$script_name" "$@"; rc=$?; else echo -e "${RED}Error: Script '$script_name' not found in $(pwd) or $SCRIPT_DIR!${NC}"; rc=1; fi
+if [ -x "$SCRIPT_DIR/scripts/$script_name" ]; then "$SCRIPT_DIR/scripts/$script_name" "$@"; rc=$?; elif [ -f "$SCRIPT_DIR/scripts/$script_name" ]; then "$bash_bin" "$SCRIPT_DIR/scripts/$script_name" "$@"; rc=$?; elif [ -x "$SCRIPT_DIR/$script_name" ]; then "$SCRIPT_DIR/$script_name" "$@"; rc=$?; elif [ -f "$SCRIPT_DIR/$script_name" ]; then "$bash_bin" "$SCRIPT_DIR/$script_name" "$@"; rc=$?; elif [ -x "./$script_name" ]; then "./$script_name" "$@"; rc=$?; elif [ -f "./$script_name" ]; then "$bash_bin" "./$script_name" "$@"; rc=$?; elif command -v "$script_name" &>/dev/null; then "$script_name" "$@"; rc=$?; else echo -e "${RED}Error: Script '$script_name' not found in $(pwd) or $SCRIPT_DIR!${NC}"; rc=1; fi
 local t_end="${EPOCHSECONDS:-$(date +%s 2>/dev/null || echo 0)}" dur=$((t_end - t_start))
 if [ "$rc" -ne 0 ]; then log_mp_error "run_sub_script" "Script '$script_name' failed with exit code $rc" "Args: ${*:-<none>} | Duration: ${dur}s"; track_user_activity "Run Script: $script_name" "script_execution" "$dur" "error" "Exit code: $rc"; else track_user_activity "Run Script: $script_name" "script_execution" "$dur" "success" "Completed"; fi
 return "$rc"
@@ -9817,17 +9825,28 @@ if [ "${MP_SCREEN_ALIGN_TERMINAL:-true}" = "true" ] && ! mp_tty_audio_mode_activ
     # because the window manager may still be mapping the new window.
     if [ "${_MS_WANT:-1}" -ge 2 ] && [ "${_MS_ON:-0}" -ne 1 ]; then
         # This block runs at the script's top level, so no "local" here.
+        # Span once, then poll for the window manager to finish resizing. The
+        # old loop always burned four rounds with a fixed sleep between them,
+        # which cost about six seconds before the first menu appeared when the
+        # window never confirmed. Stop at the first confirmation instead, and
+        # only ask again if the first request clearly did not land.
         _SPAN_TRY=0
-        while [ "$_SPAN_TRY" -lt 4 ]; do
+        while [ "$_SPAN_TRY" -lt 2 ]; do
             _SPAN_TRY=$((_SPAN_TRY + 1))
-            mp_screen_span_console >/dev/null 2>&1 || true
-            sleep 0.5
-            _MS_LAYOUT_TS=0
-            _MS_PROBE_TS=0
-            update_terminal_geometry 1
-            mp_screen_layout_refresh 1
-            [ "${_MS_ON:-0}" -eq 1 ] && break
+            mp_screen_span_console >/dev/null 2>&1 || break
+            _SPAN_POLL=0
+            while [ "$_SPAN_POLL" -lt 5 ]; do
+                _SPAN_POLL=$((_SPAN_POLL + 1))
+                sleep 0.15
+                _MS_LAYOUT_TS=0
+                _MS_PROBE_TS=0
+                update_terminal_geometry 1
+                mp_screen_layout_refresh 1
+                [ "${_MS_ON:-0}" -eq 1 ] && break 2
+            done
         done
+        # Leave the cached geometry and column split describing the window that
+        # is actually on screen now, so the first draw does not re-probe.
         _MS_LAYOUT_TS=0
         update_terminal_geometry 1
         mp_screen_layout_refresh 1
