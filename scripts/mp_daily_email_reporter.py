@@ -2239,7 +2239,6 @@ def execute_email_dispatch(force: bool = False, dry_run: bool = False) -> bool:
             log_message("INFO", "No OpenCode session is running. Skipping the report and the email.")
             return False
         log_message("INFO", f"{sessions} OpenCode session(s) running. Report allowed.")
-        return False
 
     # Acquire exclusive process lock to guarantee single-instance execution
     #

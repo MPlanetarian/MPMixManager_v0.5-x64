@@ -612,7 +612,8 @@ def connect_folder(f: Dict[str, Any], config: Dict[str, Any], interactive: bool 
         if _is_mountpoint(md):
             return False, f"{display_path(f)} is mounted but not responding, and it could not be remounted."
     md.mkdir(parents=True, exist_ok=True)
-    cmd = ["rclone", "mount", remote, str(md), "--read-only",
+    # Read-write. These shares hold Windows thumbnail caches the cleaner deletes.
+    cmd = ["rclone", "mount", remote, str(md),
            "--dir-cache-time", "24h", "--vfs-cache-mode", "full", "--vfs-cache-max-size", "15G",
            "--vfs-cache-max-age", "24h", "--vfs-read-chunk-size", "4M", "--vfs-read-chunk-size-limit", "64M",
            "--buffer-size", "16M", "--no-modtime", "--attr-timeout", "1h"]

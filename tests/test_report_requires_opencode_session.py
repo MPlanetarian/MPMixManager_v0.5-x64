@@ -111,6 +111,33 @@ class OpenCodeSessionDetectionTest(unittest.TestCase):
         finally:
             self.mod.active_opencode_sessions = original_detect
 
+    def test_a_running_session_does_not_shortcut_the_dispatch(self):
+        """The allow path must fall through to the send, not return early.
+
+        A stray `return False` after "Report allowed" meant the report was never
+        sent even with a session running: the gate said yes and then aborted.
+        Check that the dispatch gets past the session gate, by watching for the
+        next step it takes rather than for a return value.
+        """
+        original_detect = self.mod.active_opencode_sessions
+        self.mod.active_opencode_sessions = lambda: 2
+        called = {}
+
+        def fake_rate_limit(cfg, force=False):
+            called["reached"] = True
+            return False          # stop here; never build or send a report
+
+        original_rate = self.mod.check_rate_limit
+        self.mod.check_rate_limit = fake_rate_limit
+        try:
+            self.mod.execute_email_dispatch(force=False)
+        finally:
+            self.mod.check_rate_limit = original_rate
+            self.mod.active_opencode_sessions = original_detect
+        self.assertTrue(called.get("reached"),
+                        "with a session running the dispatch must continue past "
+                        "the session gate, not return early")
+
     def test_force_is_not_blocked_by_the_session_rule(self):
         """`--force` is the interactive 'send now' path and must still work."""
         original_detect = self.mod.active_opencode_sessions
