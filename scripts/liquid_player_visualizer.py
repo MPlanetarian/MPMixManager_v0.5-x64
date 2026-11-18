@@ -137,6 +137,17 @@ def state_path() -> Path:
 def _inactive(preset_id: int = 0) -> Dict[str, Any]:
     return {
         "active": False,
+        # ``visible`` is what the player's Visualization button controls. It is
+        # deliberately separate from ``active``: ``active`` asks the visualizer
+        # to sit behind the player at all, while ``visible`` maps or unmaps the
+        # one window the player owns. An older state file, or a writer that
+        # does not know the key, reads as visible so nothing disappears.
+        "visible": True,
+        # ``gui_visible`` is MP Gui's own Visualization button. The two hosts
+        # share this file but own separate companion processes, so a single
+        # flag let the player's button blank the menu's background (and the
+        # reverse). Each window follows only its own host's key.
+        "gui_visible": True,
         "preset_id": int(preset_id),
         "preset_key": "cosmic_dreamworlds_liquid",
         "preset_name": "Cosmic Dreamworlds (Liquid)",
@@ -156,7 +167,8 @@ def preset_by_id(preset_id: int) -> Optional[Dict[str, Any]]:
     return None
 
 
-def mark_player_visualizer_attached(preset: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def mark_player_visualizer_attached(preset: Optional[Dict[str, Any]] = None,
+                                    visible: Optional[bool] = None) -> Dict[str, Any]:
     """Mark the companion visualizer active *before* its process starts.
 
     The player spawns the visualizer, and the visualizer starts polling
@@ -164,6 +176,11 @@ def mark_player_visualizer_attached(preset: Optional[Dict[str, Any]] = None) -> 
     would read ``active: false`` and the window would never bond. Writing it
     first means the very first frame already knows it belongs behind the
     player. A preset is chosen when the caller does not supply one.
+
+    ``visible`` is the Visualization button's map/unmap flag. The Liquid Player
+    passes ``True`` on a fresh launch so a window is shown. ``None`` keeps
+    whatever is on disk, which is what MP Gui and the launcher scripts want:
+    starting the menu must not un-hide a background the player turned off.
     """
     if preset is None:
         try:
@@ -174,7 +191,7 @@ def mark_player_visualizer_attached(preset: Optional[Dict[str, Any]] = None) -> 
             preset = get_active_preset()
         except Exception:
             preset = None
-    return write_player_visualizer_state(True, preset or {})
+    return write_player_visualizer_state(True, preset or {}, visible=visible)
 
 
 def read_player_visualizer_state() -> Dict[str, Any]:
@@ -196,6 +213,13 @@ def read_player_visualizer_state() -> Dict[str, Any]:
         raw = {}
     state = _inactive(int(raw.get("preset_id") or 0))
     state["active"] = bool(raw.get("active"))
+    # A state file written before this key existed, or by a window that only
+    # ever cared about ``active``, must keep showing its window. Only an
+    # explicit false hides anything.
+    state["visible"] = raw.get("visible") is not False
+    # MP Gui's button keeps its own flag for the same reason: the two hosts
+    # share this file, and one host's button must not unmap the other's window.
+    state["gui_visible"] = raw.get("gui_visible") is not False
     if raw.get("preset_key"):
         state["preset_key"] = str(raw.get("preset_key"))
     if raw.get("preset_name"):
@@ -204,9 +228,39 @@ def read_player_visualizer_state() -> Dict[str, Any]:
     return dict(state)
 
 
-def write_player_visualizer_state(active: bool, preset: Dict[str, Any]) -> Dict[str, Any]:
+def write_player_visualizer_state(active: bool, preset: Dict[str, Any],
+                                  visible: Optional[bool] = None,
+                                  gui_visible: Optional[bool] = None) -> Dict[str, Any]:
+    """Publish the visualizer state the player and the companion window share.
+
+    ``active`` asks the companion to sit behind the player. ``visible`` is the
+    Visualization button's on/off: hidden only unmaps the one window the
+    player owns, and never a window the user opened with Z or from the desktop
+    shortcut.
+
+    ``gui_visible`` is the same button on MP Gui, kept as a second key because
+    both hosts own a separate companion process but share this file. Writing
+    one host's flag must not blank the other host's background.
+
+    ``visible``/``gui_visible`` of ``None`` keep the value already on disk, so
+    a writer that only changes the preset (a key pressed in a free visualizer
+    window, the theme sync) cannot un-hide a companion the user turned off. A
+    first write with no file yet follows ``active``, which is the pre-existing
+    behaviour.
+    """
+    if visible is None or gui_visible is None:
+        try:
+            current = read_player_visualizer_state()
+        except Exception:
+            current = {}
+        if visible is None:
+            visible = current.get("visible") is not False if current else bool(active)
+        if gui_visible is None:
+            gui_visible = current.get("gui_visible") is not False if current else bool(active)
     state = {
         "active": bool(active),
+        "visible": bool(visible),
+        "gui_visible": bool(gui_visible),
         "preset_id": int(preset.get("id", 0)),
         "preset_key": str(preset.get("key") or "cosmic_dreamworlds_liquid"),
         "preset_name": str(preset.get("name") or "Cosmic Dreamworlds (Liquid)"),
@@ -600,7 +654,10 @@ def _glass_host_running(manager: bool) -> Optional[bool]:
     root = Path("/proc")
     if not root.is_dir():
         return None
-    marker = b"MP_Audio_Player_Liquid_Glass"
+    # MP Liquid Mixer hosts the same companion behind its own full-screen
+    # window, so it counts as a player host. It is never the manager.
+    player_marker = b"MP_Audio_Player_Liquid_Glass"
+    mixer_marker = b"MP_Liquid_Mixer"
     try:
         entries = os.listdir(root)
     except OSError:
@@ -612,7 +669,11 @@ def _glass_host_running(manager: bool) -> Optional[bool]:
             command = (root / entry / "cmdline").read_bytes()
         except OSError:
             continue
-        if marker in command and (b"--manager" in command) == manager:
+        if manager:
+            if player_marker in command and b"--manager" in command:
+                return True
+            continue
+        if (player_marker in command and b"--manager" not in command) or mixer_marker in command:
             return True
     return False
 
@@ -1237,7 +1298,7 @@ class PlayerVisualizerLayer:
 
     def draw(self, renderer, fw: int, fh: int) -> bool:
         state = read_player_visualizer_state()
-        if not state.get("active"):
+        if not state.get("active") or state.get("visible") is False:
             return False
         return self.draw_with_state(renderer, fw, fh, state)
 
@@ -1256,7 +1317,7 @@ class PlayerVisualizerLayer:
         passes ``False``. The default stays on, which is what every existing
         caller (the in-player overlay) already expected.
         """
-        if not state.get("active"):
+        if not state.get("active") or state.get("visible") is False:
             return False
         if text_guard is None:
             text_guard = True
@@ -1799,12 +1860,17 @@ class LiquidVisualizerOpenGLRenderer(MonitorSpanMixin, RandomPresetMixin, Player
         self.width, self.height = ww, wh
 
         window = 0
+        # An owned companion the button has already turned off opens unmapped:
+        # the first frame would otherwise show the scene before the poll hides
+        # it again. A free window, a GUI companion and a screensaver window
+        # always open visible.
+        start_visible = 0 if self._bond_should_start_hidden() else 1
         for major, minor, profile in mp_raspberry_pi.gl_create_attempts():
             glfw.glfwDefaultWindowHints()
             hints = [
                 (GLFW_CLIENT_API, GLFW_OPENGL_API),
                 (GLFW_DECORATED, 0),
-                (GLFW_VISIBLE, 1),
+                (GLFW_VISIBLE, start_visible),
                 (GLFW_FOCUSED, 1),
                 (GLFW_RESIZABLE, 0),
             ]
@@ -1835,6 +1901,9 @@ class LiquidVisualizerOpenGLRenderer(MonitorSpanMixin, RandomPresetMixin, Player
                 "libglfw3 mesa-utils libgl1-mesa-dri) and check X11/XWayland."
             )
         self._window = window
+        # Keep the map state in step with the hint that opened it, so the
+        # first visibility poll does not try to hide an already hidden window.
+        self._companion_visible = bool(start_visible)
         if saver_bounds:
             ox, oy = int(saver_bounds[0]), int(saver_bounds[1])
         elif span_bounds:
@@ -1960,6 +2029,13 @@ class LiquidVisualizerOpenGLRenderer(MonitorSpanMixin, RandomPresetMixin, Player
         if hasattr(g, "glfwGetWindowAttrib"):
             g.glfwGetWindowAttrib.argtypes = [c_void_p, c_int]
             g.glfwGetWindowAttrib.restype = c_int
+        # The Visualization button hides/shows the owned companion. Binding
+        # them here rather than per call keeps the ctypes signature in one
+        # place; a missing symbol simply leaves the flag inert.
+        if hasattr(g, "glfwHideWindow"):
+            g.glfwHideWindow.argtypes = [c_void_p]
+        if hasattr(g, "glfwShowWindow"):
+            g.glfwShowWindow.argtypes = [c_void_p]
         if sys.platform.startswith("win"):
             if hasattr(g, "glfwGetWin32Window"):
                 g.glfwGetWin32Window.argtypes = [c_void_p]
@@ -2467,3 +2543,72 @@ class LiquidVisualizerOpenGLRenderer(MonitorSpanMixin, RandomPresetMixin, Player
         pixel = bytes((r, g, b, 255)) * 4
         GL.glBindTexture(GL.GL_TEXTURE_2D, self._tex)
         GL.glTexImage2D(GL.GL_TEXTURE_2D, 0, GL.GL_RGBA, 2, 2, 0, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE, pixel)
+
+
+def gui_visualizer_visible() -> bool:
+    """True when MP Gui's Visualization button is on.
+
+    A state file written before the key existed, or by a host that does not
+    know it, reads as visible so an upgraded build never hides a background
+    the user did not turn off.
+    """
+    try:
+        return read_player_visualizer_state().get("gui_visible") is not False
+    except Exception:
+        return True
+
+
+def set_gui_visualizer_visible(visible: bool) -> Dict[str, Any]:
+    """Turn MP Gui's companion background on or off.
+
+    Only ``gui_visible`` changes: ``active`` still says the window belongs
+    behind MP Gui, so the companion is unmapped rather than un-bonded or
+    closed, and pressing the button again maps the same window back with its
+    geometry and preset intact. The preset is kept so a toggle never changes
+    the picture the user chose.
+    """
+    current = read_player_visualizer_state()
+    preset = {
+        "id": int(current.get("preset_id") or 0),
+        "key": str(current.get("preset_key") or "cosmic_dreamworlds_liquid"),
+        "name": str(current.get("preset_name") or "Cosmic Dreamworlds (Liquid)"),
+    }
+    return write_player_visualizer_state(True, preset, visible=None,
+                                         gui_visible=bool(visible))
+
+
+def _visualizer_state_cli(argv: Optional[List[str]] = None) -> int:
+    """``--gui-visible`` / ``--set-gui-visible on|off`` for the shell menus.
+
+    MP Gui is a bash menu, so it cannot import this module in-process. This
+    keeps the file format in one place instead of re-implementing the JSON
+    read and write in shell.
+    """
+    args = list(sys.argv[1:] if argv is None else argv)
+    try:
+        if args[:1] == ["--gui-visible"]:
+            print("on" if gui_visualizer_visible() else "off")
+            return 0
+        if args[:1] == ["--set-gui-visible"]:
+            wanted = (args[1] if len(args) > 1 else "").strip().lower()
+            if wanted in ("on", "true", "1", "show"):
+                set_gui_visualizer_visible(True)
+            elif wanted in ("off", "false", "0", "hide"):
+                set_gui_visualizer_visible(False)
+            else:
+                print("usage: --set-gui-visible on|off", file=sys.stderr)
+                return 2
+            return 0
+        if args[:1] == ["--toggle-gui-visible"]:
+            set_gui_visualizer_visible(not gui_visualizer_visible())
+            return 0
+    except Exception as exc:
+        print(f"visualizer state: {exc}", file=sys.stderr)
+        return 1
+    print("usage: --gui-visible | --set-gui-visible on|off | --toggle-gui-visible",
+          file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(_visualizer_state_cli())

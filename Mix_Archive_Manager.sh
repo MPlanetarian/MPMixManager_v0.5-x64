@@ -1848,10 +1848,13 @@ JSEOF
 
 run_interactive_submenu() {
 _gamepad_flush
+# A menu is really on screen now, so a flagged invocation gets the saved theme
+# pane here rather than while its one-shot arguments were still being parsed.
+declare -F _paint_theme_background_on_load >/dev/null 2>&1 && _paint_theme_background_on_load
 [ -z "${_LAST_SET_TITLE:-}" ] && ensure_manager_windowed
 local _menu_exit_hint="q to exit"; [ "${MP_GUI_SESSION:-0}" = "1" ] && _menu_exit_hint="q or Esc to close"; local menu_title="$1"; local menu_header="$2"; local -n _opts_ref="$3"; local cur_idx="${4:-0}"; local total_opts="${#_opts_ref[@]}"; command -v update_mp_bridge_menu &>/dev/null && update_mp_bridge_menu "${menu_title:-Main Console / Workstation Menu}" "true"; if [ "$total_opts" -eq 0 ]; then REPLY="0"; return 0; fi; local start_attempts=0; while [ "$start_attempts" -lt "$total_opts" ]; do IFS='|' read -r k_chk _ _ <<< "${_opts_ref[$cur_idx]}"; if [ "$k_chk" != "SECTION" ] && [ "$k_chk" != "SEP" ]; then break; fi; cur_idx=$(( (cur_idx + 1) % total_opts )); ((start_attempts++)); done; local -a selectable_map=(); local s_count=0; local i; for (( i=0; i<total_opts; i++ )); do IFS='|' read -r k_chk _ _ <<< "${_opts_ref[$i]}"; if [ "$k_chk" != "SECTION" ] && [ "$k_chk" != "SEP" ]; then selectable_map[i]=$s_count; ((s_count++)); else selectable_map[i]=-1; fi; done; _find_menu_search_match() { local q="${1,,}" start="${2:-0}" dir="${3:-1}"; [ -z "$q" ] && return 0; local step=0 idx="$start"; while [ "$step" -lt "$total_opts" ]; do local ok="" ol="" oe=""; IFS='|' read -r ok ol oe <<< "${_opts_ref[$idx]}"; if [ "$ok" != "SECTION" ] && [ "$ok" != "SEP" ]; then local haystack="${ok} ${ol} ${oe}"; haystack="${haystack,,}"; if [[ "$haystack" == *"$q"* ]]; then cur_idx=$idx; return 0; fi; fi; idx=$(( (idx + dir + total_opts) % total_opts )); ((step++)); done; return 1; }; if [ ! -t 0 ]; then clear; if [ -n "$menu_title" ]; then echo -e "${BOLD}${MAGENTA}${S70}${NC}\n${BOLD}${MAGENTA}       $menu_title${NC}\n${BOLD}${MAGENTA}${S70}${NC}"; elif [ -z "$menu_title" ] && [ -z "$menu_header" ] && command -v render_main_header &>/dev/null; then update_terminal_geometry 0; render_main_header "$(( _TERM_COLS - 4 ))" >/dev/null; menu_header="${_RENDERED_MAIN_HEADER:-}"; fi; [ -n "$menu_header" ] && echo -e "$menu_header"; if get_mp_audio_player_track_info 2>/dev/null; then local st_sym="${BOLD}${GREEN}▶ PLAYING${NC}"; [ "$MP_PLAYER_STATE" = "paused" ] && st_sym="${BOLD}${YELLOW}⏸ PAUSED${NC}"; local disp_title="$MP_PLAYER_TITLE"; [ ${#disp_title} -gt 40 ] && disp_title="${disp_title:0:37}..."; local p_hdr="♫ MP AUDIO PLAYER"; [ "$MP_PLAYER_MODE" = "MUSIC" ] && p_hdr="♫ MP AUDIO PLAYER [MUSIC MODE - TRACKS]"; local p_dashes=$(( 74 - ${#p_hdr} - 4 )); [ "$p_dashes" -lt 0 ] && p_dashes=0; local p_dash_str; printf -v p_dash_str '%*s' "$p_dashes" ''; p_dash_str="${p_dash_str// /─}"; echo -e "  ${BOLD}${MAGENTA}╭── ${p_hdr} ${p_dash_str}╮${NC}"; printf "  ${BOLD}${MAGENTA}│${NC} %b  ${BOLD}${YELLOW}%-40s${NC}  ${CYAN}%s/%s${NC} ${DIM}(%2s%%)${NC} ${BOLD}${MAGENTA}│\n" "$st_sym" "$disp_title" "$MP_PLAYER_POS_FMT" "$MP_PLAYER_DUR_FMT" "${MP_PLAYER_PROGRESS_PCT%.*}"; printf "  ${BOLD}${MAGENTA}│${NC}   %b %b  %b %b\n" "${MENU_WHITE}EQ:" "${MENU_WHITE}${MP_PLAYER_MINI_EQ:-        }" "${MENU_WHITE}Controls: [Space] Toggle [L] Liquid [C] Theme [n] Next [</>] Track [p] UI [f] FM" "${NC}${BOLD}${MAGENTA}│"; echo -e "  ${BOLD}${MAGENTA}╰──────────────────────────────────────────────────────────────────────────╯${NC}"; fi; for opt_entry in "${_opts_ref[@]}"; do IFS='|' read -r o_key o_label o_extra <<< "$opt_entry"; case "$o_key" in SECTION) echo -e "\n  ${BOLD}${BLUE}─── [ $o_label ] ─────────${NC}" ;; SEP) echo -e "  ${BOLD}${BLUE}──────────────────────────────────────────────────────────────────────────${NC}" ;; *) echo -e "  ${MENU_INK}${BOLD}$o_key)${NC}${MENU_INK} $o_label $o_extra${NC}" ;; esac; done; echo ""; run_deferred_startup; read -r -p "Enter choice: " REPLY; return 0; fi; update_terminal_geometry 0; local box_w; _set_menu_box_width box_w "${_TERM_COLS:-80}"; _CURRENT_BOX_W="$box_w"; _MENU_CURSOR_LOCK=1; local header_count=0; local cached_header_block=""; local cached_header_lines=0; local overhead=4
 build_header_block() {
-header_count=0; cached_header_block=""; cached_header_lines=0; local inner_w=$(( box_w - 2 )); local text_w=$(( box_w - 4 )); local h_border; printf -v h_border '%*s' "$inner_w" ''; h_border="${h_border// /─}"; if [ -n "$menu_title" ]; then cached_header_block+="  ${BOLD}${MAGENTA}╭${h_border}╮\033[K${NC}\n"; local title_line; printf -v title_line "  ${BOLD}${MAGENTA}│ %-${text_w}s │\033[K${NC}\n" "  ${menu_title}"; cached_header_block+="$title_line"; cached_header_block+="  ${BOLD}${MAGENTA}╰${h_border}╯\033[K${NC}\n"; cached_header_lines=$((cached_header_lines + 3)); fi; if [ -z "$menu_title" ] && command -v render_main_header &>/dev/null; then render_main_header "$box_w" >/dev/null; menu_header="${_RENDERED_MAIN_HEADER:-}"; fi; if [ -n "$menu_header" ]; then local exp_hdr=""; printf -v exp_hdr "%b" "$menu_header"; exp_hdr="${exp_hdr%$'\n'}"; while IFS= read -r h_line; do cached_header_block+="${h_line}\033[K\n"; ((header_count++)); done <<< "$exp_hdr"; cached_header_lines=$((cached_header_lines + header_count)); fi; if [ -n "$menu_title" ]; then _append_fitted_hint "$(( box_w + 2 ))" "Use [↑/↓] Arrows to navigate, [/] to search, [Enter] to select, [G] MP Gui, [B] Bash, [Shift+A] MP Harmony, [Esc] to return immediately"; else _append_fitted_hint "$(( box_w + 2 ))" "Use [↑/↓] Arrows to navigate, [/] to search, [Enter] to select, [G] MP Gui, [B] Bash, [Shift+A] MP Harmony, [C] Theme, ${_menu_exit_hint}"; fi; ((cached_header_lines++)); overhead=$((cached_header_lines + 4))
+header_count=0; cached_header_block=""; cached_header_lines=0; local inner_w=$(( box_w - 2 )); local text_w=$(( box_w - 4 )); local h_border; printf -v h_border '%*s' "$inner_w" ''; h_border="${h_border// /─}"; if [ -n "$menu_title" ]; then cached_header_block+="  ${BOLD}${MAGENTA}╭${h_border}╮\033[K${NC}\n"; local title_line; printf -v title_line "  ${BOLD}${MAGENTA}│ %-${text_w}s │\033[K${NC}\n" "  ${menu_title}"; cached_header_block+="$title_line"; cached_header_block+="  ${BOLD}${MAGENTA}╰${h_border}╯\033[K${NC}\n"; cached_header_lines=$((cached_header_lines + 3)); fi; if [ -z "$menu_title" ] && command -v render_main_header &>/dev/null; then render_main_header "$box_w" >/dev/null; menu_header="${_RENDERED_MAIN_HEADER:-}"; fi; if [ -n "$menu_header" ]; then local exp_hdr=""; printf -v exp_hdr "%b" "$menu_header"; exp_hdr="${exp_hdr%$'\n'}"; while IFS= read -r h_line; do cached_header_block+="${h_line}\033[K\n"; ((header_count++)); done <<< "$exp_hdr"; cached_header_lines=$((cached_header_lines + header_count)); fi; if [ -n "$menu_title" ]; then _append_fitted_hint "$(( box_w + 2 ))" "Use [↑/↓] Arrows to navigate, [/] to search, [Enter] to select, [G] MP Gui, [B] Bash, [Shift+A] MP Harmony, [Esc] to return immediately"; else _append_fitted_hint "$(( box_w + 2 ))" "Use [↑/↓] Arrows to navigate, [/] to search, [Enter] to select, [G] MP Gui, [B] Bash, [Shift+A] MP Harmony, [C] Theme, [V] Visualizer, ${_menu_exit_hint}"; fi; ((cached_header_lines++)); overhead=$((cached_header_lines + 4))
 }
 # --- Multi-screen section columns -------------------------------------------
 # One SECTION group per display. Everything here is nested inside
@@ -2343,6 +2346,14 @@ _menu_handle_mouse() {
         0)  ;;
         *)  return 0 ;;
     esac
+    # The Visualization chip in the player banner is a button, not an option
+    # row: a click on its span toggles the background window immediately.
+    if [ "${_mp_gui_vis_row:-0}" -gt 0 ] && [ "$row" -eq "${_mp_gui_vis_row:-0}" ] \
+        && [ "$col" -ge "${_mp_gui_vis_span_c1:-0}" ] && [ "$col" -le "${_mp_gui_vis_span_c2:-0}" ]; then
+        _toggle_mp_gui_visualizer
+        _MENU_MOUSE_SELECTED=1
+        return 0
+    fi
     _menu_mouse_row_to_idx "$row" idx "$col" || return 0
     [ "${selectable_map[$idx]:--1}" -lt 0 ] 2>/dev/null && return 0
     local now="${EPOCHREALTIME:-0}"
@@ -2367,8 +2378,55 @@ _menu_handle_mouse() {
 cleanup_submenu_screen() {
 _menu_restore_input; _MENU_CURSOR_LOCK=0; _stop_win_cursor_hider; _nav_mouse_disable; printf '\033[?7h\033[?12h\033[?25h\033[?2026l'
 }                                            
-_MENU_CURSOR_LOCK=1; _start_win_cursor_hider; _nav_mouse_enable; printf '\033[?25l\033[?12l\033[?7l'; local _last_menu_frame=""; local typed_buffer=""; local search_mode=0; local search_query=""; local view_top=0; local last_term_lines="$_TERM_LINES"; local _MENU_FRAME_FRESH=0; local _LAST_MENU_TICK_S="${SECONDS:-0}"; local -a _menu_item_row=(); local _menu_status_row=0; local _menu_fast_ok=0; local _ARROW_HOLD=0; local _LAST_NAV_TIME="${SECONDS:-0}" _BREATH_STEP=0 _BREATH_TICK_DIV=0 _IS_BREATHING=0; local _LAST_MOUSE_AT=0 _LAST_MOUSE_IDX="" _MENU_MOUSE_ACTIVATE=0 _MENU_MOUSE_SELECTED=0; local -a _BREATH_FACTORS=(100 98 94 88 82 74 66 58 50 42 35 30 26 24 22 20 20 22 24 26 30 35 42 50 58 66 74 82 88 94 98 100); while true; do _menu_quiet_input; update_terminal_geometry 0; local cur_box_w; _set_menu_box_width cur_box_w "${_TERM_COLS:-80}"; local _draw=1; if [ "$cur_box_w" -eq "$box_w" ] && [ "$_TERM_LINES" -eq "$last_term_lines" ] && [ -n "$_last_menu_frame" ] && [ "${_MENU_FRAME_FRESH:-0}" -eq 1 ]; then _draw=0; fi; if [ "$_draw" -eq 0 ]; then printf '\033[?25l\033[?12l\033[?7l'; else if [ "$cur_box_w" -ne "$box_w" ] || [ "$_TERM_LINES" -ne "$last_term_lines" ]; then box_w="$cur_box_w"; last_term_lines="$_TERM_LINES"; _CURRENT_BOX_W="$box_w"; build_header_block; fi; if _ms_layout_panels; then _ms_render_frame; if [ "${STARTUP_AUTOPLAY_EXECUTED:-0}" -eq 0 ]; then run_deferred_startup; fi; _MENU_FRAME_FRESH=1; else local inner_w=$(( box_w - 2 )); local text_w=$(( box_w - 4 )); local h_border; printf -v h_border '%*s' "$inner_w" ''; h_border="${h_border// /─}"; local menu_rule; printf -v menu_rule '%*s' "$((inner_w + 1))" ''; menu_rule="${menu_rule// /─}"; local player_banner=""; local banner_lines=0; if get_mp_audio_player_track_info 2>/dev/null; then local st_color="$GREEN"; local st_icon="▶"; if [ "$MP_PLAYER_STATE" = "paused" ]; then st_color="$YELLOW"; st_icon="⏸"; fi; local st_low="$(printf "%s" "$MP_PLAYER_STATE" | tr "A-Z" "a-z")"; local st_sym="${BOLD}${st_color}${st_icon} ${st_low}${NC}"; local st_raw="${st_icon} ${st_low}"; if [ "${MP_PLAYER_RECORDING:-false}" = "true" ]; then st_sym+=" ${BOLD}${RED}● REC${NC}"; st_raw+=" ● REC"; fi; local p_mode_title="♫ MP AUDIO PLAYER"; [ "$MP_PLAYER_MODE" = "MUSIC" ] && p_mode_title="♫ MP AUDIO PLAYER [MUSIC MODE - TRACKS]"; local rem_dashes=$(( inner_w - ${#p_mode_title} - 4 )); [ "$rem_dashes" -lt 0 ] && rem_dashes=0; local p_top_dashes; printf -v p_top_dashes '%*s' "$rem_dashes" ''; p_top_dashes="${p_top_dashes// /─}"; player_banner+="  ${BOLD}${MAGENTA}╭── ${p_mode_title} ${p_top_dashes}╮\033[K${NC}\n"; local pos_pct_str="${MP_PLAYER_POS_FMT}/${MP_PLAYER_DUR_FMT} (${MP_PLAYER_PROGRESS_PCT%.*}%)"; local max_t_len=$(( text_w - ${#pos_pct_str} - ${#st_raw} - 4 )); [ "$max_t_len" -lt 4 ] && max_t_len=4; [ "$max_t_len" -gt "$text_w" ] && max_t_len="$text_w"; local disp_title="$MP_PLAYER_TITLE"; if [ ${#disp_title} -gt "$max_t_len" ]; then disp_title="${disp_title:0:$((max_t_len - 3))}..."; fi; local l1_left="${st_sym}  ${BOLD}${YELLOW}${disp_title}${NC}"; local l1_right="${CYAN}${MP_PLAYER_POS_FMT}/${MP_PLAYER_DUR_FMT}${NC} ${DIM}(${MP_PLAYER_PROGRESS_PCT%.*}%)${NC}"; local raw_l1_len=$(( ${#st_raw} + 2 + ${#disp_title} + ${#pos_pct_str} )); local l1_pad=$(( text_w - raw_l1_len )); if [ "$l1_pad" -lt 1 ]; then local _over=$((1 - l1_pad)); local _tlen=${#disp_title}; if [ $((_tlen - _over)) -gt 3 ]; then disp_title="${disp_title:0:$((_tlen - _over - 3))}..."; else disp_title="${disp_title:0:$(( _tlen > _over ? _tlen - _over : 0 ))}"; fi; l1_left="${st_sym}  ${BOLD}${YELLOW}${disp_title}${NC}"; raw_l1_len=$(( ${#st_raw} + 2 + ${#disp_title} + ${#pos_pct_str} )); l1_pad=$(( text_w - raw_l1_len )); [ "$l1_pad" -lt 1 ] && l1_pad=1; fi; local l1_sp
-printf -v l1_sp '%*s' "$l1_pad" ''; player_banner+="  ${BOLD}${MAGENTA}│${NC} ${l1_left}${l1_sp}${l1_right} ${BOLD}${MAGENTA}│\033[K${NC}\n"; local line2_ctrl="[Space] Toggle [M] Player [L] Liquid [G] MP Gui [C] Theme [n] Next [</>] Track [p] UI [f] FM"; local eq_raw="$(_mp_player_eq_field "${MP_PLAYER_MINI_EQ:-}")"; local eq_disp="${MENU_WHITE}${eq_raw}${NC}"; local l2_pad=$(( text_w - 16 - ${#eq_raw} - ${#line2_ctrl} )); if [ "$l2_pad" -lt 0 ]; then local _keep=$(( ${#line2_ctrl} + l2_pad )); [ "$_keep" -lt 0 ] && _keep=0; if [ "$_keep" -gt 3 ]; then line2_ctrl="${line2_ctrl:0:$((_keep - 3))}..."; else line2_ctrl="${line2_ctrl:0:$_keep}"; fi; l2_pad=0; fi; local l2_sp=""; [ "$l2_pad" -gt 0 ] && printf -v l2_sp '%*s' "$l2_pad" ''; player_banner+="  ${BOLD}${MAGENTA}│${NC}   ${MENU_WHITE}EQ: ${eq_raw}${l2_sp}Controls: ${line2_ctrl}${NC} ${BOLD}${MAGENTA}│\033[K${NC}\n"; player_banner+="  ${BOLD}${MAGENTA}╰${h_border}╯\033[K${NC}\n"; banner_lines=4; fi; local effective_overhead=$(( overhead + banner_lines )); local max_visible=$(( _TERM_LINES - effective_overhead - 1 )); max_visible=$(( max_visible < 2 ? 2 : max_visible )); if [ "$max_visible" -ge "$total_opts" ]; then max_visible=$total_opts; view_top=0; else view_top=$(( cur_idx < view_top ? cur_idx : view_top )); view_top=$(( cur_idx >= view_top + max_visible ? cur_idx - max_visible + 1 : view_top )); view_top=$(( view_top > total_opts - max_visible ? total_opts - max_visible : view_top )); view_top=$(( view_top < 0 ? 0 : view_top )); fi; if [ "$cur_idx" -le 1 ]; then view_top=0; elif [ "$cur_idx" -gt 0 ]; then local _pk=""; IFS='|' read -r _pk _ _ <<< "${_opts_ref[$((cur_idx - 1))]}"; [ "$_pk" = "SECTION" ] && [ "$((cur_idx - 1))" -lt "$view_top" ] && view_top=$((cur_idx - 1)); fi; local view_end=$(( view_top + max_visible - 1 )); [ "$view_end" -ge "$total_opts" ] && view_end=$(( total_opts - 1 ));
+_MENU_CURSOR_LOCK=1; _start_win_cursor_hider; _nav_mouse_enable; printf '\033[?25l\033[?12l\033[?7l'; local _mp_gui_vis_row=0 _mp_gui_vis_span_c1=0 _mp_gui_vis_span_c2=0; local _last_menu_frame=""; local typed_buffer=""; local search_mode=0; local search_query=""; local view_top=0; local last_term_lines="$_TERM_LINES"; local _MENU_FRAME_FRESH=0; local _LAST_MENU_TICK_S="${SECONDS:-0}"; local -a _menu_item_row=(); local _menu_status_row=0; local _menu_fast_ok=0; local _ARROW_HOLD=0; local _LAST_NAV_TIME="${SECONDS:-0}" _BREATH_STEP=0 _BREATH_TICK_DIV=0 _IS_BREATHING=0; local _LAST_MOUSE_AT=0 _LAST_MOUSE_IDX="" _MENU_MOUSE_ACTIVATE=0 _MENU_MOUSE_SELECTED=0; local -a _BREATH_FACTORS=(100 98 94 88 82 74 66 58 50 42 35 30 26 24 22 20 20 22 24 26 30 35 42 50 58 66 74 82 88 94 98 100); while true; do _menu_quiet_input; update_terminal_geometry 0; local cur_box_w; _set_menu_box_width cur_box_w "${_TERM_COLS:-80}"; local _draw=1; if [ "$cur_box_w" -eq "$box_w" ] && [ "$_TERM_LINES" -eq "$last_term_lines" ] && [ -n "$_last_menu_frame" ] && [ "${_MENU_FRAME_FRESH:-0}" -eq 1 ]; then _draw=0; fi; if [ "$_draw" -eq 0 ]; then printf '\033[?25l\033[?12l\033[?7l'; else if [ "$cur_box_w" -ne "$box_w" ] || [ "$_TERM_LINES" -ne "$last_term_lines" ]; then box_w="$cur_box_w"; last_term_lines="$_TERM_LINES"; _CURRENT_BOX_W="$box_w"; build_header_block; fi; if _ms_layout_panels; then _ms_render_frame; if [ "${STARTUP_AUTOPLAY_EXECUTED:-0}" -eq 0 ]; then run_deferred_startup; fi; _MENU_FRAME_FRESH=1; else local inner_w=$(( box_w - 2 )); local text_w=$(( box_w - 4 )); local h_border; printf -v h_border '%*s' "$inner_w" ''; h_border="${h_border// /─}"; local menu_rule; printf -v menu_rule '%*s' "$((inner_w + 1))" ''; menu_rule="${menu_rule// /─}"; local player_banner=""; local banner_lines=0; if get_mp_audio_player_track_info 2>/dev/null; then local st_color="$GREEN"; local st_icon="▶"; if [ "$MP_PLAYER_STATE" = "paused" ]; then st_color="$YELLOW"; st_icon="⏸"; fi; local st_low="$(printf "%s" "$MP_PLAYER_STATE" | tr "A-Z" "a-z")"; local st_sym="${BOLD}${st_color}${st_icon} ${st_low}${NC}"; local st_raw="${st_icon} ${st_low}"; if [ "${MP_PLAYER_RECORDING:-false}" = "true" ]; then st_sym+=" ${BOLD}${RED}● REC${NC}"; st_raw+=" ● REC"; fi; local p_mode_title="♫ MP AUDIO PLAYER"; [ "$MP_PLAYER_MODE" = "MUSIC" ] && p_mode_title="♫ MP AUDIO PLAYER [MUSIC MODE - TRACKS]"; local rem_dashes=$(( inner_w - ${#p_mode_title} - 4 )); [ "$rem_dashes" -lt 0 ] && rem_dashes=0; local p_top_dashes; printf -v p_top_dashes '%*s' "$rem_dashes" ''; p_top_dashes="${p_top_dashes// /─}"; player_banner+="  ${BOLD}${MAGENTA}╭── ${p_mode_title} ${p_top_dashes}╮\033[K${NC}\n"; local pos_pct_str="${MP_PLAYER_POS_FMT}/${MP_PLAYER_DUR_FMT} (${MP_PLAYER_PROGRESS_PCT%.*}%)"; local max_t_len=$(( text_w - ${#pos_pct_str} - ${#st_raw} - 4 )); [ "$max_t_len" -lt 4 ] && max_t_len=4; [ "$max_t_len" -gt "$text_w" ] && max_t_len="$text_w"; local disp_title="$MP_PLAYER_TITLE"; if [ ${#disp_title} -gt "$max_t_len" ]; then disp_title="${disp_title:0:$((max_t_len - 3))}..."; fi; local l1_left="${st_sym}  ${BOLD}${YELLOW}${disp_title}${NC}"; local l1_right="${CYAN}${MP_PLAYER_POS_FMT}/${MP_PLAYER_DUR_FMT}${NC} ${DIM}(${MP_PLAYER_PROGRESS_PCT%.*}%)${NC}"; local raw_l1_len=$(( ${#st_raw} + 2 + ${#disp_title} + ${#pos_pct_str} )); local l1_pad=$(( text_w - raw_l1_len )); if [ "$l1_pad" -lt 1 ]; then local _over=$((1 - l1_pad)); local _tlen=${#disp_title}; if [ $((_tlen - _over)) -gt 3 ]; then disp_title="${disp_title:0:$((_tlen - _over - 3))}..."; else disp_title="${disp_title:0:$(( _tlen > _over ? _tlen - _over : 0 ))}"; fi; l1_left="${st_sym}  ${BOLD}${YELLOW}${disp_title}${NC}"; raw_l1_len=$(( ${#st_raw} + 2 + ${#disp_title} + ${#pos_pct_str} )); l1_pad=$(( text_w - raw_l1_len )); [ "$l1_pad" -lt 1 ] && l1_pad=1; fi; local l1_sp
+printf -v l1_sp '%*s' "$l1_pad" ''; player_banner+="  ${BOLD}${MAGENTA}│${NC} ${l1_left}${l1_sp}${l1_right} ${BOLD}${MAGENTA}│\033[K${NC}\n"; local line2_ctrl="[Space] Toggle [M] Player [L] Liquid [G] MP Gui [C] Theme [n] Next [</>] Track [p] UI [f] FM"; local eq_raw="$(_mp_player_eq_field "${MP_PLAYER_MINI_EQ:-}")"; local eq_disp="${MENU_WHITE}${eq_raw}${NC}"; local l2_pad=$(( text_w - 16 - ${#eq_raw} - ${#line2_ctrl} )); if [ "$l2_pad" -lt 0 ]; then local _keep=$(( ${#line2_ctrl} + l2_pad )); [ "$_keep" -lt 0 ] && _keep=0; if [ "$_keep" -gt 3 ]; then line2_ctrl="${line2_ctrl:0:$((_keep - 3))}..."; else line2_ctrl="${line2_ctrl:0:$_keep}"; fi; l2_pad=0; fi; local l2_sp=""; [ "$l2_pad" -gt 0 ] && printf -v l2_sp '%*s' "$l2_pad" ''; player_banner+="  ${BOLD}${MAGENTA}│${NC}   ${MENU_WHITE}EQ: ${eq_raw}${l2_sp}Controls: ${line2_ctrl}${NC} ${BOLD}${MAGENTA}│\033[K${NC}\n";
+    # MP Gui's own Visualization button, the twin of the MP Liquid Player's
+    # chip. The menu runs the same companion window behind itself, so this
+    # turns that window off and back on without closing it. Only shown in
+    # MP Gui, where a companion exists.
+    if [ "${MP_GUI_SESSION:-0}" = "1" ]; then
+        local _vis_on=0 _vis_chip="" _vis_hint="" _vis_face="  VISUALIZATION  "
+        _mp_gui_visualizer_on && _vis_on=1
+        local _vis_hint_plain=""
+        if [ "$_vis_on" -eq 1 ]; then
+            _vis_chip="${SEL_BAR}${MENU_WHITE}${BOLD}${_vis_face}${NC}"
+            _vis_hint_plain="ON [V] hide"
+            _vis_hint="${MENU_WHITE}ON${NC} ${DIM}${MENU_WHITE}[V] hide${NC}"
+        else
+            _vis_chip="${BOLD}${BLUE}${_vis_face}${NC}"
+            _vis_hint_plain="OFF [V] show"
+            _vis_hint="${MENU_WHITE}OFF${NC} ${DIM}${MENU_WHITE}[V] show${NC}"
+        fi
+        # Measure what the terminal paints, not the escape bytes: the chip's
+        # colour codes counted as text would push the right border off the row.
+        # Left bar plus the "   " indent and right bar sit outside the face.
+        local _vis_pad=$(( inner_w + 2 - 1 - 3 - ${#_vis_face} - 2 - ${#_vis_hint_plain} - 1 ))
+        # A pane too narrow for face and hint drops the hint, then the chip
+        # itself: the button is still on V, so nothing becomes unreachable.
+        local _vis_show_hint=1
+        if [ "$_vis_pad" -lt 1 ]; then
+            _vis_show_hint=0
+            _vis_pad=$(( inner_w + 2 - 1 - 3 - ${#_vis_face} - 1 ))
+        fi
+        if [ "$_vis_pad" -lt 0 ]; then
+            _vis_face="  VIS  "
+            _vis_chip="${_vis_chip}"
+            _vis_pad=$(( inner_w + 2 - 1 - 3 - ${#_vis_face} - 1 ))
+        fi
+        [ "$_vis_pad" -lt 1 ] && _vis_pad=1
+        local _vis_sp=""
+        printf -v _vis_sp '%*s' "$_vis_pad" ''
+        local _vis_text="${_vis_chip}"
+        [ "$_vis_show_hint" -eq 1 ] && _vis_text+="  ${_vis_hint}"
+        player_banner+="  ${BOLD}${MAGENTA}│${NC}   ${_vis_text}${_vis_sp}${BOLD}${MAGENTA}│\033[K${NC}\n"
+        # Row and column span of the chip, so a click can hit it like a key.
+        _mp_gui_vis_row=$(( cached_header_lines + 4 ))
+        _mp_gui_vis_span_c1=6
+        _mp_gui_vis_span_c2=$(( 6 + ${#_vis_face} - 1 ))
+        banner_lines=5
+    else
+        banner_lines=4
+    fi; player_banner+="  ${BOLD}${MAGENTA}╰${h_border}╯\033[K${NC}\n"; fi; local effective_overhead=$(( overhead + banner_lines )); local max_visible=$(( _TERM_LINES - effective_overhead - 1 )); max_visible=$(( max_visible < 2 ? 2 : max_visible )); if [ "$max_visible" -ge "$total_opts" ]; then max_visible=$total_opts; view_top=0; else view_top=$(( cur_idx < view_top ? cur_idx : view_top )); view_top=$(( cur_idx >= view_top + max_visible ? cur_idx - max_visible + 1 : view_top )); view_top=$(( view_top > total_opts - max_visible ? total_opts - max_visible : view_top )); view_top=$(( view_top < 0 ? 0 : view_top )); fi; if [ "$cur_idx" -le 1 ]; then view_top=0; elif [ "$cur_idx" -gt 0 ]; then local _pk=""; IFS='|' read -r _pk _ _ <<< "${_opts_ref[$((cur_idx - 1))]}"; [ "$_pk" = "SECTION" ] && [ "$((cur_idx - 1))" -lt "$view_top" ] && view_top=$((cur_idx - 1)); fi; local view_end=$(( view_top + max_visible - 1 )); [ "$view_end" -ge "$total_opts" ] && view_end=$(( total_opts - 1 ));
     # MP Gui's portrait window is taller than this menu needs, so the footer
     # used to stop halfway down the glass and leave a strip of unused rows
     # under it. When every option already fits, the spare rows are shared out
@@ -2497,7 +2555,7 @@ TICK)
             _maybe_refresh_perf_cache
         fi
         _MENU_FRAME_FRESH=0
-    fi ; local _idle_time=$(( _now_s - _LAST_NAV_TIME )); if [ "$_idle_time" -ge 10 ] && [ "${search_mode:-0}" -ne 1 ] && [ -z "${typed_buffer:-}" ]; then _IS_BREATHING=1; ((_BREATH_TICK_DIV++)); if [ "$_BREATH_TICK_DIV" -ge 2 ]; then _BREATH_TICK_DIV=0; _BREATH_STEP=$(( (_BREATH_STEP + 1) % 32 )); local cur_f="${_BREATH_FACTORS[_BREATH_STEP]}"; if [ "${_MS_ON:-0}" -eq 1 ]; then _MS_BREATH="$cur_f"; _ms_repaint_index "$cur_idx" || true; elif [ "${_menu_item_row[$cur_idx]:-0}" -ge 1 ] && [ "${_menu_item_row[$cur_idx]}" -lt "$_TERM_LINES" ]; then local o_key="" o_label="" o_extra="" sel_breath=""; IFS='|' read -r o_key o_label o_extra <<< "${_opts_ref[$cur_idx]}"; highlight_menu_line "$o_key" "$o_label" "$o_extra" "${selectable_map[$cur_idx]:-0}" sel_breath "$box_w" "$cur_f"; printf '\033[?25l\033[%s;1H%b\r\033[?25l' "${_menu_item_row[$cur_idx]}" "$sel_breath"; fi; fi; elif [ "$_IS_BREATHING" -eq 1 ]; then _IS_BREATHING=0; _BREATH_STEP=0; _BREATH_TICK_DIV=0; if [ "${_MS_ON:-0}" -eq 1 ]; then _MS_BREATH=100; _ms_repaint_index "$cur_idx" || true; elif [ "${_menu_item_row[$cur_idx]:-0}" -ge 1 ] && [ "${_menu_item_row[$cur_idx]}" -lt "$_TERM_LINES" ]; then local o_key="" o_label="" o_extra="" sel_restored=""; IFS='|' read -r o_key o_label o_extra <<< "${_opts_ref[$cur_idx]}"; highlight_menu_line "$o_key" "$o_label" "$o_extra" "${selectable_map[$cur_idx]:-0}" sel_restored "$box_w" 100; printf '\033[?25l\033[%s;1H%b\r\033[?25l' "${_menu_item_row[$cur_idx]}" "$sel_restored"; fi; fi; continue ;; CHAR:/) if [ "$search_mode" -eq 1 ]; then search_query+="/"; _find_menu_search_match "$search_query" 0 1; else search_mode=1; search_query=""; typed_buffer=""; fi; _MENU_FRAME_FRESH=0; continue ;; SPACE) if [ "$search_mode" -eq 1 ]; then search_query+=" "; _find_menu_search_match "$search_query" 0 1; _MENU_FRAME_FRESH=0; continue; fi; toggle_mp_audio_player; _MENU_FRAME_FRESH=0; continue ;; CHAR:m|CHAR:M) if [ "$search_mode" -eq 1 ]; then search_query+="${key_action#CHAR:}"; _find_menu_search_match "$search_query" 0 1; _MENU_FRAME_FRESH=0; continue; fi; _mp_key_m; _MENU_FRAME_FRESH=0; continue ;; CHAR:l|CHAR:L) if [ "$search_mode" -eq 1 ]; then search_query+="${key_action#CHAR:}"; _find_menu_search_match "$search_query" 0 1; _MENU_FRAME_FRESH=0; continue; fi; launch_mp_audio_player_liquid_glass >/dev/null 2>&1; _MENU_FRAME_FRESH=0; continue ;; CHAR:z|CHAR:Z) if [ "$search_mode" -eq 1 ]; then search_query+="${key_action#CHAR:}"; _find_menu_search_match "$search_query" 0 1; _MENU_FRAME_FRESH=0; continue; fi; launch_mp_liquid_visualizer >/dev/null 2>&1; _MENU_FRAME_FRESH=0; continue ;;
+    fi ; local _idle_time=$(( _now_s - _LAST_NAV_TIME )); if [ "$_idle_time" -ge 10 ] && [ "${search_mode:-0}" -ne 1 ] && [ -z "${typed_buffer:-}" ]; then _IS_BREATHING=1; ((_BREATH_TICK_DIV++)); if [ "$_BREATH_TICK_DIV" -ge 2 ]; then _BREATH_TICK_DIV=0; _BREATH_STEP=$(( (_BREATH_STEP + 1) % 32 )); local cur_f="${_BREATH_FACTORS[_BREATH_STEP]}"; if [ "${_MS_ON:-0}" -eq 1 ]; then _MS_BREATH="$cur_f"; _ms_repaint_index "$cur_idx" || true; elif [ "${_menu_item_row[$cur_idx]:-0}" -ge 1 ] && [ "${_menu_item_row[$cur_idx]}" -lt "$_TERM_LINES" ]; then local o_key="" o_label="" o_extra="" sel_breath=""; IFS='|' read -r o_key o_label o_extra <<< "${_opts_ref[$cur_idx]}"; highlight_menu_line "$o_key" "$o_label" "$o_extra" "${selectable_map[$cur_idx]:-0}" sel_breath "$box_w" "$cur_f"; printf '\033[?25l\033[%s;1H%b\r\033[?25l' "${_menu_item_row[$cur_idx]}" "$sel_breath"; fi; fi; elif [ "$_IS_BREATHING" -eq 1 ]; then _IS_BREATHING=0; _BREATH_STEP=0; _BREATH_TICK_DIV=0; if [ "${_MS_ON:-0}" -eq 1 ]; then _MS_BREATH=100; _ms_repaint_index "$cur_idx" || true; elif [ "${_menu_item_row[$cur_idx]:-0}" -ge 1 ] && [ "${_menu_item_row[$cur_idx]}" -lt "$_TERM_LINES" ]; then local o_key="" o_label="" o_extra="" sel_restored=""; IFS='|' read -r o_key o_label o_extra <<< "${_opts_ref[$cur_idx]}"; highlight_menu_line "$o_key" "$o_label" "$o_extra" "${selectable_map[$cur_idx]:-0}" sel_restored "$box_w" 100; printf '\033[?25l\033[%s;1H%b\r\033[?25l' "${_menu_item_row[$cur_idx]}" "$sel_restored"; fi; fi; continue ;; CHAR:/) if [ "$search_mode" -eq 1 ]; then search_query+="/"; _find_menu_search_match "$search_query" 0 1; else search_mode=1; search_query=""; typed_buffer=""; fi; _MENU_FRAME_FRESH=0; continue ;; SPACE) if [ "$search_mode" -eq 1 ]; then search_query+=" "; _find_menu_search_match "$search_query" 0 1; _MENU_FRAME_FRESH=0; continue; fi; toggle_mp_audio_player; _MENU_FRAME_FRESH=0; continue ;; CHAR:m|CHAR:M) if [ "$search_mode" -eq 1 ]; then search_query+="${key_action#CHAR:}"; _find_menu_search_match "$search_query" 0 1; _MENU_FRAME_FRESH=0; continue; fi; _mp_key_m; _MENU_FRAME_FRESH=0; continue ;; CHAR:l|CHAR:L) if [ "$search_mode" -eq 1 ]; then search_query+="${key_action#CHAR:}"; _find_menu_search_match "$search_query" 0 1; _MENU_FRAME_FRESH=0; continue; fi; launch_mp_audio_player_liquid_glass >/dev/null 2>&1; _MENU_FRAME_FRESH=0; continue ;; CHAR:z|CHAR:Z) if [ "$search_mode" -eq 1 ]; then search_query+="${key_action#CHAR:}"; _find_menu_search_match "$search_query" 0 1; _MENU_FRAME_FRESH=0; continue; fi; launch_mp_liquid_visualizer >/dev/null 2>&1; _MENU_FRAME_FRESH=0; continue ;; CHAR:v|CHAR:V) if [ "$search_mode" -eq 1 ]; then search_query+="${key_action#CHAR:}"; _find_menu_search_match "$search_query" 0 1; _MENU_FRAME_FRESH=0; continue; fi; _toggle_mp_gui_visualizer; _MENU_FRAME_FRESH=0; continue ;;
 CHAR:A) if [ "$search_mode" -eq 1 ]; then search_query+="A"; _find_menu_search_match "$search_query" 0 1; _MENU_FRAME_FRESH=0; continue; fi; if [ "${_NAV_WIN_CON:-0}" -eq 1 ] && _nav_just_arrowed; then continue; fi; cleanup_submenu_screen; launch_mp_harmony_from_menu; _MENU_CURSOR_LOCK=1; _start_win_cursor_hider; printf '\033[?25l\033[?12l\033[?7l'; clear; typed_buffer=""; _last_menu_frame=""; _MENU_FRAME_FRESH=0; last_term_lines=0; continue ;;
 CHAR:g|CHAR:G) if [ "$search_mode" -eq 1 ]; then search_query+="${key_action#CHAR:}"; _find_menu_search_match "$search_query" 0 1; _MENU_FRAME_FRESH=0; continue; fi; launch_mp_gui_from_menu; _last_menu_frame=""; _MENU_FRAME_FRESH=0; continue ;;
 CHAR:h|CHAR:H) if [ "$search_mode" -eq 1 ]; then search_query+="${key_action#CHAR:}"; _find_menu_search_match "$search_query" 0 1; _MENU_FRAME_FRESH=0; continue; fi; toggle_hidden_mode; typed_buffer=""; _last_menu_frame=""; _MENU_FRAME_FRESH=0; continue ;;
@@ -3877,6 +3935,83 @@ _mp_gui_vertical_menu() {
     VERTICAL|vertical|Vertical) return 0 ;;
   esac
   return 1
+}
+# MP Gui's Visualization button. The menu runs the same companion window
+# behind itself that the Liquid Player has behind it, and this turns that
+# window off and back on without closing it: the visualizer reads the flag and
+# unmaps or maps the one window MP Gui owns, so its geometry, preset and place
+# in the stack survive. Only ``gui_visible`` is written, so the Liquid Player's
+# own button state is left exactly as it was.
+_mp_gui_visualizer_state_py() {
+  local py_bin="${MP_PY:-}"
+  if [ -z "$py_bin" ] || [ ! -x "$py_bin" ]; then
+    py_bin="$(command -v python3 2>/dev/null || command -v python 2>/dev/null || true)"
+  fi
+  [ -n "$py_bin" ] || return 1
+  local vis_mod="$SCRIPT_DIR/scripts/liquid_player_visualizer.py"
+  [ -f "$vis_mod" ] || vis_mod="$SCRIPT_DIR/liquid_player_visualizer.py"
+  [ -f "$vis_mod" ] || return 1
+  "$py_bin" "$vis_mod" "$@" 2>/dev/null
+}
+_mp_gui_visualizer_on() {
+  local state=""
+  state="$(_mp_gui_visualizer_state_py --gui-visible)" || return 1
+  [ "$state" = "on" ]
+}
+_toggle_mp_gui_visualizer() {
+  # Only meaningful inside MP Gui: a plain console has no companion window.
+  if [ "${MP_GUI_SESSION:-0}" != "1" ]; then
+    [ "${MP_LIQUID_GLASS:-0}" = "1" ] || { launch_mp_liquid_visualizer; return 0; }
+  fi
+  local was_on=1
+  _mp_gui_visualizer_on || was_on=0
+  if [ "$was_on" -eq 1 ]; then
+    _mp_gui_visualizer_state_py --set-gui-visible off || return 1
+  else
+    _mp_gui_visualizer_state_py --set-gui-visible on || return 1
+    # Turning it back on with no companion alive (the user closed it, or MP Gui
+    # was opened with --no-visualizer) has to start the window again.
+    _mp_gui_visualizer_ensure_running
+  fi
+  play_sound_effect "click" 2>/dev/null || true
+  return 0
+}
+_mp_gui_visualizer_ensure_running() {
+  [ "${MP_GUI_SESSION:-0}" = "1" ] || return 0
+  local running=1
+  if command -v _mp_gui_vis_running >/dev/null 2>&1; then
+    _mp_gui_vis_running || running=0
+  else
+    # No MP_Gui.sh helper (a hand-started menu): ask the session module.
+    local py_bin="${MP_PY:-python3}"
+    "$py_bin" - "$SCRIPT_DIR" <<'PYVIS' >/dev/null 2>&1 || running=0
+import sys
+from pathlib import Path
+root = Path(sys.argv[1])
+sys.path.insert(0, str(root))
+sys.path.insert(0, str(root / "scripts"))
+from liquid_player_visualizer import companion_visualizer_running
+raise SystemExit(0 if companion_visualizer_running(True) else 1)
+PYVIS
+  fi
+  [ "$running" -eq 1 ] && return 0
+  local py_bin="${MP_PY:-}"
+  if [ -z "$py_bin" ] || [ ! -x "$py_bin" ]; then
+    py_bin="$(command -v python3 2>/dev/null || command -v python 2>/dev/null || true)"
+  fi
+  [ -n "$py_bin" ] || return 1
+  local vis_py="$SCRIPT_DIR/MP_Liquid_Visualizer.py"
+  [ ! -f "$vis_py" ] && vis_py="$SCRIPT_DIR/scripts/mp_liquid_visualizer_vulkan.py"
+  [ -f "$vis_py" ] || return 1
+  mkdir -p "$HOME/.config/mix-manager" 2>/dev/null || true
+  # This is MP Gui's own companion, not a window after the player returns:
+  # the player retires its own background, and this only restores the menu's
+  # when the Visualization button is switched back on with none alive.
+  # shellcheck disable=SC2086
+  ( MP_VISUALIZER_COMPANION=1 MP_VISUALIZER_MATCH_GUI=1 \
+      "$py_bin" "$vis_py" --preset random >> "$HOME/.config/mix-manager/liquid_visualizer.log" 2>&1 & )
+  disown 2>/dev/null || true
+  return 0
 }
 # M in MP Gui toggles Vertical (portrait, text at 80%) and the normal
 # Horizontal window. The glass host reads this file. It does not bind M,

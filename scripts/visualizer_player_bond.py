@@ -54,6 +54,11 @@ HOST_GONE_GRACE_SECONDS = 2.0
 # notice, and the grace period means the exact last poll does not matter.
 HOST_CHECK_INTERVAL = 1.0
 
+# How often the owned companion re-reads the player's ``visible`` flag. The
+# flag only changes when the Visualization button is pressed, and the file is
+# tiny, but a stat per frame is still pointless at 60 fps.
+VISIBILITY_CHECK_INTERVAL = 0.1
+
 
 class PlayerBondMixin:
     """Follow the Liquid Player's published geometry and stack below it.
@@ -99,6 +104,13 @@ class PlayerBondMixin:
         # A window opened later (Z) is explicitly detached: it must not adopt
         # the player's rectangle just because a companion is already running.
         self._bond_detached = os.environ.get("MP_VISUALIZER_DETACHED") == "1"
+        # Map/unmap state of the companion the player owns. The player's
+        # Visualization button writes ``visible`` into the shared state file;
+        # this window is mapped while it is true and unmapped while it is
+        # false. Only that one owned window follows the flag - see
+        # ``_sync_companion_visibility``.
+        self._companion_visible = True
+        self._visibility_check_at = 0.0
         # When this companion first noticed that no host was running, and
         # whether it has already closed itself for that reason. See
         # ``_close_if_host_is_gone``.
@@ -196,6 +208,110 @@ class PlayerBondMixin:
         # None means "not observable here"; keep it that way instead of
         # collapsing it to False via bool().
         return None if running is None else bool(running)
+
+    # -- visibility -------------------------------------------------------
+    def _companion_follows_visibility(self) -> bool:
+        """True for the one companion window this host launched, and only that.
+
+        The Visualization button maps and unmaps the companion its own host
+        launched: the Liquid Player's button drives the player's companion and
+        MP Gui's button drives the menu's. A window the user opened with Z,
+        from the desktop shortcut, or a spawned F10/F11 window, is never
+        touched: those are their own windows and hiding them would close
+        something the user is watching.
+
+        The two hosts read different keys of the shared state file
+        (``visible`` and ``gui_visible``), so pressing one button cannot blank
+        the other window's background.
+        """
+        if not self._bond_is_locked() or getattr(self, "_bond_detached", False):
+            return False
+        return True
+
+    def _companion_visibility_key(self) -> str:
+        """The state-file key this companion's host button writes."""
+        try:
+            return "gui_visible" if self._bond_targets_gui() else "visible"
+        except Exception:
+            return "visible"
+
+    def _set_companion_visible(self, visible: bool) -> None:
+        """Map or unmap this window without ending the render loop.
+
+        ``glfwHideWindow`` leaves the GLFW window, its GL context and the bond
+        state alive, so the loop keeps running and can map the window again on
+        the next button press. That is the difference from closing it: closing
+        would need a new process, and the bond would have to be re-established
+        from scratch.
+        """
+        g, w = getattr(self, "_glfw", None), getattr(self, "_window", None)
+        if g is None or not w:
+            return
+        function = getattr(g, "glfwShowWindow" if visible else "glfwHideWindow", None)
+        if not callable(function):
+            return
+        try:
+            function(w)
+        except Exception:
+            return
+        self._companion_visible = bool(visible)
+        if visible and getattr(self, "_player_bonded", False):
+            # Showing a window can raise it. Put it back under the player at
+            # once instead of waiting for the next half-second re-lower.
+            self._next_relower_at = 0.0
+            self._lower_below_player()
+
+    def _sync_companion_visibility(self) -> None:
+        """Follow the player's Visualization button for the owned companion.
+
+        The button writes ``visible`` to the shared state file; ``active`` says
+        whether the window belongs behind the player at all. This maps the
+        window while ``visible`` is true and unmaps it while it is false, so
+        pressing the button twice restores exactly what was there before. The
+        file is read at most ``VISIBILITY_CHECK_INTERVAL`` apart because every
+        frame would stat it for a value that only changes on a key press.
+        """
+        if not self._companion_follows_visibility():
+            return
+        now = time.monotonic()
+        if now < getattr(self, "_visibility_check_at", 0.0):
+            return
+        self._visibility_check_at = now + VISIBILITY_CHECK_INTERVAL
+        try:
+            from liquid_player_visualizer import read_player_visualizer_state
+        except ImportError:
+            from scripts.liquid_player_visualizer import read_player_visualizer_state
+        try:
+            state = read_player_visualizer_state()
+        except Exception:
+            return
+        # An older state file has no such key; it reads as True so an
+        # upgraded build never hides a window the user did not turn off.
+        wanted = state.get(self._companion_visibility_key()) is not False
+        if wanted == bool(getattr(self, "_companion_visible", True)):
+            return
+        self._set_companion_visible(wanted)
+
+    def _bond_should_start_hidden(self) -> bool:
+        """True when the owned companion must open unmapped.
+
+        The Visualization button can be off in the state file before the
+        window is created (the player spawns the companion on launch and the
+        user has turned it off, or a previous session left it off). Opening
+        with ``GLFW_VISIBLE=0`` avoids a frame of scene flashing on screen
+        before the first poll hides it again.
+        """
+        if not self._companion_follows_visibility():
+            return False
+        try:
+            from liquid_player_visualizer import read_player_visualizer_state
+        except ImportError:
+            from scripts.liquid_player_visualizer import read_player_visualizer_state
+        try:
+            return read_player_visualizer_state().get(
+                self._companion_visibility_key()) is False
+        except Exception:
+            return False
 
     def _close_if_host_is_gone(self) -> bool:
         """Close a locked companion once the window behind it has exited.
@@ -533,6 +649,11 @@ class PlayerBondMixin:
     # -- main entry point -------------------------------------------------
     def _sync_player_bond(self) -> None:
         """Keep the standalone visualizer directly behind the Liquid Player."""
+        # The Visualization button owns the map state of the companion the
+        # player launched. It is checked first because the visibility gate has
+        # its own eligibility test (owned companion, not detached, not GUI)
+        # and must not depend on the bonding rules below.
+        self._sync_companion_visibility()
         if not self._bonding_applies():
             return
         # The host can disappear without ever running its own shutdown (tray
