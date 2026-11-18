@@ -6615,16 +6615,16 @@ def _get_dynamic_gradient(step: float) -> Tuple[Tuple[int, int, int], Tuple[int,
 # The stacked portrait deck. It is a third in-place size beside Mini and
 # Micro: one narrow column, a large clock, a tall analyser and its own
 # transport bar, so the player reads from across a desk instead of a row of
-# text. 40x52 is taller than it is wide by more than 2:1 at the 9x18 cell.
-VERTICAL_COLS, VERTICAL_ROWS = 40, 52
+# text. 40x44 is taller than it is wide by more than 2:1 at the 9x18 cell.
+VERTICAL_COLS, VERTICAL_ROWS = 40, 44
 # The deck stacks three panels: the main window (title, clock, spectrum,
 # transport), the graphic equaliser, and the playlist. The first two are fixed
 # and the playlist takes what is left, so a taller window buys track rows.
-VERTICAL_MAIN_ROWS = 23
+VERTICAL_MAIN_ROWS = 12
 VERTICAL_EQ_ROWS = 11
 VERTICAL_PLAYLIST_MIN_ROWS = 5
 # The shrunk limits used when the window is shorter than the three panels want.
-VERTICAL_MAIN_MIN_ROWS = 16
+VERTICAL_MAIN_MIN_ROWS = 9
 VERTICAL_EQ_MIN_ROWS = 4
 # M walks this ring. The tall view comes first: a press from the full window
 # opens the deck, then the two compact strips, then the full window again.
@@ -7696,14 +7696,45 @@ class TerminalPlayerUI:
             elif not self.cached_status.get("title") or self.cached_status.get("title") == "Loading...":
                 if (res := send_ipc_command("status")) and isinstance(res.get("data"), dict): self.cached_status = res["data"]
             if self.cached_status.get("mode"): self._sync_mode_scanner(self.cached_status.get("mode"))
-            if not self.equalizer_hud_active:
-                if self.cached_status.get("eq_preset"): self.eq_manager.active_preset = str(self.cached_status["eq_preset"])
-                if isinstance(self.cached_status.get("eq_bands"), list) and len(self.cached_status["eq_bands"]) == 10:
-                    self.eq_manager.current_bands = [float(x) for x in self.cached_status["eq_bands"]]
+            self._sync_eq_from_status(self.cached_status)
             return self._apply_pending_status(self.cached_status)
         st = self.engine.get_status_dict(live=True) if self.engine else self.cached_status
         if st.get("mode"): self._sync_mode_scanner(st.get("mode"))
+        self._sync_eq_from_status(st)
         return self._apply_pending_status(st)
+
+    def _sync_eq_from_status(self, st: Dict[str, Any]) -> None:
+        """Adopt the daemon's equaliser without erasing a local edit.
+
+        The player writes each band change to the daemon, but the status file
+        lags a frame or two. Adopting it unconditionally meant the value just
+        set was overwritten by the stale one on the very next draw, so the deck
+        equaliser looked frozen: the arrow keys moved a band for a few
+        milliseconds and the old number came straight back.
+
+        A value this window has set is therefore remembered until the daemon
+        reports it (or the overlay expires, when the daemon was not listening),
+        exactly like the pitch and seek overlays above. Nothing is blocked for
+        longer than that, so another window's change still arrives.
+        """
+        now = time.monotonic()
+        preset = st.get("eq_preset")
+        if preset:
+            self.eq_manager.active_preset = str(preset)
+        bands = st.get("eq_bands")
+        overlay = getattr(self, "_pending_eq_bands", None)
+        if overlay is not None:
+            values, expires = overlay
+            if now >= expires or not isinstance(bands, list) or len(bands) != len(values) \
+                    or all(abs(float(a) - float(b)) < 0.05 for a, b in zip(bands, values)):
+                # The daemon has caught up (or stopped listening): drop the
+                # overlay and take whatever it reports from here on.
+                self._pending_eq_bands = None
+            else:
+                self.eq_manager.current_bands = list(values)
+                return
+        if isinstance(bands, list) and len(bands) == 10:
+            self.eq_manager.current_bands = [float(x) for x in bands]
 
     def _apply_pending_status(self, st: Dict[str, Any]) -> Dict[str, Any]:
         """Overlay a click the daemon has not echoed back yet.
@@ -7741,6 +7772,11 @@ class TerminalPlayerUI:
             if not self.search_query:
                 for i, m in enumerate(self._get_active_tracks()):
                     if m["path"] == cp: self.selected_row = i; break
+
+    def _remember_eq_bands(self, expires: float = 3.0) -> None:
+        """Hold the bands this window just set until the daemon echoes them."""
+        self._pending_eq_bands = (list(self.eq_manager.current_bands),
+                                  time.monotonic() + float(expires))
 
     def _send_cmd(self, cmd: str, **kwargs):
         # A timeline or pitch click must paint on the very next frame, before
@@ -9977,18 +10013,23 @@ class TerminalPlayerUI:
                 band = self.eq_selected_band
                 new_gain = round(min(12.0, self.eq_manager.current_bands[band] + 0.5), 1)
                 self.eq_manager.set_band(band, new_gain)
+                self._remember_eq_bands()
                 if self.is_remote: self._send_cmd("set_eq_band", band=band, gain=new_gain)
                 elif self.engine: self.engine.set_eq_band(band, new_gain)
+                self._notify(f"{EQ_BAND_LABELS[band]} · {new_gain:+.1f} dB", 1.5)
                 return
             elif data in (b"\x1b[B", b"\x1bOB", b"j", b"J", b"-", b"_"):
                 band = self.eq_selected_band
                 new_gain = round(max(-12.0, self.eq_manager.current_bands[band] - 0.5), 1)
                 self.eq_manager.set_band(band, new_gain)
+                self._remember_eq_bands()
                 if self.is_remote: self._send_cmd("set_eq_band", band=band, gain=new_gain)
                 elif self.engine: self.engine.set_eq_band(band, new_gain)
+                self._notify(f"{EQ_BAND_LABELS[band]} · {new_gain:+.1f} dB", 1.5)
                 return
             elif data in (b"p", b"P", b"\t"):
                 name = self.eq_manager.cycle_preset(1)
+                self._remember_eq_bands()
                 if self.is_remote: self._send_cmd("set_eq_preset", preset=name)
                 elif self.engine: self.engine.set_eq_preset(name)
                 self._notify(f"Equalizer Preset: {name}", 2.0)
@@ -10016,17 +10057,20 @@ class TerminalPlayerUI:
             elif data in (b"\x1b[A", b"\x1bOA", b"k", b"+", b"="):
                 new_gain = round(min(12.0, self.eq_manager.current_bands[self.eq_selected_band] + 0.5), 1)
                 self.eq_manager.set_band(self.eq_selected_band, new_gain)
+                self._remember_eq_bands()
                 if self.is_remote: self._send_cmd("set_eq_band", band=self.eq_selected_band, gain=new_gain)
                 elif self.engine: self.engine.set_eq_band(self.eq_selected_band, new_gain)
                 return
             elif data in (b"\x1b[B", b"\x1bOB", b"j", b"J", b"-", b"_"):
                 new_gain = round(max(-12.0, self.eq_manager.current_bands[self.eq_selected_band] - 0.5), 1)
                 self.eq_manager.set_band(self.eq_selected_band, new_gain)
+                self._remember_eq_bands()
                 if self.is_remote: self._send_cmd("set_eq_band", band=self.eq_selected_band, gain=new_gain)
                 elif self.engine: self.engine.set_eq_band(self.eq_selected_band, new_gain)
                 return
             elif data in (b"p", b"P", b"\t"):
                 np_name = self.eq_manager.cycle_preset(1)
+                self._remember_eq_bands()
                 if self.is_remote: self._send_cmd("set_eq_preset", preset=np_name)
                 elif self.engine: self.engine.set_eq_preset(np_name)
                 self._notify(f"Equalizer Preset: {np_name}", 2.0)
@@ -10037,6 +10081,7 @@ class TerminalPlayerUI:
                 if 0 <= idx < len(p_list):
                     t_name = p_list[idx]
                     self.eq_manager.apply_preset(t_name)
+                    self._remember_eq_bands()
                     if self.is_remote: self._send_cmd("set_eq_preset", preset=t_name)
                     elif self.engine: self.engine.set_eq_preset(t_name)
                     self._notify(f"Equalizer Preset: {t_name}", 2.0)
@@ -10047,6 +10092,7 @@ class TerminalPlayerUI:
                 return
             elif data in (b"r", b"R", b"0"):
                 self.eq_manager.apply_preset("Flat")
+                self._remember_eq_bands()
                 if self.is_remote: self._send_cmd("set_eq_preset", preset="Flat")
                 elif self.engine: self.engine.set_eq_preset("Flat")
                 self._notify("Equalizer Reset to Flat (0 dB)", 2.0)
@@ -10813,6 +10859,10 @@ class TerminalPlayerUI:
         while main_rows + eq_rows + list_rows > usable and list_rows > 2:
             list_rows -= 1
         # Any remaining rows are the playlist's; a tall window just lists more.
+        # The main window and the equaliser keep their height, so the top half
+        # never changes shape between tracks. The playlist takes every row that
+        # is left; a short list simply shows its empty rows, the way a playlist
+        # pane does.
         list_rows = max(list_rows, usable - main_rows - eq_rows)
         return main_rows, eq_rows, list_rows
 
@@ -10958,11 +11008,10 @@ class TerminalPlayerUI:
 
         main_rows, eq_rows, list_rows = self._vertical_panels(h)
 
-        lines = [
-            f"  {c1}╭{'─' * iw}╮{NC}",
-            f"  {c1}│{c2}{header_title.center(iw)}{c1}│{NC}",
-            f"  {c1}╰{'─' * iw}╯{NC}",
-        ]
+        # One rule with the title in it, not a three-row box: the main window is
+        # the compact half of the deck, so its chrome stays at one line and the
+        # rows go to the clock and the spectrum.
+        lines = [_boxed_rule("╭", f"── {header_title} ", "╮", iw, c1, c2)]
         state = st.get("state", "stopped")
         badge = (f"{bold_s}{playing_badge_ink(self.visualizer.theme, is_lg)}▶ PLAY{NC}" if state == "playing"
                  else (f"{bold_s}\033[38;2;255;191;0m⏸ PAUSE{NC}" if state == "paused"
@@ -10979,15 +11028,13 @@ class TerminalPlayerUI:
         for row in lcd_clock_rows(clock, c1):
             pad = max(0, (iw - _display_width(row)) // 2)
             lines.append(f"  {' ' * pad}{row}")
-        ext = os.path.splitext(st.get("path", ""))[1][1:].upper() or "FLAC"
-        sr, ch_s = st.get("sample_rate", 44100), ("Stereo" if st.get("channels", 2) == 2 else "Mono")
-        lines.append(_fit_text_line([
-            f"  {text_col}{ext} · {sr / 1000:.1f} kHz · {ch_s}{NC}",
-            f"  {ext} {sr / 1000:.0f}k {ch_s}",
-        ], max(20, w - 1)))
         # The spectrum strip is the analyser's place in the main window, in the
         # portrait bars so it fits the column whatever style is selected.
-        spectrum_rows = max(1, main_rows - len(lines) - 3)
+        # Everything between the clock and the seek bar is spectrum. Two rows
+        # below it are reserved: the seek bar and the transport line. Reserving
+        # three left the main window one row short and the pad turned that into
+        # a blank line under the transport.
+        spectrum_rows = max(1, main_rows - len(lines) - 2)
         # vertical_spectrum_rows carries its own two-space frame indent; inside
         # the deck the panel already sits at column 3, so drop one indent.
         for row in vertical_spectrum_rows(st, max(20, iw), spectrum_rows):

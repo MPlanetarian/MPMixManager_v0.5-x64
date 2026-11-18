@@ -162,6 +162,46 @@ class TestVerticalPlayerMode(unittest.TestCase):
         self.assertEqual(joined.count("EQUALIZER"), 1)
         self.assertEqual(joined.count("PLAYLIST"), 1)
 
+    def test_equaliser_edit_survives_the_daemon_status(self):
+        """A band set with the arrows must not be erased by the next draw.
+
+        The status file lags a frame behind the IPC write, so adopting it
+        unconditionally made the deck equaliser look frozen: the value moved
+        for one frame and the stale one came straight back.
+        """
+        ui = self._ui()
+        ui.ui_size_mode = "VERTICAL"
+        ui.eq_manager.current_bands = [0.0] * 10
+        stale = {"eq_preset": "Flat", "eq_bands": [0.0] * 10,
+                 "levels": [0.2] * 24, "peaks": [0.5] * 24}
+        with patch.object(ui, "_send_cmd"), patch.object(ui, "_get_status", return_value=stale):
+            ui._process_key(b"E")
+            ui._process_key(b"\x1b[A")
+            ui._process_key(b"\x1b[A")
+            self.assertEqual(ui.eq_manager.current_bands[0], 1.0)
+            # Every frame re-syncs from the daemon; the edit must survive.
+            for _ in range(3):
+                ui._get_status()
+                self.assertEqual(ui.eq_manager.current_bands[0], 1.0,
+                                 "the daemon's stale bands erased a local edit")
+        # Once the daemon echoes the value, an external change lands again.
+        ui._sync_eq_from_status({"eq_preset": "Trance", "eq_bands": [1.0] + [0.0] * 9})
+        ui._sync_eq_from_status({"eq_preset": "Trance", "eq_bands": [-4.0] + [0.0] * 9})
+        self.assertEqual(ui.eq_manager.current_bands[0], -4.0)
+
+    def test_equaliser_focus_is_visible_in_the_panel_title(self):
+        """The panel says whether the arrows drive the sliders or the tracks."""
+        scanner = MagicMock()
+        scanner.get_mixes.return_value = [{"name": "Mix 1", "path": "/m1.flac", "ext": "FLAC"}]
+        ui = MP_Audio_Player.TerminalPlayerUI(
+            engine=None, scanner=scanner, is_remote=True, ui_size_mode="VERTICAL")
+        st = {"path": "/m1.flac", "position_fmt": "00:10", "levels": [0.2] * 24,
+              "peaks": [0.5] * 24}
+        with patch.object(ui, "_get_status", return_value=st):
+            self.assertIn("TRACKS", "\n".join(drawn_lines(ui)))
+            ui._vertical_eq_focus = True
+            self.assertIn("SLIDERS", "\n".join(drawn_lines(ui)))
+
     def test_equaliser_takes_the_arrow_keys_when_it_has_focus(self):
         """E hands the arrows to the EQ sliders; a second press gives them back."""
         ui = self._ui()
@@ -213,7 +253,7 @@ class TestVerticalPlayerMode(unittest.TestCase):
             {"name": f"Mix {n}", "path": f"/m{n}.flac", "ext": "FLAC"} for n in range(20)]
         st = {"path": "/m9.flac", "position_fmt": "01:00",
               "levels": [0.4] * 24, "peaks": [0.8] * 24}
-        for height in (52, 46, 40, 30, 24, 20, 16):
+        for height in (44, 40, 34, 28, 24, 20, 16):
             ui = MP_Audio_Player.TerminalPlayerUI(
                 engine=None, scanner=scanner, is_remote=True, ui_size_mode="VERTICAL")
             with patch.object(ui, "_get_status", return_value=st):
@@ -303,6 +343,16 @@ class TestVerticalPlayerMode(unittest.TestCase):
             self.assertEqual(header[1], 0)
             self.assertEqual(body[1], header[1] + header[3])
             self.assertGreater(body[3], 0)
+            # The panels must stay inside the window at every deck height, not
+            # just the default one. A hardcoded 23-row header overflowed as
+            # soon as the deck was shortened.
+            for rows in (44, 40, 30, 20, 12):
+                top, bottom = mod.player_panel_rects(
+                    40, rows, 9, 18, 7, 7, mode="VERTICAL")
+                self.assertEqual(top[1], 7)
+                self.assertAlmostEqual(top[1] + top[3], bottom[1])
+                self.assertLessEqual(bottom[1] + bottom[3], rows * 18 + 7 + 0.5, rows)
+                self.assertGreaterEqual(top[3], 9 * 18, rows)
 
     def test_host_launcher_forwards_the_vertical_flag(self):
         for mod in (lg_vulkan, lg_opengl):

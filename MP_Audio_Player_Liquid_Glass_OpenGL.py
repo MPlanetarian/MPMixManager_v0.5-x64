@@ -192,7 +192,31 @@ def _kill_player_processes() -> List[int]:
 COLS, ROWS = 120, 40
 # The portrait deck. It is the size M reaches first from the full window: one
 # narrow column, so the glass rectangle is taller than it is wide.
-VERTICAL_COLS, VERTICAL_ROWS = 40, 52
+VERTICAL_COLS, VERTICAL_ROWS = 40, 44
+
+
+# The deck's main-window height, mirrored from MP_Audio_Player so the host and
+# the child agree without the host importing the whole player. It shrinks with
+# the window the same way the player's own budget does.
+VERTICAL_MAIN_ROWS = 12
+VERTICAL_MAIN_MIN_ROWS = 9
+VERTICAL_EQ_ROWS = 11
+VERTICAL_EQ_MIN_ROWS = 4
+VERTICAL_PLAYLIST_MIN_ROWS = 5
+
+
+def vertical_main_rows(rows: int) -> int:
+    """Rows the player gives its main window in a deck of ``rows``."""
+    usable = max(3, int(rows) - 1)
+    main_rows = eq_rows = list_rows = 0
+    main_rows, eq_rows, list_rows = VERTICAL_MAIN_ROWS, VERTICAL_EQ_ROWS, VERTICAL_PLAYLIST_MIN_ROWS
+    while main_rows + eq_rows + list_rows > usable and eq_rows > VERTICAL_EQ_MIN_ROWS:
+        eq_rows -= 1
+    while main_rows + eq_rows + list_rows > usable and main_rows > VERTICAL_MAIN_MIN_ROWS:
+        main_rows -= 1
+    while main_rows + eq_rows + list_rows > usable and list_rows > 2:
+        list_rows -= 1
+    return max(1, min(main_rows, int(rows) - 1))
 # Used when Hack is not installed, and when a measured cell has no face yet.
 DEFAULT_FONT = "Monospace 11"
 # Glass shader opacity when the window opens. VTE text remains fully opaque.
@@ -269,12 +293,10 @@ def player_panel_rects(cols, rows, char_w, char_h, origin_x, origin_y, mode="NOR
         # The deck stacks three panels: the main window, the equaliser and the
         # playlist. Each panel keeps its own rectangle so the glass behind them
         # is shaped to the thing it sits under, not one slab down the column.
-        # Row heights match the player's own VERTICAL_MAIN_ROWS / EQ_ROWS.
-        main_rows, eq_rows = 23, 11
-        list_rows = max(5, rows - main_rows - eq_rows)
+        main_rows = vertical_main_rows(rows)
         return (
             box(1, 0, max(20, cols - 2), main_rows),
-            box(1, main_rows, max(20, cols - 2), eq_rows + list_rows),
+            box(1, main_rows, max(20, cols - 2), max(1, rows - main_rows)),
         )
     if mode == "MINI":
         return (box(2, 0, iw, 3), box(2, 3, iw, max(1, rows - 3)))

@@ -289,7 +289,27 @@ ROWS = 40
 CHAR_W = 9
 CHAR_H = 18
 # The portrait deck M reaches first from the full window.
-VERTICAL_COLS, VERTICAL_ROWS = 40, 52
+VERTICAL_COLS, VERTICAL_ROWS = 40, 44
+
+
+VERTICAL_MAIN_ROWS = 12
+VERTICAL_MAIN_MIN_ROWS = 9
+VERTICAL_EQ_ROWS = 11
+VERTICAL_EQ_MIN_ROWS = 4
+VERTICAL_PLAYLIST_MIN_ROWS = 5
+
+
+def vertical_main_rows(rows: int) -> int:
+    """Rows the player gives its main window in a deck of ``rows``."""
+    usable = max(3, int(rows) - 1)
+    main_rows, eq_rows, list_rows = VERTICAL_MAIN_ROWS, VERTICAL_EQ_ROWS, VERTICAL_PLAYLIST_MIN_ROWS
+    while main_rows + eq_rows + list_rows > usable and eq_rows > VERTICAL_EQ_MIN_ROWS:
+        eq_rows -= 1
+    while main_rows + eq_rows + list_rows > usable and main_rows > VERTICAL_MAIN_MIN_ROWS:
+        main_rows -= 1
+    while main_rows + eq_rows + list_rows > usable and list_rows > 2:
+        list_rows -= 1
+    return max(1, min(main_rows, int(rows) - 1))
 
 
 def _mode_grid(mode):
@@ -399,11 +419,10 @@ def player_panel_rects(cols=COLS, rows=ROWS, char_w=CHAR_W, char_h=CHAR_H, origi
         return box(2, 0, max(20, cols - 4), rows), (0.0, 0.0, 0.0, 0.0)
     elif m == "VERTICAL":
         # The deck stacks the main window, the equaliser and the playlist.
-        main_rows, eq_rows = 23, 11
-        list_rows = max(5, rows - main_rows - eq_rows)
+        main_rows = vertical_main_rows(rows)
         return (
             box(2, 0, max(20, cols - 4), main_rows),
-            box(2, main_rows, max(20, cols - 4), eq_rows + list_rows),
+            box(2, main_rows, max(20, cols - 4), max(1, rows - main_rows)),
         )
     elif m == "MINI":
         return box(2, 0, max(20, cols - 4), 3), box(2, 3, max(20, cols - 4), max(1, rows - 3))

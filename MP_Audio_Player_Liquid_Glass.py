@@ -55,7 +55,31 @@ except ImportError:
 COLS, ROWS = 120, 40
 # The portrait deck. It is the size M reaches first from the full window: one
 # narrow column, so the glass rectangle is taller than it is wide.
-VERTICAL_COLS, VERTICAL_ROWS = 40, 52
+VERTICAL_COLS, VERTICAL_ROWS = 40, 44
+
+
+# The deck's main-window height, mirrored from MP_Audio_Player so the host and
+# the child agree without the host importing the whole player. It shrinks with
+# the window the same way the player's own budget does.
+VERTICAL_MAIN_ROWS = 12
+VERTICAL_MAIN_MIN_ROWS = 9
+VERTICAL_EQ_ROWS = 11
+VERTICAL_EQ_MIN_ROWS = 4
+VERTICAL_PLAYLIST_MIN_ROWS = 5
+
+
+def vertical_main_rows(rows: int) -> int:
+    """Rows the player gives its main window in a deck of ``rows``."""
+    usable = max(3, int(rows) - 1)
+    main_rows = eq_rows = list_rows = 0
+    main_rows, eq_rows, list_rows = VERTICAL_MAIN_ROWS, VERTICAL_EQ_ROWS, VERTICAL_PLAYLIST_MIN_ROWS
+    while main_rows + eq_rows + list_rows > usable and eq_rows > VERTICAL_EQ_MIN_ROWS:
+        eq_rows -= 1
+    while main_rows + eq_rows + list_rows > usable and main_rows > VERTICAL_MAIN_MIN_ROWS:
+        main_rows -= 1
+    while main_rows + eq_rows + list_rows > usable and list_rows > 2:
+        list_rows -= 1
+    return max(1, min(main_rows, int(rows) - 1))
 # Used when Hack is not installed. Linux uses Hack 11 when that family is present.
 DEFAULT_FONT = "Monospace 11"
 CONFIG_DIR = Path.home() / ".config" / "mix-manager"
@@ -122,12 +146,11 @@ def player_panel_rects(cols, rows, cw, ch, ox, oy, mode="NORMAL"):
         # The deck stacks three panels: the main window, the equaliser and the
         # playlist. Each keeps its own rectangle, so the glass behind them is
         # shaped to the thing it sits under rather than one slab down the
-        # column. Row heights match the player's VERTICAL_MAIN_ROWS / EQ_ROWS.
-        main_rows, eq_rows = 23, 11
-        list_rows = max(5, rows - main_rows - eq_rows)
+        # column.
+        main_rows = vertical_main_rows(rows)
         return (
             b(1, 0, max(20, cols - 2), main_rows),
-            b(1, main_rows, max(20, cols - 2), eq_rows + list_rows),
+            b(1, main_rows, max(20, cols - 2), max(1, rows - main_rows)),
         )
     if mode == "MINI":
         return b(2, 0, iw, 3), b(2, 3, iw, max(1, rows - 3))
