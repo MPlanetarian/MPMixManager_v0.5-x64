@@ -382,6 +382,27 @@ class PhoneEqualiserTest(unittest.TestCase):
         self.assertIn("if (!phoneIsAudible())", fn)
         self.assertIn("phoneIsAudible", fn)
 
+    def test_the_spectrum_puller_only_exists_for_capture_streams(self):
+        """An always-on ScriptProcessorNode is what iOS tears down.
+
+        The muted pull node exists because WebKit drops AnalyserNode data when
+        nothing pulls the graph. An element source is already pulled by its
+        audible connection, so building the node for that path added a
+        2048-frame callback running ~21 times a second forever - the node most
+        often behind an iOS audio-session teardown, and one more reason the
+        page reloaded.
+        """
+        self.assertIn("if (mode === 'capture') attachSpectrumPull(ctx, analyser);", self.html)
+        # The unconditional call must be gone.
+        ensure = self.html[self.html.index("function ensureAudioGraph"):]
+        ensure = ensure[:ensure.index("function ")]
+        self.assertNotIn("            attachSpectrumPull(ctx, analyser);\n", ensure)
+        # attachSpectrumPull must not silently create a second graph reference.
+        pull_fn = self.html[self.html.index("function attachSpectrumPull"):]
+        pull_fn = pull_fn[:pull_fn.index("function ensureAudioGraph")]
+        self.assertIn("if (!ctx || !analyser) return;", pull_fn)
+        self.assertNotIn("audioGraph = audioGraph || {{}};", pull_fn)
+
     def test_engage_seeks_to_the_live_desk_position(self):
         """A desk player already in the mix must not start the phone at 0.
 

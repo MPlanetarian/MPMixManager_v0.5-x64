@@ -49,7 +49,7 @@ def _get_app_version() -> str:
                 return cand.read_text(encoding="utf-8").strip()
             except Exception:
                 pass
-    return "0.5.3 Stable (Sensorium)"
+    return "0.5.4 Stable (Sensorium)"
 
 VERSION = _get_app_version()
 
@@ -694,6 +694,18 @@ except ImportError:  # The companion is also importable from the repo root.
     except ImportError:
         suite_control = None  # type: ignore[assignment]
 
+# The same playlist reader the player and the exporter use. A playlist the
+# player accepts (M3U, M3U8, XSPF, PLS or JSON) is a playlist this page can
+# stream, without a second parser that only knows two of the five types.
+try:
+    import playlist_formats as _playlists
+except ImportError:
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import playlist_formats as _playlists  # type: ignore[no-redef]
+    except ImportError:
+        _playlists = None  # type: ignore[assignment]
+
 
 def launch_pad_status() -> Dict[str, Any]:
     if suite_control is None:
@@ -799,7 +811,7 @@ QUEUE_CACHE_TTL = 10.0
 # fields by name, and a positional tuple silently changed meaning the last time
 # a field was added.
 _queue_cache: Optional[Dict[str, Any]] = None
-_queue_source_state: Dict[str, Any] = {"fallback": False, "detail": ""}
+_queue_source_state: Dict[str, Any] = {"fallback": False, "detail": "", "music_offline": False}
 # Resolving the queue can take seconds (a 51k-entry music playlist), and the
 # dashboard polls hard. Only one thread may scan; the rest wait and then read
 # the fresh cache instead of starting their own scan.
@@ -1906,21 +1918,57 @@ def _music_sample_paths(paths: List[str], sample: int = 12) -> List[str]:
     return picked
 
 
+def _path_readable_now(path: Any) -> bool:
+    """True when this exact file can be opened and read right now.
+
+    A dropped rclone/FUSE mount keeps answering `os.stat()` from its attribute
+    cache and fails only on the read ("Transport endpoint is not connected").
+    A browser streaming such a file sees a body that ends early and reports it
+    as unplayable, which is a lie about the file. Used before recording a mix
+    as undecodable, so a flaky share can never blacklist a good track.
+    """
+    raw = str(path or "").strip()
+    if not raw:
+        return False
+    try:
+        if not stat.S_ISREG(os.stat(raw).st_mode):
+            return False
+        with open(raw, "rb") as probe:
+            return bool(probe.read(1))
+    except OSError:
+        return False
+
+
 def _music_sample_reachable(paths: List[str], sample: int = 12) -> bool:
-    """True when at least one playlist path is a real file on disk.
+    """True when at least one playlist path can actually be READ.
 
     The generated playlist names every track whether or not the SMB share is
     mounted. Sampling a spread of entries tells the dashboard to say
     "connecting" only when nothing in the library can be opened yet. It does
     not decide membership: the playlist itself is the list.
+
+    `os.stat` is not enough. A dropped rclone/FUSE mount keeps answering stat()
+    from its attribute cache long after the share is gone, and only the read
+    fails with "Transport endpoint is not connected". Probing stat alone
+    therefore called 55k unreachable tracks "reachable", the page offered every
+    one of them, and each stream attempt died mid-body. One byte proves the
+    difference, and it is one byte per sampled file, not a whole read.
     """
     for path in _music_sample_paths(paths, sample):
         try:
             st = os.stat(path)
         except OSError:
             continue
-        if stat.S_ISREG(st.st_mode) and st.st_size > MIN_STREAMABLE_BYTES:
-            return True
+        if not stat.S_ISREG(st.st_mode) or st.st_size <= MIN_STREAMABLE_BYTES:
+            continue
+        try:
+            with open(path, "rb") as probe:
+                if not probe.read(1):
+                    continue
+        except OSError:
+            # A dead mount: stat answered from cache, the read did not.
+            continue
+        return True
     return False
 
 
@@ -2061,24 +2109,13 @@ def _playlist_entry_paths(path: Path) -> List[str]:
     if not path.is_file():
         return []
     try:
-        if path.suffix.lower() == ".json":
-            data = json.loads(path.read_text(encoding="utf-8", errors="ignore"))
-            raw = data.get("tracks") if isinstance(data, dict) else data
-            paths: List[str] = []
-            for item in raw or []:
-                if isinstance(item, dict):
-                    item = item.get("path") or item.get("file") or ""
-                if isinstance(item, str) and is_audio_file(item):
-                    paths.append(item)
-            return paths
-        paths = []
-        for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            if is_audio_file(line):
-                paths.append(line)
-        return paths
+        # One reader for every container (M3U, M3U8, XSPF, PLS and JSON), the
+        # same one the player and the exporter use. Rows are only kept when the
+        # path is an audio file, so a stray line cannot become a track here.
+        if _playlists is None:
+            return []
+        rows = _playlists.read_playlist(path)
+        return [row["path"] for row in rows if row.get("path") and is_audio_file(row["path"])]
     except Exception:
         return []
 
@@ -2493,25 +2530,33 @@ def build_stream_queue(force: bool = False) -> List[str]:
             files = scan_playlist_files()
             _queue_source_state.update({
                 "fallback": False,
+                "music_offline": False,
                 "detail": "" if files else (
                     f"The playlist named by WEB_COMPANION_PLAYLIST is empty or missing ({explicit})"
                 ),
             })
         elif mode == LIBRARY_MODE_MUSIC:
             files = scan_music_files()
-            # The Music button loads the music playlist. Substituting the mix
-            # archive when a share was offline is what made the list say it was
-            # switching to Music and then fill with mixes.
+            # The Music button loads the music playlist, and it must NOT quietly
+            # become the mix archive: that once made the list say it was loading
+            # tracks and then fill with mixes. But when the shares are dead the
+            # page must not sit on 55k unreadable rows pretending to connect
+            # forever either - `music_offline` lets the dashboard say what is
+            # actually wrong and offer the archive in one tap.
             if files and not _music_sample_reachable(files):
                 detail = (
-                    "Connecting the music folders. The playlist is loaded; "
-                    "playback starts as soon as the shares are online."
+                    "The music folders are offline. Reconnect the shares, "
+                    "or switch to the Mix Archive to keep listening."
                 )
             elif not files:
                 detail = "No music tracks found in the music library"
             else:
                 detail = ""
-            _queue_source_state.update({"fallback": False, "detail": detail})
+            _queue_source_state.update({
+                "fallback": False,
+                "detail": detail,
+                "music_offline": bool(files) and bool(detail),
+            })
         elif mode == LIBRARY_MODE_FAVORITES:
             files = scan_favorite_files()
             # An empty Favorites playlist is a normal state, not a broken
@@ -2519,10 +2564,11 @@ def build_stream_queue(force: bool = False) -> List[str]:
             # another mode. Marking tracks with [H] in the player fills it.
             _queue_source_state.update({
                 "fallback": False,
+                "music_offline": False,
                 "detail": "" if files else "No favorites yet - press H in the player to add one",
             })
         else:
-            _queue_source_state.update({"fallback": False, "detail": ""})
+            _queue_source_state.update({"fallback": False, "detail": "", "music_offline": False})
             files = scan_archive_files()
             # A launchd/systemd job on macOS is denied read access to external
             # volumes until it is approved in Full Disk Access. Without this the
@@ -3142,6 +3188,45 @@ def next_playable_index(queue: List[str], start: int,
     return None
 
 
+# A queue entry is only handed to a device if it can be opened right now. The
+# verdict is cached for a few seconds because the status poll asks repeatedly
+# and a network mount read costs a round trip: long enough to keep polling
+# cheap, short enough that a share coming back is noticed almost at once.
+_READABLE_TTL = 3.0
+_readable_cache: Dict[str, Tuple[float, bool]] = {}
+
+
+def _entry_readable(path: str) -> bool:
+    now = time.time()
+    hit = _readable_cache.get(path)
+    if hit and (now - hit[0]) < _READABLE_TTL:
+        return hit[1]
+    verdict = _path_readable_now(path)
+    if len(_readable_cache) > 4096:
+        _readable_cache.clear()
+    _readable_cache[path] = (now, verdict)
+    return verdict
+
+
+def next_readable_index(queue: List[str], start: int) -> Optional[int]:
+    """First index at or after `start` whose file can actually be read.
+
+    Kept for callers that want to resolve a starting point before a session is
+    created (the engage path). It is deliberately NOT used to keep the serving
+    cursor honest on every poll: see the note in `current_stream_file()` - a
+    probe-driven cursor alternates between files on a flaky mount and the
+    dashboard restarts its player on every change.
+    """
+    if not queue:
+        return None
+    start = int(start or 0) % len(queue)
+    for offset in range(len(queue)):
+        idx = (start + offset) % len(queue)
+        if _entry_readable(queue[idx]):
+            return idx
+    return None
+
+
 def unplayable_count(queue: Optional[List[str]] = None) -> int:
     """How many entries of the queue have already failed to decode.
 
@@ -3210,6 +3295,17 @@ def current_stream_file(cached: bool = False) -> Tuple[str, Dict[str, Any]]:
         state["position_sec"] = 0.0
         state["duration_sec"] = 0.0
         state["started_at"] = time.time() if state.get("playing") else 0.0
+    # Deliberately NO readability re-point here.
+    #
+    # A first attempt did exactly that - skip to the next entry whose file
+    # opens - and it caused a reload loop in the browser. The verdict comes from
+    # a short-lived probe, so on a flaky mount it flips between "readable" and
+    # "not", which makes this function name a DIFFERENT file on alternate polls:
+    # a, b, a, b. The dashboard treats a changed active_file as a track change
+    # and re-points its <audio> element every time, so the player restarted
+    # roughly every two seconds. The file the listener is on must be stable;
+    # unreadable entries are dealt with where the failure is actually known -
+    # a 404 from /api/stream (skipped by the page) and the unplayable ledger.
     return queue[idx], state
 
 
@@ -3666,6 +3762,7 @@ def get_playback_status(cli_theme: Optional[str] = None, follow: str = "") -> Di
         "mode_label": MODE_LABELS.get(get_library_mode(), "Library"),
         "library_fallback": bool(_queue_source_state.get("fallback")),
         "library_detail": _queue_source_state.get("detail", ""),
+        "music_offline": bool(_queue_source_state.get("music_offline")),
         # True once every candidate in the queue has been proven undecodable.
         # The dashboard uses it to show one clear "nothing in this playlist can
         # play" message instead of retrying dead URLs forever.
@@ -3797,6 +3894,7 @@ def get_mini_playlist(limit: Optional[int] = None, follow: str = "", query: str 
             "mode_label": MODE_LABELS.get(mode, "Library"),
             "library_fallback": bool(_queue_source_state.get("fallback")),
             "library_detail": _queue_source_state.get("detail", ""),
+        "music_offline": bool(_queue_source_state.get("music_offline")),
             "playback_exhausted": False,
             "unplayable_count": 0,
             "modes": [{"id": mid, "label": label} for mid, label in MODE_LABELS.items()],
@@ -3865,6 +3963,7 @@ def get_mini_playlist(limit: Optional[int] = None, follow: str = "", query: str 
         "mode_label": MODE_LABELS.get(mode, "Library"),
         "library_fallback": bool(_queue_source_state.get("fallback")),
         "library_detail": _queue_source_state.get("detail", ""),
+        "music_offline": bool(_queue_source_state.get("music_offline")),
         "playback_exhausted": bool(state.get("playback_exhausted")),
         "unplayable_count": unplayable_count(queue),
         "modes": [{"id": mid, "label": label} for mid, label in MODE_LABELS.items()],
@@ -3894,6 +3993,7 @@ def play_random_track() -> Dict[str, Any]:
         "player_script": str(get_base_dir() / "MP_Audio_Player.py"),
         "library_fallback": bool(_queue_source_state.get("fallback")),
         "library_detail": _queue_source_state.get("detail", ""),
+        "music_offline": bool(_queue_source_state.get("music_offline")),
     }
     if total < 1:
         detail = _queue_source_state.get("detail") or (
@@ -4123,7 +4223,17 @@ def control_player(action: str, params: Optional[Dict[str, List[str]]] = None) -
             # A media error on the phone says nothing about the host's own
             # queue, but it does say the shared file is undecodable. Record it
             # so the next phone skips it, then let the desk player keep going.
-            mark_unplayable(str((params.get("path") or [""])[0] or ""))
+            #
+            # Only record it when the host can actually read the file. A dropped
+            # rclone/FUSE mount answers stat() from cache and fails the read with
+            # "Transport endpoint is not connected"; the browser then sees a
+            # truncated body and reports MEDIA_ERR_SRC_NOT_SUPPORTED, which is
+            # indistinguishable from real corruption. Writing those off would
+            # permanently blacklist good tracks because a share hiccuped, so the
+            # reachability of the file itself is the deciding vote.
+            failed_path = str((params.get("path") or [""])[0] or "")
+            if _path_readable_now(failed_path):
+                mark_unplayable(failed_path)
             return True
         if action == "report_position":
             # The host's own clock is authoritative, so a phone clock report is
@@ -4526,22 +4636,34 @@ def render_html_page(theme: Dict[str, Any]) -> str:
         body.dynamic-rainbow-glass-active #rainbowWash {
             display: block;
             position: fixed;
-            /* Larger than the viewport so the rotation never flashes a corner. */
-            inset: -50%;
+            /* Exactly the viewport. This used to be `inset: -50%` so a
+               continuously rotating layer still covered the corners. On an
+               iPhone 16 Pro Max (430x932 CSS at DPR 3) that is a 14.4 MP
+               surface -- about 58 MB of RGBA -- promoted to its own compositor
+               layer and re-rasterised forever, which is what got the WebContent
+               process killed and made iOS Safari silently reload the page. The
+               wash no longer rotates (the hue is stepped in JS), so it needs no
+               oversized box at all. */
+            inset: 0;
             z-index: -1;
             pointer-events: none;
             background:
                 radial-gradient(circle at 22% 18%, hsl(var(--rainbow-hue) 90% 62% / 0.62), transparent 52%),
                 radial-gradient(circle at 78% 16%, hsl(calc(var(--rainbow-hue) + 140) 95% 58% / 0.48), transparent 50%),
                 radial-gradient(circle at 48% 92%, hsl(calc(var(--rainbow-hue) + 280) 90% 58% / 0.55), transparent 55%);
-            animation: dynamicRainbowHue 24s linear infinite,
-                       dynamicRainbowBreath 6s ease-in-out infinite;
-            will-change: transform;
+            /* Opacity only. Do NOT rotate or transform this layer: a transform
+               animation forces the whole wash to be re-composited every frame,
+               and any `backdrop-filter` above it then re-blurs a backdrop that
+               never stops changing. That pair is what reloaded the iPhone. */
+            animation: dynamicRainbowBreath 6s ease-in-out infinite;
         }
+        /* The cards stay translucent (--card-bg carries 0.72 alpha under this
+           theme) but are not blurred. `backdrop-filter` over the animating wash
+           made the compositor read back and re-blur the full card every frame. */
         body.dynamic-rainbow-glass-active .card,
         body.dynamic-rainbow-glass-active .overlay-card {
-            backdrop-filter: blur(18px) saturate(1.35);
-            -webkit-backdrop-filter: blur(18px) saturate(1.35);
+            backdrop-filter: none;
+            -webkit-backdrop-filter: none;
         }
         body.dynamic-rainbow-glass-active .overlay-card {
             box-shadow: 0 16px 50px rgba(0, 0, 0, 0.9),
@@ -5193,6 +5315,21 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             box-shadow: var(--btn-shadow);
             text-transform: uppercase;
             letter-spacing: 1px;
+        }}
+        /* Second action on the gate: only appears when the chosen library
+           cannot play, so the listener is never left on a dead button. */
+        .btn-switch-library {{
+            margin-top: 10px;
+            padding: 12px 20px;
+            font-size: 0.82rem;
+            background: rgba(255, 255, 255, 0.10);
+            box-shadow: none;
+            border: 1px solid var(--accent-secondary);
+            color: var(--accent-secondary);
+        }}
+        .btn-switch-library:disabled {{
+            opacity: 0.55;
+            cursor: default;
         }}
         /* Short viewports (landscape phones, split screens): shrink the card
            instead of scrolling it, so the engage button stays centred and on
@@ -6166,15 +6303,32 @@ def render_html_page(theme: Dict[str, Any]) -> str:
         <span class="restart-spinner" aria-hidden="true"></span>
         <span id="restartNoticeText">MP Audio Player (Web) has been restarted — reconnecting…</span>
     </div>
-    <!-- Stream Activation Modal to Satisfy Mobile Autoplay Policies -->
-    <div id="streamOverlay" class="show">
+    <!-- Stream Activation Modal to Satisfy Mobile Autoplay Policies.
+         The dashboard starts the stream by itself as soon as it loads and stays
+         out of the way while it does, so this gate begins hidden and comes up
+         only when the browser refused that (iOS Safari, or a desktop autoplay
+         policy) or when the host has nothing queued. The whole card is then the
+         engage control: one tap anywhere starts the same stream the automatic
+         attempt wanted to start, so the listener never has to aim at the
+         button. -->
+    <div id="streamOverlay"
+         ontouchend="activateMobileStream(event)"
+         onclick="activateMobileStream(event)">
         <div class="overlay-card">
             <h2>🎧 MP Audio Player (Web)</h2>
-            <p>Tap below to engage mobile studio audio streaming and dashboard synchronization.</p>
+            <p id="streamOverlayLead">Tap anywhere to start the mix on this device.</p>
             <p id="streamOverlayDetail" class="stream-overlay-detail" style="display: none;"></p>
             <button type="button" class="btn-activate-stream"
                     ontouchend="activateMobileStream(event)"
                     onclick="activateMobileStream(event)">Engage Audio Stream</button>
+            <!-- Only shown when the selected library itself is unplayable (dead
+                 music shares). One tap switches to the Mix Archive instead of
+                 leaving the listener on a button that cannot produce sound. -->
+            <button type="button" id="streamOverlaySwitch"
+                    class="btn-activate-stream btn-switch-library"
+                    ontouchend="event.stopPropagation(); switchToPlayableLibrary();"
+                    onclick="event.stopPropagation(); switchToPlayableLibrary();"
+                    style="display: none;">Switch to Mix Archive</button>
         </div>
     </div>
 
@@ -6455,6 +6609,12 @@ def render_html_page(theme: Dict[str, Any]) -> str:
         // its final frame and end the instant play() is called.
         let lastServerResume = 0.0;
         let audioStreamEngaged = false;
+        // True once a real person started (or restarted) this page's stream,
+        // as opposed to the automatic start that runs on page load. The
+        // difference matters: an unattended run may retry a dead read, but it
+        // must not permanently write off archive files on a transient share
+        // failure, which is what advancing past an "unplayable" mix does.
+        let listenerEngaged = false;
         // Set only by the Play/Stop button. A stall, a track change and a
         // reconnect must keep going unless the listener asked them to stop.
         let listenerPaused = false;
@@ -6476,6 +6636,18 @@ def render_html_page(theme: Dict[str, Any]) -> str:
         // Restart detection. The server reports a fresh instance id on every
         // launch; a change means the companion was stopped and started again.
         let serverInstance = "";
+        // Flap guard. `active_file` changing is normally a track change, and the
+        // element is re-pointed once. But a server that alternates A, B, A makes
+        // that a reload loop that restarts playback on every poll. A genuine
+        // change keeps naming the new file, so the change is only acted on once
+        // the same new file has been reported on consecutive polls.
+        const FILE_CHANGE_CONFIRMATIONS = 2;
+        const FILE_FLAP_COOLDOWN_MS = 15000;
+        let pendingFile = "";
+        let pendingFileCount = 0;
+        let secondLastFile = "";
+        let fileFollowFrozenUntil = 0;
+        let fileFlapDetected = false;
         let restartNoticeShown = false;
         // A restart notice is transient; a skip notice belongs to the run of
         // unplayable mixes and stays put until a mix really plays. Without the
@@ -6507,6 +6679,9 @@ def render_html_page(theme: Dict[str, Any]) -> str:
         let consecutiveSkips = 0;
         let skipRunStartAt = 0;
         let exhaustedNoticeShown = false;
+        // True once an unattended run has told the listener to tap. Repeats are
+        // suppressed so a failing source cannot repaint the gate per file.
+        let unattendedStopShown = false;
         // Set when a run stops for a reason that will not fix itself (every
         // entry failed, or the source share dropped mid-walk). Unlike
         // exhaustedNoticeShown this is not cleared by the next status poll: the
@@ -7392,6 +7567,26 @@ def render_html_page(theme: Dict[str, Any]) -> str:
                     // not a drop, and reconnecting here would throw away the
                     // 30s skip the listener just made.
                     if (code === 1 /* MEDIA_ERR_ABORTED */) return;
+                    // A network failure is not a damaged file. The archive is on
+                    // a mounted share, so a read that dies mid-body arrives as
+                    // MEDIA_ERR_NETWORK or as a short body, and both say
+                    // "the connection went away", not "this mix is broken".
+                    // Only a decode/source refusal is proof about the file.
+                    if (code === 2 /* MEDIA_ERR_NETWORK */) {{
+                        resumeAfterNetworkDrop();
+                        return;
+                    }}
+                    // Nothing here is a listener decision: this page started the
+                    // stream by itself. Writing files off from that unattended
+                    // run would permanently skip good mixes because a share
+                    // hiccuped for a second. So an automatic start may retry and
+                    // report, but only a stream a person engaged may advance the
+                    // queue past a file.
+                    const automaticRun = audioStreamEngaged && !listenerEngaged;
+                    if (automaticRun) {{
+                        resumeAfterNetworkDrop();
+                        return;
+                    }}
                     const decodeFailure =
                         code === 3 /* MEDIA_ERR_DECODE */ ||
                         code === 4 /* MEDIA_ERR_SRC_NOT_SUPPORTED */;
@@ -7468,7 +7663,7 @@ def render_html_page(theme: Dict[str, Any]) -> str:
                 return;
             }}
             // 272 is the theme's home violet, so the first frame does not
-            // jump to red. A full turn takes the same 24s as the wash spin.
+            // jump to red. A full turn still takes 24s.
             const hue = (272 + (performance.now() / 24000) * 360) % 360;
             document.documentElement.style.setProperty('--rainbow-hue', hue.toFixed(1));
         }}
@@ -7487,7 +7682,13 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             if (rainbowShouldRun()) {{
                 if (!rainbowTimer) {{
                     tickRainbow();
-                    rainbowTimer = setInterval(tickRainbow, 100);
+                    // 250 ms, not 100. Each tick rewrites --rainbow-hue, and 27
+                    // custom properties on the theme scope derive from it, so
+                    // every tick is a full style recalculation of the document.
+                    // At 10 Hz that was 10 recalcs a second on a phone that is
+                    // also decoding FLAC; at 4 Hz the 24 s cycle is still smooth
+                    // (1.7 degrees per step) and the phone stays responsive.
+                    rainbowTimer = setInterval(tickRainbow, 250);
                 }}
             }} else {{
                 stopRainbowDrive();
@@ -7797,6 +7998,64 @@ def render_html_page(theme: Dict[str, Any]) -> str:
         // the overlay up and the first touch starts the same stream.
         let lastEngageAt = 0;
 
+        // Automatic playback is attempted as soon as the page loads. A browser
+        // that refuses it (an autoplay policy, not a fault) usually approves the
+        // very next interaction, so the first gesture anywhere on the dashboard
+        // retries the same engage. That tap may land on a tab or a transport
+        // button rather than the gate, which is why the listener is on the
+        // document and runs before the control's own handler.
+        let gestureEngageArmed = false;
+        let gestureEngageHandler = null;
+
+        function armFirstGestureEngage() {{
+            if (gestureEngageArmed) return;
+            gestureEngageArmed = true;
+            gestureEngageHandler = function (ev) {{
+                // Audio is already running, or the listener deliberately
+                // stopped it: nothing to retry.
+                if ((audioStreamEngaged && audioElIsPlaying()) || listenerPaused) {{
+                    disarmGestureEngage();
+                    return;
+                }}
+                const target = ev && ev.target;
+                const tag = target && target.tagName ? String(target.tagName).toLowerCase() : '';
+                // Do not hijack typing. The assistant prompt and the playlist
+                // search are the two places a keystroke means text.
+                if (ev && ev.type === 'keydown' && (tag === 'input' || tag === 'textarea')) return;
+                // A tap on a control with its own meaning (transport, tabs,
+                // volume, track row, the gate itself) must do exactly what it
+                // says. Starting audio as a side effect of pressing Pause is
+                // not a favour, so the retry only claims taps on the page
+                // itself - anywhere the listener would otherwise get nothing.
+                if (target && target.closest && target.closest(
+                        'button, a, input, select, textarea, label, [onclick], [role="button"]')) {{
+                    return;
+                }}
+                // One entry point: the same handler the Engage button runs, so
+                // the tap gets the unlock, the rescan and the explanation.
+                activateMobileStream();
+            }};
+            // touchend and click are the two events WebKit approves; keydown
+            // covers the desktop keyboard. pointerdown is deliberately not
+            // used: on iOS it does not grant playback activation, and it would
+            // spend activateMobileStream's de-dupe window before the touchend
+            // that actually can start the sound. activateMobileStream also
+            // collapses the two events one tap produces.
+            document.addEventListener('touchend', gestureEngageHandler, true);
+            document.addEventListener('click', gestureEngageHandler, true);
+            document.addEventListener('keydown', gestureEngageHandler, true);
+        }}
+
+        function disarmGestureEngage() {{
+            if (!gestureEngageArmed) return;
+            gestureEngageArmed = false;
+            if (!gestureEngageHandler) return;
+            document.removeEventListener('touchend', gestureEngageHandler, true);
+            document.removeEventListener('click', gestureEngageHandler, true);
+            document.removeEventListener('keydown', gestureEngageHandler, true);
+            gestureEngageHandler = null;
+        }}
+
         // The listener started this page's own audio. Later polls and taps
         // follow that stream. While a desk player is also on air, copy its
         // file into the session first so the switch does not jump mixes.
@@ -7804,7 +8063,8 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             audioStreamEngaged = true;
             networkResumeAttempts = 0;
             networkResumePending = false;
-            if (!hostPlayerActive) {{
+            // Audio is running, so a pending "tap to start" retry is spent.
+            disarmGestureEngage();            if (!hostPlayerActive) {{
                 followStream = true;
                 return;
             }}
@@ -7830,7 +8090,7 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             if (listenerPaused || !audioStreamEngaged || !activeAudioFile) return;
             if (networkResumePending) return;
             if (networkResumeAttempts >= 5) {{
-                showStreamOverlay('The audio stream dropped. Tap Engage Audio Stream to start it again.');
+                showStreamOverlay('The audio stream dropped. Tap anywhere to start it again.');
                 return;
             }}
             networkResumePending = true;
@@ -7866,12 +8126,27 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             }}, 350 * attempt);
         }}
 
-        function engageStreamFromServer(resumePos) {{
+        // `opts.gesture` is true when a real tap (or keypress) is calling us.
+        // `opts.auto` is true for the page-load attempt, where a refusal is
+        // expected on iPhone and must read as "tap to start", not as an error.
+        function engageStreamFromServer(resumePos, opts) {{
+            const options = opts || {{}};
+            const onGesture = Boolean(options.gesture);
+            const automatic = Boolean(options.auto);
             const audioEl = document.getElementById('mobileAudioStream');
             if (!audioEl) return;
             // In the Engage tap this still runs on the gesture's turn, which
-            // is the only moment iOS will resume the audio graph.
-            ensureAudioGraph();
+            // is the only moment iOS will resume the audio graph. On the
+            // automatic attempt a newly created context would start suspended,
+            // and routing the element through it would silence the mix on
+            // desktop Chrome, so the graph is only built from a real gesture
+            // (or from a context a previous gesture already unlocked).
+            if (onGesture) {{
+                unlockAudioContext();
+                ensureAudioGraph();
+            }} else if (audioCtx && audioCtx.state === 'running') {{
+                ensureAudioGraph();
+            }}
             if (!activeAudioFile) {{
                 // /api/stream?file= would 404 here, which is indistinguishable
                 // from a dead button on the phone. Explain the real cause.
@@ -7880,6 +8155,13 @@ def render_html_page(theme: Dict[str, Any]) -> str:
                 return;
             }}
             const streamUrl = '/api/stream?file=' + encodeURIComponent(activeAudioFile);
+            // A real gesture makes this a listener-driven run, which is the only
+            // kind allowed to advance the queue past a file it cannot decode.
+            if (onGesture) {{
+                listenerEngaged = true;
+                unattendedStopShown = false;
+                skipRunStopped = false;
+            }}
             const current = audioEl.currentSrc || audioEl.src || '';
             let alreadyPointed = false;
             try {{
@@ -7918,11 +8200,7 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             try {{
                 pending = audioEl.play();
             }} catch (err) {{
-                const why = (err && (err.message || err.name))
-                    ? ((err.name ? err.name + ': ' : '') + (err.message || 'playback was blocked'))
-                    : 'This phone blocked playback. Tap again.';
-                noteTapExplanation(why);
-                showStreamOverlay(streamUnavailableReason || why);
+                reportEngageRefused(err, onGesture, automatic, audioEl);
                 return;
             }}
             if (!pending || !pending.then) {{
@@ -7954,12 +8232,39 @@ def render_html_page(theme: Dict[str, Any]) -> str:
                 hideRestartNotice();
                 hideStreamOverlay();
             }}).catch((err) => {{
-                const why = (err && (err.message || err.name))
-                    ? ((err.name ? err.name + ': ' : '') + (err.message || 'playback was blocked'))
-                    : 'This phone blocked playback. Tap again.';
-                noteTapExplanation(why);
-                showStreamOverlay(streamUnavailableReason || why);
+                reportEngageRefused(err, onGesture, automatic, audioEl);
             }});
+        }}
+
+        // A refused play() has two very different meanings. The page-load
+        // attempt being refused is not a failure: the browser's autoplay
+        // policy simply wants a gesture, so the gate stays up with a calm
+        // "tap to start" line and the next touch retries. A tap being refused
+        // is a real answer and keeps the specific reason on screen.
+        function reportEngageRefused(err, onGesture, automatic, audioEl) {{
+            const why = (err && (err.message || err.name))
+                ? ((err.name ? err.name + ': ' : '') + (err.message || 'playback was blocked'))
+                : 'This browser blocked playback. Tap again.';
+            const notAllowed = Boolean(err && (
+                err.name === 'NotAllowedError'
+                || /notallowed|user gesture|user didn.t interact|autoplay/i.test(
+                    String((err && err.name) + ' ' + (err && err.message)))));
+            if (!onGesture && (automatic || notAllowed)) {{
+                // Keep the element pointed at the mix so the tap only has to
+                // call play(), and say the one thing that helps: tap. The lead
+                // line already carries the instruction, so an empty detail
+                // avoids printing it twice, and a real host problem still
+                // outranks it.
+                clearTimeout(autoStartWatchdog);
+                autoStartWatchdog = 0;
+                armFirstGestureEngage();
+                setStreamOverlayLead(STREAM_LEAD_TAP);
+                noteTapExplanation(STREAM_LEAD_TAP);
+                showStreamOverlay(streamUnavailableReason || '');
+                return;
+            }}
+            noteTapExplanation(why);
+            showStreamOverlay(streamUnavailableReason || why);
         }}
 
         // After a skip the element is in an error/ended state, so it does not
@@ -7980,6 +8285,22 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             // the archive stopped answering). A late `error` from the last
             // source must not restart the walk or the banner.
             if (skipRunStopped) return;
+            // An unattended run must not write files off. The only thing that
+            // proves a mix is broken is a decode refusal, and even that is not
+            // worth permanently skipping a library entry because a page opened
+            // on its own. Leave the queue alone, say how to try, and let the
+            // tap that follows become a normal listener run.
+            if (!listenerEngaged) {{
+                if (!unattendedStopShown) {{
+                    unattendedStopShown = true;
+                    noteTapExplanation(STREAM_LEAD_TAP);
+                    setStreamOverlayLead(STREAM_LEAD_TAP);
+                    showStreamOverlay(streamUnavailableReason ||
+                        'This mix could not be loaded. Tap anywhere to try again.');
+                    armFirstGestureEngage();
+                }}
+                return;
+            }}
             const label = file.split('/').pop() || file;
             const alreadyKnown = unplayableFiles.has(file);
             const now = performance.now();
@@ -8027,12 +8348,12 @@ def render_html_page(theme: Dict[str, Any]) -> str:
                 hideRestartNotice();
                 showRestartNotice(
                     'The music library stopped responding — skipping is paused. ' +
-                    'Check the archive drive or share, then tap “Engage Audio Stream”.',
+                    'Check the archive drive or share, then tap anywhere to try again.',
                     'skip');
                 showPlaybackExhaustedNotice(
                     'The last ' + skipBurstCount + ' mixes could not be loaded. ' +
                     'The archive drive or share may be offline. Reconnect it, then ' +
-                    'tap “Engage Audio Stream” to try again.');
+                    'tap anywhere to try again.');
                 return;
             }}
             // The queue length is what bounds the run: once this phone has
@@ -8118,7 +8439,15 @@ def render_html_page(theme: Dict[str, Any]) -> str:
         // to the player tab only. Without this the fixed overlay would cover
         // the tab bar and the assistant could never be reached before the
         // first successful play().
-        let streamOverlayWanted = true;
+        //
+        // It starts hidden: the dashboard is usable at once and the stream
+        // starts by itself, so a gate that says "tap to engage" is only shown
+        // when the browser actually refused or there is nothing to play.
+        let streamOverlayWanted = false;
+        // Last `autoplay.status` the host reported. "pending" means its queue
+        // is still being built, so a missing file is not yet a reason to ask
+        // the listener for anything.
+        let hostAutoplayStatus = "";
         // The last thing a tap told the listener, and when. The 2 s status poll
         // must not paint its generic waiting text over a specific answer the
         // tap just produced.
@@ -8140,6 +8469,16 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             document.body.classList.toggle('overlay-active', visible);
         }}
 
+        // The gate's headline copy, switched to an invitation only once the
+        // browser has actually refused, so the page never asks for a tap it
+        // does not need.
+        const STREAM_LEAD_TAP = 'Tap anywhere to start the mix on this device.';
+
+        function setStreamOverlayLead(text) {{
+            const lead = document.getElementById('streamOverlayLead');
+            if (lead && text) lead.innerText = text;
+        }}
+
         function showStreamOverlay(detail) {{
             streamOverlayWanted = true;
             const note = document.getElementById('streamOverlayDetail');
@@ -8151,6 +8490,11 @@ def render_html_page(theme: Dict[str, Any]) -> str:
                     note.style.display = 'none';
                 }}
             }}
+            // A visible gate must always be actionable. The status poll can put
+            // the gate up a moment before the automatic attempt is refused, and
+            // a tap in that window used to do nothing at all. Arming here means
+            // whatever brought the gate up, the very next tap starts the mix.
+            if (!(audioStreamEngaged && audioElIsPlaying())) armFirstGestureEngage();
             renderStreamOverlay();
         }}
 
@@ -8166,31 +8510,97 @@ def render_html_page(theme: Dict[str, Any]) -> str:
         // leaves the note alone.
         const TAP_EXPLANATION_HOLD_MS = 8000;
 
+        // True while the host's own queue build is still running. Asking the
+        // listener to "engage" a stream that has no file yet is the very gate
+        // this page is trying to get rid of, so a pending host leaves the
+        // dashboard alone until it names a file (or reports a real problem).
+        function hostQueueIsStillBuilding() {{
+            return !hostAutoplayStatus || hostAutoplayStatus === 'pending';
+        }}
+
         function syncStreamOverlayDetail() {{
-            if (!streamOverlayWanted) return;
-            if (activeAudioFile) return;
+            if (activeAudioFile) {{
+                setStreamSwitchVisible(false);
+                return;
+            }}
             if (lastTapExplanation && (performance.now() - lastTapExplanationAt) < TAP_EXPLANATION_HOLD_MS) {{
                 return;
             }}
+            // The queue is being built: the automatic attempt has not had its
+            // chance yet, so there is nothing to ask the listener for.
+            if (hostQueueIsStillBuilding() && !audioStreamEngaged) return;
+            // The selected music library is offline while the archive is fine.
+            // The Engage button cannot help, so offer the library that can play
+            // instead of a button that only produces the same warning again.
+            setStreamSwitchVisible(Boolean(musicLibraryOffline));
+            setStreamOverlayLead(STREAM_LEAD_TAP);
             showStreamOverlay(streamUnavailableReason ||
                 'Waiting for the host to queue a mix…');
         }}
 
+        // True when the host reports the Music library is selected but none of
+        // its files can be read. The gate then offers the Mix Archive.
+        let musicLibraryOffline = false;
+
+        function setStreamSwitchVisible(visible) {{
+            const btn = document.getElementById('streamOverlaySwitch');
+            if (btn) btn.style.display = visible ? 'block' : 'none';
+        }}
+
+        // One tap: switch to a library that can play, then start the stream from
+        // inside the same gesture so the browser approves the play().
+        async function switchToPlayableLibrary() {{
+            const btn = document.getElementById('streamOverlaySwitch');
+            if (btn) btn.disabled = true;
+            try {{
+                unlockAudioContext();
+                await switchLibraryMode('MIX_ARCHIVE');
+                // The queue has just been rebuilt; wait for the status poll to
+                // name the first archive file, then engage inside this gesture.
+                for (let i = 0; i < 20 && !activeAudioFile; i++) {{
+                    await fetchStatus();
+                    if (!activeAudioFile) await new Promise(r => setTimeout(r, 150));
+                }}
+                if (activeAudioFile) {{
+                    engageStreamFromServer(lastServerResume, {{ gesture: true }});
+                }} else {{
+                    showStreamOverlay(streamUnavailableReason ||
+                        'The Mix Archive has nothing playable either.');
+                }}
+            }} catch (e) {{
+                showStreamOverlay('Could not switch library. Tap again to retry.');
+            }} finally {{
+                if (btn) btn.disabled = false;
+                setStreamSwitchVisible(false);
+            }}
+        }}
+
         function hideStreamOverlay() {{
             streamOverlayWanted = false;
+            clearTimeout(autoStartWatchdog);
+            autoStartWatchdog = 0;
             // Playback started, so whatever a tap explained is settled. The
             // hold must not keep a stale message over a gate that is now open.
             lastTapExplanation = "";
             lastTapExplanationAt = 0;
+            setStreamOverlayLead(STREAM_LEAD_TAP);
+            // Drop the detail line too: "Waiting for the host to queue a mix…"
+            // was painted before the first status poll named the file, and a
+            // later refusal would otherwise reopen the gate showing it.
+            const note = document.getElementById('streamOverlayDetail');
+            if (note) {{
+                note.innerText = "";
+                note.style.display = 'none';
+            }}
             renderStreamOverlay();
             const banner = document.getElementById('mobileAudioBanner');
             if (banner) banner.style.display = 'block';
         }}
 
         let streamAutoStarted = false;
-        // True when the dashboard is mirroring a running MP Audio Player. In
-        // that mode the host owns the audio: the phone must not open its own
-        // stream, or two devices render the mix out of step with each other.
+        // True when the dashboard is mirroring a running MP Audio Player. Its
+        // desk clock decides where the page starts, but it no longer decides
+        // whether the page plays: the dashboard engages the stream by itself.
         let hostPlayerActive = false;
         let hostPlayerFile = "";
         // The desk player's clock at the last status poll, and when that poll
@@ -8273,27 +8683,50 @@ def render_html_page(theme: Dict[str, Any]) -> str:
         }}
 
         // Called once the dashboard knows which file the server is streaming.
+        //
+        // The stream starts by itself: this is the automatic press of "Engage
+        // Audio Stream". Chrome and Firefox on a LAN origin generally allow it,
+        // and every browser falls back to the gate plus the first-touch retry
+        // when it does not. A live desk player no longer suppresses it — the
+        // listener opened the page to hear the music here, so this page adopts
+        // the desk's file, position and level and plays it.
+        const AUTO_START_WATCHDOG_MS = 4000;
+        let autoStartWatchdog = 0;
+
         function maybeAutoStartStream() {{
             if (streamAutoStarted) return;
             if (!activeAudioFile) return;
             if (needsPlaybackGesture()) {{
-                // Leave the gate up. Playing here is outside a tap, so iOS
-                // refuses it and the later Engage play() then fails too.
-                return;
-            }}
-            // A live host player is the source of truth and is already making
-            // sound where it should. Auto-engaging here would start a second,
-            // unsynchronised copy on the phone.
-            if (hostPlayerActive) {{
-                hideStreamOverlay();
+                // iOS refuses a play() outside a tap, and a rejected play()
+                // marks the element so the later Engage tap fails too. Leave
+                // the gate up and let the tap do the first load. Any tap will
+                // do: the retry listens on the whole document.
+                armFirstGestureEngage();
+                setStreamOverlayLead(STREAM_LEAD_TAP);
+                showStreamOverlay(streamUnavailableReason);
                 return;
             }}
             streamAutoStarted = true;
-            engageStreamFromServer(lastServerResume);
+            // If the attempt neither starts audio nor explains a refusal (a
+            // silent autoplay policy, or a dead stream), the listener must not
+            // be left with a silent page and no control. The gate comes up on
+            // its own.
+            clearTimeout(autoStartWatchdog);
+            autoStartWatchdog = setTimeout(() => {{
+                autoStartWatchdog = 0;
+                if (audioStreamEngaged || audioElIsPlaying()) return;
+                setStreamOverlayLead(STREAM_LEAD_TAP);
+                noteTapExplanation(STREAM_LEAD_TAP);
+                showStreamOverlay(streamUnavailableReason || '');
+                armFirstGestureEngage();
+            }}, AUTO_START_WATCHDOG_MS);
+            engageStreamFromServer(lastServerResume, {{ auto: true }});
         }}
 
-        // Keep the local element pointed at the host's file so a listener can
-        // opt in with "Engage Audio Stream", without playing automatically.
+        // Keep the local element pointed at the host's file so a tap can start
+        // it immediately. On iOS this only records the file: the first load has
+        // to happen inside the tap, so binding src here would spend the gesture
+        // approval the tap needs.
         function syncHostPlayerFile() {{
             const audioEl = document.getElementById('mobileAudioStream');
             if (!audioEl || !activeAudioFile) return;
@@ -8318,11 +8751,15 @@ def render_html_page(theme: Dict[str, Any]) -> str:
 
         // touchend and click both arrive for one tap. The first call is the
         // gesture that iOS will approve; the second must not restart the mix.
-        let lastEngageTapAt = 0;
+        //
+        // It starts at -Infinity, not 0: with 0, a tap in the first 700 ms of
+        // the page's life was swallowed by the de-dupe and the button looked
+        // dead. Only a previous tap may suppress a tap.
+        let lastEngageTapAt = -Infinity;
 
         function activateMobileStream() {{
             const now = (typeof performance !== 'undefined') ? performance.now() : Date.now();
-            if (now - lastEngageTapAt < 700) return;
+            if (isFinite(lastEngageTapAt) && now - lastEngageTapAt < 700) return;
             lastEngageTapAt = now;
             // Resume before any later await. A context created after the fetch
             // stays suspended on iPhone and the equaliser (and the mix, once
@@ -8340,7 +8777,9 @@ def render_html_page(theme: Dict[str, Any]) -> str:
                 rescanForEngage();
                 return;
             }}
-            engageStreamFromServer(lastServerResume);
+            // This runs inside a real tap, so the browser will approve it even
+            // when the automatic attempt at page load was refused.
+            engageStreamFromServer(lastServerResume, {{ gesture: true }});
         }}
 
         // The unlock must happen inside the tap, before any await: iOS only
@@ -8414,7 +8853,7 @@ def render_html_page(theme: Dict[str, Any]) -> str:
                         showStreamOverlay(empty);
                         return;
                     }}
-                    engageStreamFromServer(lastServerResume);
+                    engageStreamFromServer(lastServerResume, {{ gesture: true }});
                 }})
                 .catch(() => {{
                     if (token !== engageRescanToken) return;
@@ -8458,14 +8897,14 @@ def render_html_page(theme: Dict[str, Any]) -> str:
                 pending = audioEl.play();
             }} catch (e) {{
                 showStreamOverlay(streamUnavailableReason ||
-                    'This browser blocked playback. Tap Engage Audio Stream.');
+                    'This browser blocked playback. Tap anywhere to start the mix.');
                 return;
             }}
             sendAction('play');
             if (pending && pending.then) {{
                 pending.then(() => noteStreamEngaged()).catch(() => {{
                     showStreamOverlay(streamUnavailableReason ||
-                        'This browser blocked playback. Tap Engage Audio Stream.');
+                        'This browser blocked playback. Tap anywhere to start the mix.');
                 }});
             }} else {{
                 noteStreamEngaged();
@@ -8533,6 +8972,14 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             // The audible connection does that for the element source. This
             // muted processor does it for a capture-stream source, which must
             // not be wired to the speakers or the mix plays twice.
+            //
+            // Only for the capture path: an element source is already pulled by
+            // its audible connection, so calling this there added a second
+            // always-on processor for nothing. A 2048-frame ScriptProcessorNode
+            // wakes the audio thread ~21 times a second forever, and on iOS it
+            // is the node that most often gets the audio session torn down.
+            if (!ctx || !analyser) return;
+            if (!(analyser.context === ctx)) return;
             try {{
                 const pull = ctx.createScriptProcessor(2048, 1, 1);
                 const mute = ctx.createGain();
@@ -8603,10 +9050,12 @@ def render_html_page(theme: Dict[str, Any]) -> str:
                 if (src.indexOf('/api/stream') !== -1) audioGraph = {{ failed: true }};
                 return null;
             }}
-            attachSpectrumPull(ctx, analyser);
             freqBins = new Uint8Array(analyser.frequencyBinCount);
             timeBins = new Uint8Array(analyser.fftSize);
             audioGraph = {{ analyser: analyser, source: source, mode: mode, gain: mixGain }};
+            // Only a captureStream source needs an artificial pull. The element
+            // source is pulled by its audible connection to the destination.
+            if (mode === 'capture') attachSpectrumPull(ctx, analyser);
             captureSilenceFrames = 0;
             captureSawSignal = false;
             return audioGraph;
@@ -9377,7 +9826,13 @@ def render_html_page(theme: Dict[str, Any]) -> str:
                     skipRunStartAt = 0;
                 }}
                 updateAutoplayNotice(data.autoplay);
+                // The host builds its queue at boot and again after a library
+                // switch. `pending` means the automatic attempt has no file to
+                // ask for yet, so the gate stays down and the next poll with a
+                // file starts the stream instead of asking for a tap.
+                hostAutoplayStatus = (data.autoplay && data.autoplay.status) || "";
                 streamUnavailableReason = streamUnavailableDetail(data);
+                musicLibraryOffline = Boolean(data.music_offline);
                 syncStreamOverlayDetail();
 
                 // A running host player means the workstation is the output.
@@ -9393,6 +9848,50 @@ def render_html_page(theme: Dict[str, Any]) -> str:
                 }}
 
                 if (data.active_file && activeAudioFile !== data.active_file) {{
+                    // Require the new file to be named twice in a row before the
+                    // element is re-pointed. A real track change keeps naming the
+                    // new file; a flapping cursor alternates A, B, A, B and never
+                    // settles, which used to reload the player every poll. This
+                    // costs one poll (2 s) on a genuine change and makes a bounce
+                    // completely inert. The very first file needs no confirmation:
+                    // there is nothing yet to flap against, and delaying it would
+                    // just slow the initial start.
+                    if (activeAudioFile) {{
+                        if (data.active_file === pendingFile) {{
+                            pendingFileCount += 1;
+                        }} else {{
+                            pendingFile = data.active_file;
+                            pendingFileCount = 1;
+                        }}
+                        if (pendingFileCount < FILE_CHANGE_CONFIRMATIONS) {{
+                            fileFlapDetected = true;
+                            return;
+                        }}
+                        // Confirmed. Now reject an oscillation: A -> B -> A is a
+                        // flapping cursor, not two track changes. Latch it, so the
+                        // page stops following changes until the server has named
+                        // one file steadily for FILE_FLAP_COOLDOWN_MS. Without the
+                        // latch an alternating server still restarted playback
+                        // every few polls, just more slowly.
+                        const nowMs = performance.now();
+                        if (data.active_file === secondLastFile) {{
+                            fileFlapDetected = true;
+                            fileFollowFrozenUntil = nowMs + FILE_FLAP_COOLDOWN_MS;
+                            pendingFile = "";
+                            pendingFileCount = 0;
+                            return;
+                        }}
+                        if (nowMs < fileFollowFrozenUntil) {{
+                            fileFlapDetected = true;
+                            pendingFile = "";
+                            pendingFileCount = 0;
+                            return;
+                        }}
+                        secondLastFile = activeAudioFile || "";
+                        fileFollowFrozenUntil = 0;
+                    }}
+                    pendingFile = "";
+                    pendingFileCount = 0;
                     // A mix that just ran to its end still counts as "was
                     // playing": the element has already flipped to ended, so
                     // audioElIsPlaying() is false by the time the server names
@@ -9416,6 +9915,7 @@ def render_html_page(theme: Dict[str, Any]) -> str:
                     const keepListening = audioStreamEngaged && !listenerPaused
                         && (!hostPlayerActive || followStream);
                     activeAudioFile = data.active_file;
+                    fileFlapDetected = false;
                     audioStreamConfigured = false;
                     lastServerPos = -1.0;
                     lastServerResume = Number(data.resume_sec) || 0;
@@ -10050,6 +10550,7 @@ class CompanionHandler(http.server.BaseHTTPRequestHandler):
                 "total": len(build_stream_queue_cached()),
                 "library_fallback": bool(_queue_source_state.get("fallback")),
                 "library_detail": _queue_source_state.get("detail", ""),
+        "music_offline": bool(_queue_source_state.get("music_offline")),
             }
             self._send_json(200 if chosen else 400, payload)
         elif url.path == "/api/playlist":
@@ -10147,6 +10648,24 @@ class CompanionHandler(http.server.BaseHTTPRequestHandler):
                 self._send_json(404, {
                     "error": "no_audio_frames",
                     "detail": "The mix file has no playable audio.",
+                })
+                return
+
+            # A network mount can answer stat() from its cache and then fail the
+            # actual read ("Transport endpoint is not connected"). Answering 200
+            # with Content-Length for a body we cannot deliver made the browser
+            # report ERR_CONTENT_LENGTH_MISMATCH, which the dashboard read as
+            # "the music library stopped responding" and used to write files off.
+            # Prove the first block is readable before any header is written, so
+            # a dead share is a clean 404 the page can skip quickly.
+            try:
+                with open(file_path, "rb") as probe:
+                    if not probe.read(1):
+                        raise OSError("empty read")
+            except OSError:
+                self._send_json(404, {
+                    "error": "unreadable",
+                    "detail": "The mix file could not be read from the archive.",
                 })
                 return
 
