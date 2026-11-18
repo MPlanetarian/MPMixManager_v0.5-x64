@@ -77,6 +77,9 @@ fragment float4 liquid_glass_fragment(
     float3 theme = mix(hi, accent, 0.42);
     theme = mix(theme, refl, 0.20);
 
+    // Retro Linux Memories' highlight is the flat charcoal #2d2d2d.
+    float darkGlass = 1.0 - step(0.02, length(hi - float3(0.1765)));
+
     // Caustics & still water body
     float caust = hash21(floor(frag * 0.12) + u.res.z * 0.05);
     float caustFine = hash21(floor(frag * 0.24) - u.res.z * 0.08);
@@ -87,19 +90,22 @@ fragment float4 liquid_glass_fragment(
     // Panel well shading
     float3 panelCol = mix(float3(0.34, 0.36, 0.44), theme, 0.34);
     water = mix(water, panelCol, panel * 0.45);
-    water += mix(float3(1.0), theme, 0.45) * panelLip * 0.22;
+    float3 darkWater = mix(float3(0.1765), accent, 0.05);
+    water = mix(water, darkWater, darkGlass);
+    water += mix(float3(1.0), theme, 0.45) * panelLip * 0.22 * mix(1.0, 0.35, darkGlass);
 
     // Outer rim refraction & sloped glass highlights
     float3 col = water;
-    col = mix(col, mix(float3(1.0), theme, 0.28), large * 0.80);
-    col = mix(col, mix(theme, float3(1.0), 0.25), shoulder * 0.55);
-    col = mix(col, float3(1.0), hair);
+    float3 rimHi = mix(float3(1.0), float3(0.35, 0.38, 0.42), darkGlass);
+    col = mix(col, mix(rimHi, theme, 0.28), large * mix(0.80, 0.28, darkGlass));
+    col = mix(col, mix(theme, rimHi, 0.25), shoulder * mix(0.55, 0.22, darkGlass));
+    col = mix(col, rimHi, hair * mix(1.0, 0.22, darkGlass));
 
     // Specular highlight from mouse cursor position
     float2 m = float2(u.themeA.w, u.themeB.w);
     float2 lp = (m - uv) * float2(max(u.res.w, 0.5), 1.0);
     float spec = pow(max(0.0, 1.0 - length(lp) * 1.8), 8.0);
-    col += float3(1.0) * spec * 0.28 * large;
+    col += float3(1.0) * spec * 0.28 * large * mix(1.0, 0.25, darkGlass);
 
     // Close button badge (top right)
     if (u.bezel.w > 0.5) {
@@ -122,6 +128,7 @@ fragment float4 liquid_glass_fragment(
 
     // Alpha with 10% core transparency reduction and dynamic breathing modulation
     float alpha = 0.50 * (1.0 - panel * 0.25);
+    alpha = mix(alpha, 0.97, darkGlass);
     float voidOut = 1.0 - step(0.001, dot(theme, float3(0.299, 0.587, 0.114)));
     col = mix(col, float3(0.0), voidOut);
     if (u.themeC.w > 0.0) {

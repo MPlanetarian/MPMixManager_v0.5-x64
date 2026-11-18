@@ -79,9 +79,15 @@ THEMES: dict[str, tuple[str, str, str, str, str, str, str, str, str, str, str]] 
     "retro_terminal": ("Old Style Unix Terminal Retro Mode (White on Black)", "Monochrome VT100: White Text Only on Black Background", "#ffffff", "#ffffff", "#ffffff", "#777777", "#ffffff", "#888888", "#ffffff", "#ffffff", "#ffffff"),
     "sensorium": ("Sensorium", "Bright Tangerine, Acid Chartreuse & Electric Azure on a Light Coral Pane", "#5c2400", "#263d00", "#0b2f6b", "#7a3a3a", "#2b0a10", "#52242c", "#263d00", "#5e140f", "#4a3400"),
     "retro_linux_memories": ("Retro Linux Memories", "Classic Retro Linux GTK Dark Slate, VeraCrypt Blue Selection & Beveled Steel", "#15539e", "#5b86bb", "#f0ad4e", "#545453", "#ffffff", "#919190", "#5cb85c", "#d9534f", "#f0ad4e"),
+    "blood_moon": ("Blood Moon [Crimson Eclipse]", "Vivid Blood Crimson, Scarlet & Dark Ruby on Dark Wine Pane", "#ff2040", "#ff5a5f", "#b40020", "#991a2e", "#ffeaed", "#8c404d", "#ff5a5f", "#ff2040", "#ff5a5f"),
 }
 
 THEME_ALIASES: dict[str, str] = {
+    "blood_moon": "blood_moon",
+    "blood moon": "blood_moon",
+    "blood-moon": "blood_moon",
+    "crimson": "blood_moon",
+    "vampire": "blood_moon",
     "sensorium": "sensorium",
     "sensorium_interface": "sensorium",
     "sensorium interface": "sensorium",

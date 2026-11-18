@@ -7,17 +7,22 @@ with a fixed ``MENU_WHITE``, which made every theme look the same: white text
 on a dark pane. This pins the restored behaviour and the one guard that came
 with it.
 
-Two rows are not plain theme colour:
+Several rows are not the theme's own accent:
 
-* ``into_darkness_void_out`` and ``retro_terminal`` are white-on-black
-  themes, so their ink is legitimately white.
-* Four themes (``dracula``, ``nord``, ``gruvbox`` and ``cyberpunk``) have an
-  accent that is too dark on their own pane — as low as 2.1:1. Those inks are
-  mixed toward white until they reach the 4.5:1 WCAG AA floor. The hue is
-  kept; only its lightness moves. ``dracula`` goes further: its navigation
-  rows use the theme's soft lavender-gray (190, 181, 216) rather than the
-  coral-pink accent, so the menu reads as light purple-gray on the
-  ``#282A36`` pane while the ``[numbers]`` keep the pink accent.
+* ``into_darkness_void_out``, ``dreamworlds``, ``nord`` and ``solarized`` are
+  white-on-dark themes, so their ink is legitimately white. ``matrix`` keeps
+  its phosphor green on the black pane, and ``retro_terminal`` is a grey.
+* Four themes (``dracula``, ``gruvbox``, ``cyberpunk`` and the others on a
+  pale field) have an accent that is too dark on their own pane — as low as
+  2.1:1. Those inks are mixed toward black until they reach the 4.5:1 WCAG AA
+  floor. The hue is kept; only its lightness moves. ``dracula`` goes further:
+  its navigation rows use the theme's soft lavender-gray (190, 181, 216)
+  rather than the coral-pink accent, so the menu reads as light purple-gray on
+  the ``#282A36`` pane while the ``[numbers]`` keep the pink accent.
+
+``Dreamworlds`` moved to a black pane with white ink, ``Nord`` to its own
+``#2e3440`` slate, ``Solarized`` to a deep amber so white stays readable on
+the yellow, and ``Dynamic Liquid Glass`` to the light purple ``#d8b4fe``.
 
 ``THEME_BG`` is the console pane ``set_theme_colors`` paints for the same
 theme, so contrast is measurable in the test rather than assumed.
@@ -31,24 +36,28 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 MGR_SH = BASE_DIR / "Mix_Archive_Manager.sh"
 
 # theme -> (menu ink R, G, B). Every value is published by set_theme_colors.
-# Each hue pulled toward black until it clears 4.5:1 on the still-water field.
-# Into Darkness stays white: its field is the void-out black.
+# Each hue is pulled toward black until it clears 4.5:1 on the still-water
+# field, except where the theme keeps a dark pane of its own. Stream of
+# Frequency, Dynamic Liquid Glass, Cosmic Supernova and Dreamworlds Liquid use
+# dark native fields, so their hues are lightened instead. Dreamworlds, The
+# Matrix, Nord and Solarized now sit on dark panes and use white ink; The
+# Matrix keeps its phosphor green.
 EXPECTED_INK = {
-    "stream_of_frequency": (92, 86, 5),
+    "stream_of_frequency": (76, 217, 123),
     "sensorium": (43, 10, 16),
-    "dreamworlds": (150, 95, 225),
-    "dynamic_rainbow_liquid_glass": (134, 11, 125),
-    "dreamworlds_liquid": (7, 92, 53),
+    "dreamworlds": (255, 255, 255),
+    "dynamic_rainbow_liquid_glass": (216, 180, 254),
+    "dreamworlds_liquid": (199, 125, 255),
     "dreamworlds_ultra": (80, 67, 95),
-    "cosmic_supernova": (124, 62, 7),
-    "retro_linux_memories": (81, 58, 6),
+    "cosmic_supernova": (224, 86, 253),
+    "retro_linux_memories": (255, 183, 20),
     "into_darkness_void_out": (255, 255, 255),
     "retro_terminal": (87, 87, 87),
     "the_whitest_white": (0, 0, 0),
     "dracula": (77, 73, 88),
-    "nord": (61, 88, 69),
-    "matrix": (8, 100, 15),
-    "solarized": (65, 76, 6),
+    "nord": (255, 255, 255),
+    "matrix": (57, 255, 20),
+    "solarized": (255, 255, 255),
     "tokyo": (144, 42, 11),
     "monokai": (20, 89, 7),
     "gruvbox": (103, 73, 61),
@@ -62,10 +71,14 @@ EXPECTED_INK = {
     "ice_cold": (11, 83, 145),
 }
 
-# Into Darkness is the one white-on-black theme. Any other theme must NOT
-# come out white: the still-water field is pale.
+# The themes whose console pane is black or a dark slate: plain white is the
+# readable ink there. Dreamworlds, The Matrix, Nord and Solarized were moved to
+# such panes on purpose. The Matrix keeps its phosphor green, which is not white.
 LEGIT_WHITE = {
     "into_darkness_void_out",
+    "dreamworlds",
+    "nord",
+    "solarized",
 }
 
 # Any 256/truecolor background fill means the row is painted on a block again.
@@ -136,9 +149,9 @@ class TestMenuTextThemeInk(unittest.TestCase):
     def test_every_ink_is_readable_on_its_own_pane(self):
         """No theme falls below 4.5:1, the WCAG AA floor for body text.
 
-        The pane is the pale still-water field, so every hue has been pulled
-        toward black until it clears the floor. Into Darkness is white on
-        black and clears it easily.
+        Pale still-water panes pull each hue toward black; the dark native
+        panes lighten it. Into Darkness is white on black and clears it
+        easily.
         """
         for raw in _run(DUMP).splitlines():
             theme, _sgr, ink_rgb, pane_rgb = raw.split("|")

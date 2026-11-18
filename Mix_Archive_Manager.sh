@@ -1,5 +1,13 @@
 #!/usr/bin/env bash
-if [[ "$OSTYPE" == "darwin"* && "${BASH_VERSINFO[0]:-0}" -lt 4 && "${BASH_SOURCE[0]}" == "$0" ]]; then for bash in /opt/homebrew/bin/bash /usr/local/bin/bash; do [[ -x "$bash" ]] && exec "$bash" "${BASH_SOURCE[0]}" "$@"; done; fi; _mp_self="${BASH_SOURCE[0]}"; while [ -h "$_mp_self" ]; do _mp_dir="$(cd -P "$(dirname "$_mp_self")" >/dev/null 2>&1 && pwd)"; _mp_self="$(readlink "$_mp_self")"; case "$_mp_self" in /*) ;; *) _mp_self="$_mp_dir/$_mp_self" ;; esac; done; SCRIPT_DIR="$(cd -P "$(dirname "$_mp_self")" >/dev/null 2>&1 && pwd)"; unset _mp_self _mp_dir; MANAGER_START_EPOCH="${MANAGER_START_EPOCH:-${EPOCHSECONDS:-$(date +%s 2>/dev/null || echo 0)}}"; export MANAGER_START_EPOCH; shopt -s checkwinsize 2>/dev/null || true; export PYTHONIOENCODING="utf-8" PYTHONUTF8=1; UNAME_S="${UNAME_S:-$(uname -s 2>/dev/null)}"; UNAME_M="${UNAME_M:-$(uname -m 2>/dev/null)}"; _TERM_LINES=""; _TERM_COLS=""; _TERM_RESIZED=1; _on_winch() { _TERM_RESIZED=1; }; trap '_on_winch' WINCH; S70="======================================================================"; D70="----------------------------------------------------------------------"; if [ -z "${VERSION:-}" ]; then if [ -f "$SCRIPT_DIR/VERSION" ]; then VERSION="$(head -n 1 "$SCRIPT_DIR/VERSION" | tr -d '\r\n')"; else VERSION="0.5.3 Stable (Sensorium)"; fi; fi; export VERSION
+if [[ "$OSTYPE" == "darwin"* && "${BASH_VERSINFO[0]:-0}" -lt 4 && "${BASH_SOURCE[0]}" == "$0" ]]; then for bash in /opt/homebrew/bin/bash /usr/local/bin/bash; do [[ -x "$bash" ]] && exec "$bash" "${BASH_SOURCE[0]}" "$@"; done; fi; _mp_self="${BASH_SOURCE[0]}"; while [ -h "$_mp_self" ]; do _mp_dir="$(cd -P "$(dirname "$_mp_self")" >/dev/null 2>&1 && pwd)"; _mp_self="$(readlink "$_mp_self")"; case "$_mp_self" in /*) ;; *) _mp_self="$_mp_dir/$_mp_self" ;; esac; done; SCRIPT_DIR="$(cd -P "$(dirname "$_mp_self")" >/dev/null 2>&1 && pwd)"; unset _mp_self _mp_dir; MANAGER_START_EPOCH="${MANAGER_START_EPOCH:-${EPOCHSECONDS:-$(date +%s 2>/dev/null || echo 0)}}"; export MANAGER_START_EPOCH; shopt -s checkwinsize 2>/dev/null || true; export PYTHONIOENCODING="utf-8" PYTHONUTF8=1; UNAME_S="${UNAME_S:-$(uname -s 2>/dev/null)}"; UNAME_M="${UNAME_M:-$(uname -m 2>/dev/null)}"; _TERM_LINES=""; _TERM_COLS=""; _TERM_RESIZED=1; _on_winch() { _TERM_RESIZED=1; }; trap '_on_winch' WINCH; S70="======================================================================"; D70="----------------------------------------------------------------------"; if [ -z "${VERSION:-}" ]; then if [ -f "$SCRIPT_DIR/VERSION" ]; then VERSION="$(head -n 1 "$SCRIPT_DIR/VERSION" | tr -d '\r\n')"; else VERSION="0.5.4 Stable (Sensorium)"; fi; fi; export VERSION
+# One-shot calls (-v/--version, --update, --help, --beszel-status, ...) print a
+# few lines and exit. They must never repaint the console with the saved theme
+# pane, so remember whether this launch has any argument at all. Only a plain
+# `./Mix_Archive_Manager.sh` with none loads the menu and owns the background.
+# A sourced copy is a function library, not a launch: it keeps the old
+# behaviour and paints for whatever the caller passes.
+_MP_LAUNCHED=0; [ "${BASH_SOURCE[0]}" = "$0" ] && _MP_LAUNCHED=1
+if [ "$_MP_LAUNCHED" = "1" ] && [ "$#" -gt 0 ]; then _MP_CLI_ARGS_PRESENT=1; else _MP_CLI_ARGS_PRESENT=0; fi
 # A recycled pid must not open the portrait window from the previous MP Gui.
 if [ "${MP_GUI_SESSION:-0}" = "1" ]; then rm -f "${HOME}/.config/mix-manager/gui_window_shape.$$" 2>/dev/null || true; fi
 _has_flatpak() { [[ -d "/var/lib/flatpak/app/$1" || -d "$HOME/.local/share/flatpak/app/$1" ]] && return 0; command -v flatpak &>/dev/null || return 1; [[ -z "${_FP_LIST_CACHE+x}" ]] && _FP_LIST_CACHE="$(flatpak list --columns=application 2>/dev/null)"; [[ "$_FP_LIST_CACHE" == *"$1"* ]]; }
@@ -476,7 +484,7 @@ RED='\033[38;2;217;83;79m'; GREEN='\033[38;2;92;184;92m'; YELLOW='\033[38;2;240;
 into_darkness_void_out|into_darkness|"Into Darkness (Void Out)"|"Into Darkness"|"Void Out")
 RED='\033[38;2;200;200;200m'; GREEN='\033[38;2;200;200;200m'; YELLOW='\033[1;37m'; BLUE='\033[38;2;72;72;72m'; MAGENTA='\033[38;2;200;200;200m'; CYAN='\033[1;37m'; CURRENT_THEME="into_darkness_void_out" ;;
 retro_terminal|unix_terminal|retro_unix|old_style_unix|unix_retro|white_on_black|retro|terminal|vt100|"Old Style Unix Terminal Retro Mode (White on Black)"|"Old Style Unix Terminal Retro Mode"|"Old Style Unix Terminal")
-RED='\033[1;37m' GREEN='\033[1;37m' YELLOW='\033[1;37m'; BLUE='\033[0;37m' MAGENTA='\033[1;37m' CYAN='\033[1;37m'; CURRENT_THEME="retro_terminal" ;; the_whitest_white|whitest_white|whitest|white|"The Whitest White"|"The Whitest White Theme"|"The Whitest White MP Mix Manager") RED='\033[38;2;0;0;0m'; GREEN='\033[38;2;0;0;0m'; YELLOW='\033[38;2;0;0;0m'; BLUE='\033[38;2;0;0;0m'; MAGENTA='\033[38;2;0;0;0m'; CYAN='\033[38;2;0;0;0m'; CURRENT_THEME="the_whitest_white" ;; dracula|dreamworlds_neon) RED='\033[38;5;212m' GREEN='\033[38;5;84m' YELLOW='\033[38;5;228m'; BLUE='\033[38;5;62m' MAGENTA='\033[38;5;141m' CYAN='\033[38;5;117m'; CURRENT_THEME="dracula" ;; nord|ice_cold) RED='\033[38;5;167m' GREEN='\033[38;5;108m' YELLOW='\033[38;5;221m'; BLUE='\033[38;5;110m' MAGENTA='\033[38;5;139m' CYAN='\033[38;5;117m'; CURRENT_THEME="nord" ;; matrix|phosphor) RED='\033[38;5;124m' GREEN='\033[38;5;46m' YELLOW='\033[38;5;190m'; BLUE='\033[38;5;29m' MAGENTA='\033[38;5;35m' CYAN='\033[38;5;120m'; CURRENT_THEME="matrix" ;; solarized) RED='\033[38;5;166m' GREEN='\033[38;5;64m' YELLOW='\033[38;5;136m'; BLUE='\033[38;5;33m' MAGENTA='\033[38;5;125m' CYAN='\033[38;5;37m'; CURRENT_THEME="solarized" ;; tokyo) RED='\033[38;5;203m' GREEN='\033[38;5;114m' YELLOW='\033[38;5;222m'; BLUE='\033[38;5;111m' MAGENTA='\033[38;5;176m' CYAN='\033[38;5;73m'; CURRENT_THEME="tokyo" ;; monokai) RED='\033[38;5;197m' GREEN='\033[38;5;148m' YELLOW='\033[38;5;220m'; BLUE='\033[38;5;141m' MAGENTA='\033[38;5;208m' CYAN='\033[38;5;81m'; CURRENT_THEME="monokai" ;; gruvbox|retro_studio) RED='\033[38;5;167m' GREEN='\033[38;5;142m' YELLOW='\033[38;5;214m'; BLUE='\033[38;5;109m' MAGENTA='\033[38;5;175m' CYAN='\033[38;5;108m'; CURRENT_THEME="gruvbox" ;; emerald) RED='\033[38;5;204m' GREEN='\033[38;5;48m' YELLOW='\033[38;5;221m'; BLUE='\033[38;5;31m' MAGENTA='\033[38;5;78m' CYAN='\033[38;5;86m'; CURRENT_THEME="emerald" ;; classic) RED='\033[0;31m' GREEN='\033[0;32m' YELLOW='\033[0;33m'; BLUE='\033[0;34m' MAGENTA='\033[0;35m' CYAN='\033[0;36m'; CURRENT_THEME="classic" ;; cyberpunk|cyber_neon) RED='\033[38;5;196m' GREEN='\033[38;5;48m' YELLOW='\033[38;5;226m'; BLUE='\033[38;5;45m' MAGENTA='\033[38;5;198m' CYAN='\033[38;5;51m'; CURRENT_THEME="cyberpunk" ;; *) RED='\033[38;2;255;0;0m' GREEN='\033[38;2;0;255;0m' YELLOW='\033[38;2;255;153;51m'; BLUE='\033[38;2;102;102;255m' MAGENTA='\033[38;2;166;77;255m' CYAN='\033[38;2;153;153;255m'; CURRENT_THEME="dreamworlds_ultra" ;; esac
+RED='\033[1;37m' GREEN='\033[1;37m' YELLOW='\033[1;37m'; BLUE='\033[0;37m' MAGENTA='\033[1;37m' CYAN='\033[1;37m'; CURRENT_THEME="retro_terminal" ;; the_whitest_white|whitest_white|whitest|white|"The Whitest White"|"The Whitest White Theme"|"The Whitest White MP Mix Manager") RED='\033[38;2;0;0;0m'; GREEN='\033[38;2;0;0;0m'; YELLOW='\033[38;2;0;0;0m'; BLUE='\033[38;2;0;0;0m'; MAGENTA='\033[38;2;0;0;0m'; CYAN='\033[38;2;0;0;0m'; CURRENT_THEME="the_whitest_white" ;; blood_moon|blood-moon|"blood moon"|crimson|crimson_eclipse|"crimson eclipse"|vampire|blood|blood_ruby|"blood ruby"|bloodmoon|"Blood Moon"|"Blood Moon [Crimson Eclipse]"|"Blood Moon MP Mix Manager") RED='\033[38;2;255;32;64m'; GREEN='\033[38;2;255;90;95m'; YELLOW='\033[38;2;255;154;162m'; BLUE='\033[38;2;180;0;32m'; MAGENTA='\033[38;2;220;20;60m'; CYAN='\033[38;2;255;68;85m'; CURRENT_THEME="blood_moon" ;; dracula|dreamworlds_neon) RED='\033[38;5;212m' GREEN='\033[38;5;84m' YELLOW='\033[38;5;228m'; BLUE='\033[38;5;62m' MAGENTA='\033[38;5;141m' CYAN='\033[38;5;117m'; CURRENT_THEME="dracula" ;; nord|ice_cold) RED='\033[38;5;167m' GREEN='\033[38;5;108m' YELLOW='\033[38;5;221m'; BLUE='\033[38;5;110m' MAGENTA='\033[38;5;139m' CYAN='\033[38;5;117m'; CURRENT_THEME="nord" ;; matrix|phosphor) RED='\033[38;5;124m' GREEN='\033[38;5;46m' YELLOW='\033[38;5;190m'; BLUE='\033[38;5;29m' MAGENTA='\033[38;5;35m' CYAN='\033[38;5;120m'; CURRENT_THEME="matrix" ;; solarized) RED='\033[38;5;166m' GREEN='\033[38;5;64m' YELLOW='\033[38;5;136m'; BLUE='\033[38;5;33m' MAGENTA='\033[38;5;125m' CYAN='\033[38;5;37m'; CURRENT_THEME="solarized" ;; tokyo) RED='\033[38;5;203m' GREEN='\033[38;5;114m' YELLOW='\033[38;5;222m'; BLUE='\033[38;5;111m' MAGENTA='\033[38;5;176m' CYAN='\033[38;5;73m'; CURRENT_THEME="tokyo" ;; monokai) RED='\033[38;5;197m' GREEN='\033[38;5;148m' YELLOW='\033[38;5;220m'; BLUE='\033[38;5;141m' MAGENTA='\033[38;5;208m' CYAN='\033[38;5;81m'; CURRENT_THEME="monokai" ;; gruvbox|retro_studio) RED='\033[38;5;167m' GREEN='\033[38;5;142m' YELLOW='\033[38;5;214m'; BLUE='\033[38;5;109m' MAGENTA='\033[38;5;175m' CYAN='\033[38;5;108m'; CURRENT_THEME="gruvbox" ;; emerald) RED='\033[38;5;204m' GREEN='\033[38;5;48m' YELLOW='\033[38;5;221m'; BLUE='\033[38;5;31m' MAGENTA='\033[38;5;78m' CYAN='\033[38;5;86m'; CURRENT_THEME="emerald" ;; classic) RED='\033[0;31m' GREEN='\033[0;32m' YELLOW='\033[0;33m'; BLUE='\033[0;34m' MAGENTA='\033[0;35m' CYAN='\033[0;36m'; CURRENT_THEME="classic" ;; cyberpunk|cyber_neon) RED='\033[38;5;196m' GREEN='\033[38;5;48m' YELLOW='\033[38;5;226m'; BLUE='\033[38;5;45m' MAGENTA='\033[38;5;198m' CYAN='\033[38;5;51m'; CURRENT_THEME="cyberpunk" ;; *) RED='\033[38;2;255;0;0m' GREEN='\033[38;2;0;255;0m' YELLOW='\033[38;2;255;153;51m'; BLUE='\033[38;2;102;102;255m' MAGENTA='\033[38;2;166;77;255m' CYAN='\033[38;2;153;153;255m'; CURRENT_THEME="dreamworlds_ultra" ;; esac
 # Bracketed menu numbers [ 0]. Each theme keeps its own hue. The shared
 # light-blue cyan is not reused, so changing theme always changes this colour.
 _menu_id="${theme_name}"
@@ -505,15 +513,16 @@ monokai) _menu_id=monokai ;;
 gruvbox) _menu_id=gruvbox ;;
 emerald) _menu_id=emerald ;;
 classic) _menu_id=classic ;;
+blood_moon|blood-moon|"blood moon"|crimson|crimson_eclipse|"crimson eclipse"|vampire|blood|blood_ruby|"blood ruby"|bloodmoon|"Blood Moon"|"Blood Moon [Crimson Eclipse]"|"Blood Moon MP Mix Manager") _menu_id=blood_moon ;;
 the_whitest_white|whitest_white|whitest|white|"The Whitest White"|"The Whitest White Theme"|"The Whitest White MP Mix Manager") _menu_id=the_whitest_white ;;
 cyberpunk) _menu_id=cyberpunk ;; *) _menu_id=dreamworlds_ultra ;;
 esac
 case "$_menu_id" in
-stream_of_frequency) _mr=92; _mg=86; _mb=7 ;;
+stream_of_frequency) _mr=76; _mg=217; _mb=123 ;;
 dreamworlds_ultra) _mr=80; _mg=67; _mb=95 ;;
-dynamic_rainbow_liquid_glass) _mr=134; _mg=11; _mb=125 ;;
-cosmic_supernova) _mr=124; _mg=62; _mb=10 ;;
-dreamworlds_liquid) _mr=7; _mg=92; _mb=53 ;;
+dynamic_rainbow_liquid_glass) _mr=255; _mg=45; _mb=142 ;;
+cosmic_supernova) _mr=224; _mg=86; _mb=253 ;;
+dreamworlds_liquid) _mr=199; _mg=125; _mb=255 ;;
 dreamworlds_neon) _mr=129; _mg=12; _mb=151 ;;
 retro_studio) _mr=99; _mg=77; _mb=11 ;;
 cyber_neon) _mr=152; _mg=12; _mb=12 ;;
@@ -521,19 +530,20 @@ phosphor) _mr=61; _mg=95; _mb=7 ;;
 ice_cold) _mr=11; _mg=83; _mb=145 ;;
 retro_terminal) _mr=87; _mg=87; _mb=87 ;;
 sensorium) _mr=92; _mg=36; _mb=0 ;;
-retro_linux_memories) _mr=81; _mg=58; _mb=6 ;;
+retro_linux_memories) _mr=255; _mg=183; _mb=20 ;;
 into_darkness_void_out) _mr=255; _mg=255; _mb=255 ;;
 dreamworlds) _mr=150; _mg=95; _mb=225 ;;
 cyberpunk) _mr=139; _mg=0; _mb=126 ;;
 dracula) _mr=152; _mg=12; _mb=45 ;;
-nord) _mr=46; _mg=91; _mb=59 ;;
-matrix) _mr=8; _mg=100; _mb=15 ;;
-solarized) _mr=65; _mg=76; _mb=6 ;;
+nord) _mr=136; _mg=192; _mb=208 ;;
+matrix) _mr=57; _mg=255; _mb=20 ;;
+solarized) _mr=253; _mg=246; _mb=227 ;;
 tokyo) _mr=144; _mg=42; _mb=11 ;;
 monokai) _mr=20; _mg=89; _mb=7 ;;
 gruvbox) _mr=138; _mg=53; _mb=15 ;;
 emerald) _mr=7; _mg=91; _mb=33 ;;
 classic) _mr=99; _mg=86; _mb=35 ;;
+blood_moon) _mr=137; _mg=17; _mb=34 ;;
 the_whitest_white) _mr=0; _mg=0; _mb=0 ;;
 esac
 MENU_NUM="$(printf '\033[38;2;%s;%s;%sm' "$_mr" "$_mg" "$_mb")"
@@ -543,15 +553,19 @@ MENU_NUM_R="$_mr"; MENU_NUM_G="$_mg"; MENU_NUM_B="$_mb"
 # pinned it to MENU_WHITE, which is what made every theme look white.
 # The console pane is the pale still-water field, so each hue is pulled
 # toward black until it clears 4.5:1 on that field. The hue stays; only the
-# lightness moves. Into Darkness is the black void pane and keeps white.
+# lightness moves. Into Darkness, Dreamworlds and The Matrix are the black
+# void panes and keep white (The Matrix keeps its phosphor green); Nord and
+# Solarized use dark fields of their own and keep white too. Stream of
+# Frequency, Dynamic Liquid Glass, Cosmic Supernova and Dreamworlds Liquid sit
+# on their native dark fields, so their hues are lightened instead.
 # Dracula's rows stay the palette's soft lavender-gray, darkened onto the
 # shared field. The [numbers] keep their own MENU_NUM accent above.
 case "$_menu_id" in
-stream_of_frequency) _ir=92; _ig=86; _ib=5 ;;
+stream_of_frequency) _ir=76; _ig=217; _ib=123 ;;
 dreamworlds_ultra) _ir=80; _ig=67; _ib=95 ;;
-dynamic_rainbow_liquid_glass) _ir=134; _ig=11; _ib=125 ;;
-cosmic_supernova) _ir=124; _ig=62; _ib=7 ;;
-dreamworlds_liquid) _ir=7; _ig=92; _ib=53 ;;
+dynamic_rainbow_liquid_glass) _ir=216; _ig=180; _ib=254 ;;
+cosmic_supernova) _ir=224; _ig=86; _ib=253 ;;
+dreamworlds_liquid) _ir=199; _ig=125; _ib=255 ;;
 dreamworlds_neon) _ir=129; _ig=12; _ib=151 ;;
 retro_studio) _ir=99; _ig=77; _ib=11 ;;
 cyber_neon) _ir=152; _ig=12; _ib=12 ;;
@@ -559,19 +573,20 @@ phosphor) _ir=61; _ig=95; _ib=5 ;;
 ice_cold) _ir=11; _ig=83; _ib=145 ;;
 retro_terminal) _ir=87; _ig=87; _ib=87 ;;
 sensorium) _ir=43; _ig=10; _ib=16 ;;
-retro_linux_memories) _ir=81; _ig=58; _ib=6 ;;
+retro_linux_memories) _ir=255; _ig=183; _ib=20 ;;
 into_darkness_void_out) _ir=255; _ig=255; _ib=255 ;;
-dreamworlds) _ir=150; _ig=95; _ib=225 ;;
+dreamworlds) _ir=255; _ig=255; _ib=255 ;;
 cyberpunk) _ir=129; _ig=31; _ib=120 ;;
 dracula) _ir=77; _ig=73; _ib=88 ;;
-nord) _ir=61; _ig=88; _ib=69 ;;
-matrix) _ir=8; _ig=100; _ib=15 ;;
-solarized) _ir=65; _ig=76; _ib=6 ;;
+nord) _ir=255; _ig=255; _ib=255 ;;
+matrix) _ir=57; _ig=255; _ib=20 ;;
+solarized) _ir=255; _ig=255; _ib=255 ;;
 tokyo) _ir=144; _ig=42; _ib=11 ;;
 monokai) _ir=20; _ig=89; _ib=7 ;;
 gruvbox) _ir=103; _ig=73; _ib=61 ;;
 emerald) _ir=7; _ig=91; _ib=33 ;;
 classic) _ir=99; _ig=86; _ib=35 ;;
+blood_moon) _ir=142; _ig=0; _ib=25 ;;
 the_whitest_white) _ir=0; _ig=0; _ib=0 ;;
 *) _ir=80; _ig=67; _ib=95 ;;
 esac
@@ -615,6 +630,7 @@ nord) SEL_BAR_R=0; SEL_BAR_G=229; SEL_BAR_B=255 ;;
 matrix) SEL_BAR_R=57; SEL_BAR_G=255; SEL_BAR_B=20 ;;
 gruvbox) SEL_BAR_R=241; SEL_BAR_G=196; SEL_BAR_B=15 ;;
 classic) SEL_BAR_R=255; SEL_BAR_G=255; SEL_BAR_B=255 ;;
+blood_moon) SEL_BAR_R=255; SEL_BAR_G=32; SEL_BAR_B=64 ;;
 *) SEL_BAR_R=166; SEL_BAR_G=77; SEL_BAR_B=255 ;;
 esac
 SEL_BAR="$(printf '\033[48;2;%s;%s;%sm' "$SEL_BAR_R" "$SEL_BAR_G" "$SEL_BAR_B")"
@@ -622,19 +638,23 @@ SEL_BAR="$(printf '\033[48;2;%s;%s;%sm' "$SEL_BAR_R" "$SEL_BAR_G" "$SEL_BAR_B")"
 # uses. Computed from the unbreathing colour so idle breathing cannot flicker.
 SEL_BAR_LUM=$(( (SEL_BAR_R * 299 + SEL_BAR_G * 587 + SEL_BAR_B * 114) / 1000 ))
 if [ "$SEL_BAR_LUM" -ge 140 ]; then SEL_BAR_FG="\033[1;38;2;0;0;0m"; else SEL_BAR_FG="\033[1;38;2;255;255;255m"; fi
-# Pane for the CLI console. This is the still-water field MP Gui and MP
-# Liquid Player paint (mix of rgb(194, 204, 222) with 22% of the theme).
-# Aliases the glass collapses share that field, so dreamworlds matches
-# dreamworlds_ultra and dracula matches dreamworlds_neon. Into Darkness is
-# the void-out black both shaders force. Keyed on _menu_id so the table stays
-# aligned with scripts/mp_theme_palette.py glass_field_rgb().
+# Pane for the CLI console. Most themes use the still-water field MP Gui and
+# MP Liquid Player paint (mix of rgb(194, 204, 222) with 22% of the theme).
+# Aliases the glass collapses share that field. Into Darkness, Dreamworlds and
+# The Matrix are the black void-out panes. Retro Linux Memories is the charcoal
+# field #2d2d2d, Nord is its own #2e3440 slate, and Solarized is a deep amber,
+# so white text stays readable on the yellow. Stream of Frequency, Dynamic
+# Liquid Glass, Cosmic Supernova and Dreamworlds Liquid keep their native dark
+# terminal fields instead, so their menu ink is lightened below.
+# Keyed on _menu_id so the table stays aligned with
+# scripts/mp_theme_palette.py THEME_BACKGROUNDS.
 case "$_menu_id" in
-stream_of_frequency) THEME_BG_R=168; THEME_BG_G=210; THEME_BG_B=213 ;;
+stream_of_frequency) THEME_BG_R=12; THEME_BG_G=13; THEME_BG_B=23 ;;
 the_whitest_white) THEME_BG_R=203; THEME_BG_G=211; THEME_BG_B=225; THEME_FG_R=0; THEME_FG_G=0; THEME_FG_B=0 ;;
 dreamworlds_ultra) THEME_BG_R=186; THEME_BG_G=180; THEME_BG_B=220 ;;
-dynamic_rainbow_liquid_glass) THEME_BG_R=188; THEME_BG_G=182; THEME_BG_B=221 ;;
-cosmic_supernova) THEME_BG_R=177; THEME_BG_G=195; THEME_BG_B=225 ;;
-dreamworlds_liquid) THEME_BG_R=169; THEME_BG_G=200; THEME_BG_B=228 ;;
+dynamic_rainbow_liquid_glass) THEME_BG_R=20; THEME_BG_G=12; THEME_BG_B=32 ;;
+cosmic_supernova) THEME_BG_R=10; THEME_BG_G=8; THEME_BG_B=20 ;;
+dreamworlds_liquid) THEME_BG_R=6; THEME_BG_G=20; THEME_BG_B=28 ;;
 dreamworlds_neon) THEME_BG_R=174; THEME_BG_G=190; THEME_BG_B=220 ;;
 retro_studio) THEME_BG_R=203; THEME_BG_G=195; THEME_BG_B=178 ;;
 cyber_neon) THEME_BG_R=185; THEME_BG_G=186; THEME_BG_B=215 ;;
@@ -642,32 +662,40 @@ phosphor) THEME_BG_R=169; THEME_BG_G=215; THEME_BG_B=180 ;;
 ice_cold) THEME_BG_R=167; THEME_BG_G=204; THEME_BG_B=223 ;;
 retro_terminal) THEME_BG_R=199; THEME_BG_G=207; THEME_BG_B=221 ;;
 sensorium) THEME_BG_R=195; THEME_BG_G=196; THEME_BG_B=191 ;;
-retro_linux_memories) THEME_BG_R=158; THEME_BG_G=171; THEME_BG_B=191 ;;
+retro_linux_memories) THEME_BG_R=45; THEME_BG_G=45; THEME_BG_B=45 ;;
 into_darkness_void_out) THEME_BG_R=0; THEME_BG_G=0; THEME_BG_B=0 ;;
 dreamworlds) THEME_BG_R=0; THEME_BG_G=0; THEME_BG_B=0 ;;
 cyberpunk) THEME_BG_R=185; THEME_BG_G=186; THEME_BG_B=215 ;;
 dracula) THEME_BG_R=174; THEME_BG_G=190; THEME_BG_B=220 ;;
-nord) THEME_BG_R=167; THEME_BG_G=204; THEME_BG_B=223 ;;
-matrix) THEME_BG_R=169; THEME_BG_G=215; THEME_BG_B=180 ;;
-solarized) THEME_BG_R=184; THEME_BG_G=181; THEME_BG_B=193 ;;
+nord) THEME_BG_R=46; THEME_BG_G=52; THEME_BG_B=64 ;;
+matrix) THEME_BG_R=0; THEME_BG_G=0; THEME_BG_B=0 ;;
+solarized) THEME_BG_R=140; THEME_BG_G=105; THEME_BG_B=0 ;;
 tokyo) THEME_BG_R=194; THEME_BG_G=190; THEME_BG_B=217 ;;
 monokai) THEME_BG_R=193; THEME_BG_G=189; THEME_BG_B=199 ;;
 gruvbox) THEME_BG_R=203; THEME_BG_G=195; THEME_BG_B=178 ;;
 emerald) THEME_BG_R=158; THEME_BG_G=201; THEME_BG_B=202 ;;
 classic) THEME_BG_R=199; THEME_BG_G=207; THEME_BG_B=221 ;;
+blood_moon) THEME_BG_R=204; THEME_BG_G=169; THEME_BG_B=188 ;;
 *) THEME_BG_R=186; THEME_BG_G=180; THEME_BG_B=220 ;;
 esac
 # Neutral console ink for the Selection: line and the EQ line. The menu rows
 # use MENU_INK, the theme hue. The still-water field is pale, so this neutral
 # is the same dark foreground the glass terminal uses (24, 26, 34). Into
-# Darkness is black and keeps white. The Whitest White keeps black. Inside
-# MP Gui and MP Liquid Player the status line stays white; those windows
-# draw the field in the shader and do not take this OSC colour.
+# Darkness and Dreamworlds are black, The Matrix is black, Retro Linux
+# Memories is charcoal #2d2d2d, Nord is #2e3440, Solarized is a deep amber, and
+# Stream of Frequency, Dynamic Liquid Glass, Cosmic Supernova and Dreamworlds
+# Liquid use their dark native panes; all keep white. The Whitest White keeps
+# black. Inside MP Gui and MP Liquid Player the status line stays white; those
+# windows draw the field in the shader and do not take this OSC colour.
 if [ "${_menu_id:-}" = "the_whitest_white" ]; then
     THEME_FG_R=0; THEME_FG_G=0; THEME_FG_B=0
     MENU_WHITE="\033[38;2;0;0;0m"
 elif [ "${MP_LIQUID_GLASS:-0}" != "1" ] && [ "${MP_GUI_SESSION:-0}" != "1" ]; then
-    if [ "${_menu_id:-}" = "into_darkness_void_out" ]; then
+    if [ "${_menu_id:-}" = "into_darkness_void_out" ] || [ "${_menu_id:-}" = "retro_linux_memories" ] \
+        || [ "${_menu_id:-}" = "stream_of_frequency" ] || [ "${_menu_id:-}" = "dynamic_rainbow_liquid_glass" ] \
+        || [ "${_menu_id:-}" = "cosmic_supernova" ] || [ "${_menu_id:-}" = "dreamworlds_liquid" ] \
+        || [ "${_menu_id:-}" = "dreamworlds" ] || [ "${_menu_id:-}" = "matrix" ] \
+        || [ "${_menu_id:-}" = "nord" ] || [ "${_menu_id:-}" = "solarized" ]; then
         THEME_FG_R=255; THEME_FG_G=255; THEME_FG_B=255
         MENU_WHITE="\033[38;2;255;255;255m"
     else
@@ -2585,6 +2613,34 @@ set_theme_colors "$saved_theme"
 # quiet until the file actually changes.
 _LAST_THEME_APPLIED="$saved_theme"
 _LAST_THEME_STAMP="$(_theme_file_stamp)"
+# Konsole's scheme switch is what actually tints its pane, so the user's own
+# default scheme is put back first. Then, on a plain launch, the saved theme
+# pane is painted immediately.
+#
+# A flagged call does not touch the terminal at all. -v/--version, --update,
+# --beszel-status and the rest print a few lines and exit, so repainting the
+# window with Blood Moon (or any theme) before the version line is the flash
+# that made `./Mix_Archive_Manager.sh -v` tint the console. Those runs leave the
+# pane exactly as the user's shell left it. A flagged call that really loads a
+# menu paints at menu time through _paint_theme_background_on_load().
+if [ "${_MP_CLI_ARGS_PRESENT:-0}" != "1" ]; then
+    # Konsole's scheme reset clears OSC 11. Paint the theme pane after that.
+    _ensure_konsole_default_scheme
+    _CLI_THEME_BG_LOADED=1
+    _apply_cli_theme_background
+fi
+}
+# Called the first time an interactive menu is drawn, whichever flag (if any)
+# led there. Plain launches already painted in load_theme(); this exists so a
+# flagged menu invocation is themed at load time instead of at parse time.
+_paint_theme_background_on_load() {
+[ "${_CLI_THEME_BG_LOADED:-0}" = "1" ] && return 0
+_CLI_THEME_BG_LOADED=1
+[ "${MP_LIQUID_GLASS:-0}" = "1" ] && return 0
+[ "${MP_GUI_SESSION:-0}" = "1" ] && return 0
+# A piped run has no pane to paint; the OSC 50 scheme reset would end up in
+# the captured output, so only a real terminal is touched.
+[ -t 1 ] || return 0
 # Konsole's scheme reset clears OSC 11. Paint the theme pane after that.
 _ensure_konsole_default_scheme
 _apply_cli_theme_background
@@ -2931,6 +2987,7 @@ local -a _cycle=(
     retro_linux_memories
     the_whitest_white
     into_darkness_void_out
+    blood_moon
 )
 local cur="${CURRENT_THEME:-}"
 case "$cur" in
@@ -2941,6 +2998,7 @@ case "$cur" in
     matrix) cur="phosphor" ;;
     gruvbox) cur="retro_studio" ;;
     classic) cur="retro_terminal" ;;
+    blood_moon|blood-moon|crimson|vampire) cur="blood_moon" ;;
 esac
 local i n=${#_cycle[@]} next=0
 for ((i=0; i<n; i++)); do
@@ -2961,6 +3019,7 @@ case "$th" in
     stream_of_frequency)   tn="Stream_of_Frequency_MP_Mix_Manager" ;;
     sensorium)             tn="Sensorium_MP_Mix_Manager" ;;
     retro_linux_memories)  tn="Retro_Linux_Memories_MP_Mix_Manager" ;;
+    blood_moon)            tn="Blood_Moon_MP_Mix_Manager" ;;
     the_whitest_white)     tn="The_Whitest_White_MP_Mix_Manager" ;;
     *) return 0 ;;
 esac
@@ -5063,7 +5122,7 @@ os.replace(tmp, dst)
 PY
     fi
 }
-case "${1:-}" in --reinstall|reinstall|factory-reset|--factory-reset) shift; if [ -f "$SCRIPT_DIR/scripts/reinstall_mp_manager.sh" ]; then exec bash "$SCRIPT_DIR/scripts/reinstall_mp_manager.sh" "$@"; elif [ -f "$SCRIPT_DIR/reinstall_mp_manager.sh" ]; then exec bash "$SCRIPT_DIR/reinstall_mp_manager.sh" "$@"; fi; if [ -f "$SCRIPT_DIR/install.sh" ]; then exec bash "$SCRIPT_DIR/install.sh" --reinstall "$@"; fi; echo "Error: reinstall helper not found." >&2; exit 1 ;; --music|--music-mode|music) shift; manage_music_folders_menu "$@"; exit 0 ;; visualizer|--visualizer|vis|--vis|mp-visualizer|--mp-visualizer) shift; launch_mp_liquid_visualizer "$@"; exit 0 ;; --track|--current-track|--audacious-path|--strawberry-path|--cliamp-path|-p) if get_audacious_track_info 2>/dev/null && [ -n "$AUDACIOUS_RESOLVED_PATH" ]; then echo "$AUDACIOUS_RESOLVED_PATH"; exit 0; elif get_strawberry_track_info 2>/dev/null && [ -n "$STRAWBERRY_RESOLVED_PATH" ]; then echo "$STRAWBERRY_RESOLVED_PATH"; exit 0; elif get_cliamp_track_info 2>/dev/null && [ -n "$CLIAMP_RESOLVED_PATH" ]; then echo "$CLIAMP_RESOLVED_PATH"; exit 0; else detected_p=$(detect_currently_playing_mix 2>/dev/null); [ -n "$detected_p" ] && [ -f "$detected_p" ] && { echo "$detected_p"; exit 0; }; echo "Error: No track currently playing in Audacious, Strawberry, cliamp, or supported players." >&2; exit 1; fi ;; --audacious-info) if get_audacious_track_info 2>/dev/null; then printf "State: %s\nTitle: %s\nArtist: %s\nAlbum: %s\nTime: %s / %s (%s%%)\nPath: %s\n" "$AUDACIOUS_STATE" "$AUDACIOUS_TITLE" "$AUDACIOUS_ARTIST" "$AUDACIOUS_ALBUM" "$AUDACIOUS_POS_FMT" "$AUDACIOUS_DUR_FMT" "$AUDACIOUS_PROGRESS_PCT" "$AUDACIOUS_RESOLVED_PATH"; [ -n "$AUDACIOUS_FILE_SIZE" ] && echo "Size: $AUDACIOUS_FILE_SIZE"; exit 0; else echo "Error: Audacious is not running or no track playing." >&2; exit 1; fi ;; --strawberry-info) if get_strawberry_track_info 2>/dev/null; then printf "State: %s\nTitle: %s\nArtist: %s\nAlbum: %s\nTime: %s / %s (%s%%)\nPath: %s\n" "$STRAWBERRY_STATE" "$STRAWBERRY_TITLE" "$STRAWBERRY_ARTIST" "$STRAWBERRY_ALBUM" "$STRAWBERRY_POS_FMT" "$STRAWBERRY_DUR_FMT" "$STRAWBERRY_PROGRESS_PCT" "$STRAWBERRY_RESOLVED_PATH"; [ -n "$STRAWBERRY_FILE_SIZE" ] && echo "Size: $STRAWBERRY_FILE_SIZE"; exit 0; else echo "Error: Strawberry is not running or no track playing." >&2; exit 1; fi ;; --cliamp-info) if get_cliamp_track_info 2>/dev/null; then printf "State: %s\nTitle: %s\nArtist: %s\nTime: %s / %s (%s%%)\nPath: %s\n" "$CLIAMP_STATE" "$CLIAMP_TITLE" "$CLIAMP_ARTIST" "$CLIAMP_POS_FMT" "$CLIAMP_DUR_FMT" "$CLIAMP_PROGRESS_PCT" "$CLIAMP_RESOLVED_PATH"; [ -n "$CLIAMP_FILE_SIZE" ] && echo "Size: $CLIAMP_FILE_SIZE"; exit 0; else echo "Error: cliamp is not running or no track playing." >&2; exit 1; fi ;; --help|-h|help) shift; [ -x "$SCRIPT_DIR/scripts/show_help.sh" ] && exec bash "$SCRIPT_DIR/scripts/show_help.sh" "$@"; [ -x "$SCRIPT_DIR/show_help.sh" ] && exec bash "$SCRIPT_DIR/show_help.sh" "$@"; exit 0 ;; --version|-v|version) shift; [ -x "$SCRIPT_DIR/scripts/update_manager.sh" ] && exec bash "$SCRIPT_DIR/scripts/update_manager.sh" --version "$@"; [ -x "$SCRIPT_DIR/update_manager.sh" ] && exec bash "$SCRIPT_DIR/update_manager.sh" --version "$@"; exit 0 ;; update|--update) shift; [ -x "$SCRIPT_DIR/scripts/update_manager.sh" ] && exec bash "$SCRIPT_DIR/scripts/update_manager.sh" "$@"; [ -x "$SCRIPT_DIR/update_manager.sh" ] && exec bash "$SCRIPT_DIR/update_manager.sh" "$@"; exit 0 ;; --top5|--top-5|top5|top-5) shift; [ -x "$SCRIPT_DIR/scripts/manage_top_5_tracks.sh" ] && exec bash "$SCRIPT_DIR/scripts/manage_top_5_tracks.sh" "$@"; [ -f "$SCRIPT_DIR/scripts/top_5_tracks_manager.py" ] && exec python3 "$SCRIPT_DIR/scripts/top_5_tracks_manager.py" "$@"; exit 0 ;; --infinite-talk*|--inftlk*|--infinite-talker*|--stephen-hawking*) shift; run_wan2gp_infinite_talker "$@"; exit 0 ;; esac; CLI_INITIAL_ACTION="${1:-}"; _LAST_STATS_CHECK=0; _CACHED_STATS_CORE=""
+case "${1:-}" in --reinstall|reinstall|factory-reset|--factory-reset) shift; if [ -f "$SCRIPT_DIR/scripts/reinstall_mp_manager.sh" ]; then exec bash "$SCRIPT_DIR/scripts/reinstall_mp_manager.sh" "$@"; elif [ -f "$SCRIPT_DIR/reinstall_mp_manager.sh" ]; then exec bash "$SCRIPT_DIR/reinstall_mp_manager.sh" "$@"; fi; if [ -f "$SCRIPT_DIR/install.sh" ]; then exec bash "$SCRIPT_DIR/install.sh" --reinstall "$@"; fi; echo "Error: reinstall helper not found." >&2; exit 1 ;; --music|--music-mode|music) shift; manage_music_folders_menu "$@"; exit 0 ;; visualizer|--visualizer|vis|--vis|mp-visualizer|--mp-visualizer) shift; launch_mp_liquid_visualizer "$@"; exit 0 ;; --track|--current-track|--audacious-path|--strawberry-path|--cliamp-path|-p) if get_audacious_track_info 2>/dev/null && [ -n "$AUDACIOUS_RESOLVED_PATH" ]; then echo "$AUDACIOUS_RESOLVED_PATH"; exit 0; elif get_strawberry_track_info 2>/dev/null && [ -n "$STRAWBERRY_RESOLVED_PATH" ]; then echo "$STRAWBERRY_RESOLVED_PATH"; exit 0; elif get_cliamp_track_info 2>/dev/null && [ -n "$CLIAMP_RESOLVED_PATH" ]; then echo "$CLIAMP_RESOLVED_PATH"; exit 0; else detected_p=$(detect_currently_playing_mix 2>/dev/null); [ -n "$detected_p" ] && [ -f "$detected_p" ] && { echo "$detected_p"; exit 0; }; echo "Error: No track currently playing in Audacious, Strawberry, cliamp, or supported players." >&2; exit 1; fi ;; --audacious-info) if get_audacious_track_info 2>/dev/null; then printf "State: %s\nTitle: %s\nArtist: %s\nAlbum: %s\nTime: %s / %s (%s%%)\nPath: %s\n" "$AUDACIOUS_STATE" "$AUDACIOUS_TITLE" "$AUDACIOUS_ARTIST" "$AUDACIOUS_ALBUM" "$AUDACIOUS_POS_FMT" "$AUDACIOUS_DUR_FMT" "$AUDACIOUS_PROGRESS_PCT" "$AUDACIOUS_RESOLVED_PATH"; [ -n "$AUDACIOUS_FILE_SIZE" ] && echo "Size: $AUDACIOUS_FILE_SIZE"; exit 0; else echo "Error: Audacious is not running or no track playing." >&2; exit 1; fi ;; --strawberry-info) if get_strawberry_track_info 2>/dev/null; then printf "State: %s\nTitle: %s\nArtist: %s\nAlbum: %s\nTime: %s / %s (%s%%)\nPath: %s\n" "$STRAWBERRY_STATE" "$STRAWBERRY_TITLE" "$STRAWBERRY_ARTIST" "$STRAWBERRY_ALBUM" "$STRAWBERRY_POS_FMT" "$STRAWBERRY_DUR_FMT" "$STRAWBERRY_PROGRESS_PCT" "$STRAWBERRY_RESOLVED_PATH"; [ -n "$STRAWBERRY_FILE_SIZE" ] && echo "Size: $STRAWBERRY_FILE_SIZE"; exit 0; else echo "Error: Strawberry is not running or no track playing." >&2; exit 1; fi ;; --climpaudio-info) if get_cliamp_track_info 2>/dev/null; then printf "State: %s\nTitle: %s\nArtist: %s\nTime: %s / %s (%s%%)\nPath: %s\n" "$CLIAMP_STATE" "$CLIAMP_TITLE" "$CLIAMP_ARTIST" "$CLIAMP_POS_FMT" "$CLIAMP_DUR_FMT" "$CLIAMP_PROGRESS_PCT" "$CLIAMP_RESOLVED_PATH"; [ -n "$CLIAMP_FILE_SIZE" ] && echo "Size: $CLIAMP_FILE_SIZE"; exit 0; else echo "Error: MP CLI Audio Player is not running or no track playing." >&2; exit 1; fi ;; --help|-h|help) shift; [ -x "$SCRIPT_DIR/scripts/show_help.sh" ] && exec bash "$SCRIPT_DIR/scripts/show_help.sh" "$@"; [ -x "$SCRIPT_DIR/show_help.sh" ] && exec bash "$SCRIPT_DIR/show_help.sh" "$@"; exit 0 ;; --version|-v|version) shift; [ -x "$SCRIPT_DIR/scripts/update_manager.sh" ] && exec bash "$SCRIPT_DIR/scripts/update_manager.sh" --version "$@"; [ -x "$SCRIPT_DIR/update_manager.sh" ] && exec bash "$SCRIPT_DIR/update_manager.sh" --version "$@"; exit 0 ;; update|--update) shift; [ -x "$SCRIPT_DIR/scripts/update_manager.sh" ] && exec bash "$SCRIPT_DIR/scripts/update_manager.sh" "$@"; [ -x "$SCRIPT_DIR/update_manager.sh" ] && exec bash "$SCRIPT_DIR/update_manager.sh" "$@"; exit 0 ;; --top5|--top-5|top5|top-5) shift; [ -x "$SCRIPT_DIR/scripts/manage_top_5_tracks.sh" ] && exec bash "$SCRIPT_DIR/scripts/manage_top_5_tracks.sh" "$@"; [ -f "$SCRIPT_DIR/scripts/top_5_tracks_manager.py" ] && exec python3 "$SCRIPT_DIR/scripts/top_5_tracks_manager.py" "$@"; exit 0 ;; --infinite-talk*|--inftlk*|--infinite-talker*|--stephen-hawking*) shift; run_wan2gp_infinite_talker "$@"; exit 0 ;; esac; CLI_INITIAL_ACTION="${1:-}"; _LAST_STATS_CHECK=0; _CACHED_STATS_CORE=""
 invalidate_archive_stats_cache() {
 _LAST_STATS_CHECK=0; _CACHED_STATS_CORE=""
 }
@@ -7685,11 +7744,13 @@ while true; do
         "15|View Playing Mix Audio Specifications & Stream Metadata|(Bit Depth, Sample Rate, Codec, Title)"
         "16|Manage Bluetooth Audio & Auto Stream Routing|(Intelligent BT Monitor, Auto-Switch)"
         "17|Configure Standalone Liquid Glass Player Backend|(Current: ${LIQUID_GLASS_BACKEND:-opengl^^})"
+        "18|Open a Playlist in the MP Audio Player|(.m3u / .m3u8 / .xspf / .pls / .json — replaces the open list)"
+        "19|Export the MP Audio Player Playlist|(M3U / M3U8 / XSPF / PLS / JSON — honours a search filter)"
         "0|Return to Main Menu|(or Esc / q)"
     )
     run_interactive_submenu "AUDIO PLAYERS & PLAYBACK SUITE" "$hdr" opts 0
     case "$REPLY" in
-        1|mp|mp_player|mpplayer|p|P) manage_mp_audio_player ;;
+        1|mp|mp_player|mpplayer|p|P) manage_mp_audio_player --mix-archive-mode ;;
         2|audacious) launch_audacious ;;
         3|cliamp) manage_cliamp ;;
         4|vlc) launch_vlc ;;
@@ -7706,6 +7767,8 @@ while true; do
         15|meta|metadata) inspect_playing_audio_file ;;
         16|bt|bluetooth|"bluetooth audio") manage_bluetooth_audio ;;
         17|liquid|glass|backend) configure_liquid_glass_backend ;;
+        18|open-playlist|open) open_playlist_in_mp_player_cli ;;
+        19|export-playlist|export) export_playlist_from_mp_player_cli ;;
         0|[qQ]|[eE][xX][iI][tT]|ESC) return 0 ;;
         *) echo -e "\n${RED}Invalid choice!${NC}"; sleep 1.5 ;;
     esac
@@ -7843,7 +7906,7 @@ manage_themes() {
 # dark chip keeps that white readable on the light tints and the dark panes.
 local _tw=$'\033[1;48;2;20;20;28;38;2;255;255;255m'
 while true; do
-    local m1="" m2="" m3="" m4="" m5="" m6="" m7="" m8="" m9="" m10="" m11="" m12="" m13="" m14="" m15="" m16="" m17="" m18="" m19="" m20=""
+    local m1="" m2="" m3="" m4="" m5="" m6="" m7="" m8="" m9="" m10="" m11="" m12="" m13="" m14="" m15="" m16="" m17="" m18="" m19="" m20="" m21=""
     case "$CURRENT_THEME" in
         dreamworlds)                    m1=" ${_tw}★ ACTIVE${NC}" ;;
         dreamworlds_ultra)              m2=" ${_tw}★ ACTIVE (DEFAULT)${NC}" ;;
@@ -7865,6 +7928,7 @@ while true; do
         sensorium)                      m18=" ${_tw}★ ACTIVE (SENSORIUM)${NC}" ;;
         retro_linux_memories)           m19=" ${_tw}★ ACTIVE (RETRO LINUX)${NC}" ;;
         the_whitest_white)              m20=" ${_tw}★ ACTIVE (WHITEST WHITE)${NC}" ;;
+        blood_moon)                     m21=" ${_tw}★ ACTIVE (BLOOD MOON)${NC}" ;;
     esac
     local opts=(
         "1|MPlanetarian Dreamworlds|[Sweet Hot Pink, Electric Cyan, Lavender & Violet]${m1}"
@@ -7887,6 +7951,7 @@ while true; do
         "18|Sensorium|[Bright Tangerine, Acid Chartreuse & Electric Azure • Light Coral Pane]${m18}"
         "19|Retro Linux Memories [GTK / VeraCrypt Dark Slate]|[Classic Retro Linux GTK Dark Slate, VeraCrypt Blue Selection & Beveled Steel]${m19}"
         "20|The Whitest White|[Pure white pane, black ink, black menu numbers]${m20}"
+        "21|Blood Moon [Crimson Eclipse]|[Vivid Blood Crimson, Scarlet & Dark Ruby Wine Pane]${m21}"
         "0|Return to Main Menu|(or Esc / q)"
     )
     run_interactive_submenu "Themes & Color Palette Switcher" "  ${_tw}Current Active Theme: ${CURRENT_THEME}${NC}\n" opts 0
@@ -7932,6 +7997,8 @@ while true; do
             save_theme "retro_linux_memories"; echo -e "\n${_tw}✓ Theme switched to Retro Linux Memories [GTK / VeraCrypt Dark Slate]!${NC}"; sleep 0.8 ;;
         20|the_whitest_white|whitest_white|whitest|"The Whitest White"|"The Whitest White MP Mix Manager")
             save_theme "the_whitest_white"; echo -e "\n${_tw}✓ Theme switched to The Whitest White!${NC}"; sleep 0.8 ;;
+        21|blood_moon|blood-moon|"blood moon"|crimson|crimson_eclipse|"crimson eclipse"|vampire|blood|blood_ruby|"blood ruby"|bloodmoon|"Blood Moon"|"Blood Moon [Crimson Eclipse]"|"Blood Moon MP Mix Manager")
+            save_theme "blood_moon"; echo -e "\n${_tw}✓ Theme switched to Blood Moon [Crimson Eclipse]!${NC}"; sleep 0.8 ;;
         0|[bB]|[qQ]|ESC) return 0 ;;
         *) echo -e "\n${RED}Invalid choice!${NC}"; sleep 1.2 ;;
     esac
@@ -8807,7 +8874,7 @@ _s4_hardware_connected() {
                 local found=0
                 if command -v amidi >/dev/null 2>&1 && amidi -l 2>/dev/null | grep -qi "Traktor"; then
                     found=1
-                elif [ -e "/dev/snd/midiC0D0" ] && grep -qi "Traktor" /proc/asound/cards 2>/dev/null; then
+                elif ls /dev/snd/midiC*D* >/dev/null 2>&1 && grep -qi "Traktor" /proc/asound/cards 2>/dev/null; then
                     found=1
                 fi
                 mkdir -p "$HOME/.config/mix-manager" 2>/dev/null || true
@@ -8822,7 +8889,7 @@ _s4_hardware_connected() {
     _S4_CONN_CACHE=0
     if command -v amidi >/dev/null 2>&1 && amidi -l 2>/dev/null | grep -qi "Traktor"; then
         _S4_CONN_CACHE=1
-    elif [ -e "/dev/snd/midiC0D0" ] && grep -qi "Traktor" /proc/asound/cards 2>/dev/null; then
+    elif ls /dev/snd/midiC*D* >/dev/null 2>&1 && grep -qi "Traktor" /proc/asound/cards 2>/dev/null; then
         _S4_CONN_CACHE=1
     fi
     [ "$_S4_CONN_CACHE" = "1" ]
@@ -8881,6 +8948,121 @@ done
 manage_video_dispatcher()          { _run_tool "launch_specific_video.sh" || launch_vlc; }
 manage_publishing_schedule()      { _run_tool "publish_calendar_scheduler.sh"; }
 manage_playlists_menu()            { _run_tool "manage_playlists.sh"; }
+# ------------------------------------------------------------------------------
+# MP Audio Player CLI: open a playlist file, or export the open one
+#
+# Both helpers drive the same MP_Audio_Player.py flags the player itself uses,
+# so a playlist opened here behaves exactly like one opened with Shift+O, and
+# an export writes the same five containers the [w] exporter offers.
+# ------------------------------------------------------------------------------
+_mp_playlist_py() {
+    local mp_py="$SCRIPT_DIR/MP_Audio_Player.py"
+    [ ! -f "$mp_py" ] && mp_py="$SCRIPT_DIR/scripts/MP_Audio_Player.py"
+    [ -f "$mp_py" ] && printf '%s\n' "$mp_py"
+}
+_mp_playlist_ext_list() { printf '%s\n' "m3u m3u8 xspf pls json"; }
+# Ask for a playlist path. A desktop dialog is offered first (it can reach any
+# mounted drive or share); the typed prompt is always available and accepts a
+# full path, a ~ path or a bare relative one.
+_mp_ask_playlist_path() {
+    local start="${1:-$HOME}" path="" globs
+    [ -d "$start" ] || start="$HOME"
+    globs="*.m3u *.m3u8 *.xspf *.pls *.json"
+    # A desktop dialog can reach any mounted drive or share. It is only a
+    # shortcut: the typed prompt below always works, so this never depends on
+    # a display, and it does not load the player module just to open a picker.
+    if [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
+        if command -v kdialog >/dev/null 2>&1; then
+            path="$(kdialog --title "Open Playlist in MP Audio Player" \
+                --getopenfilename "$start" "$globs | Playlist Files" 2>/dev/null || true)"
+        elif command -v zenity >/dev/null 2>&1; then
+            path="$(zenity --file-selection --title="Open Playlist in MP Audio Player" \
+                --filename="${start%/}/" --file-filter="Playlist Files | $globs" 2>/dev/null || true)"
+        fi
+        [ -n "$path" ] && { printf '%s\n' "$path"; return 0; }
+    fi
+    read -r -e -p "Playlist file to open (any .m3u/.m3u8/.xspf/.pls/.json): " path
+    path="${path#\"}"; path="${path%\"}"; path="${path#\'}"; path="${path%\'}"
+    path="${path/#\~/$HOME}"
+    [ -n "$path" ] && printf '%s\n' "$path"
+    return 0
+}
+open_playlist_in_mp_player_cli() {
+    local path py; py="$(_mp_playlist_py)"
+    if [ -z "$py" ]; then echo -e "\n${RED}Error: MP_Audio_Player.py was not found.${NC}"; press_enter; return 1; fi
+    clear; echo -e "${BOLD}${MAGENTA}${S70}\n           OPEN A PLAYLIST IN THE MP AUDIO PLAYER\n${S70}${NC}\n"
+    echo -e "  Supported types: ${BOLD}${CYAN}.m3u  .m3u8  .xspf  .pls  .json${NC}"
+    echo -e "  ${DIM}The opened playlist replaces the one already in the player and starts its first track.${NC}\n"
+    path="$(_mp_ask_playlist_path "${MP_LAST_PLAYLIST_DIR:-$HOME}")"
+    if [ -z "$path" ]; then echo -e "\n${YELLOW}No playlist selected.${NC}"; press_enter; return 0; fi
+    local ext="${path##*.}"; ext="${ext,,}"
+    case " $(_mp_playlist_ext_list) " in
+        *" $ext "*) ;;
+        *) echo -e "\n${RED}Not a supported playlist type: .${ext}${NC}"; press_enter; return 1 ;;
+    esac
+    if [ ! -f "$path" ]; then echo -e "\n${RED}Playlist not found: ${path}${NC}"; press_enter; return 1; fi
+    export MP_LAST_PLAYLIST_DIR="$(cd "$(dirname "$path")" 2>/dev/null && pwd || dirname "$path")"
+    echo -e "\n${GREEN}✓ Opening $(basename "$path") in the MP Audio Player...${NC}"
+    manage_mp_audio_player --open-playlist "$path"
+    return 0
+}
+# Export the playlist the player has open. The scope is either the whole open
+# playlist or the rows a search filter left on screen, and the user picks the
+# container type by number before typing (or accepting) a destination.
+export_playlist_from_mp_player_cli() {
+    local py; py="$(_mp_playlist_py)"
+    if [ -z "$py" ]; then echo -e "\n${RED}Error: MP_Audio_Player.py was not found.${NC}"; press_enter; return 1; fi
+    clear; echo -e "${BOLD}${MAGENTA}${S70}\n        EXPORT THE OPEN PLAYLIST FROM THE MP AUDIO PLAYER\n${S70}${NC}\n"
+    local fmt_choice fmt
+    echo -e "  ${BOLD}${CYAN}1)${NC} M3U            ${DIM}(universal, most players)${NC}"
+    echo -e "  ${BOLD}${CYAN}2)${NC} M3U8 (UTF-8)   ${DIM}(universal, non-ASCII titles)${NC}"
+    echo -e "  ${BOLD}${CYAN}3)${NC} XSPF           ${DIM}(XML Shareable Playlist)${NC}"
+    echo -e "  ${BOLD}${CYAN}4)${NC} PLS            ${DIM}(numbered entries)${NC}"
+    echo -e "  ${BOLD}${CYAN}5)${NC} JSON           ${DIM}(MP Mix Manager, keeps metadata)${NC}"
+    echo ""
+    read -r -p "Playlist type [1-5, default 2]: " fmt_choice
+    case "${fmt_choice:-2}" in
+        1) fmt="m3u" ;; 2) fmt="m3u8" ;; 3) fmt="xspf" ;; 4) fmt="pls" ;; 5) fmt="json" ;;
+        *) fmt="m3u8" ;;
+    esac
+    local scope="all" scope_label="the whole open playlist" filter=""
+    echo ""
+    echo -e "  ${BOLD}${CYAN}1)${NC} Everything currently in the player's playlist"
+    echo -e "  ${BOLD}${CYAN}2)${NC} Only the rows a filter leaves on screen (a search made before exporting)"
+    read -r -p "What to export [1-2, default 1]: " scope
+    if [ "${scope:-1}" = "2" ]; then
+        read -r -e -p "Filter text (only rows matching it are exported): " filter
+        if [ -n "$filter" ]; then
+            scope="filtered"; scope_label="filtered search '${filter}'"
+        else
+            scope="all"; scope_label="the whole open playlist"
+        fi
+    fi
+    local def_dir="$HOME/Desktop"; [ -d "$def_dir" ] || def_dir="$HOME"
+    local dest
+    read -r -e -p "Destination (file or folder) [${def_dir}/MP_Archive_Playlist.${fmt}]: " dest
+    dest="${dest#\"}"; dest="${dest%\"}"; dest="${dest#\'}"; dest="${dest%\'}"
+    dest="${dest/#\~/$HOME}"
+    [ -z "$dest" ] && dest="${def_dir}/MP_Archive_Playlist.${fmt}"
+    # A directory (or a path with no suffix) gets the default file name.
+    if [ -d "$dest" ]; then dest="${dest%/}/MP_Archive_Playlist.${fmt}"; fi
+    case "$dest" in *.*) ;; *) dest="${dest}.${fmt}" ;; esac
+    export MP_LAST_PLAYLIST_DIR="$(cd "$(dirname "$dest")" 2>/dev/null && pwd || dirname "$dest")"
+    echo -e "\n${GREEN}✓ Exporting ${scope_label} as ${fmt^^} → ${dest}${NC}\n"
+    # The running player writes the file itself: it owns the open list, so the
+    # export uses the same rows its own [w] exporter would, and a filter narrows
+    # it exactly the way the on-screen search does.
+    local args=(--export-playlist "$dest" --export-format "$fmt")
+    [ -n "$filter" ] && args+=(--filter "$filter")
+    if python3 "$py" "${args[@]}"; then
+        echo -e "\n${GREEN}✓ Export finished: ${dest}${NC}"
+    else
+        echo -e "\n${RED}✖ Export failed.${NC}"
+    fi
+    press_enter
+    return 0
+}
+
 inspect_audio_studio_menu()        { _run_tool "inspect_audio_studio.sh"; }
 generate_ppm_cover_menu()          { _run_tool "generate_ppm_cover.sh"; }
 manage_sync_video_companion_menu() { _run_tool "sync_video_companion.sh"; }
@@ -9397,7 +9579,7 @@ generate_archive_folder_playlists_menu() {
 ensure_playlists_generated_dirs; local p="$SCRIPT_DIR/scripts/generate_archive_folder_playlists.py"; [ -f "$p" ] || p="$SCRIPT_DIR/generate_archive_folder_playlists.py"; [ -f "$p" ] && python3 "$p" || { echo -e "${RED}Error: generate_archive_folder_playlists.py not found!${NC}"; press_enter; }
 }
 manage_playlists_and_history() {
-local t_ver rb py_rb="$SCRIPT_DIR/scripts/export_rekordbox_playlist.py"; t_ver="$(get_traktor_version_mac 2>/dev/null)"; t_ver="${t_ver//$'\r'/}"; t_ver="${t_ver//$'\n'/}"; while true; do local opts=("1|Custom Mix Playlists Suite|(.m3u / .m3u8 / .xspf - Create, Edit & Launch)" "2|Generate Mix Archive Folder Playlists|(.m3u / .m3u8 / .xspf ➔ PLAYLISTS_GENERATED)" "3|Generate Playlist from History Files on Traktor ${t_ver:-3}|(Key Sorted / Decks Ready)" "4|Export Favorites DJ Set|(Local folder / SMB + Tracklist + Traktor playlist)" "5|Listen to Your Top 5 Tracks Right Now|$(get_top_5_status_badge)" "6|Export Playlists / Traktor History to Pioneer Rekordbox XML|(export_rekordbox_playlist.py)" "0|Return to Main Menu|(or Esc / q)"); run_interactive_submenu "CUSTOM PLAYLISTS & TRAKTOR HISTORY SUITE" "" opts 0; case "$REPLY" in 1) manage_playlists_menu ;; 2) generate_archive_folder_playlists_menu ;; 3) generate_traktor_playlist_from_history ;; 4|fav|favorites|export-favorites|dj-set) export_favorites_dj_set; press_enter ;; 5|top5|top-5|top|special) manage_top_5_tracks ;; 6) echo -e "\n${BOLD}${BLUE}=== EXPORT TO PIONEER REKORDBOX XML ===${NC}\n"; read -r -p "Enter path to Traktor .nml, .m3u, or .m3u8 playlist: " rb; rb="${rb#[\'\"]}"; rb="${rb%[\'\"]}"; [ -f "$rb" ] && python3 "$py_rb" "$rb" || echo -e "${RED}Error: Playlist file not found.${NC}"; press_enter ;; 0|[qQ]|[eE][xX][iI][tT]|ESC) return 0 ;; *) echo -e "\n${RED}Invalid option!${NC}"; sleep 1 ;; esac; done
+local t_ver rb py_rb="$SCRIPT_DIR/scripts/export_rekordbox_playlist.py"; t_ver="$(get_traktor_version_mac 2>/dev/null)"; t_ver="${t_ver//$'\r'/}"; t_ver="${t_ver//$'\n'/}"; while true; do local opts=("1|Custom Mix Playlists Suite|(.m3u / .m3u8 / .xspf - Create, Edit & Launch)" "2|Generate Mix Archive Folder Playlists|(.m3u / .m3u8 / .xspf ➔ PLAYLISTS_GENERATED)" "3|Generate Playlist from History Files on Traktor ${t_ver:-3}|(Key Sorted / Decks Ready)" "4|Export Favorites DJ Set|(Local folder / SMB + Tracklist + Traktor playlist)" "5|Listen to Your Top 5 Tracks Right Now|$(get_top_5_status_badge)" "6|Export Playlists / Traktor History to Pioneer Rekordbox XML|(export_rekordbox_playlist.py)" "7|Open a Playlist in the MP Audio Player|(.m3u / .m3u8 / .xspf / .pls / .json — from any folder, replaces the open list)" "8|Export the MP Audio Player Playlist|(M3U / M3U8 / XSPF / PLS / JSON — honours a search filter)" "0|Return to Main Menu|(or Esc / q)"); run_interactive_submenu "CUSTOM PLAYLISTS & TRAKTOR HISTORY SUITE" "" opts 0; case "$REPLY" in 1) manage_playlists_menu ;; 2) generate_archive_folder_playlists_menu ;; 3) generate_traktor_playlist_from_history ;; 4|fav|favorites|export-favorites|dj-set) export_favorites_dj_set; press_enter ;; 5|top5|top-5|top|special) manage_top_5_tracks ;; 6) echo -e "\n${BOLD}${BLUE}=== EXPORT TO PIONEER REKORDBOX XML ===${NC}\n"; read -r -p "Enter path to Traktor .nml, .m3u, or .m3u8 playlist: " rb; rb="${rb#[\'\"]}"; rb="${rb%[\'\"]}"; [ -f "$rb" ] && python3 "$py_rb" "$rb" || echo -e "${RED}Error: Playlist file not found.${NC}"; press_enter ;; 7|open-playlist|open) open_playlist_in_mp_player_cli ;; 8|export-playlist|export) export_playlist_from_mp_player_cli ;; 0|[qQ]|[eE][xX][iI][tT]|ESC) return 0 ;; *) echo -e "\n${RED}Invalid option!${NC}"; sleep 1 ;; esac; done
 }
 export_favorites_dj_set() {
 local py="$SCRIPT_DIR/scripts/MP_Fav_Playlist_Track_Exporter.py"; local sh="$SCRIPT_DIR/scripts/MP_Fav_Playlist_Track_Exporter.sh"; [ ! -f "$py" ] && py="$SCRIPT_DIR/MP_Fav_Playlist_Track_Exporter.py"; if [ -f "$sh" ]; then bash "$sh" "$@"; elif [ -f "$py" ]; then python3 "$py" "$@"; else echo -e "\n${RED}Error: MP_Fav_Playlist_Track_Exporter was not found in scripts/!${NC}\n"; press_enter; return 1; fi
@@ -9418,11 +9600,17 @@ touch "$HOME/.config/mix-manager/traktor_s4_notified.flag" 2>/dev/null || true
 local py_s4="$SCRIPT_DIR/scripts/traktor_s4_midi.py"
 [ ! -f "$py_s4" ] && py_s4="$SCRIPT_DIR/traktor_s4_midi.py"
 while true; do
+local det_port="" det_raw="" det_details=""
+if [ -f "$py_s4" ]; then
+local det_line
+det_line="$(python3 "$py_s4" --detect-line 2>/dev/null || true)"
+IFS='|' read -r det_port det_raw det_details <<< "$det_line"
+fi
 local det_badge="${RED}Not Detected / Offline${NC}"
-if amidi -l 2>/dev/null | grep -qi "Traktor"; then
-det_badge="${GREEN}Detected & Connected (hw:0,0)${NC}"
-elif [ -e "/dev/snd/midiC0D0" ] && grep -qi "Traktor" /proc/asound/cards 2>/dev/null; then
-det_badge="${GREEN}Detected & Connected (/dev/snd/midiC0D0)${NC}"
+local port_badge="${DIM}auto-detect${NC} ${DIM}(searching...)${NC}"
+if [ -n "$det_port" ]; then
+det_badge="${GREEN}Detected & Connected${NC}"
+port_badge="${CYAN}${det_port}${NC} ${DIM}(${det_raw:-rawmidi node missing})${NC}"
 fi
 local srv_badge="${RED}Disabled / Inactive${NC}" srv_pid=""
 local pid_file="$HOME/.config/mix-manager/traktor_s4_midi.pid"
@@ -9439,22 +9627,22 @@ if [ -f "$HOME/.config/mix-manager/mp_audio_player.sock" ] || [ -f "$HOME/.confi
 pl_badge="${GREEN}Connected to MP Audio Player${NC}"
 fi
 local s4_hdr="  • Hardware Unit         : ${BOLD}${WHITE}Native Instruments Traktor Kontrol S4${NC}\n"
-s4_hdr+="  • ALSA Hardware Port    : ${CYAN}hw:0,0${NC} ${DIM}(/dev/snd/midiC0D0)${NC}\n"
+s4_hdr+="  • ALSA Hardware Port    : ${port_badge}\n"
 s4_hdr+="  • Hardware Status       : ${det_badge}\n"
 s4_hdr+="  • MIDI Service Daemon   : ${srv_badge}\n"
 s4_hdr+="  • Audio Player IPC      : ${pl_badge}\n"
 s4_hdr+="  • MIDI Mode Shortcut    : Hold ${BOLD}${YELLOW}SHIFT + BROWSE${NC} (MK1) or ${BOLD}${YELLOW}SHIFT + PREVIEW${NC} (MK2)\n"
-s4_hdr+="  • Supported in v0.4.3   : ${BOLD}${GREEN}Traktor Kontrol S4 Exclusively${NC}\n"
+s4_hdr+="  • Supported in v0.5.4   : ${BOLD}${GREEN}Traktor Kontrol S4 Exclusively${NC}\n"
 local s4_opts=(
 "1|Enable Traktor Kontrol S4 MIDI Mapping Support|(Start Background Service & Save Setting)"
 "2|Disable Traktor Kontrol S4 MIDI Mapping Support|(Stop Background Service & Save Setting)"
-"3|Restart MIDI Controller Service / Rescan hw:0,0|(Re-initialize ALSA Rawmidi Connection)"
+"3|Restart MIDI Controller Service / Rescan Port|(Re-detect the S4 card and reopen ALSA Rawmidi)"
 "4|Interactive Live MIDI Monitor & Packet Test|(Real-Time Pitch Sliders, Buttons & Encoders)"
 "5|View Traktor Kontrol S4 Getting Started User Guide|(Full Hardware Mapping Documentation)"
 "6|Open Official Native Instruments PDF Manuals|(Controller Editor & S4 MK2 Guides)"
 "0|Return to Previous Menu|(or Esc / q)"
 )
-run_interactive_submenu "TRAKTOR KONTROL S4 MIDI HARDWARE CONTROL & MAPPING (v0.5.3)" "$s4_hdr" s4_opts 0
+run_interactive_submenu "TRAKTOR KONTROL S4 MIDI HARDWARE CONTROL & MAPPING (v0.5.4)" "$s4_hdr" s4_opts 0
 local opt="$REPLY"
 case "$opt" in
 1)
@@ -9475,7 +9663,17 @@ echo -e "\n${BOLD}${CYAN}Restarting Traktor Kontrol S4 MIDI Service...${NC}\n"
 sleep 1.5 ;;
 4|monitor|test)
 echo -e "\n${BOLD}${YELLOW}Launching Interactive Live MIDI Monitor Console...${NC}\n"
+local s4_was_running=0
+if [ -n "$srv_pid" ] && kill -0 "$srv_pid" 2>/dev/null; then s4_was_running=1; fi
+if [ "$s4_was_running" -eq 1 ]; then
+echo -e "${DIM}Pausing the background service so the monitor can open the rawmidi port...${NC}\n"
+[ -f "$py_s4" ] && python3 "$py_s4" --stop
+fi
 [ -f "$py_s4" ] && python3 "$py_s4" --monitor
+if [ "$s4_was_running" -eq 1 ] && [ -f "$py_s4" ]; then
+echo -e "\n${DIM}Resuming the background MIDI service...${NC}"
+python3 "$py_s4" --start
+fi
 press_enter ;;
 5|guide|help|manual)
 clear
@@ -9502,8 +9700,106 @@ sleep 1 ;;
 *) echo -e "\n${RED}Invalid option!${NC}"; sleep 1 ;;
 esac; done
 }
+# ------------------------------------------------------------------------------
+# MP Mix Manager Audio Settings — pick the audio output device
+#
+# Lives under Studio Hardware (main option 19) as its own entry, never on the
+# main page. The selection is written to config.env as MP_AUDIO_OUTPUT_DEVICE
+# and MP Audio Player (and therefore every Liquid Player host, which runs it)
+# resolves it in _configured_output_device() before the system default.
+# ------------------------------------------------------------------------------
+_mp_audio_device_list() {
+# Print "<index>\t<name>" for every output-capable device PortAudio exposes.
+# sounddevice is the same backend the players use, so the indices line up.
+python3 - <<'PY' 2>/dev/null
+import sounddevice as sd
+try:
+    devices = sd.query_devices()
+    hostapis = sd.query_hostapis()
+except Exception:
+    raise SystemExit(1)
+for idx, dev in enumerate(devices):
+    if int(dev.get("max_output_channels", 0)) < 1:
+        continue
+    host = ""
+    try:
+        hi = int(dev.get("hostapi", -1))
+        if 0 <= hi < len(hostapis):
+            host = str(hostapis[hi].get("name", ""))
+    except Exception:
+        host = ""
+    name = str(dev.get("name", "")).strip()
+    print(f"{idx}\t{name}" + (f" [{host}]" if host else ""))
+PY
+}
+
+_mp_audio_settings_current() {
+local cur="${MP_AUDIO_OUTPUT_DEVICE:-}"
+if [ -z "$cur" ]; then
+    local cfg="${SCRIPT_DIR:-$PWD}/config.env"
+    [ -f "$cfg" ] && cur="$(grep -E '^[[:space:]]*MP_AUDIO_OUTPUT_DEVICE=' "$cfg" 2>/dev/null | tail -1 | sed -E 's/^[^=]*=//; s/^"//; s/"$//')"
+fi
+[ -z "$cur" ] && cur="default"
+printf '%s' "$cur"
+}
+
+manage_mp_audio_settings() {
+while true; do
+    local current devices opts=() i=1 line idx name default_idx=""
+    current="$(_mp_audio_settings_current)"
+    devices="$(_mp_audio_device_list)"
+    if [ -z "$devices" ]; then
+        echo -e "\n${RED}No audio output devices were reported.${NC}"
+        echo -e "${YELLOW}Sounddevice/PortAudio may not be installed, or no sound server is running.${NC}"
+        echo -e "Install the player requirements (pip install -r requirements.txt) and try again.\n"
+        press_enter; return 1
+    fi
+    default_idx="$(python3 - <<'PY' 2>/dev/null
+import sounddevice as sd
+try:
+    d = sd.default.device
+    print(int(d[1] if isinstance(d, (list, tuple)) else d))
+except Exception:
+    print("")
+PY
+)"
+    while IFS=$'\t' read -r idx name; do
+        [ -z "$idx" ] && continue
+        local mark=""
+        [ "$idx" = "$default_idx" ] && mark=" • system default"
+        case "$current" in
+            "$idx"|"$name") mark="$mark • SELECTED" ;;
+        esac
+        # An exact name match also counts when the index moved after a replug.
+        [ "$current" = "$name" ] && mark="$mark • SELECTED"
+        opts+=("${i}|${name}${mark}|(device index ${idx})")
+        i=$((i + 1))
+    done <<< "$devices"
+    opts+=("d|Use the System Default Device|(stop forcing a device; PortAudio decides)")
+    opts+=("0|Return to the Studio Hardware Menu|(or Esc / q)")
+    run_interactive_submenu "MP MIX MANAGER AUDIO SETTINGS — OUTPUT DEVICE" "  Current selection: ${BOLD}${CYAN}${current}${NC}\n  Applies to MP Audio Player and every Liquid Player window.\n" opts 0
+    case "$REPLY" in
+        0|[qQ]|[eE][xX][iI][tT]|ESC) return 0 ;;
+        d|D|default) save_config_setting "MP_AUDIO_OUTPUT_DEVICE" "default"
+            export MP_AUDIO_OUTPUT_DEVICE="default"
+            echo -e "\n${GREEN}✓ Now using the system default output device.${NC}\n"
+            sleep 1.4 ;;
+        ''|*[!0-9]*) echo -e "\n${RED}Invalid option!${NC}"; sleep 1 ;;
+        *)
+            line="$(printf '%s\n' "$devices" | sed -n "${REPLY}p")"
+            if [ -z "$line" ]; then echo -e "\n${RED}Invalid option!${NC}"; sleep 1; continue; fi
+            idx="$(printf '%s' "$line" | cut -f1)"
+            name="$(printf '%s' "$line" | cut -f2)"
+            save_config_setting "MP_AUDIO_OUTPUT_DEVICE" "$idx"
+            export MP_AUDIO_OUTPUT_DEVICE="$idx"
+            echo -e "\n${GREEN}✓ Audio output set to ${BOLD}${name}${NC}${GREEN} (index ${idx}).${NC}"
+            echo -e "${YELLOW}Reopen MP Audio Player or the Liquid Player for it to take effect.${NC}\n"
+            sleep 1.6 ;;
+    esac
+done
+}
 manage_studio_hardware_and_volume() {
-local opts=("1|Studio Hardware & Software Inspector|(PipeWire, ALSA, DAWs, MIDI Controllers & Surfaces)" "2|Toggle Audio Mute / Unmute & Master Volume Control|(Instant PipeWire/ALSA Mute)" "3|Traktor Kontrol S4 MIDI Hardware Control & Mapping|(Enable/Disable, Live Status, Port hw:0,0, Pitch & Guide)" "4|Game Controllers: Xbox, PlayStation, Nintendo & Steam|(Connected pads & live button test)" "0|Return to Main Menu|(or Esc / q)"); while true; do run_interactive_submenu "STUDIO HARDWARE, INTERFACES & VOLUME CONTROL" "" opts 0; case "$REPLY" in 1) inspect_audio_studio_menu ;; 2) toggle_audio_mute ;; 3|s4|midi|kontrol) manage_traktor_s4_midi_menu ;; 4|gamepad|gamepads|controller|controllers|xbox|playstation|nintendo|steam) manage_game_controllers_menu ;; 0|[qQ]|[eE][xX][iI][tT]|ESC) return 0 ;; *) echo -e "\n${RED}Invalid option!${NC}"; sleep 1 ;; esac; done
+local opts=("1|Studio Hardware & Software Inspector|(PipeWire, ALSA, DAWs, MIDI Controllers & Surfaces)" "2|Toggle Audio Mute / Unmute & Master Volume Control|(Instant PipeWire/ALSA Mute)" "3|Traktor Kontrol S4 MIDI Hardware Control & Mapping|(Enable/Disable, Live Status, Auto-Detected Port, Pitch & Guide)" "4|Game Controllers: Xbox, PlayStation, Nintendo & Steam|(Connected pads & live button test)" "5|MP Mix Manager Audio Settings|(Choose the audio output device for MP Audio Player & the Liquid Player)" "0|Return to Main Menu|(or Esc / q)"); while true; do run_interactive_submenu "STUDIO HARDWARE, INTERFACES & VOLUME CONTROL" "" opts 0; case "$REPLY" in 1) inspect_audio_studio_menu ;; 2) toggle_audio_mute ;; 3|s4|midi|kontrol) manage_traktor_s4_midi_menu ;; 4|gamepad|gamepads|controller|controllers|xbox|playstation|nintendo|steam) manage_game_controllers_menu ;; 5|audio-settings|audio_settings|mp-audio-settings|output-device|output_device) manage_mp_audio_settings ;; 0|[qQ]|[eE][xX][iI][tT]|ESC) return 0 ;; *) echo -e "\n${RED}Invalid option!${NC}"; sleep 1 ;; esac; done
 }
 manage_game_controllers_menu() {
 local helper="$SCRIPT_DIR/scripts/gamepad_bridge.py"
@@ -9736,7 +10032,7 @@ manage_congen() {
 local b; for b in "$SCRIPT_DIR/Congen/Congen" "$SCRIPT_DIR/congen" "./congen"; do if [ -x "$b" ]; then "$b" "$@"; return 0; fi; done; echo -e "\n${RED}Error: Congen executable not found!${NC}"; press_enter
 }
 manage_network_and_internet() {
-local opts=("1|Manage Network Services|(SSH, Samba, FTP - Start, Stop, Restart All)" "2|Congen - KDE Connect Commands Generator & Remote Control|(Mobile Phone Commands)" "3|Block Internet Access|(LAN Only - block-internet)" "4|Restore / Unblock Internet Access|(unblock-internet)" "5|Studio & DJ Booth Mobile Web Companion Server|(Phone & Tablet browser remote on port 8888)" "0|Return to Main Menu|(or Esc / q)"); while true; do run_interactive_submenu "NETWORK SERVICES, CONGEN & INTERNET ACCESS CONTROL" "" opts 0; case "$REPLY" in 1) manage_network_services ;; 2) manage_congen ;; 3) block_internet ;; 4) unblock_internet ;; 5) echo -e "\n${BOLD}${BLUE}=== LAUNCHING STUDIO & DJ BOOTH MOBILE WEB COMPANION ===${NC}\n"; launch_in_terminal "DJ Booth Web Companion" "CURRENT_THEME='$CURRENT_THEME' python3 '$SCRIPT_DIR/scripts/mix_web_companion.py' --theme '$CURRENT_THEME'" "window"; press_enter; ;; 0|[qQ]|[eE][xX][iI][tT]|ESC) return 0 ;; *) echo -e "\n${RED}Invalid option!${NC}"; sleep 1 ;; esac; done
+local opts=("1|Manage Network Services|(SSH, Samba, FTP - Start, Stop, Restart All)" "2|Congen - KDE Connect Commands Generator & Remote Control|(Mobile Phone Commands)" "3|Block Internet Access|(LAN Only - block-internet)" "4|Restore / Unblock Internet Access|(unblock-internet)" "5|Start MP Audio Web Player Companion Service|(Studio & DJ Booth phone and tablet server on port 8888)" "0|Return to Main Menu|(or Esc / q)"); while true; do run_interactive_submenu "NETWORK SERVICES, CONGEN & INTERNET ACCESS CONTROL" "" opts 0; case "$REPLY" in 1) manage_network_services ;; 2) manage_congen ;; 3) block_internet ;; 4) unblock_internet ;; 5) echo -e "\n${BOLD}${BLUE}=== RESTARTING MP WEB AUDIO COMPANION ===${NC}\n"; run_sub_script "mix_web_companion.sh" restart; press_enter; ;; 0|[qQ]|[eE][xX][iI][tT]|ESC) return 0 ;; *) echo -e "\n${RED}Invalid option!${NC}"; sleep 1 ;; esac; done
 }
 _m_loop() {
 local title="$1" sub="$2"; shift 2; local -a opts=("$@"); while true; do run_interactive_submenu "$title" "$sub" opts 0; case "$REPLY" in 0|[qQ]|[eE][xX][iI][tT]|ESC) return 0 ;; " ") toggle_mp_audio_player ;; [mM]) _mp_key_m ;; [lL]) launch_mp_audio_player_liquid_glass ;; [gG]) launch_mp_gui_from_menu ;; [zZ]) launch_mp_liquid_visualizer ;; K) mp_stop_audio_players; _CACHED_PLAYER_CHECK_TIME=0; _CACHED_PLAYER_ACTIVE_RES=1; MP_PLAYER_RUNNING=0; MP_PLAYER_STATE="stopped" ;; *) local act="${_MENU_ACT[$REPLY]:-}"; if [[ -n "$act" ]]; then eval "$act"; else printf '\n%bInvalid option!%b\n' "${RED:-}" "${NC:-}"; sleep 1; fi; ;; esac; done
@@ -9790,7 +10086,7 @@ manage_motd_and_tools() {
 local -A _MENU_ACT=([1]="manage_system_motd_menu" [2]="burn_iso_to_usb"); _m_loop "MOTD BANNER MANAGER & SYSTEM UTILITIES" "" "1|Dynamic System MOTD Banner Manager|(Last 3 Mixes, Date/Time, Size, Format & Specs)" "2|Burn ISO Image to USB Drive|(dd / diskutil with safety checks)" "0|Return to Main Menu|(or Esc / q)"
 }
 manage_settings_and_system() {
-local rb="systemctl reboot with confirmation"; case "$OS_TYPE" in macos) rb="macOS restart with confirmation" ;; windows|wsl) rb="Windows restart with confirmation" ;; freebsd) rb="FreeBSD restart with confirmation" ;; esac; local -A _MENU_ACT=([1]="manage_themes" [2]="manage_installation_and_config" [3]="configure_daily_reports_settings" [4]="manage_mix_reports_menu" [5]="run_bash_cli" [6]="reboot_system" [7]="configure_liquid_glass_backend"); _m_loop "MANAGER SETTINGS, THEMES & SYSTEM SHELL" "" "1|Manager Themes & Color Palette Switcher|(20 Themes: Dreamworlds, Sensorium, Retro Linux Memories...)" "2|Manage Installation & Configuration|(Migrate Path, Backup, Export, Import & Reinstall)" "3|Automated Daily Reports & Continuous Telemetry Settings|(Schedule Time, On/Off, Catch-Up)" "4|Daily Mix Reports, Telemetry & Predictive Analytics Suite|(PDF Reports, Multi-Archive Stats, Math Models)" "5|Run Bash CLI Commands|(Interactive Shell & Direct Runner)" "6|Reboot System|(${rb})" "7|Configure Liquid Glass Player Backend|(OpenGL [Default • AMD Radeon/Intel/Older Cards] or Vulkan)" "0|Return to Main Menu|(or Esc / q)"
+local rb="systemctl reboot with confirmation"; case "$OS_TYPE" in macos) rb="macOS restart with confirmation" ;; windows|wsl) rb="Windows restart with confirmation" ;; freebsd) rb="FreeBSD restart with confirmation" ;; esac; local -A _MENU_ACT=([1]="manage_themes" [2]="manage_installation_and_config" [3]="configure_daily_reports_settings" [4]="manage_mix_reports_menu" [5]="run_bash_cli" [6]="reboot_system" [7]="configure_liquid_glass_backend"); _m_loop "MANAGER SETTINGS, THEMES & SYSTEM SHELL" "" "1|Manager Themes & Color Palette Switcher|(21 Themes: Dreamworlds, Blood Moon, Sensorium...)" "2|Manage Installation & Configuration|(Migrate Path, Backup, Export, Import & Reinstall)" "3|Automated Daily Reports & Continuous Telemetry Settings|(Schedule Time, On/Off, Catch-Up)" "4|Daily Mix Reports, Telemetry & Predictive Analytics Suite|(PDF Reports, Multi-Archive Stats, Math Models)" "5|Run Bash CLI Commands|(Interactive Shell & Direct Runner)" "6|Reboot System|(${rb})" "7|Configure Liquid Glass Player Backend|(OpenGL [Default • AMD Radeon/Intel/Older Cards] or Vulkan)" "0|Return to Main Menu|(or Esc / q)"
 }
 # MP Gui paints each header value after a label colon truecolor white.
 # The label, through the colon, keeps its own colour. A │ or | ends the
@@ -9994,7 +10290,7 @@ hdr+=$'\n\n  '"${BOLD}${RED}⚠️  Please be advised you have not configured yo
 fi; local _mf_cnt=0 _mf_f="$HOME/.config/mix-manager/music_folders.json" _mf_line; if [ -f "$_mf_f" ]; then while IFS= read -r _mf_line; do [[ "$_mf_line" == *'"id":'* ]] && _mf_cnt=$((_mf_cnt + 1)); done < "$_mf_f"; fi; if [ "${_mf_cnt:-0}" -eq 0 ]; then
 hdr+=$'\n\n  '"${BOLD}${YELLOW}⚠️  Please be advised you have 0 MUSIC Folders configured.${NC}"$'\n  '"${BOLD}${YELLOW}Please use Option 2 to configure your music library folders now.${NC}"$'\n  '"${DIM}${YELLOW}(Support for local music libraries, external drives & network SMB shares)${NC}"
 fi; local _s4_conn=0; _s4_hardware_connected && _s4_conn=1; if [ "$_s4_conn" -eq 1 ] && [ "${TRAKTOR_S4_NOTIFIED:-false}" != "true" ] && [ ! -f "$HOME/.config/mix-manager/traktor_s4_notified.flag" ]; then
-hdr+=$'\n\n  '"${BOLD}${GREEN}🎛️  Traktor Kontrol S4 Hardware MIDI Device Detected [hw:0,0]!${NC}
+hdr+=$'\n\n  '"${BOLD}${GREEN}🎛️  Traktor Kontrol S4 Hardware MIDI Device Detected (auto-detected ALSA port)!${NC}
   ${BOLD}${CYAN}Please navigate to Option 19 (Studio Hardware & MIDI) to enable and configure Traktor Kontrol S4 MIDI Device Mapping Controls.${NC}
   ${DIM}${GREEN}(Control player transport, mixer, and pitch sliders directly from your S4 hardware)${NC}"
 fi; fi; get_manager_uptime >/dev/null; hdr+=$'\n  '"${_MANAGER_UPTIME_LINE}"; if [ "${MP_GUI_SESSION:-0}" = "1" ] && type _whiten_header_data_fields >/dev/null 2>&1; then _whiten_header_data_fields hdr; fi; _fit_block_to_panel _RENDERED_MAIN_HEADER "$hdr" "$(( cur_box_w + 2 ))"; printf '%b\n' "$_RENDERED_MAIN_HEADER"
@@ -10137,8 +10433,8 @@ if mp_tty_audio_mode_active && [ -z "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then :
 ensure_first_run_equalizer
 ensure_first_run_sample_track
 ensure_liquid_glass_first_run_reward
-_STOP_AUDIO_ON_EXIT=1; while true; do update_mp_bridge_menu "Main Console / Workstation Menu" "true"; update_terminal_geometry 0; _set_menu_box_width box_w "${_TERM_COLS:-80}"; main_header=""; main_opts=("SECTION|SECTION 1: Listen to Mixes & Tracks / Convert Audio / Import Mixes / Plus More|" "AI|Load MP Mix Manager AI Assistant (MP Harmony) (New)|(Shift+A • starts Ollama if needed • loads gpt-oss-pinned:latest)" "MP|MP GUI Mix Manager (New)|(Press G • Liquid Glass window • runs MP Gui)" "VR|Enter VR Mode with MP Liquid Player (BigScreen)|(Windows + Bigscreen VR • player centered on the primary desktop • music starts when it is placed)" "0|Run Any Desktop Shortcuts|(Games, Audio, Files, Tools, AI Servers — Linux/Windows/macOS)" "1|Play DJ Mixes (MP Audio Player - Mix Archive Mode)|(Built-in Player, Custom Animated EQ, FLAC/WAV/MP3)" "2|Play Tracks from MUSIC Folders using MP Audio Player|(Music Library • Local Drives & SMB Shares • Add / Remove Folders)" "3|MP Audio Player (Liquid Glass Mode)|(Liquid glass window • OpenGL [Default - All GPUs] or Vulkan • light theme reflections)" "4|Run Mix Conversion|(FLAC, MP3, WAV, or YouTube MP4)" "5|Audio Conversion, EBU R128 Mastering & CUE Sheets|(WAV, MP3, AAC, LUFS, CUE, Splitter)" "6|Retrieve Unconverted WAVs from Archive|(MOVE_NOT_CONVERTED_WAVS.sh)" "7|Search & Import Mixes from Local Drives & SMB|(search_and_import_mixes.sh / import_new_mixes.sh)" "8|Rename a Mix and Associated Assets|(FLAC, Tracklist, Spek)" "9|Find & Remove Duplicate Audio Files / Mixes|(Exact Content & Episode Match)" "10|Export / Copy Mixes to Specified Path|(Audio, Covers, Tracklists, Spek)" "11|Audio Integrity, Bit-Rot Scrub & FLAC Verification|(SHA-256, Bit-Rot Daemon, Fake FLAC)" "12|Cloud & Remote Backup Suite|(Google Drive, iCloud, Dropbox, Custom Folder)" "13|Storage Management & Multiple Mix Archives Setup|(Drive Space, Rescan, Configure Archives)" "SECTION|SECTION 2: STUDIO AUDIO, PLAYBACK, METADATA & VIDEO|" "14|Tracklist Management, Scanning & Metadata Suite|(Browse, Search, Picard, HTML Index)" "15|Audio Players & Retro Playback Suite|(cliamp, Strawberry, VLC, Audacity, Haruna, Winamp...)" "16|Configure Mix Archive Storage Locations|(Primary & Multiple Archives)" "17|Custom Mix Playlists & Traktor History Suite|(.m3u, .m3u8, .xspf, Traktor 3 Playlists)" "18|Digital Audio Workstations (DAWs) & Mix Dispatch|(Reaper, Logic, FL Studio, Ardour, Traktor)" "19|Studio Hardware, Audio Interfaces & Master Volume Control|(PipeWire, ALSA, MIDI, Mute)" "20|Spectrogram Generation & Audio Frequency Analysis|(Single & Multiple Spek, SoX, Praat)" "21|Morning Alarm Clock & DJ Mix Playback Suite|(Steam Games, Wake-Up Mixes, Scheduler)" "22|YouTube Video Suite|(Generate 4K/1080p Videos & Shorts Promos)" "23|Visual Media, Cover Art & Companion Video Suite|(Cut/Split Video, Converters, PPM, Launchers)" "24|Record Video of DJ Mix using GPU Screen Recorder (Linux)|(New Desktop Window)" "25|Listen to Your Top 5 Tracks Right Now (Pre-Selected - Special Option)|${_CACHED_TOP_5_BADGE:-[Ready]}" "SECTION|SECTION 3: SYSTEM, NETWORK, AI & SETTINGS|" "26|Live Session, Stream & Transfer Monitors Suite|(Tracklist, Traktor, Transfers, Uploads, Tasks)" "27|System & Hardware Process Monitors Suite|(btop, nvtop, top)" "28|MP Reporter Suite & Automated Reports Management|(Daily, Weekly, Monthly, Yearly, 12-Month Calendar & Email)" "29|Promotional Outreach, Syndication & Music Shopping|(Emails, RSS/Podcasts, Beatport/Bandcamp)" "30|Network Services, Congen & Internet Control|(SSH, Samba, FTP, Congen KDE Connect, Block Internet)" "31|Desktop Display Settings, Audio Routing & App Control|(Wayland/X11/macOS/Windows, Close Apps)" "32|Universal System Maintenance & Cleanup|(Drive space, OS Updates, Package Clean, Logs)" "33|Monitor System Processes and Bash Commands with System Info|(MP_Monitor_Bash.sh, new Terminal tab)" "34|Dynamic MOTD Banner Manager & Drive Burner|(Last 3 Mixes, Netpbm, ISO USB Burner)" "35|Manager Settings, Themes, Shell CLI & Reboot|(Themes, Migration, Reinstall/Reset, Bash CLI, Reboot)" "36|MP Mix Manager GUI|(Liquid Glass window • MP Liquid Player interface • Retro Linux Memories and built-in themes)" "SEP|SEP|"); if [ "${OS_TYPE:-}" = "linux" ]; then main_opts+=("37|Linux TTY Desktop Switcher (MP Mix Manager TTY Audio Mode)|(Text console • enables MP Mix Manager TTY Audio Mode)"); fi; main_opts+=("38|Exit Manager|(or q / exit)"); if [ -n "$CLI_INITIAL_ACTION" ]; then run_deferred_startup; choice="$CLI_INITIAL_ACTION"; CLI_INITIAL_ACTION=""; else run_interactive_submenu "" "$main_header" main_opts 0; choice="$REPLY"; fi; case $choice in AI|ai|"Load MP Mix Manager AI Assistant (MP Harmony) (New)"*) launch_mp_harmony_from_menu ;; MP|"MP GUI Mix Manager (New)"*) launch_mp_gui_from_menu ;; VR|vr|"Enter VR Mode with MP Liquid Player (BigScreen)"*|vr-mode|bigscreen|bigscreen-vr) enter_bigscreen_vr_mode ;; 1|p|P|play|Play|player|mp_player|mp-player|mpplayer|mp|"Play DJ Mixes (MP Audio Player - Mix Archive Mode)"*|"Play Mix/Audio File (MP Audio Player)"*)
-manage_mp_audio_player ;; 2|music|MUSIC|"Play Tracks from MUSIC Folders using MP Audio Player"*|"NEW Feature - Play Tracks from MUSIC Folders using MP Audio Player"*)
+_STOP_AUDIO_ON_EXIT=1; while true; do update_mp_bridge_menu "Main Console / Workstation Menu" "true"; update_terminal_geometry 0; _set_menu_box_width box_w "${_TERM_COLS:-80}"; main_header=""; main_opts=("SECTION|SECTION 1: Listen to Mixes & Tracks / Convert Audio / Import Mixes / Plus More|" "AI|Load MP Mix Manager AI Assistant (MP Harmony) (New)|(Shift+A • starts Ollama if needed • loads gpt-oss-pinned:latest)" "MP|MP GUI Mix Manager (New)|(Press G • Liquid Glass window • runs MP Gui)" "VR|Enter VR Mode with MP Liquid Player (BigScreen)|(Windows + Bigscreen VR • player centered on the primary desktop • music starts when it is placed)" "0|Run Any Desktop Shortcuts|(Games, Audio, Files, Tools, AI Servers — Linux/Windows/macOS)" "1|Play DJ Mixes (MP Audio Player - Mix Archive Mode)|(Built-in Player, Custom Animated EQ, FLAC/WAV/MP3)" "2|Play Tracks from MUSIC Folders using MP Audio Player|(Music Library • Local Drives & SMB Shares • Add / Remove Folders)" "3|MP Audio Player (Liquid Glass Mode)|(Liquid glass window • OpenGL [Default - All GPUs] or Vulkan • light theme reflections)" "4|Run Mix Conversion|(FLAC, MP3, WAV, or YouTube MP4)" "5|Audio Conversion, EBU R128 Mastering & CUE Sheets|(WAV, MP3, AAC, LUFS, CUE, Splitter)" "6|Retrieve Unconverted WAVs from Archive|(MOVE_NOT_CONVERTED_WAVS.sh)" "7|Search & Import Mixes from Local Drives & SMB|(search_and_import_mixes.sh / import_new_mixes.sh)" "8|Rename a Mix and Associated Assets|(FLAC, Tracklist, Spek)" "9|Find & Remove Duplicate Audio Files / Mixes|(Exact Content & Episode Match)" "10|Export / Copy Mixes to Specified Path|(Audio, Covers, Tracklists, Spek)" "11|Audio Integrity, Bit-Rot Scrub & FLAC Verification|(SHA-256, Bit-Rot Daemon, Fake FLAC)" "12|Cloud & Remote Backup Suite|(Google Drive, iCloud, Dropbox, Custom Folder)" "13|Storage Management & Multiple Mix Archives Setup|(Drive Space, Rescan, Configure Archives)" "SECTION|SECTION 2: STUDIO AUDIO, PLAYBACK, METADATA & VIDEO|" "14|Tracklist Management, Scanning & Metadata Suite|(Browse, Search, Picard, HTML Index)" "15|Audio Players & Retro Playback Suite|(cliamp, Strawberry, VLC, Audacity, Haruna, Winamp...)" "16|Configure Mix Archive Storage Locations|(Primary & Multiple Archives)" "17|Custom Mix Playlists & Traktor History Suite|(.m3u, .m3u8, .xspf, Traktor 3 Playlists)" "18|Digital Audio Workstations (DAWs) & Mix Dispatch|(Reaper, Logic, FL Studio, Ardour, Traktor)" "19|Studio Hardware, Audio Interfaces & Master Volume Control|(PipeWire, ALSA, MIDI, Mute)" "20|Spectrogram Generation & Audio Frequency Analysis|(Single & Multiple Spek, SoX, Praat)" "21|Morning Alarm Clock & DJ Mix Playback Suite|(Steam Games, Wake-Up Mixes, Scheduler)" "22|YouTube Video Suite|(Generate 4K/1080p Videos & Shorts Promos)" "23|Visual Media, Cover Art & Companion Video Suite|(Cut/Split Video, Converters, PPM, Launchers)" "24|Record Video of DJ Mix using GPU Screen Recorder (Linux)|(New Desktop Window)" "25|Listen to Your Top 5 Tracks Right Now (Pre-Selected - Special Option)|${_CACHED_TOP_5_BADGE:-[Ready]}" "SECTION|SECTION 3: SYSTEM, NETWORK, AI & SETTINGS|" "26|Live Session, Stream & Transfer Monitors Suite|(Tracklist, Traktor, Transfers, Uploads, Tasks)" "27|System & Hardware Process Monitors Suite|(btop, nvtop, top)" "28|MP Reporter Suite & Automated Reports Management|(Daily, Weekly, Monthly, Yearly, 12-Month Calendar & Email)" "29|Promotional Outreach, Syndication & Music Shopping|(Emails, RSS/Podcasts, Beatport/Bandcamp)" "30|Network Services, Congen & Internet Control|(SSH, Samba, FTP, Congen, Restart MP Web Audio Companion)" "31|Desktop Display Settings, Audio Routing & App Control|(Wayland/X11/macOS/Windows, Close Apps)" "32|Universal System Maintenance & Cleanup|(Drive space, OS Updates, Package Clean, Logs)" "33|Monitor System Processes and Bash Commands with System Info|(MP_Monitor_Bash.sh, new Terminal tab)" "34|Dynamic MOTD Banner Manager & Drive Burner|(Last 3 Mixes, Netpbm, ISO USB Burner)" "35|Manager Settings, Themes, Shell CLI & Reboot|(Themes, Migration, Reinstall/Reset, Bash CLI, Reboot)" "36|MP Mix Manager GUI|(Liquid Glass window • MP Liquid Player interface • Retro Linux Memories and built-in themes)" "SEP|SEP|"); if [ "${OS_TYPE:-}" = "linux" ]; then main_opts+=("37|Linux TTY Desktop Switcher (MP Mix Manager TTY Audio Mode)|(Text console • enables MP Mix Manager TTY Audio Mode)"); fi; main_opts+=("38|Exit Manager|(or q / exit)"); if [ -n "$CLI_INITIAL_ACTION" ]; then run_deferred_startup; choice="$CLI_INITIAL_ACTION"; CLI_INITIAL_ACTION=""; else run_interactive_submenu "" "$main_header" main_opts 0; choice="$REPLY"; fi; case $choice in AI|ai|"Load MP Mix Manager AI Assistant (MP Harmony) (New)"*) launch_mp_harmony_from_menu ;; MP|"MP GUI Mix Manager (New)"*) launch_mp_gui_from_menu ;; VR|vr|"Enter VR Mode with MP Liquid Player (BigScreen)"*|vr-mode|bigscreen|bigscreen-vr) enter_bigscreen_vr_mode ;; 1|p|P|play|Play|player|mp_player|mp-player|mpplayer|mp|"Play DJ Mixes (MP Audio Player - Mix Archive Mode)"*|"Play Mix/Audio File (MP Audio Player)"*)
+manage_mp_audio_player --mix-archive-mode ;; 2|music|MUSIC|"Play Tracks from MUSIC Folders using MP Audio Player"*|"NEW Feature - Play Tracks from MUSIC Folders using MP Audio Player"*)
 manage_music_folders_menu ;; 3|liquid|liquid-glass|glass|"MP Audio Player (Liquid Glass Mode)"*) launch_liquid_glass_from_menu ;; liquid-config|glass-config|liquid-backend|glass-backend) configure_liquid_glass_backend ;; 4|convert|mix-conversion|flac-conversion|"Run Mix Conversion"*)
 manage_mix_conversion ;; 5) manage_audio_conversion ;; 6) echo -e "\n${BOLD}${YELLOW}Retrieving unconverted WAV files...${NC}\n"; run_sub_script "MOVE_NOT_CONVERTED_WAVS.sh"; press_enter; ;; 7) manage_mix_search_and_import ;; 8) rename_mix; press_enter ;; 9) find_duplicate_audio_mixes; ;; 10) export_mixes_to_path ;; 11) manage_integrity_and_verification; ;; 12|backup|cloud-backup) manage_cloud_backup_suite ;; 13) play_sound_effect "storage"; manage_storage_and_archive_config ;;
 14) manage_tracklist_suite; ;; 15|manage-audio-players|players) manage_audio_players ;; 16|config-archive|archive-dir|archive-folder) play_sound_effect "storage"; configure_mix_archive_folder ;; specs|metadata|inspect) inspect_playing_audio_file; ;; 17) manage_playlists_and_history ;; 18) manage_daws_suite; ;; 19|studio|midi|hardware) manage_studio_hardware_and_volume ;; s4|kontrol|kontrol-s4|traktor-s4|traktor_s4) manage_traktor_s4_midi_menu ;; 20) manage_spek_generation; ;; 21) manage_mix_scheduler ;; 22) generate_youtube_video; ;; 23|manage-visual-media|visual-launchers|video-launchers) manage_visual_media_suite ;; 24|gpu-screen-recorder|record-mix) launch_gpu_screen_recorder; press_enter ;; 25|top5|top-5|top_5|mystery|special) manage_top_5_tracks; ;; 26|manage-live-monitors|live-monitors) manage_live_monitors ;; 27|manage-process-monitors|process-monitors) manage_system_process_monitors; ;; 28|reports|daily-reports|report|mp-reporter|reporter) manage_mix_reports_menu ;; 29) manage_promo_and_syndication ;; 30) manage_network_and_internet; ;; 31) manage_desktop_and_display ;; 32) manage_system_maintenance; ;; 33|monitor|mp-monitor|bash-monitor) manage_process_and_bash_monitor ;; infinite-talk*|inftlk*|stephen-hawking*|infinite-talker*) run_wan2gp_infinite_talker ;; open-webui|openwebui|webui|web-chat) manage_open_webui ;; harmony|mp-harmony|mp_harmony|harmony-agent|ha) manage_harmony_agent; ;; 34) manage_motd_and_tools ;; 35) manage_settings_and_system; ;; 36|mp-gui|gui|MP_Gui|g|G|"MP Mix Manager GUI"*) launch_mp_gui_from_menu ;; ESC) [ "${MP_GUI_SESSION:-0}" = "1" ] && exit_mix_manager ;; 37|tty|tty-mode|tty-audio|desktop-cli|"Linux TTY Desktop Switcher (MP Mix Manager TTY Audio Mode)"*) manage_linux_tty_desktop_switch ;; 38|77|[qQ]|[eE][xX][iI][tT]) exit_mix_manager ;; audacious|audacious-launch) launch_audacious; ;; audacity|audacity-launch) launch_audacity ;; strawberry|strawberry-launch) launch_strawberry; ;; vlc|vlc-launch) launch_vlc ;; haruna|haruna-launch) launch_haruna; ;; kodi|kodi-launch) launch_kodi ;; gimp|gimp-launch) launch_gimp; ;; electricsheep|screensaver) launch_electricsheep ;; geexlab|geexlab-launch) launch_geexlab_demos; ;; btop|btop-launch) echo -e "\n${BOLD}${YELLOW}Launching btop Resource Monitor (Press 'q' to exit)...${NC}\n"; sleep 0.5; if command -v btop &>/dev/null; then _sync_btop_theme "$CURRENT_THEME"; btop; else echo -e "${RED}Error: btop command not found!${NC}"; press_enter; fi ;; nvtop|nvtop-launch) echo -e "\n${BOLD}${YELLOW}Launching nvtop GPU Monitor (Press 'q' to exit)...${NC}\n"; sleep 0.5; trap ':' INT; if command -v nvtop &>/dev/null; then nvtop; else echo -e "${RED}Error: nvtop command not found!${NC}"; press_enter; fi; trap 'exit_mix_manager' INT; ;; top|top-launch) echo -e "\n${BOLD}${YELLOW}Launching top Process Monitor (Press 'q' to exit)...${NC}\n"; sleep 0.5; trap ':' INT; if command -v top &>/dev/null; then top; else echo -e "${RED}Error: top command not found!${NC}"; press_enter; fi; trap 'exit_mix_manager' INT ;; split-flac|split_flac) split_flac_audio; press_enter ;; split-video|split_video|split-mp4|split_mp4) split_video_clip; press_enter ;; cut-video|cut_video) cut_video_clip; press_enter ;; beszel|beszel-start|beszel_start|beszel-hub|beszel-agent) manage_beszel; press_enter ;; ollama|ollama-serve|ollama_serve|ollama-start|ollama_start) manage_ollama; press_enter ;; dsh|dsh-mobile|dsh_mobile|dsh-start|dsh_start|dsh-web|dsh_web|deepseek|deepseek-harness) manage_dsh_mobile; press_enter ;; alarm|alarm-clock|alarm_clock|alarm.sh) manage_mix_scheduler; ;; congen|kdeconnect|congen-launch) manage_congen ;; block-internet|--block-internet|block_internet) block_internet; ;; unblock-internet|--unblock-internet|unblock_internet) unblock_internet ;; 0|[Ss]|shortcuts|desktop-shortcuts|ds|kioclient|run-shortcuts|desktop_shortcuts) manage_desktop_shortcuts; ;; " ") toggle_mp_audio_player ;; [mM]) _mp_key_m ;; [lL]) launch_mp_audio_player_liquid_glass ;; [cC]) cycle_menu_theme ;; [zZ]|visualizer|liquid-visualizer|mp-visualizer|mp_liquid_visualizer) launch_mp_liquid_visualizer ;; visualizer-preset|visualizer-presets) manage_mp_liquid_visualizer_presets ;; K) mp_stop_audio_players; _CACHED_PLAYER_CHECK_TIME=0; _CACHED_PLAYER_ACTIVE_RES=1; MP_PLAYER_RUNNING=0; MP_PLAYER_STATE="stopped" ;; *) case "$choice" in ""|A|B|"[A"|"[B"|OA|OB|UP|DOWN|UNKNOWN|SECTION|SEP) ;; *) echo -e "\n${RED}Invalid option! Please enter a number between 0 and 38, or q to exit.${NC}"; sleep 2 ;; esac ;; esac; done

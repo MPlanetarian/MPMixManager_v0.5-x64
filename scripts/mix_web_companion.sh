@@ -267,6 +267,7 @@ compile_bundle_launcher() {
     cat >"$src" <<EOF
 #include <dlfcn.h>
 #include <errno.h>
+#include <glob.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -277,6 +278,53 @@ compile_bundle_launcher() {
 /* Keep the app bundle resident as the parent of Python so macOS TCC
  * attributes the archive read to the bundle that holds the FDA grant. */
 static volatile sig_atomic_t child_pid = 0;
+
+/* Homebrew rebuilds libpython in a versioned Cellar directory, so an exact
+ * path is only valid until the next \`brew upgrade python@X.Y\`. The path baked
+ * in at build time pointed at Python 3.15.1; Homebrew moved to 3.15.2 and the
+ * launcher then failed with
+ *
+ *   dlopen(.../3.15.1/Frameworks/Python.framework/Versions/3.15/Python) failed
+ *
+ * leaving the service dead while the job still reported as loaded. The baked
+ * path is tried first; when it is gone the same framework is looked up under
+ * the Cellar by version, so a patch bump no longer breaks the bundle.
+ */
+static void *open_libpython(const char *baked) {
+    void *h = dlopen(baked, RTLD_NOW | RTLD_GLOBAL);
+    if (h) return h;
+    fprintf(stderr, "mp-web-companion: dlopen(%s) failed: %s\n", baked, dlerror());
+    fprintf(stderr, "mp-web-companion: searching the Cellar for a replacement\n");
+
+    static const char *patterns[] = {
+        "/opt/homebrew/Cellar/python@3.*/*/Frameworks/Python.framework/Versions/3.*/Python",
+        "/usr/local/Cellar/python@3.*/*/Frameworks/Python.framework/Versions/3.*/Python",
+        "/opt/homebrew/Frameworks/Python.framework/Versions/3.*/Python",
+        "/usr/local/Frameworks/Python.framework/Versions/3.*/Python",
+        "/Library/Frameworks/Python.framework/Versions/3.*/Python",
+        NULL
+    };
+    for (int i = 0; patterns[i]; i++) {
+        glob_t found;
+        memset(&found, 0, sizeof found);
+        if (glob(patterns[i], GLOB_NOSORT, NULL, &found) != 0) {
+            globfree(&found);
+            continue;
+        }
+        /* Newest first: the Cellar names sort ascending by version. */
+        for (size_t n = found.gl_pathc; n > 0; n--) {
+            const char *cand = found.gl_pathv[n - 1];
+            h = dlopen(cand, RTLD_NOW | RTLD_GLOBAL);
+            if (h) {
+                fprintf(stderr, "mp-web-companion: using %s\n", cand);
+                globfree(&found);
+                return h;
+            }
+        }
+        globfree(&found);
+    }
+    return NULL;
+}
 
 /* launchd stops a job with SIGTERM. Without forwarding it, Python is orphaned
  * and keeps port 8888 bound, so the "restart" appears to succeed while the old
@@ -311,7 +359,7 @@ int main(void) {
      * "Python" and MP Web Companion never appeared in Privacy & Security.
      * Embedding keeps the bundle, and therefore the privacy grant, attached
      * to this process for its whole lifetime. */
-    void *libpython = dlopen("$PYTHON_LIB", RTLD_NOW | RTLD_GLOBAL);
+    void *libpython = open_libpython("$PYTHON_LIB");
     if (libpython) {
         int (*run_python)(int, char **) =
             (int (*)(int, char **))dlsym(libpython, "Py_BytesMain");
@@ -329,9 +377,6 @@ int main(void) {
         }
         fprintf(stderr, "mp-web-companion: Py_BytesMain missing from %s\n",
                 "$PYTHON_LIB");
-    } else {
-        fprintf(stderr, "mp-web-companion: dlopen(%s) failed: %s\n",
-                "$PYTHON_LIB", dlerror());
     }
 
     /* Fallback: exec the interpreter. Still serves, but macOS then judges the
@@ -506,7 +551,7 @@ write_launchd_plist() {
     local macos_dir="$bundle/Contents/MacOS"
     local version
     version="$(cat "$APP_DIR/VERSION" 2>/dev/null | awk '{print $1}')"
-    [ -n "$version" ] || version="0.5.3"
+    [ -n "$version" ] || version="0.5.4"
     mkdir -p "$macos_dir" "$bundle/Contents/Resources"
 
     # An icon is not cosmetic here: an app without one is drawn as a blank

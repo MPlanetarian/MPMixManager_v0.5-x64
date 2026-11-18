@@ -1,5 +1,5 @@
 # ==============================================================================
-# MP Mix Manager v0.5.3 — Python runtime dependencies
+# MP Mix Manager v0.5.4 — Python runtime dependencies
 # ==============================================================================
 # scripts/mp_dependencies.py reads this list, compares it with what the current
 # interpreter can import, and installs whatever is missing (into the per-user

@@ -17,6 +17,7 @@ from __future__ import annotations
 import os
 import sys
 import re
+import errno
 import time
 import json
 import shutil
@@ -496,18 +497,44 @@ def _kill_rclone_mount(md: Path) -> None:
 def smb_mount_dir(f: Dict[str, Any], config: Dict[str, Any]) -> Path:
     return config["mount_root"] / f["id"]
 
+def _mount_path_key(path: Union[str, Path]) -> str:
+    """Resolve the parent so a mount records under the same path we look it up by.
+
+    The kernel stores resolved mount paths, so on a Fedora style layout where
+    /home is a symlink to /var/home, ~/MUSIC_SMB/MUSIC002 is listed as
+    /var/home/... and a raw string compare never matches. The leaf itself is
+    kept as-is because stat()-ing a dead FUSE mount raises ENOTCONN.
+    """
+    raw = os.path.abspath(str(path))
+    parent, name = os.path.split(raw)
+    try:
+        parent = os.path.realpath(parent)
+    except OSError:
+        parent = os.path.normpath(parent)
+    return os.path.normpath(os.path.join(parent, name) if name else parent)
+
+def _stat_errno(path: Union[str, Path], timeout: float = 2.0) -> Optional[int]:
+    """stat() error number: 0 when it works, None when a wedged mount blocks it."""
+    def _probe():
+        try:
+            os.stat(str(path))
+            return 0
+        except OSError as exc:
+            return exc.errno or -1
+    return _run_with_timeout(_probe, timeout, None)
+
 def _is_mountpoint(p: Path) -> bool:
-    target = str(p)
+    target = _mount_path_key(p)
     try:
         with open("/proc/mounts", "r", encoding="utf-8", errors="ignore") as fh:
             for line in fh:
                 parts = line.split()
-                if len(parts) >= 2 and parts[1].replace("\\040", " ") == target:
+                if len(parts) >= 2 and os.path.normpath(parts[1].replace("\\040", " ")) == target:
                     return True
     except Exception:
         pass
     try:
-        return os.path.ismount(target)
+        return os.path.ismount(str(p))
     except Exception:
         return False
 
@@ -611,7 +638,9 @@ def connect_folder(f: Dict[str, Any], config: Dict[str, Any], interactive: bool 
             time.sleep(0.1)
         if _is_mountpoint(md):
             return False, f"{display_path(f)} is mounted but not responding, and it could not be remounted."
-    md.mkdir(parents=True, exist_ok=True)
+    ok, msg = _prepare_mount_dir(md, f, config)
+    if not ok:
+        return False, msg
     # Read-write. These shares hold Windows thumbnail caches the cleaner deletes.
     cmd = ["rclone", "mount", remote, str(md),
            "--dir-cache-time", "24h", "--vfs-cache-mode", "full", "--vfs-cache-max-size", "15G",
@@ -632,7 +661,50 @@ def connect_folder(f: Dict[str, Any], config: Dict[str, Any], interactive: bool 
         return False, f"Timed out waiting for {display_path(f)} to mount at {md}"
     if _listing_responds(target, 8):
         return True, f"Mounted {display_path(f)} at {md}"
-    return False, f"Mounted {display_path(f)} but the share did not respond. Check the SMB login in option 8."
+    # Leave no half-mounted share behind, otherwise the next launch has to
+    # clean up a dead FUSE mount before it can even try again.
+    disconnect_folder(f, config)
+    return False, f"{display_path(f)} is offline (share not responding). Its tracks will be skipped."
+
+def _release_posix_mount(md: Path) -> bool:
+    """Lazily detach a FUSE mount, including one whose connection is already dead."""
+    commands = []
+    if shutil.which("fusermount3"):
+        commands.append(["fusermount3", "-uz", str(md)])
+    if shutil.which("fusermount"):
+        commands.append(["fusermount", "-uz", str(md)])
+    commands.append(["umount", "-l", str(md)])
+    for cmd in commands:
+        # A wedged FUSE mount can leave fusermount blocked. Give up and kill rclone.
+        try:
+            subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+        except (subprocess.TimeoutExpired, OSError):
+            pass
+        if not _is_mountpoint(md) and _stat_errno(md) == 0:
+            break
+    _kill_rclone_mount(md)
+    return not _is_mountpoint(md) and _stat_errno(md) == 0
+
+def _prepare_mount_dir(md: Path, f: Dict[str, Any], config: Dict[str, Any]) -> Tuple[bool, str]:
+    """Create the mount point, clearing a dead mount an offline share left behind.
+
+    A share that vanishes while mounted leaves its FUSE mountpoint in a dead
+    state: mkdir() returns EEXIST because the directory entry exists, and every
+    stat() on it raises ENOTCONN. Without this clean-up that OSError escaped and
+    aborted the whole "Play ALL Music Folders" launch.
+    """
+    try:
+        md.mkdir(parents=True, exist_ok=True)
+        return True, ""
+    except OSError as first_error:
+        if not (_is_mountpoint(md) or _stat_errno(md) == errno.ENOTCONN):
+            return False, f"Cannot prepare mount point {md}: {first_error}"
+    disconnect_folder(f, config)
+    try:
+        md.mkdir(parents=True, exist_ok=True)
+        return True, ""
+    except OSError as exc:
+        return False, f"Cannot prepare mount point {md} for {display_path(f)}: {exc}"
 
 def disconnect_folder(f: Dict[str, Any], config: Dict[str, Any]) -> Tuple[bool, str]:
     if IS_WINDOWS:
@@ -640,29 +712,24 @@ def disconnect_folder(f: Dict[str, Any], config: Dict[str, Any]) -> Tuple[bool, 
         res = subprocess.run(["net", "use", share_unc, "/delete", "/y"], capture_output=True, text=True)
         return True, ("Disconnected" if res.returncode == 0 else "No active UNC session")
     md = smb_mount_dir(f, config)
-    if _is_mountpoint(md):
-        commands = []
-        if shutil.which("fusermount3"):
-            commands.append(["fusermount3", "-uz", str(md)])
-        if shutil.which("fusermount"):
-            commands.append(["fusermount", "-uz", str(md)])
-        commands.append(["umount", "-l", str(md)])
-        for cmd in commands:
-            # A wedged FUSE mount can leave fusermount blocked. Give up and kill rclone.
-            try:
-                subprocess.run(cmd, capture_output=True, text=True, timeout=5)
-            except subprocess.TimeoutExpired:
-                pass
-            if not _is_mountpoint(md):
-                break
-    _kill_rclone_mount(md)
-    if not _is_mountpoint(md):
+    if not _is_mountpoint(md) and _stat_errno(md) != errno.ENOTCONN:
+        _kill_rclone_mount(md)
+        return True, f"Not mounted ({md})"
+    if _release_posix_mount(md):
         return True, f"Unmounted {md}"
     return False, f"Could not unmount {md}"
 
 def ensure_folders_connected(folders: List[Dict[str, Any]], config: Dict[str, Any],
                              interactive: bool = True) -> List[Tuple[Dict[str, Any], bool, str]]:
-    return [(f, *connect_folder(f, config, interactive=interactive)) for f in folders]
+    """Connect every folder, never letting one offline share abort the rest."""
+    results: List[Tuple[Dict[str, Any], bool, str]] = []
+    for f in folders:
+        try:
+            ok, msg = connect_folder(f, config, interactive=interactive)
+        except Exception as exc:  # a broken share must not kill the launch
+            ok, msg = False, f"{type(exc).__name__}: {exc}"
+        results.append((f, ok, msg))
+    return results
 
 def folder_statuses(folders: List[Dict[str, Any]], config: Dict[str, Any], timeout: float = 8.0) -> Dict[str, str]:
     results: Dict[str, str] = {}
@@ -973,8 +1040,17 @@ def launch_mp_audio_player_music_mode(target: str = ALL_TARGET, config: Optional
         st = check_playlist_status(target_id, config)
 
     print(f"{DIM}Verifying music folder connections...{NC}", flush=True)
-    for f, _, _ in ensure_folders_connected(involved, config, interactive=True):
-        pass
+    results = ensure_folders_connected(involved, config, interactive=True)
+    online = [f for f, ok, _ in results if ok]
+    for f, ok, _ in results:
+        if not ok:
+            print(f"  {YELLOW}⚠ [{f['id']}] {f['name']} is OFFLINE — its tracks will be skipped.{NC}", flush=True)
+    if not online:
+        print(f"\n{RED}✖ None of the selected music folders are reachable, so playback was not started.{NC}")
+        print(f"{DIM}  Reconnect the missing disk, or check the SMB login with option 8, then try again.{NC}")
+        if sys.stdin.isatty():
+            pause("Press Enter to return to the menu...")
+        return
 
     playlist_path = st["json_path"] if st["json_path"].is_file() else st["m3u_path"]
     player_py = config["base_dir"] / "MP_Audio_Player.py"

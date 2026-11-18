@@ -11,7 +11,7 @@ if [ -z "${VERSION:-}" ]; then
     if [ -f "$SCRIPT_DIR/VERSION" ]; then
         VERSION="$(head -n 1 "$SCRIPT_DIR/VERSION" | tr -d '\r\n')"
     else
-        VERSION="0.5.3 Stable (Sensorium)"
+        VERSION="0.5.4 Stable (Sensorium)"
     fi
 fi
 export VERSION

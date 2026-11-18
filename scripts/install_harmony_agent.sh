@@ -187,6 +187,12 @@ cmd_unit() {
     local py
     py="$(command -v python3 2>/dev/null || echo /usr/bin/python3)"
 
+    # The unit deliberately does not pin a model tag. A pinned tag that later
+    # disappears from Ollama made the agent exit on startup, and systemd then
+    # restart-looped it while the Web Companion showed "connection refused".
+    # Without --model the agent picks an installed model itself, preferring
+    # gpt-oss-pinned:latest then any Nemotron build. Set HARMONY_MODEL in a
+    # drop-in to pin a specific tag.
     cat > "$UNIT_DIR/$UNIT_NAME" <<UNIT
 [Unit]
 Description=MP Harmony AI Agent & Voice Bridge (:11435)
@@ -196,8 +202,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=$TARGET
-ExecStart=$py $TARGET/$ENTRY --server gpt-oss-pinned:latest
-Environment=HARMONY_MODEL=gpt-oss-pinned:latest
+ExecStart=$py $TARGET/$ENTRY --server
 Restart=always
 RestartSec=3
 

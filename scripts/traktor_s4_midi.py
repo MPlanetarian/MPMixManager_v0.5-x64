@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
 Traktor Kontrol S4 Hardware MIDI Controller Service for MP Mix Archive Manager & MP Audio Player
-Version 0.5.3 Stable (Sensorium)
+Version 0.5.4 Stable (Sensorium)
 
 Communicates with Native Instruments Traktor Kontrol S4 over Hardware ALSA MIDI Port (amidi / hw:0,0).
 Translates MIDI Mode signals (Pitch Faders, Buttons, Encoders, Volume Sliders) to MP Audio Player IPC commands.
 """
 
 from __future__ import annotations
-import os, sys, time, json, socket, subprocess, threading, signal, select, argparse, platform, shutil
+import os, sys, time, json, socket, subprocess, threading, signal, select, argparse, platform, shutil, re, glob
 from pathlib import Path
 from typing import Optional, Dict, Any, Tuple, List
 
@@ -16,6 +16,7 @@ CONFIG_DIR = Path.home() / ".config" / "mix-manager"
 CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 
 PID_FILE = CONFIG_DIR / "traktor_s4_midi.pid"
+LOCK_FILE = CONFIG_DIR / "traktor_s4_midi.lock"
 LOG_FILE = CONFIG_DIR / "traktor_s4_midi.log"
 STATE_FILE = CONFIG_DIR / "traktor_s4_midi_state.json"
 FIRST_SEEN_FLAG = CONFIG_DIR / "traktor_s4_first_seen.flag"
@@ -24,6 +25,9 @@ PLAYER_SOCKET = CONFIG_DIR / "mp_audio_player.sock"
 PLAYER_PORT_FILE = CONFIG_DIR / "mp_audio_player.port"
 PLAYER_STATE_FILE = CONFIG_DIR / "mp_player_state.json"
 
+# Legacy ALSA default. The S4 is normally card 0, but any other sound card
+# (HDMI audio, a USB interface) can take that slot, so the real port is
+# auto-detected and DEFAULT_PORT is only the last-resort fallback.
 DEFAULT_PORT = "hw:0,0"
 DEFAULT_DEVICE_NAME = "Traktor Kontrol S4"
 
@@ -110,68 +114,130 @@ def is_player_running() -> bool:
     return False
 
 
-def detect_traktor_s4_port() -> Tuple[bool, str, str]:
+def _read_text(path: str) -> Optional[str]:
+    """Read a small text file, returning None when it is missing/unreadable."""
+    try:
+        return Path(path).read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        return None
+
+
+def _alsa_cards(proc_root: str = "/proc") -> List[Tuple[int, str, str]]:
+    """Return (index, id, description) for every ALSA card."""
+    text = _read_text(f"{proc_root}/asound/cards") or ""
+    cards: List[Tuple[int, str, str]] = []
+    for line in text.splitlines():
+        m = re.match(r"\s*(\d+)\s+\[([^\]]*)\]\s*:\s*(.*)", line)
+        if m:
+            cards.append((int(m.group(1)), m.group(2).strip(), m.group(3).strip()))
+    return cards
+
+
+def _traktor_card(proc_root: str = "/proc") -> Optional[Tuple[int, str, str]]:
+    """Find the ALSA card belonging to a Traktor Kontrol S4, if present."""
+    for idx, card_id, desc in _alsa_cards(proc_root):
+        if "traktor" in f"{card_id} {desc}".lower():
+            return idx, card_id, desc
+    return None
+
+
+def _card_midi_subdevice(proc_root: str, card: int) -> Tuple[Optional[int], str]:
+    """First MIDI subdevice exposed by an ALSA card, plus its description."""
+    matches = sorted(
+        glob.glob(f"{proc_root}/asound/card{card}/midi*"),
+        key=lambda p: int(re.sub(r"\D", "", os.path.basename(p)) or 0),
+    )
+    if not matches:
+        return None, ""
+    midi_file = matches[0]
+    dev_str = os.path.basename(midi_file).replace("midi", "")
+    content = _read_text(midi_file) or ""
+    details = content.splitlines()[0].strip() if content else ""
+    return (int(dev_str) if dev_str.isdigit() else 0), details
+
+
+def rawmidi_path_for_port(port: str, dev_root: str = "/dev") -> Optional[str]:
+    """Map an ALSA port ('hw:CARD,DEV') to its rawmidi node, if it exists."""
+    if not port:
+        return None
+    if port.startswith("/dev/"):
+        return port if os.path.exists(port) else None
+    if port.startswith("hw:"):
+        parts = port[3:].split(",")
+        if len(parts) >= 2 and parts[0].isdigit() and parts[1].isdigit():
+            path = f"{dev_root}/snd/midiC{parts[0]}D{parts[1]}"
+            return path if os.path.exists(path) else None
+    return None
+
+
+def port_from_rawmidi_path(path: str) -> Optional[str]:
+    """Inverse of rawmidi_path_for_port: /dev/snd/midiC1D0 -> hw:1,0."""
+    m = re.match(r".*/snd/midiC(\d+)D(\d+)$", path or "")
+    return f"hw:{m.group(1)},{m.group(2)}" if m else None
+
+
+def detect_traktor_s4_port(proc_root: str = "/proc", dev_root: str = "/dev") -> Tuple[bool, str, str]:
     """
     Detect Traktor Kontrol S4 hardware port.
+
+    The card index is whatever ALSA assigned to the S4, which is not always 0:
+    HDMI audio or a USB interface can occupy card 0. Reading the card's own
+    /proc/asound/cardN/midiM entry keeps the port correct either way.
+
     Returns: (is_detected, port_str, details)
     """
-    import glob
-    port = DEFAULT_PORT
-    detected = False
-    details = ""
+    # 1. Primary ALSA check: the Traktor card and its first rawmidi subdevice.
+    card = _traktor_card(proc_root)
+    if card:
+        idx, card_id, desc = card
+        dev_num, midi_details = _card_midi_subdevice(proc_root, idx)
+        port = f"hw:{idx},{dev_num if dev_num is not None else 0}"
+        details = midi_details or f"{card_id}: {desc}"
+        return True, port, details
 
-    # 1. Primary ALSA check: /proc/asound/card*/midi*
-    for f in glob.glob("/proc/asound/card*/midi*"):
-        try:
-            content = Path(f).read_text(encoding="utf-8", errors="ignore")
-            if "Traktor Kontrol S4" in content or "Traktor" in content:
-                parts = f.split("/")
-                card_num = parts[3].replace("card", "")
-                dev_num = parts[-1].replace("midi", "")
-                port = f"hw:{card_num},{dev_num}"
-                detected = True
-                details = content.splitlines()[0].strip()
-                return detected, port, details
-        except Exception:
-            pass
-
-    # 2. Check /proc/asound/cards
-    try:
-        cards = Path("/proc/asound/cards").read_text(encoding="utf-8", errors="ignore")
-        if "Traktor Kontrol S4" in cards or "TraktorKontrolS" in cards:
-            detected = True
-            details = "Traktor Kontrol S4 (snd-usb-caiaq)"
-            port = "hw:0,0"
-            return detected, port, details
-    except Exception:
-        pass
+    # 2. FreeBSD: generic USB MIDI driver exposes /dev/umidi<unit>.<port>.
+    if IS_FREEBSD:
+        devices = freebsd_midi_devices()
+        if devices:
+            return True, devices[0], devices[0]
 
     # 3. Check amidi -l
     try:
         res = subprocess.run(["amidi", "-l"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=2)
         for line in res.stdout.splitlines():
-            if "Traktor Kontrol S4" in line or "Traktor" in line:
+            if "traktor" in line.lower():
                 parts = line.split()
-                if len(parts) >= 2 and parts[1].startswith("hw:"):
-                    port = parts[1]
-                detected = True
-                details = line.strip()
-                return detected, port, details
+                port = next((p for p in parts if p.startswith("hw:")), DEFAULT_PORT)
+                return True, port, line.strip()
     except Exception:
         pass
 
-    # 4. Check rawmidi character device
-    if os.path.exists("/dev/snd/midiC0D0"):
-        try:
-            inp = Path("/proc/bus/input/devices").read_text(encoding="utf-8", errors="ignore")
-            if "Traktor Kontrol S4" in inp:
-                detected = True
-                details = "Traktor Kontrol S4 (/dev/snd/midiC0D0)"
-                port = "hw:0,0"
-        except Exception:
-            pass
+    # 4. Rawmidi node + USB input description (when /proc/asound is absent)
+    midi_nodes = sorted(glob.glob(f"{dev_root}/snd/midiC*D*"))
+    if midi_nodes:
+        inputs = _read_text(f"{proc_root}/bus/input/devices") or ""
+        if "traktor" in inputs.lower():
+            port = port_from_rawmidi_path(midi_nodes[0]) or DEFAULT_PORT
+            return True, port, f"Traktor Kontrol S4 ({midi_nodes[0]})"
 
-    return detected, port, details
+    return False, DEFAULT_PORT, ""
+
+
+def resolve_port(requested: Optional[str] = None,
+                 proc_root: str = "/proc", dev_root: str = "/dev") -> str:
+    """Pick the port to listen on: an explicit working port, else auto-detect.
+
+    A requested port that has no rawmidi node (for example the old hardcoded
+    hw:0,0 when the S4 landed on card 1) is replaced by the detected port.
+    """
+    if requested and rawmidi_path_for_port(requested, dev_root):
+        return requested
+    detected, port, details = detect_traktor_s4_port(proc_root, dev_root)
+    if detected and port:
+        if requested and requested != port:
+            log(f"Requested port {requested} is not present; using detected {port} ({details})")
+        return port
+    return requested or DEFAULT_PORT
 
 
 class TraktorS4MidiController:
@@ -180,9 +246,11 @@ class TraktorS4MidiController:
     Translates raw MIDI messages to MP Mix Archive Manager and MP Audio Player commands.
     """
 
-    def __init__(self, port: str = DEFAULT_PORT):
-        self.port = port
-        self.rawmidi_dev = self._get_rawmidi_device_path(port)
+    def __init__(self, port: Optional[str] = None):
+        # None means "auto-detect now"; an explicit port is kept unless it has
+        # no rawmidi node, in which case _get_rawmidi_device_path() repairs it.
+        self.port = port or resolve_port()
+        self.rawmidi_dev = self._get_rawmidi_device_path(self.port)
         self.running = False
         self.last_pitch_sent = 0
         self.last_pitch_time = 0.0
@@ -192,20 +260,21 @@ class TraktorS4MidiController:
         self.shift_active = False
 
     def _get_rawmidi_device_path(self, port: str) -> Optional[str]:
-        if port.startswith("hw:"):
-            parts = port[3:].split(",")
-            if len(parts) == 2:
-                card, dev = parts[0], parts[1]
-                path = f"/dev/snd/midiC{card}D{dev}"
-                if os.path.exists(path):
-                    return path
+        path = rawmidi_path_for_port(port)
+        if path:
+            return path
         if IS_FREEBSD:
             devices = freebsd_midi_devices()
-            if devices:
-                return devices[0]
-            return None
-        if os.path.exists("/dev/snd/midiC0D0"):
-            return "/dev/snd/midiC0D0"
+            return devices[0] if devices else None
+        # The S4's card number can differ from the requested one (hdmi audio
+        # often takes card 0). Re-detect and adopt the real port.
+        detected, detected_port, _ = detect_traktor_s4_port()
+        if detected and detected_port:
+            fallback = rawmidi_path_for_port(detected_port)
+            if fallback:
+                log(f"{port} has no rawmidi node; using detected {detected_port} ({fallback})")
+                self.port = detected_port
+                return fallback
         return None
 
     def update_state(self, status: str, last_action: str = ""):
@@ -516,19 +585,24 @@ class TraktorS4MidiController:
 
     def run_rawmidi_stream(self, monitor_mode: bool = False):
         """
-        Read directly from ALSA rawmidi device (/dev/snd/midiC0D0).
+        Read directly from the S4's ALSA rawmidi device (lowest latency).
+
+        Returns when the device goes away or read() fails, so start_loop()
+        can re-detect the card, wait, and reconnect.
         """
         if not self.rawmidi_dev or not os.path.exists(self.rawmidi_dev):
-            log(f"Rawmidi device {self.rawmidi_dev} not found. Attempting amidi fallback...")
-            return self.run_amidi_stream(monitor_mode=monitor_mode)
+            log(f"No rawmidi node for {self.port}; waiting for the S4.")
+            self.update_state("standby", f"waiting for rawmidi node on {self.port}")
+            return
 
         try:
             fd = os.open(self.rawmidi_dev, os.O_RDONLY | os.O_NONBLOCK)
-        except Exception as e:
-            log(f"Failed to open {self.rawmidi_dev}: {e}. Falling back to amidi...")
-            return self.run_amidi_stream(monitor_mode=monitor_mode)
+        except OSError as e:
+            log(f"Failed to open {self.rawmidi_dev}: {e}")
+            self.update_state("standby", f"cannot open {self.rawmidi_dev}: {e}")
+            return
 
-        log(f"Connected to Traktor S4 on {self.rawmidi_dev} (hw:{self.port})")
+        log(f"Connected to Traktor S4 on {self.rawmidi_dev} ({self.port})")
         self.update_state("running", "Connected via ALSA Rawmidi")
         buffer = bytearray()
 
@@ -542,7 +616,8 @@ class TraktorS4MidiController:
                 except BlockingIOError:
                     continue
                 except OSError as e:
-                    log(f"Read error: {e}")
+                    log(f"Read error on {self.rawmidi_dev}: {e}. Re-detecting the S4.")
+                    self.update_state("standby", f"read error: {e}")
                     break
 
                 if not chunk:
@@ -588,14 +663,24 @@ class TraktorS4MidiController:
         # bare Popen died with FileNotFoundError the moment the daemon started.
         # Stand by instead: the controls simply are not available until a device
         # path can be opened, which is the same outcome without the traceback.
-        if not shutil.which("amidi"):
+        # Do not trust PATH alone: launchers started from a desktop session can
+        # carry a trimmed environment where `which amidi` misses /usr/bin.
+        amidi = shutil.which("amidi")
+        if not amidi:
+            for candidate in ("/usr/bin/amidi", "/usr/local/bin/amidi", "/opt/homebrew/bin/amidi"):
+                if os.path.exists(candidate):
+                    amidi = candidate
+                    break
+        if not amidi:
             log("amidi is not installed; MIDI input is unavailable on this platform.")
             self.update_state("standby", "amidi unavailable")
-            while self.running:
+            # Return after a short wait so start_loop() can retry detection.
+            deadline = time.time() + 5.0
+            while self.running and time.time() < deadline:
                 time.sleep(0.2)
             return
 
-        cmd = ["amidi", "-p", self.port, "--dump"]
+        cmd = [amidi, "-p", self.port, "--dump"]
         log(f"Starting amidi process: {' '.join(cmd)}")
         self.update_state("running", f"Listening via amidi on {self.port}")
 
@@ -647,84 +732,221 @@ class TraktorS4MidiController:
             print(f"  Exit Monitor    : Press {BOLD}Ctrl+C{NC}\n")
             print(f"  {DIM}Listening for incoming pitch faders, buttons, knobs, encoders...{NC}\n")
 
-        # Prioritize ALSA rawmidi character device for ultra-low latency, fallback to amidi
-        if self.rawmidi_dev and os.path.exists(self.rawmidi_dev):
-            self.run_rawmidi_stream(monitor_mode=monitor_mode)
-        else:
-            self.run_amidi_stream(monitor_mode=monitor_mode)
+        # Prefer the ALSA rawmidi node for ultra-low latency, fall back to an
+        # amidi dump stream, and keep retrying while the S4 is unplugged so the
+        # service attaches as soon as it appears (or appears on another card).
+        backoff = 1.0
+        while self.running:
+            self.rawmidi_dev = self._get_rawmidi_device_path(self.port)
+            started = time.time()
+            if self.rawmidi_dev:
+                self.run_rawmidi_stream(monitor_mode=monitor_mode)
+            else:
+                self.run_amidi_stream(monitor_mode=monitor_mode)
+            if not self.running:
+                break
+            if time.time() - started > 5.0:
+                backoff = 1.0
+            log(f"Traktor S4 MIDI stream closed; retrying in {backoff:.0f}s")
+            time.sleep(backoff)
+            backoff = min(backoff * 1.5, 15.0)
 
 
 # =============================================================================
 # DAEMON LIFECYCLE MANAGEMENT
 # =============================================================================
 
+def _pid_from_file(path: Path) -> Optional[int]:
+    try:
+        pid = int(path.read_text(encoding="utf-8").strip().split()[0])
+        return pid if pid > 0 else None
+    except Exception:
+        return None
+
+
+def _pid_alive(pid: Optional[int]) -> bool:
+    if not pid:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
 def is_daemon_running() -> Tuple[bool, Optional[int]]:
-    if PID_FILE.is_file():
-        try:
-            pid = int(PID_FILE.read_text().strip())
-            os.kill(pid, 0)
+    # PID_FILE is authoritative; the lock file keeps a surviving daemon
+    # discoverable after a manager restarts and loses the pid file.
+    for path in (PID_FILE, LOCK_FILE):
+        pid = _pid_from_file(path)
+        if _pid_alive(pid):
             return True, pid
-        except (OSError, ValueError):
-            PID_FILE.unlink(missing_ok=True)
+    PID_FILE.unlink(missing_ok=True)
     return False, None
 
 
-def start_daemon(port: str = DEFAULT_PORT):
+def _iter_daemon_pids() -> List[int]:
+    """Every live `traktor_s4_midi.py --daemon` process except this one.
+
+    Older builds could leak one daemon per manager refresh because the pid
+    file was rewritten by each child. Reaping by cmdline makes start/stop
+    converge on a single service again.
+    """
+    pids: List[int] = []
+    if not os.path.isdir("/proc"):
+        return pids
+    me = os.getpid()
+    for entry in glob.glob("/proc/[0-9]*/cmdline"):
+        try:
+            raw = Path(entry).read_bytes()
+        except OSError:
+            continue
+        # Argument-exact match: a shell or grep whose command *text* mentions
+        # the daemon must never be reaped.
+        args = [a.decode("utf-8", "replace") for a in raw.split(b"\0") if a]
+        if len(args) < 2 or not os.path.basename(args[0]).lower().startswith("python"):
+            continue
+        if "--daemon" not in args:
+            continue
+        if not any(a.endswith("traktor_s4_midi.py") for a in args[1:]):
+            continue
+        try:
+            pid = int(entry.split("/")[2])
+        except (IndexError, ValueError):
+            continue
+        if pid != me:
+            pids.append(pid)
+    return pids
+
+
+def acquire_single_instance_lock(write_pid: bool = True):
+    """Keep exactly one daemon on the S4's exclusive rawmidi node.
+
+    Two daemons used to race for /dev/snd/midiC*D* and the loser spun on
+    EBUSY while both overwrote the pid/state files. Returns an open fd that
+    must live for the process lifetime, "unsupported" where fcntl is absent,
+    or None when another daemon already owns the device.
+
+    write_pid=False is a pure probe: it leaves the lock file untouched.
+    """
+    try:
+        import fcntl
+    except ImportError:
+        return "unsupported"
+    try:
+        fd = os.open(str(LOCK_FILE), os.O_RDWR | os.O_CREAT, 0o600)
+    except OSError:
+        return None
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        os.close(fd)
+        return None
+    if write_pid:
+        try:
+            os.ftruncate(fd, 0)
+            os.write(fd, f"{os.getpid()}\n".encode())
+        except OSError:
+            pass
+    return fd
+
+
+def start_daemon(port: Optional[str] = None):
     running, pid = is_daemon_running()
     if running:
         print(f"{YELLOW}Traktor S4 MIDI service is already running (PID: {pid}).{NC}")
         return
 
-    # Check device presence
-    detected, detected_port, _ = detect_traktor_s4_port()
-    if not detected and not os.path.exists("/dev/snd/midiC0D0"):
-        print(f"{YELLOW}Warning: Traktor Kontrol S4 hardware not currently detected on {port}. Starting daemon anyway in standby mode.{NC}")
+    # A lock holder that the pid file forgot about is still a live service.
+    probe = acquire_single_instance_lock(write_pid=False)
+    if probe is None:
+        print(f"{YELLOW}Traktor S4 MIDI service is already running "
+              f"(PID: {_pid_from_file(LOCK_FILE) or 'unknown'}).{NC}")
+        return
+    if probe != "unsupported":
+        os.close(probe)
 
-    cmd = [sys.executable, str(Path(__file__).resolve()), "--daemon", "--port", port]
+    # Clear leaked daemons from older builds before spawning a fresh one.
+    # They never held this lock, so they cannot be the service we just probed.
+    for stray in _iter_daemon_pids():
+        try:
+            os.kill(stray, signal.SIGTERM)
+            log(f"Reaped stray Traktor S4 MIDI daemon (PID: {stray})")
+        except OSError:
+            pass
+    if _iter_daemon_pids():
+        time.sleep(0.5)
+
+    # Resolve the real card: hw:0,0 is only a fallback, never the assumption.
+    resolved = resolve_port(port)
+    detected, _, details = detect_traktor_s4_port()
+    if not detected and not rawmidi_path_for_port(resolved):
+        print(f"{YELLOW}Warning: Traktor Kontrol S4 hardware not currently detected. "
+              f"Starting daemon anyway in standby mode on {resolved}; it will attach when the unit appears.{NC}")
+    else:
+        print(f"{GREEN}✓ Traktor Kontrol S4 detected on {resolved}{f' ({details})' if details else ''}{NC}")
+
+    cmd = [sys.executable, str(Path(__file__).resolve()), "--daemon", "--port", resolved]
     with open(LOG_FILE, "a", encoding="utf-8") as out:
         p = subprocess.Popen(cmd, stdout=out, stderr=out, start_new_session=True)
-    
+
     PID_FILE.write_text(str(p.pid), encoding="utf-8")
     FIRST_SEEN_FLAG.touch(exist_ok=True)
-    print(f"{GREEN}✓ Traktor Kontrol S4 MIDI Control Service successfully started (PID: {p.pid}, Port: {port}).{NC}")
+    print(f"{GREEN}✓ Traktor Kontrol S4 MIDI Control Service successfully started (PID: {p.pid}, Port: {resolved}).{NC}")
 
 
 def stop_daemon():
     running, pid = is_daemon_running()
-    if not running:
+    targets = set(_iter_daemon_pids())
+    if pid:
+        targets.add(pid)
+    if not targets:
         print(f"{DIM}Traktor S4 MIDI service is not currently running.{NC}")
-        PID_FILE.unlink(missing_ok=True)
-        return
-
-    try:
-        os.kill(pid, signal.SIGTERM)
-        for _ in range(20):
-            time.sleep(0.1)
-            try:
-                os.kill(pid, 0)
-            except OSError:
-                break
-        else:
-            os.kill(pid, signal.SIGKILL)
-        print(f"{GREEN}✓ Traktor Kontrol S4 MIDI Control Service stopped (PID: {pid}).{NC}")
-    except OSError as e:
-        print(f"{RED}Error stopping MIDI service: {e}{NC}")
-    finally:
         PID_FILE.unlink(missing_ok=True)
         try:
             STATE_FILE.write_text(json.dumps({"status": "stopped", "pid": 0}), encoding="utf-8")
         except Exception:
             pass
+        return
+
+    stopped: List[int] = []
+    failed: List[str] = []
+    for target in sorted(targets):
+        try:
+            os.kill(target, signal.SIGTERM)
+            for _ in range(20):
+                time.sleep(0.1)
+                try:
+                    os.kill(target, 0)
+                except OSError:
+                    break
+            else:
+                os.kill(target, signal.SIGKILL)
+            stopped.append(target)
+        except OSError as e:
+            failed.append(f"{target}: {e}")
+
+    PID_FILE.unlink(missing_ok=True)
+    try:
+        STATE_FILE.write_text(json.dumps({"status": "stopped", "pid": 0}), encoding="utf-8")
+    except Exception:
+        pass
+    if stopped:
+        print(f"{GREEN}✓ Traktor Kontrol S4 MIDI Control Service stopped (PID: {', '.join(map(str, stopped))}).{NC}")
+    if failed:
+        print(f"{RED}Error stopping MIDI service: {'; '.join(failed)}{NC}")
 
 
 def print_status():
     detected, port, details = detect_traktor_s4_port()
+    rawmidi = rawmidi_path_for_port(port) or ""
     daemon_run, pid = is_daemon_running()
     player_run = is_player_running()
 
     print(f"\n{BOLD}{MAGENTA}=== TRAKTOR KONTROL S4 MIDI HARDWARE STATUS ==={NC}\n")
     print(f"  Device Name          : {BOLD}{WHITE}{DEFAULT_DEVICE_NAME}{NC}")
-    print(f"  Hardware Port        : {BOLD}{CYAN}{port}{NC} {DIM}(ALSA Rawmidi: /dev/snd/midiC0D0){NC}")
+    print(f"  Hardware Port        : {BOLD}{CYAN}{port}{NC} "
+          f"{DIM}(ALSA Rawmidi: {rawmidi or 'no node'}){NC}")
     if detected:
         print(f"  Hardware Connection  : {BOLD}{GREEN}✓ Detected & Connected{NC} {DIM}({details}){NC}")
     else:
@@ -743,7 +965,7 @@ def print_status():
     else:
         print(f"  MP Audio Player      : {DIM}Offline / Waiting for launch{NC}")
 
-    print(f"  Supported in v0.4.0  : {BOLD}{GREEN}Traktor Kontrol S4 Exclusively{NC}\n")
+    print(f"  Supported in v0.5.4  : {BOLD}{GREEN}Traktor Kontrol S4 Exclusively{NC}\n")
 
 
 def print_user_guide():
@@ -759,7 +981,7 @@ def print_user_guide():
     # Fallback built-in guide
     print(f"""
 {BOLD}{MAGENTA}========================================================================{NC}
-{BOLD}{WHITE}   🎛️  TRAKTOR KONTROL S4 GETTING STARTED GUIDE (v0.5.3){NC}
+{BOLD}{WHITE}   🎛️  TRAKTOR KONTROL S4 GETTING STARTED GUIDE (v0.5.4){NC}
 {BOLD}{MAGENTA}========================================================================{NC}
 
 1. SWITCHING TO MIDI MODE ON THE S4:
@@ -767,9 +989,11 @@ def print_user_guide():
    • Traktor Kontrol S4 MK2: Hold {BOLD}{YELLOW}SHIFT{NC} and press {BOLD}{YELLOW}PREVIEW{NC} button.
    • Confirmation: The two Loop Size Displays on the S4 will read {BOLD}{GREEN}ON{NC}.
 
-2. HARDWARE ALSA PORT:
-   • The Traktor Kontrol S4 connects via ALSA hardware port {BOLD}{CYAN}hw:0,0{NC} (or /dev/snd/midiC0D0).
-   • To verify in terminal: run '{BOLD}amidi -l{NC}'.
+2. HARDWARE ALSA PORT (AUTO-DETECTED):
+   • The S4's card number depends on what else is in the machine. If HDMI
+     audio or a USB interface is present it may be {BOLD}{CYAN}hw:1,0{NC} instead of {BOLD}{CYAN}hw:0,0{NC}.
+   • MP Mix Manager detects the real port itself; nothing needs to be typed.
+   • To verify in terminal: run '{BOLD}amidi -l{NC}' or '{BOLD}python3 scripts/traktor_s4_midi.py --status{NC}'.
 
 3. PITCH CONTROLS (LEFT & RIGHT DECKS):
    • Moving either Tempo/Pitch Fader adjusts the MP Audio Player DJ Pitch in real-time.
@@ -802,10 +1026,24 @@ def main():
     parser.add_argument("--status", action="store_true", help="Show hardware and service status")
     parser.add_argument("--monitor", action="store_true", help="Interactive live test and packet monitor")
     parser.add_argument("--guide", action="store_true", help="Print Traktor Kontrol S4 User Guide")
-    parser.add_argument("--port", type=str, default=DEFAULT_PORT, help="ALSA MIDI Port (default: hw:0,0)")
+    parser.add_argument("--port", type=str, default=None,
+                        help="ALSA MIDI port (default: auto-detect the S4's card)")
+    parser.add_argument("--print-port", action="store_true",
+                        help="Print the auto-detected ALSA port and exit")
+    parser.add_argument("--detect-line", action="store_true",
+                        help="Print PORT|RAWMIDI_NODE|DETAILS for shell menus")
 
     args = parser.parse_args()
 
+    if args.print_port:
+        detected, port, _ = detect_traktor_s4_port()
+        print(resolve_port(args.port) if detected else "")
+        sys.exit(0 if detected else 1)
+    if args.detect_line:
+        detected, port, details = detect_traktor_s4_port()
+        raw = (rawmidi_path_for_port(port) or "") if detected else ""
+        print(f"{port if detected else ''}|{raw}|{details}")
+        return
     if args.start:
         start_daemon(port=args.port)
         return
@@ -824,6 +1062,11 @@ def main():
         print_user_guide()
         return
     if args.monitor:
+        running, pid = is_daemon_running()
+        if running:
+            print(f"{YELLOW}The MIDI service is already running (PID: {pid}) and owns the rawmidi port.{NC}")
+            print(f"{DIM}Stop it first: python3 {Path(__file__).name} --stop{NC}")
+            return
         ctrl = TraktorS4MidiController(port=args.port)
         try:
             ctrl.start_loop(monitor_mode=True)
@@ -832,6 +1075,11 @@ def main():
         return
 
     if args.daemon:
+        lock_fd = acquire_single_instance_lock()
+        if lock_fd is None:
+            log(f"Another Traktor S4 MIDI daemon (pid {_pid_from_file(LOCK_FILE)}) already owns the device; exiting.")
+            print(f"{YELLOW}Traktor S4 MIDI service is already running.{NC}")
+            return
         PID_FILE.write_text(str(os.getpid()), encoding="utf-8")
         ctrl = TraktorS4MidiController(port=args.port)
 

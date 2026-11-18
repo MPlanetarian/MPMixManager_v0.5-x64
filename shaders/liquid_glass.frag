@@ -86,17 +86,26 @@ void main() {
     float caust = smoothstep(0.58, 0.86, n);
     float caustFine = smoothstep(0.74, 0.92, n2);
 
+    // Retro Linux Memories' highlight is the flat charcoal #2d2d2d. That
+    // theme paints an opaque dark-grey field. Every other theme stays on
+    // the pale still-water field.
+    float darkGlass = 1.0 - step(0.02, length(hi - vec3(0.1765)));
+    float title = panelMask(frag, u.panel0);
+    float library = panelMask(frag, u.panel1);
+    float panel = max(title, library);
+
     vec3 water = vec3(0.76, 0.80, 0.87);
     water = mix(water, theme, 0.22);
     water += theme * (caust * 0.16 + caustFine * 0.08);
     water += vec3(0.95, 0.97, 1.0) * caustFine * 0.04;
-
-    float title = panelMask(frag, u.panel0);
-    float library = panelMask(frag, u.panel1);
-    float panel = max(title, library);
     vec3 panelCol = mix(vec3(0.34, 0.36, 0.44), theme, 0.34);
-    // A short slope around each panel, lighter on the lip and darker inside.
     water = mix(water, panelCol, panel * 0.82);
+
+    vec3 field = vec3(0.1765, 0.1765, 0.1765);
+    vec3 panelChar = vec3(0.208, 0.208, 0.208);
+    vec3 darkWater = mix(field, accent, 0.05);
+    darkWater = mix(darkWater, panelChar, panel * 0.72);
+    water = mix(water, darkWater, darkGlass);
     float panelLip = 0.0;
     if (u.panel0.z > 4.0) {
         vec2 h0 = 0.5 * u.panel0.zw;
@@ -108,7 +117,7 @@ void main() {
         float d1 = sdRoundRect(frag - (u.panel1.xy + h1), h1, 16.0);
         panelLip = max(panelLip, exp(-pow((abs(d1) - 1.5) / 2.4, 2.0)));
     }
-    water += mix(vec3(1.0), theme, 0.45) * panelLip * 0.22;
+    water += mix(vec3(1.0), theme, 0.45) * panelLip * 0.22 * mix(1.0, 0.35, darkGlass);
 
     // Sloped outer edge. Distance across the bevel changes what it reflects.
     // Clear liquid glass effect: smooth specular reflections with no frosty snow stipple or speckles.
@@ -119,14 +128,15 @@ void main() {
     float hair = 1.0 - smoothstep(0.15, min(1.2, bz * 0.35), edge);
 
     vec3 col = water;
-    col = mix(col, mix(vec3(1.0), theme, 0.28), large * 0.80);
-    col = mix(col, mix(theme, vec3(1.0), 0.25), shoulder * 0.55);
-    col = mix(col, vec3(1.0), hair);
+    vec3 rimHi = mix(vec3(1.0), vec3(0.35, 0.38, 0.42), darkGlass);
+    col = mix(col, mix(rimHi, theme, 0.28), large * mix(0.80, 0.28, darkGlass));
+    col = mix(col, mix(theme, rimHi, 0.25), shoulder * mix(0.55, 0.22, darkGlass));
+    col = mix(col, rimHi, hair * mix(1.0, 0.22, darkGlass));
 
     vec2 m = vec2(u.themeA.w, u.themeB.w);
     vec2 lp = (m - uv) * vec2(max(u.res.w, 0.5), 1.0);
     float spec = pow(max(0.0, 1.0 - length(lp) * 1.8), 8.0);
-    col += vec3(1.0) * spec * 0.28 * large;
+    col += vec3(1.0) * spec * 0.28 * large * mix(1.0, 0.25, darkGlass);
 
     if (u.bezel.w > 0.5) {
         float margin = max(u.bezel.x, 8.0);
@@ -147,6 +157,7 @@ void main() {
     }
 
     float alpha = 0.50 * (1.0 - panel * 0.25);
+    alpha = mix(alpha, mix(0.96, 0.98, panel), darkGlass);
     if (u.themeC.w > 0.0) {
         alpha *= u.themeC.w;
     }

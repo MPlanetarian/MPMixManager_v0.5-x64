@@ -44,7 +44,7 @@ get_current_version() {
     elif [ -f "$CODEBASE_DIR/CHANGELOG.md" ]; then
         grep -E '^## \[[0-9]+\.[0-9]+' "$CODEBASE_DIR/CHANGELOG.md" | head -1 | sed -E 's/.*\[([0-9]+\.[0-9]+\.[0-9]+.*)\].*/\1/'
     else
-        echo "0.5.3 Stable (Sensorium)"
+        echo "0.5.4 Stable (Sensorium)"
     fi
 }
 

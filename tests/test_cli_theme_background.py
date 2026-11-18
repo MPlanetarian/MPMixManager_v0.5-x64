@@ -74,12 +74,20 @@ class TestCliThemeBackground(unittest.TestCase):
         # Dreamworlds is the one theme painted on black, because that is the
         # field its Liquid Glass skin uses; its menu ink is lightened to match
         # (see tests/test_menu_text_theme_ink.py). Into Darkness is also the
-        # void-out black.
+        # void-out black. Four themes on the C cycle keep native dark terminal
+        # fields, so cycling shows more than the two void-out panes.
         self.assertEqual(seen["dreamworlds"], (0, 0, 0))
         self.assertEqual(seen["dreamworlds_ultra"], (186, 180, 220))
         self.assertEqual(seen["sensorium"], (195, 196, 191))
         self.assertEqual(seen["into_darkness_void_out"], (0, 0, 0))
-        self.assertEqual(seen["retro_linux_memories"], (158, 171, 191))
+        self.assertEqual(seen["retro_linux_memories"], (45, 45, 45))
+        self.assertEqual(seen["stream_of_frequency"], (12, 13, 23))
+        self.assertEqual(seen["dynamic_rainbow_liquid_glass"], (20, 12, 32))
+        self.assertEqual(seen["cosmic_supernova"], (10, 8, 20))
+        self.assertEqual(seen["dreamworlds_liquid"], (6, 20, 28))
+        self.assertEqual(seen["matrix"], (0, 0, 0))
+        self.assertEqual(seen["nord"], (46, 52, 64))
+        self.assertEqual(seen["solarized"], (140, 105, 0))
         alias = _bash(
             f"""
             set -e
@@ -104,11 +112,24 @@ class TestCliThemeBackground(unittest.TestCase):
                 self.assertGreaterEqual(channel, 0, theme)
                 self.assertLessEqual(channel, 255, theme)
             luma = 0.299 * r + 0.587 * g + 0.114 * b
-            if theme in ("into_darkness_void_out", "dreamworlds"):
-                # Dreamworlds is painted on the same void-out black as Into
-                # Darkness: that is the field its Liquid Glass skin uses, and
-                # its menu ink is lightened to stay readable on it.
-                self.assertEqual((r, g, b), (0, 0, 0), theme)
+            # Dreamworlds is painted on the same void-out black as Into
+            # Darkness: that is the field its Liquid Glass skin uses, and its
+            # menu ink is lightened to stay readable on it. The four native
+            # dark terminal palettes do the same.
+            dark = {
+                "into_darkness_void_out": (0, 0, 0),
+                "dreamworlds": (0, 0, 0),
+                "matrix": (0, 0, 0),
+                "retro_linux_memories": (45, 45, 45),
+                "stream_of_frequency": (12, 13, 23),
+                "dynamic_rainbow_liquid_glass": (20, 12, 32),
+                "cosmic_supernova": (10, 8, 20),
+                "dreamworlds_liquid": (6, 20, 28),
+                "nord": (46, 52, 64),
+                "solarized": (140, 105, 0),
+            }
+            if theme in dark:
+                self.assertEqual((r, g, b), dark[theme], theme)
             else:
                 self.assertGreaterEqual(
                     luma, 140,
@@ -120,8 +141,6 @@ class TestCliThemeBackground(unittest.TestCase):
         shared = {
             "dreamworlds_ultra": "dreamworlds_ultra",
             "dracula": "dreamworlds_neon",
-            "nord": "ice_cold",
-            "matrix": "phosphor",
             "gruvbox": "retro_studio",
             "cyberpunk": "cyber_neon",
             "classic": "retro_terminal",
@@ -129,10 +148,11 @@ class TestCliThemeBackground(unittest.TestCase):
         for alias, canonical in shared.items():
             self.assertEqual(seen[alias], seen[canonical], alias)
         own = [rgb for theme, rgb in seen.items() if theme not in shared]
-        # Dreamworlds and Into Darkness are both the void-out black by design,
-        # so one duplicate is expected; every other field stays distinct.
-        self.assertEqual(len(set(own)), len(own) - 1,
-                         "only Dreamworlds and Into Darkness may share a field")
+        # Dreamworlds, The Matrix and Into Darkness are all the black pane by
+        # design, so two duplicates are expected; every other field stays
+        # distinct.
+        self.assertEqual(len(set(own)), len(own) - 2,
+                         "only Dreamworlds, The Matrix and Into Darkness may share the black pane")
 
     def test_theme_switch_emits_osc11_for_windows_mac_and_linux(self):
         script = f"""
@@ -154,8 +174,8 @@ class TestCliThemeBackground(unittest.TestCase):
         # BEL form and ST form, so Windows Terminal, Terminal-class Linux, and Konsole all take it.
         self.assertIn("\033]11;#bab4dc\007", chunks[0])
         self.assertIn("\033]11;#bab4dc\033\\", chunks[0])
-        self.assertIn("\033]11;#9eabbf\007", chunks[1])
-        self.assertIn("\033]11;#9eabbf\033\\", chunks[1])
+        self.assertIn("\033]11;#2d2d2d\007", chunks[1])
+        self.assertIn("\033]11;#2d2d2d\033\\", chunks[1])
 
     def test_glass_hosts_do_not_take_a_console_background(self):
         script = f"""

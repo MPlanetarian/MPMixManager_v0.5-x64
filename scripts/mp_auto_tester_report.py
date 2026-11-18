@@ -52,9 +52,9 @@ SYSTEM_ORDER = ("local", "fedora", "mac", "windows", "freebsd")
 # ---------------------------------------------------------------------------
 def read_version() -> str:
     try:
-        return VERSION_FILE.read_text(encoding="utf-8").strip() or "0.5.3"
+        return VERSION_FILE.read_text(encoding="utf-8").strip() or "0.5.4"
     except OSError:
-        return "0.5.3"
+        return "0.5.4"
 
 
 def load_results(path: Path) -> Dict[str, Any]:

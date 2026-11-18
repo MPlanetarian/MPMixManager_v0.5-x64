@@ -1174,7 +1174,10 @@ class LiquidGlassRenderer:
             state = read_player_visualizer_state()
         except Exception:
             return None
-        return state if state.get("active") else None
+        # ``visible`` is the Visualization button's on/off. Turning it off
+        # steps the scene aside and lets the themed glass pane draw again,
+        # exactly as it did before the visualizer was ever switched on.
+        return state if state.get("active") and state.get("visible") is not False else None
 
     def draw_player_visualizer_background(self, fw, fh) -> bool:
         """Draw the MP Visualizer behind the terminal text.

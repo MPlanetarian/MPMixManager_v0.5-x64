@@ -288,6 +288,74 @@ class TestLibraryMode(CompanionTestBase):
         self.assertTrue(companion._music_sample_reachable(missing + [str(good)]))
         self.assertFalse(companion._music_sample_reachable(missing))
 
+    def test_reachability_requires_a_read_not_just_a_stat(self):
+        """A dropped FUSE mount still answers stat(); only the read fails.
+
+        This is what left the phone on 55k rows that all died mid-body: every
+        path stat'ed, so the library looked healthy, and the "library stopped
+        responding" banner was the first true statement the listener got. A
+        read-only probe is the only thing that catches it.
+        """
+        path = _touch_audio(self.home / "MUSIC" / "cached.mp3")
+        self.assertTrue(companion._music_sample_reachable([str(path)]))
+
+        real_open = open
+
+        def dead_mount(name, *a, **kw):
+            # stat() succeeds (the file is on disk), but the mount is gone.
+            if str(name) == str(path):
+                raise OSError(107, "Transport endpoint is not connected")
+            return real_open(name, *a, **kw)
+
+        with patch("builtins.open", side_effect=dead_mount):
+            self.assertFalse(companion._music_sample_reachable([str(path)]),
+                             "a stat-only probe would have called this reachable")
+
+    def test_a_path_verdict_distinguishes_dead_mounts(self):
+        path = _touch_audio(self.home / "MUSIC" / "ok.mp3")
+        self.assertTrue(companion._path_readable_now(str(path)))
+        self.assertFalse(companion._path_readable_now(str(self.home / "gone.mp3")))
+        self.assertFalse(companion._path_readable_now(""))
+
+    def test_the_served_file_does_not_flap_when_a_probe_is_unstable(self):
+        """A probe-driven cursor caused a reload loop; the file must stay put.
+
+        Skipping to "the next readable entry" looked helpful, but the verdict
+        comes from a short-lived probe. On a flaky mount it alternates, so the
+        function named a different file on alternate polls (a, b, a, b). The
+        dashboard treats a changed active_file as a track change and re-pointed
+        its <audio> element every time, which restarted the player roughly every
+        two seconds. The file the listener is on has to be stable; an unreadable
+        entry is handled by the /api/stream 404 and the unplayable ledger.
+        """
+        a = self.home / "MUSIC" / "a.mp3"
+        b = self.home / "MUSIC" / "b.mp3"
+        a.parent.mkdir(parents=True, exist_ok=True)
+        a.write_bytes(b"\x00" * 4096)
+        b.write_bytes(b"\x00" * 4096)
+        queue = [str(a), str(b)]
+
+        verdict = {"a_readable": True}
+        with patch.object(companion, "build_stream_queue_cached", return_value=queue), \
+             patch.object(companion, "save_stream_session"), \
+             patch.object(companion, "load_stream_session",
+                          return_value={"index": 0, "path": str(a), "playing": True}), \
+             patch.object(companion, "_path_readable_now",
+                          side_effect=lambda p: verdict["a_readable"] if str(p) == str(a) else True), \
+             patch.object(companion, "is_unplayable", return_value=False):
+            seen = []
+            for i in range(6):
+                companion._readable_cache.clear()
+                verdict["a_readable"] = (i % 2 == 0)   # flaky mount
+                served, _state = companion.current_stream_file(cached=True)
+                seen.append(served)
+        self.assertEqual(len(set(seen)), 1,
+                         f"the served file alternated and would reload the player: {seen}")
+        self.assertEqual(seen[0], str(a))
+        # And an unreachable file is still never recorded as undecodable: the
+        # share may simply be down, and a blacklist would outlive the outage.
+        self.assertFalse(companion.is_unplayable(str(a)))
+
     def test_service_path_can_see_a_user_local_rclone(self):
         """systemd starts the companion without ~/.local/bin on PATH."""
         bindir = self.home / "bin"

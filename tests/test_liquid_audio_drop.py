@@ -219,6 +219,96 @@ class PlayerDropTests(unittest.TestCase):
     def _manifest(self, paths, **extra):
         return drop.write_drop_manifest(paths, **extra)
 
+    def _playlist(self, ext=".m3u8"):
+        fresh = []
+        for name in ("Fresh_One.flac", "Fresh_Two.mp3"):
+            path = Path(self.tmp.name) / "playlist_tracks" / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"RIFF" + b"\x00" * 16)
+            fresh.append({"name": name, "path": str(path), "ext": path.suffix[1:].upper(),
+                          "size_mb": 1.0, "mtime": 0.0})
+        playlist = Path(self.tmp.name) / f"dropped{ext}"
+        import playlist_formats
+        playlist_formats.write_playlist(playlist, fresh)
+        return playlist, fresh
+
+    def test_a_dropped_playlist_wipes_the_old_list_and_plays_the_first_track(self):
+        playlist, fresh = self._playlist(".m3u8")
+        manifest = self._manifest([str(t["path"]) for t in fresh], playlist=str(playlist))
+        self.ui.search_mode = True
+        self.ui.search_query = "Mix_A"
+        self.ui._playlist_clear_armed = True
+        self.ui._consume_input(drop.drop_osc(manifest))
+        # nothing from the previous list survives the import
+        self.assertEqual([t["path"] for t in self.ui.scanner.mixes],
+                         [t["path"] for t in fresh])
+        self.assertEqual(self.ui.mode, "PLAYLIST")
+        self.assertEqual(self.ui.selected_row, 0)
+        self.assertFalse(self.ui.search_mode)
+        self.assertFalse(self.ui._playlist_clear_armed)
+        self.engine.load_track.assert_called_with(0, True)
+        self.assertIn("dropped playlist", self.ui.notification_msg)
+        self.assertFalse(manifest.exists())
+
+    def test_a_drop_is_reported_when_the_engine_never_takes_it(self):
+        remote_ui = player.TerminalPlayerUI(None, _Scanner(self.tracks), is_remote=True)
+        playlist, fresh = self._playlist(".m3u8")
+        manifest = self._manifest([str(t["path"]) for t in fresh], playlist=str(playlist))
+        from unittest.mock import patch as _patch
+        with _patch.object(player, "send_ipc_command", return_value=None), \
+                _patch.object(player.time, "sleep", return_value=None), \
+                _patch.object(player.time, "monotonic", side_effect=[0.0, 99.0]):
+            remote_ui._consume_input(drop.drop_osc(manifest))
+        self.assertIn("not answering", remote_ui.notification_msg)
+        self.assertNotIn("Opened dropped playlist", remote_ui.notification_msg)
+
+    def test_every_dropped_playlist_type_replaces_the_list(self):
+        for ext in (".m3u", ".m3u8", ".xspf", ".pls", ".json"):
+            with self.subTest(ext=ext):
+                self.engine.load_track.reset_mock()
+                playlist, fresh = self._playlist(ext)
+                manifest = self._manifest([str(t["path"]) for t in fresh], playlist=str(playlist))
+                self.ui._consume_input(drop.drop_osc(manifest))
+                self.assertEqual(len(self.ui.scanner.mixes), len(fresh))
+                self.engine.load_track.assert_called_with(0, True)
+
+    def test_an_unreadable_dropped_playlist_leaves_the_list_and_starts_nothing(self):
+        self.engine.load_track.reset_mock()
+        manifest = self._manifest([], playlist=str(Path(self.tmp.name) / "missing.m3u8"))
+        self.ui._consume_input(drop.drop_osc(manifest))
+        self.assertEqual([t["path"] for t in self.ui.scanner.mixes],
+                         [t["path"] for t in self.tracks])
+        self.engine.load_track.assert_not_called()
+        self.assertIn("not readable", self.ui.notification_msg)
+
+    def test_an_empty_dropped_playlist_leaves_the_list_and_starts_nothing(self):
+        self.engine.load_track.reset_mock()
+        empty = Path(self.tmp.name) / "empty.xspf"
+        empty.write_text(
+            '<?xml version="1.0"?><playlist version="1" xmlns="http://xspf.org/ns/0/">'
+            "<trackList></trackList></playlist>", encoding="utf-8")
+        manifest = self._manifest([], playlist=str(empty))
+        self.ui._consume_input(drop.drop_osc(manifest))
+        self.assertEqual(len(self.ui.scanner.mixes), 2)
+        self.engine.load_track.assert_not_called()
+        self.assertIn("empty", self.ui.notification_msg)
+
+    def test_a_playlist_whose_tracks_are_all_missing_starts_nothing(self):
+        self.engine.load_track.reset_mock()
+        ghosts = Path(self.tmp.name) / "ghosts.m3u8"
+        ghosts.write_text("#EXTM3U\n/music/gone-one.flac\n/music/gone-two.flac\n", encoding="utf-8")
+        manifest = self._manifest([], playlist=str(ghosts))
+        self.ui._consume_input(drop.drop_osc(manifest))
+        self.assertEqual(len(self.ui.scanner.mixes), 2)
+        self.engine.load_track.assert_not_called()
+        self.assertIn("none are on this machine", self.ui.notification_msg)
+
+    def test_a_dropped_audio_file_still_joins_the_front_of_the_list(self):
+        manifest = self._manifest([str(self.opus)])
+        self.ui._consume_input(drop.drop_osc(manifest))
+        self.assertEqual(self.scanner.mixes[0]["path"], os.path.abspath(self.opus))
+        self.assertEqual(len(self.scanner.mixes), 3)
+
     def test_drop_puts_every_audio_file_first_and_plays_the_first(self):
         manifest = self._manifest([str(self.opus), self.tracks[1]["path"], str(Path(self.tmp.name) / "notes.txt")])
         self.ui.search_mode = True

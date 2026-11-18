@@ -32,6 +32,21 @@ NC = "\033[0m"
 
 AUDIO_EXTS = ['.flac', '.wav', '.mp3', '.m4a', '.aif', '.ogg']
 
+# One playlist module for every container, shared with MP_Audio_Player.py.
+# Imported lazily through a path insert so this script keeps working when it is
+# copied beside the player instead of into scripts/.
+def _playlist_formats_module():
+    here = Path(__file__).resolve().parent
+    for candidate in (here / "scripts", here, here.parent / "scripts"):
+        if (candidate / "playlist_formats.py").is_file():
+            if str(candidate) not in sys.path:
+                sys.path.insert(0, str(candidate))
+            break
+    import playlist_formats
+    return playlist_formats
+
+PLAYLIST_SUFFIXES = ('.m3u', '.m3u8', '.xspf', '.pls', '.json')
+
 def get_base_dir():
     return Path(__file__).resolve().parent
 
@@ -119,7 +134,7 @@ def list_playlists():
     for d in (g_dir, p_dir):
         if d.is_dir():
             for f in sorted(d.iterdir()):
-                if f.is_file() and f.suffix.lower() in ('.m3u', '.m3u8', '.xspf'):
+                if f.is_file() and f.suffix.lower() in PLAYLIST_SUFFIXES:
                     if f.name not in seen_names:
                         seen_names.add(f.name)
                         playlists.append(f)
@@ -127,35 +142,27 @@ def list_playlists():
     return playlists
 
 def parse_m3u(file_path):
-    p = Path(file_path)
-    tracks = []
+    """Read any supported playlist type into a list of track paths."""
     try:
-        with open(p, "r", encoding="utf-8", errors="ignore") as f:
-            if p.suffix.lower() == '.xspf':
-                import urllib.parse
-                for line in f:
-                    line = line.strip()
-                    if line.startswith("<location>") and line.endswith("</location>"):
-                        loc = line[10:-11]
-                        if loc.startswith("file://"):
-                            loc = urllib.parse.unquote(loc[7:])
-                        tracks.append(loc)
-            else:
-                for line in f:
-                    line = line.strip()
-                    if line and not line.startswith("#"):
-                        tracks.append(line)
+        rows = _playlist_formats_module().read_playlist(file_path)
     except Exception:
-        pass
-    return tracks
+        return []
+    return [row["path"] for row in rows if row.get("path")]
 
-def write_m3u(file_path, track_paths):
-    with open(file_path, "w", encoding="utf-8") as f:
-        f.write("#EXTM3U\n")
-        for t in track_paths:
-            title = Path(t).stem
-            f.write(f"#EXTINF:-1,{title}\n")
-            f.write(f"{t}\n")
+def write_m3u(file_path, track_paths, fmt=None):
+    """Write `track_paths` in the container named by the file's suffix."""
+    tracks = []
+    for t in track_paths:
+        p = Path(t)
+        try:
+            size_mb = p.stat().st_size / 1048576.0
+            mtime = p.stat().st_mtime
+        except OSError:
+            size_mb, mtime = 0.0, time.time()
+        tracks.append({"name": p.name, "title": p.stem, "path": str(t),
+                       "ext": p.suffix.lstrip(".").upper(), "size_mb": size_mb,
+                       "mtime": mtime})
+    return str(_playlist_formats_module().write_playlist(file_path, tracks, fmt))
 
 def launch_playlist_in_player(playlist_path, player="cliamp"):
     playlist_path = Path(playlist_path).resolve()
@@ -218,6 +225,7 @@ def interactive_ui():
         print(f"{BOLD}Playlist Operations:{NC}")
         print(f"  {BOLD}{CYAN} C){NC} Create New Custom Playlist (.m3u8)")
         print(f"  {BOLD}{CYAN} G){NC} {BOLD}{GREEN}Generate Mix Archive Folder Playlists (from Configured Storage Folders){NC}")
+        print(f"  {BOLD}{CYAN} I){NC} Import / Open a Playlist File (any folder, any supported type)")
         print(f"  {BOLD}{CYAN} L){NC} Launch a Playlist in Audio Player (cliamp, Strawberry, VLC, etc.)")
         print(f"  {BOLD}{CYAN} E){NC} Edit / Re-order Tracks in Existing Playlist")
         print(f"  {BOLD}{CYAN} D){NC} Delete a Playlist")
@@ -248,6 +256,8 @@ def interactive_ui():
             else:
                 print(f"{RED}Error: generate_traktor_playlist_from_history.py not found!{NC}")
                 time.sleep(1)
+        elif cmd.lower() == 'i':
+            import_playlist_wizard()
         elif cmd.lower() == 'l':
             if not playlists:
                 print(f"{YELLOW}No playlists available.{NC}")
@@ -285,13 +295,88 @@ def interactive_ui():
                     print(f"{RED}✓ Playlist deleted.{NC}")
                     time.sleep(0.8)
 
+def _ask_playlist_type(default=".m3u8"):
+    """Ask which container to write. Every type the player opens is offered."""
+    print(f"\n{BOLD}Playlist type:{NC}")
+    print(f"  {BOLD}{CYAN}1){NC} M3U            {DIM}(universal){NC}")
+    print(f"  {BOLD}{CYAN}2){NC} M3U8 (UTF-8)   {DIM}(universal, non-ASCII titles)${NC}")
+    print(f"  {BOLD}{CYAN}3){NC} XSPF           {DIM}(XML Shareable Playlist)${NC}")
+    print(f"  {BOLD}{CYAN}4){NC} PLS            {DIM}(numbered entries)${NC}")
+    print(f"  {BOLD}{CYAN}5){NC} JSON           {DIM}(MP Mix Manager, keeps metadata)${NC}")
+    choice = input(f"Choose [1-5, default {'2' if default == '.m3u8' else '1'}]: ").strip()
+    return {"1": ".m3u", "2": ".m3u8", "3": ".xspf", "4": ".pls", "5": ".json"}.get(choice, default)
+
+def import_playlist_wizard():
+    """Open a playlist file from anywhere and copy it into the playlist folder.
+
+    The player can open a file in place with Shift+O, so this wizard exists for
+    the other two jobs: checking that a list from another machine resolves here,
+    and keeping a copy beside the generated playlists.
+    """
+    print(f"\n{BOLD}{MAGENTA}--- Import / Open a Playlist File ---{NC}")
+    print(f"  Supported types: {BOLD}{CYAN}{', '.join(PLAYLIST_SUFFIXES)}{NC}")
+    raw = input("Path to the playlist (any folder, ~ allowed): ").strip()
+    raw = raw.strip('"').strip("'")
+    if not raw:
+        return
+    src = Path(raw).expanduser()
+    if not src.is_file():
+        print(f"{RED}Not found: {src}{NC}")
+        time.sleep(1.4)
+        return
+    if src.suffix.lower() not in PLAYLIST_SUFFIXES:
+        print(f"{RED}Not a supported playlist type: {src.suffix or '(none)'}{NC}")
+        time.sleep(1.4)
+        return
+    try:
+        rows = _playlist_formats_module().read_playlist(src)
+    except Exception as exc:
+        print(f"{RED}Could not read that playlist: {exc}{NC}")
+        time.sleep(1.6)
+        return
+    present = [row for row in rows if row.get("path") and Path(row["path"]).is_file()]
+    missing = len(rows) - len(present)
+    print(f"  Tracks named:      {WHITE}{len(rows)}{NC}")
+    print(f"  Playable here:     {GREEN}{len(present)}{NC}")
+    if missing:
+        print(f"  Not on this machine: {YELLOW}{missing}{NC}")
+    if not rows:
+        print(f"{RED}That playlist is empty.{NC}")
+        time.sleep(1.4)
+        return
+    for row in rows[:12]:
+        mark = f"{GREEN}✓{NC}" if Path(row["path"]).is_file() else f"{YELLOW}?{NC}"
+        print(f"    {mark} {Path(row['path']).name}")
+    if len(rows) > 12:
+        print(f"    {DIM}... and {len(rows) - 12} more{NC}")
+    keep = input(f"\nCopy it into the playlist folder? [y/N]: ").strip().lower()
+    if keep in ('y', 'yes'):
+        dest = get_playlists_dir() / src.name
+        try:
+            shutil.copy2(src, dest)
+            print(f"{GREEN}✓ Copied to {dest}{NC}")
+        except OSError as exc:
+            print(f"{RED}Copy failed: {exc}{NC}")
+    play = input("Open it in the MP Audio Player now? [Y/n]: ").strip().lower()
+    if play not in ('n', 'no'):
+        player = get_base_dir() / "MP_Audio_Player.py"
+        if not player.is_file():
+            player = get_base_dir() / "scripts" / "MP_Audio_Player.py"
+        if player.is_file():
+            subprocess.Popen([sys.executable, str(player), "--open-playlist", str(src)])
+            print(f"{GREEN}✓ Opening {src.name} in MP Audio Player...{NC}")
+        else:
+            print(f"{RED}MP_Audio_Player.py was not found, so it could not be opened.{NC}")
+    time.sleep(1.2)
+
 def create_playlist_wizard():
     print(f"\n{BOLD}{MAGENTA}--- Create New Custom Playlist ---{NC}")
     name = input("Enter Playlist Name (e.g. Best_Of_SOF): ").strip()
     if not name:
         return
-    if not name.lower().endswith(('.m3u', '.m3u8')):
-        name += ".m3u8"
+    # A recognised suffix is the user's own choice; anything else asks once.
+    if not name.lower().endswith(PLAYLIST_SUFFIXES):
+        name += _ask_playlist_type()
         
     p_file = get_playlists_dir() / name
     all_mixes = list_archive_mixes()
@@ -323,10 +408,9 @@ def create_playlist_wizard():
             return
         elif cmd.lower() == 'save':
             if selected_paths:
-                write_m3u(p_file, selected_paths)
-                alt_file = p_file.with_suffix('.m3u8') if p_file.suffix.lower() == '.m3u' else p_file.with_suffix('.m3u')
-                write_m3u(alt_file, selected_paths)
-                print(f"\n{GREEN}✓ Playlist successfully created with {len(selected_paths)} tracks (.m3u & .m3u8):{NC} {p_file.name}, {alt_file.name}")
+                written = write_m3u(p_file, selected_paths)
+                print(f"\n{GREEN}✓ Playlist successfully created with "
+                      f"{len(selected_paths)} tracks ({p_file.suffix}): {NC}{written}")
                 input("Press Enter to continue...")
             return
         elif cmd.startswith('/'):
@@ -362,10 +446,7 @@ def edit_playlist_wizard(p_file):
             return
         elif cmd == 'save':
             write_m3u(p_file, tracks)
-            alt_file = p_file.with_suffix('.m3u8') if p_file.suffix.lower() == '.m3u' else p_file.with_suffix('.m3u')
-            if alt_file.is_file():
-                write_m3u(alt_file, tracks)
-            print(f"{GREEN}✓ Playlist updated (.m3u / .m3u8).{NC}")
+            print(f"{GREEN}✓ Playlist updated ({p_file.suffix}).{NC}")
             time.sleep(1)
             return
         elif cmd.startswith('r '):
@@ -387,6 +468,10 @@ def main():
     parser.add_argument("--generate-archive-playlists", action="store_true", help="Generate playlists for all configured mix archive folders")
     parser.add_argument("--launch", help="Playlist path or name to launch")
     parser.add_argument("--player", default="cliamp", help="Audio player to launch")
+    parser.add_argument("--import", dest="import_path", metavar="PLAYLIST",
+                        help="Open a playlist file of any supported type")
+    parser.add_argument("--convert", nargs=2, metavar=("SOURCE", "DEST"),
+                        help="Re-write a playlist into another container (e.g. --convert set.m3u set.xspf)")
     args = parser.parse_args()
     
     if args.generate_archive_playlists:
@@ -400,6 +485,22 @@ def main():
             print(f"{p.name} ({len(parse_m3u(p))} tracks)")
     elif args.launch:
         launch_playlist_in_player(args.launch, args.player)
+    elif args.import_path:
+        player = get_base_dir() / "MP_Audio_Player.py"
+        if not player.is_file():
+            player = get_base_dir() / "scripts" / "MP_Audio_Player.py"
+        if player.is_file():
+            subprocess.call([sys.executable, str(player), "--open-playlist", args.import_path])
+        else:
+            print(f"{RED}MP_Audio_Player.py was not found.{NC}")
+    elif args.convert:
+        source, dest = (Path(x).expanduser() for x in args.convert)
+        paths = parse_m3u(source)
+        if not paths:
+            print(f"{RED}No tracks found in {source}{NC}")
+            sys.exit(1)
+        written = write_m3u(dest, paths)
+        print(f"{GREEN}✓ Converted {len(paths)} track(s): {source.name} -> {written}{NC}")
     else:
         interactive_ui()
 

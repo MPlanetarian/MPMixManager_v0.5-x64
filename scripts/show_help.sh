@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# MP Mix Manager 0.5.3 Stable (Sensorium) - Help Usage & Available Options
+# MP Mix Manager 0.5.4 Stable (Sensorium) - Help Usage & Available Options
 # Purpose: Display help usage and all available options for mix-archive-manager
 # Usage:
 #   mix-archive-manager --help
@@ -30,7 +30,7 @@ if [ -z "$VERSION" ]; then
     if [ -f "$CODEBASE_DIR/VERSION" ]; then
         VERSION="$(head -n 1 "$CODEBASE_DIR/VERSION" | tr -d '\r\n')"
     else
-        VERSION="0.5.3 Stable (Sensorium)"
+        VERSION="0.5.4 Stable (Sensorium)"
     fi
 fi
 export VERSION
@@ -100,8 +100,8 @@ ${BOLD}LAUNCH FLAGS & OPTIONS:${NC}
   ${BOLD}${GREEN}--strawberry-info${NC}
       Display playback state, track metadata, and file path from Strawberry player.
 
-  ${BOLD}${GREEN}--cliamp-info${NC}
-      Display playback state, track metadata, and file path from cliamp player.
+  ${BOLD}${GREEN}--climpaudio-info${NC}
+      Display playback state, track metadata, and file path from MP CLI Audio Player.
 
 ${BOLD}AVAILABLE MENU OPTIONS (INTERACTIVE & DIRECT SHORTCUTS):${NC}
   Press B on any menu to turn this window into a Bash prompt. Press B again on an empty line to return to the manager.
@@ -178,7 +178,7 @@ ${BOLD}AVAILABLE MENU OPTIONS (INTERACTIVE & DIRECT SHORTCUTS):${NC}
   ${BOLD}${CYAN}29${NC}   ${BOLD}Promotional Outreach, Syndication & Music Shopping${NC}
        Promo email, the publishing calendar, and music-store tabs.
   ${BOLD}${CYAN}30${NC}   ${BOLD}Network Services, Congen & Internet Control${NC}
-       SSH, Samba, FTP, Congen, the web companion, and the internet block.
+       SSH, Samba, FTP, Congen, restart the MP Web Audio Companion, and the internet block.
   ${BOLD}${CYAN}31${NC}   ${BOLD}Desktop Display Settings, Audio Routing & App Control${NC}
        Wayland or X11, window alignment, and closing other desktop apps.
   ${BOLD}${CYAN}32${NC}   ${BOLD}Universal System Maintenance & Cleanup${NC}

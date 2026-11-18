@@ -146,6 +146,23 @@ class TestBundleLauncher(unittest.TestCase):
         self.assertNotIn('\nexec ', fn)
         self.assertIn('execl("$PYTHON_BIN"', fn)
 
+    def test_a_homebrew_python_bump_cannot_kill_the_launcher(self):
+        """A baked Cellar path dies on the next `brew upgrade python@3.X`.
+
+        The shipped bundle embedded
+        `/opt/homebrew/Cellar/python@3.15/3.15.1/.../Python`; Homebrew moved to
+        3.15.2 and dlopen failed, so the companion stopped serving while the
+        launchd job still looked loaded. The launcher must keep the baked path
+        as its first choice and fall back to the Cellar.
+        """
+        fn = self.text[self.text.index("compile_bundle_launcher()") :]
+        fn = fn[: fn.index("write_launchd_plist()")]
+        self.assertIn("open_libpython", fn)
+        self.assertIn("glob(", fn)
+        self.assertIn("/opt/homebrew/Cellar/python@3.*/*/Frameworks/Python.framework/Versions/3.*/Python", fn)
+        # The baked path is tried first, before the search.
+        self.assertLess(fn.index("dlopen(baked"), fn.index("glob("))
+
     def test_launcher_is_adhoc_signed_with_the_bundle_identifier(self):
         fn = self.text[self.text.index("compile_bundle_launcher()") :]
         fn = fn[: fn.index("write_launchd_plist()")]

@@ -1,0 +1,94 @@
+#Blood Moon MP Mix Manager
+#MPlanetarian Blood Moon [Crimson Eclipse] Theme adapted for BTOP
+#Dreamworlds Productions
+#Vivid Blood Crimson, Scarlet and Dark Ruby accents on a dark wine pane.
+
+# Main background (Dark Wine / Burgundy)
+theme[main_bg]="#220d13"
+
+# Main text color (Soft Rose White)
+theme[main_fg]="#ffeaed"
+
+# Title color for boxes (Vivid Blood Crimson)
+theme[title]="#ff2040"
+
+# Highlight color for keyboard shortcuts (Bright Scarlet)
+theme[hi_fg]="#ff5a5f"
+
+# Background color of selected item in processes box (Deep Ruby Crimson)
+theme[selected_bg]="#b40020"
+
+# Foreground color of selected item in processes box
+theme[selected_fg]="#ffffff"
+
+# Color of inactive/disabled text
+theme[inactive_fg]="#8c404d"
+
+# Color of text appearing on top of graphs (Bright Scarlet)
+theme[graph_text]="#ff5a5f"
+
+# Background color of the percentage meters
+theme[meter_bg]="#441a24"
+
+# Misc colors for processes box (Garnet)
+theme[proc_misc]="#ff4455"
+
+# Cpu box outline color (Deep Crimson)
+theme[cpu_box]="#991a2e"
+
+# Memory/disks box outline color (Ruby Wine)
+theme[mem_box]="#881525"
+
+# Net up/down box outline color (Deep Crimson)
+theme[net_box]="#991a2e"
+
+# Processes box outline color (Deep Crimson)
+theme[proc_box]="#991a2e"
+
+# Box divider line and small boxes line color
+theme[div_line]="#4d1622"
+
+# Temperature graph colors (Wine -> Ruby -> Vivid Crimson)
+theme[temp_start]="#800018"
+theme[temp_mid]="#cc1030"
+theme[temp_end]="#ff2040"
+
+# CPU graph colors (Dark Ruby -> Crimson -> Coral Scarlet)
+theme[cpu_start]="#800018"
+theme[cpu_mid]="#cc1030"
+theme[cpu_end]="#ff5a5f"
+
+# Mem/Disk free meter
+theme[free_start]="#800018"
+theme[free_mid]="#b40020"
+theme[free_end]="#ff5a5f"
+
+# Mem/Disk cached meter
+theme[cached_start]="#441a24"
+theme[cached_mid]="#991a2e"
+theme[cached_end]="#ff2040"
+
+# Mem/Disk available meter
+theme[available_start]="#800018"
+theme[available_mid]="#b40020"
+theme[available_end]="#ff5a5f"
+
+# Mem/Disk used meter
+theme[used_start]="#800018"
+theme[used_mid]="#b40020"
+theme[used_end]="#ff2040"
+
+# Download graph colors
+theme[download_start]="#441a24"
+theme[download_mid]="#b40020"
+theme[download_end]="#ff5a5f"
+
+# Upload graph colors
+theme[upload_start]="#800018"
+theme[upload_mid]="#cc1030"
+theme[upload_end]="#ff2040"
+
+# Process box color gradient for threads, mem and cpu usage
+theme[process_start]="#441a24"
+theme[process_mid]="#b40020"
+theme[process_end]="#ff2040"

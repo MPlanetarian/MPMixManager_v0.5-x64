@@ -157,7 +157,7 @@ class Skip30SecondsTest(unittest.TestCase):
         self.assertNotIn("sendAction('seek_forward')", self.html)
 
     def test_skip_helper_seeks_the_audio_element(self):
-        self.assertIn("function skipBy(delta)", self.html)
+        self.assertIn("function skipBy(delta, opts)", self.html)
         self.assertIn("seekAudioTo(target);", self.html)
 
     def test_skip_clamps_within_the_mix(self):
@@ -189,7 +189,7 @@ class Skip30SecondsTest(unittest.TestCase):
         as dead. The seek must always be forwarded to the server, which owns
         the resume point and relays the command to the player.
         """
-        fn = self.html[self.html.index("function skipBy(delta)"):]
+        fn = self.html[self.html.index("function skipBy(delta, opts)"):]
         fn = fn[: fn.index("function seekAudioToWithResume")]
         self.assertIn("sendAction(delta > 0 ? 'seek_forward' : 'seek_backward')", fn)
         # The forward must not sit behind an early return for the loaded case.
@@ -202,7 +202,7 @@ class Skip30SecondsTest(unittest.TestCase):
         browser back to the start, or moved only the desk player, so the
         arrows looked dead.
         """
-        fn = self.html[self.html.index("function skipBy(delta)"):]
+        fn = self.html[self.html.index("function skipBy(delta, opts)"):]
         fn = fn[: fn.index("function seekAudioToWithResume")]
         self.assertIn("sendAction('seek_to'", fn)
         self.assertIn("phoneOwnsPlayback()", fn)
@@ -216,7 +216,7 @@ class Skip30SecondsTest(unittest.TestCase):
     def test_skip_does_not_strand_a_pending_seek(self):
         # Parking an offset without applying it meant the next press only
         # updated the same parked number and the mix never moved.
-        fn = self.html[self.html.index("function skipBy(delta)"):]
+        fn = self.html[self.html.index("function skipBy(delta, opts)"):]
         fn = fn[: fn.index("function seekAudioToWithResume")]
         self.assertIn("applyPendingSeek()", fn)
 
@@ -231,6 +231,102 @@ class Skip30SecondsTest(unittest.TestCase):
         fn = self.html[self.html.index("const prevEl ="):]
         fn = fn[: fn.index("activeAudioFile = data.active_file")]
         self.assertIn("prevEl.ended", fn)
+
+
+class KeyboardSeekTest(unittest.TestCase):
+    """Left/Right seek the mix, the same contract the desktop player has.
+
+    The dashboard's transport row was pointer-only: no keydown handler existed
+    for playback at all, so on a laptop, a keyboard case or a TV browser the
+    arrow keys did nothing to the mix. The keys must go through skipBy so they
+    inherit its clamped targets, its parked offset before metadata and its
+    forward to a desk player that owns the sound.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.html = mwc.render_html_page(mwc.get_theme_palette(None))
+
+    def _fn(self, name):
+        fn = self.html[self.html.index("function " + name):]
+        return fn
+
+    def test_the_page_binds_a_keyboard_seek_handler(self):
+        self.assertIn("function handleSeekKeydown(ev)", self.html)
+        self.assertIn(
+            "document.addEventListener('keydown', handleSeekKeydown)",
+            self.html,
+        )
+
+    def test_both_arrows_seek_through_the_shared_skip_helper(self):
+        fn = self.html[self.html.index("function handleSeekKeydown(ev)"):]
+        fn = fn[: fn.index("function seekAudioToWithResume")]
+        self.assertIn("key !== 'ArrowLeft' && key !== 'ArrowRight'", fn)
+        self.assertIn("skipBy(key === 'ArrowRight' ? step : -step, { relativeSeconds: true })", fn)
+
+    def test_the_step_matches_the_desktop_player(self):
+        # The player's own arrows are +/-10 s, so the browser must not invent a
+        # different distance for the same gesture.
+        self.assertIn("const KEY_SEEK_STEP_SECONDS = 10;", self.html)
+        self.assertIn("const KEY_SEEK_STEP_SHIFT_SECONDS = 30;", self.html)
+
+    def test_arrows_do_not_hijack_text_fields(self):
+        """The playlist search and the assistant prompt are real inputs."""
+        self.assertIn("function isSeekBlockedTarget(target)", self.html)
+        fn = self.html[self.html.index("function isSeekBlockedTarget(target)"):]
+        fn = fn[: fn.index("function handleSeekKeydown")]
+        self.assertIn("isContentEditable", fn)
+        for tag in ("'input'", "'textarea'", "'select'"):
+            self.assertIn(tag, fn)
+
+    def test_modified_arrows_stay_with_the_browser(self):
+        fn = self.html[self.html.index("function handleSeekKeydown(ev)"):]
+        fn = fn[: fn.index("function seekAudioToWithResume")]
+        self.assertIn("ev.altKey || ev.ctrlKey || ev.metaKey", fn)
+        self.assertIn("ev.preventDefault()", fn)
+
+    def test_arrows_do_nothing_on_the_assistant_tab_or_the_gate(self):
+        fn = self.html[self.html.index("function handleSeekKeydown(ev)"):]
+        fn = fn[: fn.index("function seekAudioToWithResume")]
+        self.assertIn("if (activeTab !== 'player') return;", fn)
+        self.assertIn("if (streamOverlayWanted) return;", fn)
+        self.assertIn("if (!activeAudioFile) return;", fn)
+
+    def test_a_held_key_scrubs_at_a_servable_rate(self):
+        self.assertIn("const KEY_SEEK_REPEAT_MS = 150;", self.html)
+        fn = self.html[self.html.index("function handleSeekKeydown(ev)"):]
+        fn = fn[: fn.index("function seekAudioToWithResume")]
+        self.assertIn("ev.repeat", fn)
+        self.assertIn("KEY_SEEK_REPEAT_MS", fn)
+
+    def test_the_keys_move_a_desk_player_by_their_own_step(self):
+        """A 10 s arrow must not become the buttons' fixed 30 s on the desk.
+
+        `seek_forward`/`seek_backward` are hard-coded to 30 s inside the
+        server, so a 10 s arrow forwarded as `seek_forward` moved the room 30 s
+        while the browser's silent mirror moved 10. `seek` carries the real
+        distance, which is what the desktop player's own arrows use.
+        """
+        fn = self.html[self.html.index("function skipBy(delta, opts)"):]
+        fn = fn[: fn.index("function seekAudioToWithResume")]
+        self.assertIn("options.relativeSeconds", fn)
+        self.assertIn("sendAction('seek', { seconds: delta })", fn)
+        keys = self.html[self.html.index("function handleSeekKeydown(ev)"):]
+        keys = keys[: keys.index("function seekAudioToWithResume")]
+        self.assertIn("{ relativeSeconds: true }", keys)
+
+    def test_the_buttons_keep_their_own_30_second_actions(self):
+        # The fix is scoped to the keyboard: the two buttons must still send
+        # the named actions they always have.
+        fn = self.html[self.html.index("function skipBy(delta, opts)"):]
+        fn = fn[: fn.index("function seekAudioToWithResume")]
+        self.assertIn("sendAction(delta > 0 ? 'seek_forward' : 'seek_backward')", fn)
+        self.assertIn('onclick="skipBy(-30)"', self.html)
+        self.assertIn('onclick="skipBy(30)"', self.html)
+
+    def test_the_buttons_advertise_the_keys(self):
+        self.assertIn("Left arrow rewinds 10s", self.html)
+        self.assertIn("Right arrow forwards 10s", self.html)
 
 
 class PlayPauseIconTest(unittest.TestCase):

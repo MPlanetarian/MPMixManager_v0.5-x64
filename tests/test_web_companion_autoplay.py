@@ -1228,8 +1228,114 @@ class EngageButtonTest(unittest.TestCase):
         activate = self.html[self.html.index("function activateMobileStream()") :]
         activate = activate[: activate.index("function unlockStreamElement")]
         head = activate.split("fetch(", 1)[0]
-        self.assertIn("engageStreamFromServer(lastServerResume)", head)
+        self.assertIn("engageStreamFromServer(lastServerResume, { gesture: true })", head)
         self.assertIn("ontouchend=\"activateMobileStream(event)\"", self.html)
+
+    def test_the_stream_starts_automatically_on_page_load(self):
+        """Engage must be pressed for the listener, not by the listener.
+
+        The old dashboard put a full-screen gate up on every visit and waited
+        for a tap, so nothing played until the button was pressed. The page now
+        calls the same engage path itself as soon as the first status poll names
+        a file.
+        """
+        auto = self.html[self.html.index("function maybeAutoStartStream()") :]
+        auto = auto[: auto.index("function syncHostPlayerFile")]
+        self.assertIn("streamAutoStarted = true", auto)
+        self.assertIn("engageStreamFromServer(lastServerResume, { auto: true })", auto)
+        # A running desk player is no longer a reason to stay silent here.
+        self.assertNotIn("if (hostPlayerActive) {{", auto)
+        self.assertNotIn("hideStreamOverlay();\n                return;", auto)
+
+    def test_a_refused_automatic_start_arms_the_first_tap(self):
+        """Autoplay refusal is a policy, not an error.
+
+        When the page-load attempt is refused the gate says what to do and the
+        very next interaction anywhere on the dashboard retries the stream,
+        because a browser that blocked the automatic play() approves a play()
+        inside a real gesture.
+        """
+        self.assertIn("function armFirstGestureEngage()", self.html)
+        self.assertIn("function disarmGestureEngage()", self.html)
+        self.assertIn("activateMobileStream();", self.html[
+            self.html.index("function armFirstGestureEngage()") :
+            self.html.index("function disarmGestureEngage()")])
+        refused = self.html[self.html.index("function reportEngageRefused") :]
+        refused = refused[: refused.index("// After a skip the element")]
+        self.assertIn("armFirstGestureEngage()", refused)
+        self.assertIn("NotAllowedError", refused)
+        # A real tap is never downgraded to a "tap to start" notice.
+        self.assertIn("if (!onGesture && (automatic || notAllowed))", refused)
+        # The retry is spent once the mix is really playing.
+        engaged = self.html[self.html.index("function noteStreamEngaged()") :]
+        engaged = engaged[: engaged.index("function resumeAfterNetworkDrop")]
+        self.assertIn("disarmGestureEngage()", engaged)
+
+    def test_a_flapping_active_file_cannot_reload_the_player_in_a_loop(self):
+        """A changing `active_file` re-points the element; a flapping one loops.
+
+        This was shipped and hit in the field: a server that named a different
+        file on alternate polls made the dashboard reload its player roughly
+        every two seconds. The page must require a new file to be reported twice
+        and must reject an A -> B -> A bounce, so a flapping cursor cannot drive
+        playback at all.
+        """
+        self.assertIn("const FILE_CHANGE_CONFIRMATIONS", self.html)
+        self.assertIn("let pendingFileCount", self.html)
+        self.assertIn("let fileFollowFrozenUntil", self.html)
+        # The change handler consults the guard before it touches the element.
+        change = self.html[self.html.index(
+            "if (data.active_file && activeAudioFile !== data.active_file)") :]
+        guard = change.index("FILE_CHANGE_CONFIRMATIONS")
+        bind = change.index("audioEl.src = '/api/stream?file='")
+        self.assertLess(guard, bind,
+                        "the flap guard must run before the element is re-pointed")
+        self.assertIn("data.active_file === secondLastFile", change,
+                      "an A -> B -> A oscillation must be refused")
+        self.assertIn("fileFollowFrozenUntil", change)
+        # The very first file is bound with no confirmation delay.
+        self.assertIn("if (activeAudioFile) {", change)
+
+    def test_the_gate_starts_hidden_and_opens_only_when_it_is_needed(self):
+        """The dashboard must be usable while the automatic attempt runs."""
+        self.assertIn('id="streamOverlay"\n', self.html)
+        overlay = self.html[self.html.index('<div id="streamOverlay"') :]
+        overlay = overlay[: overlay.index("<div class=\"overlay-card\">")]
+        self.assertNotIn('class="show"', overlay)
+        self.assertIn('id="streamOverlayLead"', self.html)
+        self.assertIn("let streamOverlayWanted = false;", self.html)
+
+    def test_an_unattended_start_cannot_write_off_library_files(self):
+        """Autoplay must not permanently skip a mix because a share hiccuped.
+
+        Advancing past an undecodable mix records it as unplayable on the host,
+        so no phone is served it again. That is correct for a run a person
+        started, but the page now starts by itself: a transient read failure on
+        a page nobody is watching would have written off good files forever.
+        """
+        self.assertIn("let listenerEngaged = false;", self.html)
+        # A network error is never a verdict about the file.
+        error_handler = self.html[self.html.index("audioEl.addEventListener('error'") :]
+        error_handler = error_handler[: error_handler.index("loadThemeList();")]
+        self.assertIn("MEDIA_ERR_NETWORK", error_handler)
+        self.assertLess(error_handler.index("MEDIA_ERR_NETWORK"),
+                        error_handler.index("handleUnplayableMix"))
+        # And an unattended run may not advance the queue at all.
+        handler = self.html[self.html.index("function handleUnplayableMix(") :]
+        handler = handler[: handler.index("function showPlaybackExhaustedNotice")]
+        guard = handler.index("if (!listenerEngaged)")
+        self.assertLess(guard, handler.index("unplayableFiles.add"))
+        self.assertLess(guard, handler.index("sendAction('track_failed'"))
+        # The automatic entry point does not mark the run as listener-driven.
+        auto = self.html[self.html.index("function maybeAutoStartStream()") :]
+        auto = auto[: auto.index("function syncHostPlayerFile")]
+        self.assertIn("{ auto: true }", auto)
+        self.assertNotIn("listenerEngaged = true", auto)
+        # A real tap does, so the Engage button keeps the old behaviour.
+        engage = self.html[self.html.index("function engageStreamFromServer(") :]
+        engage = engage[: engage.index("function reportEngageRefused")]
+        self.assertIn("if (onGesture)", engage)
+        self.assertIn("listenerEngaged = true", engage)
 
     def test_an_engage_tap_with_no_queue_asks_the_host_to_rescan(self):
         self.assertIn("function rescanForEngage()", self.html)

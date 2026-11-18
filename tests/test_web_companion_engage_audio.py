@@ -40,6 +40,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
+from unittest import mock
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 SCRIPTS = BASE_DIR / "scripts"
@@ -48,6 +49,47 @@ SAMPLES = BASE_DIR / "MP_SAMPLES"
 
 HAVE_FFMPEG = shutil.which("ffmpeg") is not None
 HAVE_FFPROBE = shutil.which("ffprobe") is not None
+
+# The module under test, for the server-side cases below.
+sys.path.insert(0, str(SCRIPTS))
+try:
+    import mix_web_companion as mwc  # noqa: E402
+except Exception:  # pragma: no cover - only if a dependency is missing
+    mwc = None
+
+
+def find_chrome() -> str | None:
+    """A Chrome/Chromium binary that can run headless with CDP, or None.
+
+    The autoplay tests need a real media stack: whether a browser allows an
+    audible play() without a gesture is a policy decision that cannot be read
+    out of the served HTML. The binary is looked up the same way on a
+    developer machine, a CI runner and this workstation (where Chrome lives in
+    a Flatpak), and the tests skip cleanly when none is found.
+    """
+    for name in ("google-chrome", "google-chrome-stable", "chromium",
+                 "chromium-browser", "chrome"):
+        found = shutil.which(name)
+        if found:
+            return found
+    for path in (
+        "/app/extra/chrome",
+        "/var/lib/flatpak/app/com.google.Chrome/current/active/files/extra/chrome",
+        "/opt/google/chrome/chrome",
+    ):
+        if Path(path).is_file() and os.access(path, os.X_OK):
+            return path
+    return None
+
+
+CHROME = find_chrome()
+HAVE_CDP = False
+try:  # websocket-client drives Chrome's DevTools protocol
+    import websocket  # type: ignore  # noqa: E402
+    HAVE_CDP = CHROME is not None
+except Exception:  # pragma: no cover - optional dependency
+    websocket = None
+
 
 sys.path.insert(0, str(SCRIPTS))
 
@@ -129,6 +171,342 @@ class LiveCompanion:
     def get(self, path: str, headers=None, timeout=30):
         req = urllib.request.Request(self.base + path, headers=headers or {})
         return urllib.request.urlopen(req, timeout=timeout)
+
+
+class HeadlessBrowser:
+    """A headless Chrome with the DevTools protocol open, for autoplay tests."""
+
+    def __init__(self, autoplay_policy: str):
+        self.autoplay_policy = autoplay_policy
+        self.port = free_port()
+        self.profile = tempfile.mkdtemp(prefix="mp-webc-chrome-")
+        self.proc: subprocess.Popen | None = None
+        self.ws = None
+        self._id = 0
+
+    def start(self, timeout: float = 40.0) -> None:
+        self.proc = subprocess.Popen(
+            [
+                CHROME,
+                "--headless=new",
+                "--disable-gpu",
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                "--no-first-run",
+                "--no-default-browser-check",
+                "--mute-audio",
+                f"--autoplay-policy={self.autoplay_policy}",
+                f"--user-data-dir={self.profile}",
+                f"--remote-debugging-port={self.port}",
+                "about:blank",
+            ],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
+        )
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if self.proc.poll() is not None:
+                raise unittest.SkipTest("the headless browser exited at startup")
+            try:
+                with urllib.request.urlopen(
+                        f"http://127.0.0.1:{self.port}/json/version", timeout=2) as r:
+                    if r.status == 200:
+                        return
+            except Exception:
+                time.sleep(0.2)
+        raise unittest.SkipTest("the headless browser did not open its debug port")
+
+    def stop(self) -> None:
+        try:
+            if self.ws:
+                self.ws.close()
+        except Exception:
+            pass
+        if self.proc and self.proc.poll() is None:
+            self.proc.terminate()
+            try:
+                self.proc.wait(timeout=15)
+            except subprocess.TimeoutExpired:
+                self.proc.kill()
+        shutil.rmtree(self.profile, ignore_errors=True)
+
+    # -- DevTools helpers ---------------------------------------------------
+    def _new_target(self, url: str = "") -> None:
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{self.port}/json/new?about:blank",
+            method="PUT",
+        )
+        with urllib.request.urlopen(request, timeout=10) as r:
+            info = json.loads(r.read().decode("utf-8"))
+        self.ws = websocket.create_connection(info["webSocketDebuggerUrl"], timeout=30)
+        self._id = 0
+        self.send("Page.enable")
+        self.send("Runtime.enable")
+        # Navigating is a separate step so a caller can set emulation (mobile
+        # metrics, touch) first and have the page load under it.
+        if url:
+            self.send("Page.navigate", url=url)
+
+    def send(self, method: str, **params):
+        self._id += 1
+        message_id = self._id
+        self.ws.send(json.dumps({"id": message_id, "method": method, "params": params}))
+        while True:
+            message = json.loads(self.ws.recv())
+            if message.get("id") == message_id:
+                if "error" in message:
+                    raise RuntimeError(f"{method}: {message['error']}")
+                return message.get("result", {})
+
+    def evaluate(self, expression: str):
+        result = self.send("Runtime.evaluate", expression=expression,
+                           awaitPromise=True, returnByValue=True)
+        return result.get("result", {}).get("value")
+
+
+class AutoplayTest(unittest.TestCase):
+    """The page must start the mix without the listener pressing Engage.
+
+    The behaviour under test is a browser policy decision (whether an audible
+    ``play()`` is allowed outside a gesture), so it is verified in a real
+    headless browser rather than by reading the HTML.
+
+    Two points deserve to be stated plainly, because guessing at them wasted
+    real debugging time:
+
+    * **A default Chrome refuses every autoplay**, including muted playback and
+      a silent clip. Only a browser that has decided to permit media autoplay
+      for this origin can start audible sound on load. So the permissive case
+      is tested with the flag that represents such a browser, and the strict
+      case - which is what a phone actually gets - is tested against the
+      default policy.
+    * **A tap must therefore work.** That is the contract the listener depends
+      on, and it is exercised with a real touch event, not a synthetic
+      ``activateMobileStream()`` call.
+    """
+
+    flac: Path | None = None
+
+    @classmethod
+    def setUpClass(cls):
+        if not HAVE_CDP:
+            raise unittest.SkipTest("a CDP-capable browser and websocket-client are needed")
+        cls.flac = find_flac()
+        if cls.flac is None:
+            raise unittest.SkipTest("no FLAC in MP_SAMPLES to stream")
+
+        cls.tmp = Path(tempfile.mkdtemp(prefix="mp-webc-auto-")) / "MIX_ARCHIVE"
+        target = cls.tmp / "FLAC_CONVERTED_OUTPUTS"
+        target.mkdir(parents=True, exist_ok=True)
+        cls.served = target / cls.flac.name
+        shutil.copy2(cls.flac, cls.served)
+
+        cls.server = LiveCompanion(cls.tmp, free_port())
+        # The queue is armed at boot (autoplay on), so the dashboard has a file
+        # to start as soon as it loads.
+        cls._old_autoplay = os.environ.get("WEB_COMPANION_AUTOPLAY")
+        os.environ["WEB_COMPANION_AUTOPLAY"] = "true"
+        try:
+            cls.server.start()
+        except Exception:
+            shutil.rmtree(cls.tmp, ignore_errors=True)
+            raise
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.stop()
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+        if cls._old_autoplay is None:
+            os.environ.pop("WEB_COMPANION_AUTOPLAY", None)
+        else:
+            os.environ["WEB_COMPANION_AUTOPLAY"] = cls._old_autoplay
+
+    STATE_JS = """(() => {
+        const a = document.getElementById('mobileAudioStream');
+        const ov = document.getElementById('streamOverlay');
+        return JSON.stringify({
+            paused: a ? a.paused : null,
+            time: a ? Number(a.currentTime.toFixed(2)) : null,
+            src: a ? String(a.currentSrc || a.src) : '',
+            overlay: ov ? ov.classList.contains('show') : null,
+            lead: (document.getElementById('streamOverlayLead') || {}).innerText,
+            detail: (document.getElementById('streamOverlayDetail') || {}).innerText,
+            button: (document.getElementById('btnPlayPause') || {}).innerText,
+        });
+    })()"""
+
+    def _browser(self, policy: str) -> HeadlessBrowser:
+        browser = HeadlessBrowser(policy)
+        browser.start()
+        self.addCleanup(browser.stop)
+        return browser
+
+    def _wait_for(self, browser, predicate, timeout=30.0):
+        deadline = time.time() + timeout
+        last = None
+        while time.time() < deadline:
+            last = json.loads(browser.evaluate(self.STATE_JS) or "{}")
+            if predicate(last):
+                return last
+            time.sleep(0.4)
+        return last
+
+    def test_the_mix_plays_without_pressing_engage(self):
+        """The whole point: opening the page is the engage."""
+        browser = self._browser("no-user-gesture-required")
+        browser._new_target(self.server.base + "/")
+
+        state = self._wait_for(browser, lambda s: s.get("paused") is False, timeout=40)
+        self.assertFalse(state.get("paused"),
+                         f"the stream never started on its own: {state}")
+        # The element really points at the host's stream, not at an idle clip.
+        self.assertIn("/api/stream", state.get("src") or "")
+        # And the gate is out of the way, with the play control reading Pause.
+        self.assertFalse(state.get("overlay"),
+                         f"the engage gate is still covering a playing mix: {state}")
+        self.assertIn("Pause", state.get("button") or "")
+
+    def test_the_clock_advances_after_the_automatic_start(self):
+        """A play() that resolves on a stalled stream would still be silent."""
+        browser = self._browser("no-user-gesture-required")
+        browser._new_target(self.server.base + "/")
+
+        started = self._wait_for(browser, lambda s: s.get("paused") is False, timeout=40)
+        self.assertFalse(started.get("paused"), f"the stream never started: {started}")
+        first = self._wait_for(browser, lambda s: s.get("time") and s["time"] > 0.5,
+                               timeout=25)
+        time.sleep(4)
+        later = json.loads(browser.evaluate(self.STATE_JS) or "{}")
+        self.assertFalse(later.get("paused"))
+        self.assertGreater(float(later.get("time") or 0),
+                           float(first.get("time") or 0),
+                           "the element is playing but its clock never moved")
+
+    def test_a_refused_automatic_start_offers_tap_anywhere_and_it_works(self):
+        """Strict autoplay policy: the gate says what to do, and any tap works.
+
+        The retry listens on the document rather than only on the button, so
+        the listener can tap the dashboard, not just the engage control.
+        """
+        browser = self._browser("user-gesture-required")
+        browser._new_target()
+        browser.send("Emulation.setDeviceMetricsOverride", width=420, height=880,
+                     deviceScaleFactor=2, mobile=True)
+        browser.send("Emulation.setTouchEmulationEnabled", enabled=True,
+                     maxTouchPoints=5)
+        browser.send("Page.navigate", url=self.server.base + "/")
+
+        refused = self._wait_for(
+            browser,
+            lambda s: s.get("overlay") is True and "tap anywhere" in (s.get("lead") or "").lower(),
+            timeout=40,
+        )
+        self.assertTrue(refused.get("overlay"),
+                        f"the gate did not explain the refused autoplay: {refused}")
+        self.assertIn("tap anywhere", (refused.get("lead") or "").lower())
+
+        # A real touch tap in the middle of the page, not on the button.
+        for kind in ("touchStart", "touchEnd"):
+            browser.send("Input.dispatchTouchEvent", type=kind,
+                         touchPoints=[{"x": 210, "y": 300, "radiusX": 8,
+                                       "radiusY": 8, "force": 1, "id": 1}])
+            time.sleep(0.05)
+
+        playing = self._wait_for(browser, lambda s: s.get("paused") is False, timeout=40)
+        self.assertFalse(playing.get("paused"),
+                         f"the tap did not start the mix: {playing}")
+        self.assertFalse(playing.get("overlay"),
+                         f"the gate stayed up over a playing mix: {playing}")
+
+    def test_an_alternating_active_file_does_not_reload_the_player(self):
+        """A flapping cursor restarted the player every poll. Guard it.
+
+        The server named a different file on alternate polls (a mount probe was
+        the cause), and the dashboard re-points its <audio> element on every
+        change - so the player restarted about every two seconds. The page must
+        require a change to be reported twice before acting, and must refuse an
+        A -> B -> A oscillation outright.
+        """
+        browser = self._browser("no-user-gesture-required")
+        browser._new_target()
+
+        # A fake endpoint that alternates the file on every status poll.
+        flip = {"n": 0, "srcs": 0}
+        browser.send("Runtime.evaluate", expression="1")  # ensure doc exists
+        browser.send("Page.navigate", url=self.server.base + "/")
+        time.sleep(6)
+
+        page = browser.evaluate("""(() => {
+            window.__srcs = 0;
+            const a = document.getElementById('mobileAudioStream');
+            const d = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'src');
+            Object.defineProperty(a, 'src', {
+                get() { return d.get.call(a); },
+                set(v) { window.__srcs++; d.set.call(a, v); },
+                configurable: true,
+            });
+            return 'ok';
+        })()""")
+        self.assertEqual(page, "ok")
+
+        # Drive fetchStatus with two different files alternating, which is the
+        # exact shape of the field bug.
+        for i in range(8):
+            browser.send("Runtime.evaluate", expression="""
+                (() => {
+                    const f = %s;
+                    data.active_file = f;
+                    return 1;
+                })()
+                """ % json.dumps("/fake/a.flac" if i % 2 == 0 else "/fake/b.flac"))
+            time.sleep(0.1)
+
+        # The guard itself must be present and consulted before any rebind.
+        src = browser.evaluate("""(() => {
+            return JSON.stringify({
+                confirm: typeof FILE_CHANGE_CONFIRMATIONS,
+                pending: typeof pendingFile,
+                frozen: typeof fileFollowFrozenUntil,
+                flap: typeof fileFlapDetected,
+            });
+        })()""")
+        self.assertIn('"confirm":"number"', src)
+        self.assertIn('"pending":"string"', src)
+        self.assertIn('"frozen":"number"', src)
+        self.assertIn('"flap":"boolean"', src)
+
+
+        """A share that dies mid-read must not produce the "library stopped
+        responding" banner.
+
+        This is the field symptom that made the Engage button look broken: the
+        server promised Content-Length for a file it could no longer read, the
+        browser reported ERR_CONTENT_LENGTH_MISMATCH, and the dashboard read
+        that as "many mixes failed" and paused its skip walk. The fix is on the
+        server - probe the file before writing any header - so this test drives
+        the real endpoint against a file that disappears after being listed.
+        """
+        # A file that is streamable on paper but whose body cannot be produced:
+        # the server must answer 404 rather than 200 with a short body.
+        victim = Path(tempfile.mkdtemp(prefix="mp-gone-")) / "gone.flac"
+        victim.write_bytes(b"fLaC" + b"\x00" * 4000)
+
+        handler = mwc.CompanionHandler.__new__(mwc.CompanionHandler)
+        handler.headers = {}
+        handler.wfile = mock.MagicMock()
+        handler.send_response = mock.MagicMock()
+        handler.send_header = mock.MagicMock()
+        handler.end_headers = mock.MagicMock()
+        handler.close_connection = False
+        with mock.patch.object(mwc, "is_streamable_file", return_value=True), \
+             mock.patch.object(mwc, "open", side_effect=OSError(
+                 107, "Transport endpoint is not connected"), create=True), \
+             mock.patch("builtins.open", side_effect=OSError(
+                 107, "Transport endpoint is not connected")):
+            handler._serve_audio_stream(str(victim))
+        # A dead mount is a 404, so the page can skip it instead of waiting for
+        # a body that will never arrive.
+        self.assertEqual(handler.send_response.call_args[0][0], 404)
 
 
 class WebCompanionEngageAudioTest(unittest.TestCase):

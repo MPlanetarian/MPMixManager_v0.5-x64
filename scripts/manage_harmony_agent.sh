@@ -119,6 +119,70 @@ get_active_model() {
     echo "gpt-oss-pinned:latest"
 }
 
+# The agent's default tag is gpt-oss-pinned:latest, which is an alias for the
+# Nemotron 3.5 Bolt build. Ollama loses the alias when the model store is moved,
+# rebuilt, or pruned, and then the agent exits and the Web Companion reports
+# "connection refused". Recreate the alias from whichever parent exists.
+HARMONY_PARENT_MODEL="${HARMONY_PARENT_MODEL:-nemotron-3.5-bolt:e4b}"
+
+_model_exists() {
+    local name="$1"
+    [ -n "$name" ] || return 1
+    curl -s "${OLLAMA_API_URL}/api/tags" 2>/dev/null \
+        | grep -o '"name":"[^"]*"' | cut -d'"' -f4 \
+        | grep -Fqx "$name"
+}
+
+_ollama_copy() {
+    local source="$1" dest="$2"
+    curl -s -X POST "${OLLAMA_API_URL}/api/copy" \
+        -H 'Content-Type: application/json' \
+        -d "{\"source\":\"${source}\",\"destination\":\"${dest}\"}" \
+        >/dev/null 2>&1
+}
+
+ensure_harmony_model() {
+    # Echoes the model the agent should be started with. Never returns a tag
+    # that Ollama does not have, when any usable model is installed.
+    local wanted
+    wanted=$(get_active_model)
+    wanted="${wanted//[\'\";]/}"
+    [ -z "$wanted" ] && wanted="gpt-oss-pinned:latest"
+
+    if ! is_ollama_running; then
+        echo "$wanted"
+        return 0
+    fi
+    if _model_exists "$wanted"; then
+        echo "$wanted"
+        return 0
+    fi
+
+    # Rebuild the alias from the official parent, exactly as launch_mp_harmony.sh
+    # does when the tag is missing.
+    if _model_exists "$HARMONY_PARENT_MODEL"; then
+        echo -e "  ${YELLOW}${wanted} is missing from Ollama; rebuilding it from ${HARMONY_PARENT_MODEL}...${NC}" >&2
+        if _ollama_copy "$HARMONY_PARENT_MODEL" "$wanted" && _model_exists "$wanted"; then
+            echo -e "  ${GREEN}✓ Recreated the ${wanted} alias.${NC}" >&2
+            echo "$wanted"
+            return 0
+        fi
+    fi
+
+    # Last resort: start on whatever the agent can actually load.
+    local available
+    available=$(curl -s "${OLLAMA_API_URL}/api/tags" 2>/dev/null | grep -o '"name":"[^"]*"' | cut -d'"' -f4)
+    local pick
+    pick=$(printf '%s\n' "$available" | grep -i 'gpt-oss\|nemotron' | head -1)
+    [ -z "$pick" ] && pick=$(printf '%s\n' "$available" | head -1)
+    if [ -n "$pick" ]; then
+        echo -e "  ${YELLOW}Using ${pick} because ${wanted} is unavailable.${NC}" >&2
+        echo "$pick"
+        return 0
+    fi
+    echo "$wanted"
+}
+
 start_harmony_bg() {
     echo -e "\n${BOLD}${BLUE}=== STARTING MP HARMONY AI AGENT (BACKGROUND SERVER) ===${NC}"
     if is_harmony_running; then
@@ -145,9 +209,7 @@ start_harmony_bg() {
     fi
 
     local target_model
-    target_model=$(get_active_model)
-    target_model="${target_model//[\'\";]/}"
-    [ -z "$target_model" ] && target_model="gpt-oss-pinned:latest"
+    target_model=$(ensure_harmony_model)
 
     echo -e "Launching MP Harmony Voice Bridge server [Model: ${CYAN}${target_model}${NC}, Port: ${CYAN}${HARMONY_PORT}${NC}]..."
     setsid "$PYTHON_BIN" -u "$HARMONY_SCRIPT" --server "$target_model" </dev/null >"$LOG_FILE" 2>&1 &
@@ -225,9 +287,7 @@ start_harmony_window() {
     fi
 
     local target_model
-    target_model=$(get_active_model)
-    target_model="${target_model//[\'\";]/}"
-    [ -z "$target_model" ] && target_model="gpt-oss-pinned:latest"
+    target_model=$(ensure_harmony_model)
     local TITLE="MP Harmony AI Agent Server (Port ${HARMONY_PORT})"
     local CMD="cd '${HARMONY_DIR}' && python3 '${HARMONY_SCRIPT}' --server '${target_model}'; echo ''; echo 'Agent exited. Press [Enter] to close...'; read -r"
 
@@ -268,9 +328,7 @@ launch_chat_cli() {
     fi
 
     local target_model
-    target_model=$(get_active_model)
-    target_model="${target_model//[\'\";]/}"
-    [ -z "$target_model" ] && target_model="gpt-oss-pinned:latest"
+    target_model=$(ensure_harmony_model)
 
     echo -e "\n${BOLD}${MAGENTA}======================================================================${NC}"
     echo -e "${BOLD}${MAGENTA}         LAUNCHING MP HARMONY AI AGENT INTERACTIVE CHAT               ${NC}"
@@ -309,9 +367,7 @@ launch_voice_chat_cli() {
     fi
 
     local target_model
-    target_model=$(get_active_model)
-    target_model="${target_model//[\'\";]/}"
-    [ -z "$target_model" ] && target_model="gpt-oss-pinned:latest"
+    target_model=$(ensure_harmony_model)
 
     local voice_bin
     voice_bin=$(command -v local-voice-talk 2>/dev/null || echo "$HOME/bin/local-voice-talk")

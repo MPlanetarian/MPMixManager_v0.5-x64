@@ -16,14 +16,18 @@ MGR_SH = BASE_DIR / "Mix_Archive_Manager.sh"
 
 # One truecolor hue per theme. These replace the shared light-blue menu-number cyan.
 # The same hues, pulled toward black so the numbers stay readable on the
-# pale still-water field. Sensorium was already dark enough.
+# pale still-water field. Sensorium was already dark enough. Stream of
+# Frequency, Dynamic Liquid Glass, Cosmic Supernova and Dreamworlds Liquid sit
+# on dark native fields, so their hues are lightened instead. Nord and
+# Solarized moved to dark panes, so their numbers use their own frost cyan and
+# solar cream. The Matrix's numbers follow its phosphor green.
 EXPECTED = {
-    "stream_of_frequency": "92;86;7",
+    "stream_of_frequency": "76;217;123",
     "dreamworlds": "150;95;225",
     "dreamworlds_ultra": "80;67;95",
-    "dynamic_rainbow_liquid_glass": "134;11;125",
-    "cosmic_supernova": "124;62;10",
-    "dreamworlds_liquid": "7;92;53",
+    "dynamic_rainbow_liquid_glass": "255;45;142",
+    "cosmic_supernova": "224;86;253",
+    "dreamworlds_liquid": "199;125;255",
     "dreamworlds_neon": "129;12;151",
     "retro_studio": "99;77;11",
     "cyber_neon": "152;12;12",
@@ -31,12 +35,12 @@ EXPECTED = {
     "ice_cold": "11;83;145",
     "retro_terminal": "87;87;87",
     "sensorium": "92;36;0",
-    "retro_linux_memories": "81;58;6",
+    "retro_linux_memories": "255;183;20",
     "cyberpunk": "139;0;126",
     "dracula": "152;12;45",
-    "nord": "46;91;59",
-    "matrix": "8;100;15",
-    "solarized": "65;76;6",
+    "nord": "136;192;208",
+    "matrix": "57;255;20",
+    "solarized": "253;246;227",
     "tokyo": "144;42;11",
     "monokai": "20;89;7",
     "gruvbox": "138;53;15",

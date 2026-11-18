@@ -243,7 +243,9 @@ if ! _mp_vis_running; then
     [ ! -f "$VIS_PY" ] && VIS_PY="$BASE_DIR/scripts/mp_liquid_visualizer_vulkan.py"
     if [ -f "$VIS_PY" ]; then
         # Mark it active before the child starts, or its first poll reads
-        # active:false and the window never bonds to this player.
+        # active:false and the window never bonds to this player. A fresh
+        # player shows its background, so ``visible`` is reset to True; the
+        # Visualization button can hide it again for this session.
         "$PYTHON_BIN" - "$BASE_DIR" <<'PYVIS' >/dev/null 2>&1 || true
 import sys
 from pathlib import Path
@@ -252,7 +254,7 @@ sys.path.insert(0, str(root))
 sys.path.insert(0, str(root / "scripts"))
 try:
     from liquid_player_visualizer import mark_player_visualizer_attached
-    mark_player_visualizer_attached()
+    mark_player_visualizer_attached(visible=True)
 except Exception:
     pass
 PYVIS

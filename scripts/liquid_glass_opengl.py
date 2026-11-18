@@ -336,12 +336,14 @@ def theme_rgb(name):
 
 
 def theme_uses_dark_glass(name) -> bool:
-    """Match the shader: only a black theme mix is the opaque void pane.
+    """Match the shader's opaque dark panes.
 
-    Into Darkness is that pane, so light text stays readable there. Every
-    other theme, Retro Linux Memories included, is the pale still-water field
-    that MP Gui, the Liquid Player and the console manager share.
+    Into Darkness is the black void. Retro Linux Memories is the charcoal
+    field #2d2d2d. Every other theme is the pale still-water field that
+    MP Gui, the Liquid Player and the console manager share.
     """
+    if normalize_theme_name(name) == "retro_linux_memories":
+        return True
     colors = theme_rgb(name)
     blended = tuple(colors[0][i] + (colors[1][i] - colors[0][i]) * 0.42 for i in range(3))
     theme = tuple(blended[i] + (colors[2][i] - blended[i]) * 0.20 for i in range(3))
@@ -372,8 +374,9 @@ def glass_foreground_rgb(theme_name) -> tuple[int, int, int]:
     """Terminal text ink that stays readable on the active glass pane.
 
     Most themes draw the pale still-water field, where white text disappears,
-    so those use a dark ink. Into Darkness is the opaque black pane, so it
-    keeps a light ink instead. This mirrors ``theme_uses_dark_glass``.
+    so those use a dark ink. Into Darkness and Retro Linux Memories are
+    opaque dark panes, so they keep a light ink. This mirrors
+    ``theme_uses_dark_glass``.
     """
     if theme_uses_dark_glass(theme_name):
         return (236, 240, 244)
@@ -404,6 +407,7 @@ THEME_TEXT = {
     "tokyo": (255, 75, 20),
     "monokai": (56, 255, 20),
     "emerald": (20, 255, 93),
+    "blood_moon": (142, 0, 25),
     # The Whitest White paints a white console pane, so its body ink has to be
     # black. It was missing from this table, which meant theme_text_rgb fell
     # through to the pink default and drew pink rows on a white pane.

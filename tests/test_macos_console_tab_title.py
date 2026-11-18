@@ -216,10 +216,11 @@ printf '%s\n' NO_SPAWN_OK
         light.feed(b"\033[38;5;196mR")
         self.assertEqual(light.colors[0][1], (255, 0, 0))
 
-        pale = TerminalOverlay(cols=4, rows=1)
-        pale.set_ink("retro_linux_memories", on_light_glass=True)
-        darkened_linux = pale.ink_for_cell((255, 255, 255), None)
-        self.assertTrue(all(channel < 80 for channel in darkened_linux))
+        # Retro Linux Memories is a native dark pane now (charcoal #2d2d2d),
+        # so its white body text stays white like every other dark field.
+        charcoal = TerminalOverlay(cols=4, rows=1)
+        charcoal.set_ink("retro_linux_memories", on_light_glass=True)
+        self.assertEqual(charcoal.ink_for_cell((255, 255, 255), None), (255, 255, 255))
         void = TerminalOverlay(cols=4, rows=1)
         void.set_ink("into_darkness_void_out", on_light_glass=True)
         self.assertEqual(void.ink_for_cell((255, 255, 255), None), (255, 255, 255))

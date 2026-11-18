@@ -6423,12 +6423,14 @@ def render_html_page(theme: Dict[str, Any]) -> str:
 
         <!-- Primary Controls -->
         <div class="controls-row">
-            <button class="btn-sub" onclick="skipBy(-30)">⏪ 30s</button>
+            <button class="btn-sub" onclick="skipBy(-30)"
+                    title="Rewind 30 seconds (Left arrow rewinds 10s, Shift+Left rewinds 30s)">⏪ 30s</button>
             <button onclick="sendAction('previous')">⏮</button>
             <button class="btn-main" id="btnPlayPause" onclick="handlePlayPauseClick()"
                     aria-label="Paused - tap to play">▶ Play</button>
             <button onclick="sendAction('next')">⏭</button>
-            <button class="btn-sub" onclick="skipBy(30)">30s ⏩</button>
+            <button class="btn-sub" onclick="skipBy(30)"
+                    title="Forward 30 seconds (Right arrow forwards 10s, Shift+Right forwards 30s)">30s ⏩</button>
         </div>
 
         <!-- Mode Controls -->
@@ -7392,7 +7394,8 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             return 0;
         }}
 
-        function skipBy(delta) {{
+        function skipBy(delta, opts) {{
+            const options = opts || {{}};
             clearHostAlign();
             const audioEl = document.getElementById('mobileAudioStream');
             const dur = audioTimelineEnd(audioEl);
@@ -7437,9 +7440,74 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             if (phoneOwnsPlayback()) {{
                 const told = target !== null ? target : pendingSeek;
                 sendAction('seek_to', {{ position: Number(told || 0).toFixed(1) }});
+            }} else if (options.relativeSeconds) {{
+                // Keyboard seeking has to move the desk by the key's own step.
+                // The two named actions are fixed at 30 s inside the server, so
+                // a 10 s arrow sent as seek_forward moved the room 30 s while
+                // the browser mirror moved 10 - the two disagreed on every
+                // press. `seek` carries the distance with it.
+                sendAction('seek', {{ seconds: delta }});
             }} else {{
                 sendAction(delta > 0 ? 'seek_forward' : 'seek_backward');
             }}
+        }}
+
+        // Left/Right seek, the same contract the desktop player already has.
+        //
+        // The transport row was pointer-only: on a laptop, a keyboard case or
+        // a TV browser the arrow keys moved the page nowhere and the mix
+        // stayed where it was. The keys go through skipBy on purpose, so they
+        // inherit its timeline probe, its clamped targets, its parked offset
+        // before metadata and its forward to a desk player that owns the
+        // sound - pressing Left must never leave the two out of step.
+        //
+        // Ten seconds is the player's own arrow step. Shift makes it the 30
+        // seconds the two transport buttons use, which is the longer jump
+        // when the listener is hunting for a spot in an hour-long mix.
+        const KEY_SEEK_STEP_SECONDS = 10;
+        const KEY_SEEK_STEP_SHIFT_SECONDS = 30;
+
+        // Holding the key must scrub, but not issue sixty seeks a second. The
+        // OS repeat is throttled to a rate a browser can actually serve; the
+        // first press is never delayed.
+        const KEY_SEEK_REPEAT_MS = 150;
+        let lastKeySeekAt = -Infinity;
+
+        // A keystroke means text here. The playlist search and the assistant
+        // prompt are both real text fields, and a caret move inside them must
+        // not skip the mix.
+        function isSeekBlockedTarget(target) {{
+            if (!target) return false;
+            if (target.isContentEditable) return true;
+            const tag = String(target.tagName || '').toLowerCase();
+            return tag === 'input' || tag === 'textarea' || tag === 'select' || tag === 'option';
+        }}
+
+        function handleSeekKeydown(ev) {{
+            if (!ev || ev.defaultPrevented) return;
+            const key = ev.key;
+            if (key !== 'ArrowLeft' && key !== 'ArrowRight') return;
+            // A modified arrow belongs to the browser or the OS: Ctrl+Left is
+            // a word jump in text, Cmd+Left is the start of a line, Alt+Left
+            // is Back. Only a bare arrow seeks.
+            if (ev.altKey || ev.ctrlKey || ev.metaKey) return;
+            if (isSeekBlockedTarget(ev.target)) return;
+            // The assistant tab has no transport on screen, and the engage
+            // gate is asking for a tap rather than for a seek.
+            if (activeTab !== 'player') return;
+            if (streamOverlayWanted) return;
+            // Nothing is queued: leave the arrows to the browser so the page
+            // still scrolls on a laptop instead of swallowing the keystroke.
+            if (!activeAudioFile) return;
+            const now = performance.now();
+            if (ev.repeat && (now - lastKeySeekAt) < KEY_SEEK_REPEAT_MS) {{
+                ev.preventDefault();
+                return;
+            }}
+            lastKeySeekAt = now;
+            const step = ev.shiftKey ? KEY_SEEK_STEP_SHIFT_SECONDS : KEY_SEEK_STEP_SECONDS;
+            ev.preventDefault();
+            skipBy(key === 'ArrowRight' ? step : -step, {{ relativeSeconds: true }});
         }}
 
         // Two-argument form kept internal; the single documented entry point
@@ -7483,6 +7551,10 @@ def render_html_page(theme: Dict[str, Any]) -> str:
                     if (ev.key === 'Enter' || ev.key === ' ') toggleVisualizerMode(ev);
                 }});
             }}
+            // Document-level, so the arrow keys work without the listener
+            // first having to click the player. The handler ignores text
+            // fields, modified arrows and the assistant tab on its own.
+            document.addEventListener('keydown', handleSeekKeydown);
             try {{
                 if (localStorage.getItem('mpVizMode') === 'spectrogram') {{
                     applyVisualizerMode('spectrogram');

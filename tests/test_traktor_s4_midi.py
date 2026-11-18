@@ -4,7 +4,7 @@ Unit and Integration Tests for Traktor Kontrol S4 Hardware MIDI Support
 MP Mix Archive Manager v0.5.3
 """
 
-import os, sys, time, json, unittest
+import os, sys, time, json, tempfile, threading, unittest
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
@@ -23,6 +23,14 @@ from traktor_s4_midi import (
     PID_FILE,
     STATE_FILE,
 )
+
+# Tests must not touch the live service files in ~/.config/mix-manager:
+# run_amidi_stream() and the port-repair path write log and state entries.
+_TEST_TMP = Path(tempfile.mkdtemp(prefix="s4midi-test-"))
+traktor_s4_midi.LOG_FILE = _TEST_TMP / "traktor_s4_midi.log"
+traktor_s4_midi.STATE_FILE = _TEST_TMP / "traktor_s4_midi_state.json"
+traktor_s4_midi.PID_FILE = _TEST_TMP / "traktor_s4_midi.pid"
+traktor_s4_midi.LOCK_FILE = _TEST_TMP / "traktor_s4_midi.lock"
 
 
 class TestTraktorS4MidiController(unittest.TestCase):
@@ -150,6 +158,151 @@ class TestTraktorS4MidiController(unittest.TestCase):
         mock_ipc.assert_called_with("toggle_record")
 
 
+class TestPortAutoDetection(unittest.TestCase):
+    """The S4 is not always card 0.
+
+    HDMI audio commonly takes card 0, which pushes the S4 to hw:1,0. The old
+    hardcoded hw:0,0 / /dev/snd/midiC0D0 therefore never opened the device.
+    """
+
+    CARDS = """ 0 [NVidia         ]: HDA-Intel - HDA NVidia
+                      HDA NVidia at 0xb5080000 irq 172
+ 1 [TraktorKontrolS]: snd-usb-caiaq - Traktor Kontrol S4
+                      Native Instruments Traktor Kontrol S4 (usb-0000:00:14.0-11.3)
+ 2 [MPKmini2       ]: USB-Audio - MPKmini2
+                      AKAI MPKmini2 at usb-0000:00:14.0-11.2.4, full speed
+"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.proc = self.root / "proc"
+        self.dev = self.root / "dev"
+        (self.proc / "asound").mkdir(parents=True)
+        (self.proc / "asound" / "cards").write_text(self.CARDS)
+        (self.dev / "snd").mkdir(parents=True)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _add_card_midi(self, card, dev=0, text="Traktor Kontrol S4"):
+        d = self.proc / "asound" / f"card{card}"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / f"midi{dev}").write_text(text + "\n")
+
+    def _add_node(self, card, dev=0):
+        (self.dev / "snd" / f"midiC{card}D{dev}").write_text("")
+
+    def test_finds_s4_on_card_one(self):
+        self._add_card_midi(1)
+        self._add_node(1)
+        detected, port, details = detect_traktor_s4_port(str(self.proc), str(self.dev))
+        self.assertTrue(detected)
+        self.assertEqual(port, "hw:1,0")
+        self.assertIn("Traktor", details)
+
+    def test_ignores_other_cards(self):
+        self._add_card_midi(0, text="HDA NVidia")
+        self._add_card_midi(2, text="MPKmini2")
+        self._add_card_midi(1)
+        detected, port, _ = detect_traktor_s4_port(str(self.proc), str(self.dev))
+        self.assertTrue(detected)
+        self.assertEqual(port, "hw:1,0")
+
+    def test_no_device_falls_back_to_default(self):
+        (self.proc / "asound" / "cards").write_text(
+            " 0 [NVidia         ]: HDA-Intel - HDA NVidia\n"
+        )
+        # Keep the host's real `amidi -l` out of this hermetic check.
+        empty = MagicMock(stdout="", stderr="", returncode=0)
+        with patch("traktor_s4_midi.subprocess.run", return_value=empty):
+            detected, port, _ = detect_traktor_s4_port(str(self.proc), str(self.dev))
+        self.assertFalse(detected)
+        self.assertEqual(port, traktor_s4_midi.DEFAULT_PORT)
+
+    def test_resolve_port_replaces_stale_default(self):
+        self._add_card_midi(1)
+        self._add_node(1)
+        port = traktor_s4_midi.resolve_port("hw:0,0", str(self.proc), str(self.dev))
+        self.assertEqual(port, "hw:1,0")
+
+    def test_resolve_port_keeps_explicit_working_port(self):
+        self._add_card_midi(1)
+        self._add_node(1)
+        port = traktor_s4_midi.resolve_port("hw:1,0", str(self.proc), str(self.dev))
+        self.assertEqual(port, "hw:1,0")
+
+    def test_rawmidi_path_mapping(self):
+        self._add_node(1)
+        self.assertEqual(
+            traktor_s4_midi.rawmidi_path_for_port("hw:1,0", str(self.dev)),
+            str(self.dev / "snd" / "midiC1D0"),
+        )
+        self.assertIsNone(traktor_s4_midi.rawmidi_path_for_port("hw:0,0", str(self.dev)))
+
+    def test_port_from_rawmidi_path(self):
+        self.assertEqual(traktor_s4_midi.port_from_rawmidi_path("/dev/snd/midiC3D1"), "hw:3,1")
+        self.assertIsNone(traktor_s4_midi.port_from_rawmidi_path("/dev/umidi0.0"))
+
+    def test_controller_repairs_stale_hardcoded_port(self):
+        with patch("traktor_s4_midi.detect_traktor_s4_port",
+                   return_value=(True, "hw:1,0", "Traktor Kontrol S4")), \
+             patch("traktor_s4_midi.rawmidi_path_for_port",
+                   side_effect=lambda p, dev_root="/dev": "/dev/snd/midiC1D0" if p == "hw:1,0" else None):
+            ctrl = TraktorS4MidiController(port="hw:0,0")
+        self.assertEqual(ctrl.port, "hw:1,0")
+        self.assertEqual(ctrl.rawmidi_dev, "/dev/snd/midiC1D0")
+
+
+class TestRawmidiReadLoop(unittest.TestCase):
+    """Bytes arriving on the rawmidi node must reach the event mapper."""
+
+    def test_stream_processes_messages_from_device_node(self):
+        if not hasattr(os, "mkfifo"):
+            self.skipTest("platform has no FIFOs")
+        with tempfile.TemporaryDirectory() as tmp:
+            fifo = Path(tmp) / "midi"
+            os.mkfifo(fifo)
+            with patch("traktor_s4_midi.detect_traktor_s4_port",
+                       return_value=(False, "hw:99,0", "")):
+                ctrl = TraktorS4MidiController(port="hw:99,0")
+            ctrl.rawmidi_dev = str(fifo)
+            ctrl.running = True
+            seen = []
+
+            def fake_process(status, data1, data2):
+                seen.append((status, data1, data2))
+                return "desc", "Ignored"
+
+            ctrl.process_midi_event = fake_process
+            th = threading.Thread(target=ctrl.run_rawmidi_stream, daemon=True)
+            th.start()
+            with open(fifo, "wb", buffering=0) as writer:
+                time.sleep(0.2)
+                writer.write(bytes([0xB0, 0x63, 0x01]))  # CC 99, value 1
+            deadline = time.time() + 2
+            while time.time() < deadline and not seen:
+                time.sleep(0.02)
+            ctrl.running = False
+            th.join(timeout=3)
+        self.assertEqual(seen, [(0xB0, 0x63, 0x01)])
+        self.assertFalse(th.is_alive(), "reader should stop when running is cleared")
+
+
+class TestSingleInstanceLock(unittest.TestCase):
+    """Two daemons used to race for the exclusive rawmidi node."""
+
+    def test_second_lock_is_refused(self):
+        fd = traktor_s4_midi.acquire_single_instance_lock()
+        if fd == "unsupported":
+            self.skipTest("platform has no fcntl")
+        self.assertIsNotNone(fd)
+        try:
+            self.assertIsNone(traktor_s4_midi.acquire_single_instance_lock())
+        finally:
+            os.close(fd)
+
+
 class TestFreeBSDMidiFallback(unittest.TestCase):
     """FreeBSD has no ALSA, no amidi and no /dev/snd tree.
 
@@ -174,7 +327,8 @@ class TestFreeBSDMidiFallback(unittest.TestCase):
         ctrl = TraktorS4MidiController(port="hw:0,0")
         ctrl.running = True
         with patch("traktor_s4_midi.subprocess.Popen") as mock_popen, \
-             patch("traktor_s4_midi.shutil.which", return_value=None):
+             patch("traktor_s4_midi.shutil.which", return_value=None), \
+             patch("traktor_s4_midi.os.path.exists", return_value=False):
             import threading
             th = threading.Thread(target=ctrl.run_amidi_stream, daemon=True)
             th.start()

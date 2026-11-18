@@ -139,6 +139,16 @@ class LibraryModeSwitchTests(unittest.TestCase):
         self.assertIn("option 13", ui.notification_msg)
         self.assertIn("option 2", ui.notification_msg)
 
+    def test_pinned_mix_archive_ignores_stale_music_status(self):
+        ui = _ui(mode="MIX_ARCHIVE")
+        ui._user_library_mode = "MIX_ARCHIVE"
+        archive = ui.scanner
+        with patch.object(player, "MusicFolderPlaylistScanner", return_value="should-not-load") as music:
+            ui._sync_mode_scanner("MUSIC")
+        music.assert_not_called()
+        self.assertEqual(ui.mode, "MIX_ARCHIVE")
+        self.assertIs(ui.scanner, archive)
+
     def test_user_choice_ignores_stale_daemon_mode(self):
         ui = _ui()
         with tempfile.NamedTemporaryFile(suffix=".json") as playlist:

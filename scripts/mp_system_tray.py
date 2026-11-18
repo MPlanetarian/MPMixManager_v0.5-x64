@@ -1475,7 +1475,7 @@ def macos_tray_bundle_plist() -> str:
         "\t<key>CFBundleInfoDictionaryVersion</key>\n"
         "\t<string>6.0</string>\n"
         "\t<key>CFBundleShortVersionString</key>\n"
-        "\t<string>0.5.3</string>\n"
+        "\t<string>0.5.4</string>\n"
         "\t<key>LSMinimumSystemVersion</key>\n"
         "\t<string>11.0</string>\n"
         "\t<key>LSUIElement</key>\n"

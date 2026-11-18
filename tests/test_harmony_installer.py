@@ -136,6 +136,28 @@ class TestSystemdUnit(unittest.TestCase):
         self.assertIn("WorkingDirectory=$TARGET", text)
         self.assertIn("ExecStart=$py $TARGET/$ENTRY", text)
 
+    def test_unit_does_not_pin_a_model_tag(self):
+        # A pinned tag that disappears from Ollama made the agent exit on boot;
+        # systemd restart-looped it and the Web Companion showed
+        # "connection refused". The unit must let the agent resolve a model.
+        text = AGENT_INSTALLER.read_text(encoding="utf-8")
+        self.assertIn("ExecStart=$py $TARGET/$ENTRY --server\n", text)
+        self.assertNotIn("--server gpt-oss-pinned:latest", text)
+        self.assertNotIn("HARMONY_MODEL=gpt-oss-pinned:latest", text)
+
+
+class TestModelSelfHeal(unittest.TestCase):
+    """The manager must never hand the agent a tag Ollama does not have."""
+
+    def test_manager_rebuilds_a_missing_alias(self):
+        text = MANAGER.read_text(encoding="utf-8")
+        self.assertIn("ensure_harmony_model()", text)
+        self.assertIn("/api/copy", text)
+        self.assertIn("HARMONY_PARENT_MODEL", text)
+        # Every launch path resolves through the self-healing helper. The
+        # display-only show_status may still read the raw active model.
+        self.assertEqual(text.count("target_model=$(ensure_harmony_model)"), 4)
+
 
 if __name__ == "__main__":
     unittest.main()

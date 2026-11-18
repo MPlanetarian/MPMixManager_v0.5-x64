@@ -50,6 +50,7 @@ THEME_COLORS: Dict[str, Tuple[RGB, RGB, RGB]] = {
     "tokyo": ((247, 118, 142), (122, 162, 247), (187, 154, 247)),
     "monokai": ((249, 38, 114), (166, 226, 46), (102, 217, 239)),
     "emerald": ((46, 204, 113), (26, 188, 156), (0, 168, 132)),
+    "blood_moon": ((255, 32, 64), (255, 90, 95), (180, 0, 32)),
 }
 
 # "The Whitest White" existed as a .theme file and a btop palette but was never
@@ -76,6 +77,7 @@ THEME_LABELS: Dict[str, str] = {
     "tokyo": "Tokyo Night",
     "monokai": "Monokai",
     "emerald": "Emerald",
+    "blood_moon": "Blood Moon [Crimson Eclipse]",
     "the_whitest_white": "The Whitest White",
 }
 
@@ -176,6 +178,20 @@ THEME_ALIASES: Dict[str, str] = {
     "whitest_white": "the_whitest_white",
     "the whitest white (mp mix manager)": "the_whitest_white",
     "white": "the_whitest_white",
+    # Blood Moon
+    "blood_moon": "blood_moon",
+    "blood-moon": "blood_moon",
+    "blood moon": "blood_moon",
+    "bloodmoon": "blood_moon",
+    "crimson": "blood_moon",
+    "crimson_eclipse": "blood_moon",
+    "crimson eclipse": "blood_moon",
+    "vampire": "blood_moon",
+    "blood": "blood_moon",
+    "blood_ruby": "blood_moon",
+    "blood ruby": "blood_moon",
+    "blood moon [crimson eclipse]": "blood_moon",
+    "blood moon mp mix manager": "blood_moon",
 }
 
 DEFAULT_THEME = "dreamworlds_ultra"
@@ -198,6 +214,7 @@ _CONSOLE_THEME_IDS: Tuple[str, ...] = (
     "retro_terminal",
     "sensorium",
     "retro_linux_memories",
+    "blood_moon",
     "into_darkness_void_out",
     "cyberpunk",
     "dracula",
@@ -226,8 +243,9 @@ def glass_field_rgb(name: Optional[str]) -> RGB:
     Both glass shaders start from rgb(0.76, 0.80, 0.87) and mix 22% of the
     theme colour into it. That is the background behind the text. Into
     Darkness mixes to black, and both shaders then force the pane to opaque
-    black (void out). The console manager paints this same RGB, so pressing
-    C lands on one background in all three apps.
+    black (void out). The console manager paints this same RGB, apart from
+    the native dark fields in THEME_BACKGROUNDS, so pressing C lands on one
+    background in all three apps.
     """
     theme = _theme_mix01(theme_colors(name))
     luma = 0.299 * theme[0] + 0.587 * theme[1] + 0.114 * theme[2]
@@ -312,12 +330,33 @@ def theme_colors(name: Optional[str]) -> Tuple[RGB, RGB, RGB]:
                             THEME_COLORS[DEFAULT_THEME])
 
 
-# Console pane per theme. Each value is glass_field_rgb(), the still-water
-# colour MP Gui and MP Liquid Player already show. Mix_Archive_Manager.sh
-# mirrors this table in its THEME_BG case. The glass hosts themselves stay
-# transparent: OSC 11 would paint over the shader.
+# Retro Linux Memories paints the charcoal field #2d2d2d. The glass shader
+# detects that highlight and uses the same grey. Dreamworlds, The Matrix and
+# Into Darkness are black. Nord (#2e3440) and Solarized (deep amber) keep dark
+# terminal fields of their own. Four themes on the manager's C cycle keep a
+# dark terminal field too, so pressing C shows more than the void-out panes;
+# the rest use the pale still-water mix.
+_CHARCOAL_FIELD: RGB = (45, 45, 45)
+# theme id -> native dark terminal field. Their menu ink is set in
+# Mix_Archive_Manager.sh (set_theme_colors) to stay readable on these panes:
+# the four glass themes lighten their hue, while Matrix, Nord and Solarized
+# use white ink.
+_DARK_FIELDS: Dict[str, RGB] = {
+    "stream_of_frequency": (12, 13, 23),            # Stream #0c0d17
+    "dynamic_rainbow_liquid_glass": (20, 12, 32),   # deep violet
+    "cosmic_supernova": (10, 8, 20),                # Cosmic #0a0814
+    "dreamworlds_liquid": (6, 20, 28),              # deep teal
+    "nord": (46, 52, 64),                           # Nord #2e3440
+    "solarized": (140, 105, 0),                     # deep solar amber
+}
 THEME_BACKGROUNDS: Dict[str, RGB] = {
-    name: glass_field_rgb(name) for name in _CONSOLE_THEME_IDS
+    name: (
+        (0, 0, 0) if name in ("dreamworlds", "into_darkness_void_out", "matrix")
+        else _CHARCOAL_FIELD if name == "retro_linux_memories"
+        else _DARK_FIELDS[name] if name in _DARK_FIELDS
+        else glass_field_rgb(name)
+    )
+    for name in _CONSOLE_THEME_IDS
 }
 DEFAULT_BACKGROUND: RGB = glass_field_rgb(DEFAULT_THEME)
 
@@ -354,6 +393,7 @@ def cycle_order() -> List[str]:
         "emerald",
         "the_whitest_white",
         "into_darkness_void_out",
+        "blood_moon",
     ]
     return [tid for tid in preferred if tid in THEME_COLORS]
 

@@ -537,6 +537,98 @@ _terminal_columns() {
     echo "$cols"
 }
 
+# Terminal cells used by one character, stored in _CHAR_CELLS. Emoji and CJK
+# glyphs occupy two columns, combining marks and variation selectors occupy
+# none, and everything else occupies one. Centering and clipping have to use
+# these widths instead of the raw character count, or emoji-heavy lines drift
+# off to one side. This is a plain variable assignment (no subshell) because it
+# runs once per character of every drawn line.
+_CHAR_CELLS=1
+_char_cells() {
+    local cp
+    if ! printf -v cp '%d' "'$1" 2>/dev/null || [ -z "$cp" ]; then
+        _CHAR_CELLS=1
+        return
+    fi
+    if { [ "$cp" -ge 768 ] && [ "$cp" -le 879 ]; } ||
+       [ "$cp" -eq 8205 ] || [ "$cp" -eq 65038 ] || [ "$cp" -eq 65039 ]; then
+        _CHAR_CELLS=0
+    elif { [ "$cp" -ge 4352 ] && [ "$cp" -le 4447 ]; } ||
+         { [ "$cp" -ge 11904 ] && [ "$cp" -le 13311 ]; } ||
+         { [ "$cp" -ge 13312 ] && [ "$cp" -le 19903 ]; } ||
+         { [ "$cp" -ge 19968 ] && [ "$cp" -le 40959 ]; } ||
+         { [ "$cp" -ge 40960 ] && [ "$cp" -le 42191 ]; } ||
+         { [ "$cp" -ge 44032 ] && [ "$cp" -le 55203 ]; } ||
+         { [ "$cp" -ge 63744 ] && [ "$cp" -le 64255 ]; } ||
+         { [ "$cp" -ge 65040 ] && [ "$cp" -le 65071 ]; } ||
+         { [ "$cp" -ge 65280 ] && [ "$cp" -le 65376 ]; } ||
+         { [ "$cp" -ge 65504 ] && [ "$cp" -le 65510 ]; } ||
+         { [ "$cp" -ge 126976 ] && [ "$cp" -le 129791 ]; } ||
+         { [ "$cp" -ge 129792 ] && [ "$cp" -le 130047 ]; } ||
+         { [ "$cp" -ge 130048 ] && [ "$cp" -le 131071 ]; } ||
+         { [ "$cp" -ge 131072 ] && [ "$cp" -le 131647 ]; } ||
+         { [ "$cp" -ge 131648 ] && [ "$cp" -le 131703 ]; }; then
+        _CHAR_CELLS=2
+    else
+        _CHAR_CELLS=1
+    fi
+}
+
+_display_width() {
+    local text="$1" width=0 i
+    for ((i = 0; i < ${#text}; i++)); do
+        _char_cells "${text:i:1}"
+        width=$((width + _CHAR_CELLS))
+    done
+    printf '%d' "$width"
+}
+
+# Cut a plain string to a cell budget, marking a cut with an ellipsis.
+_clip_display() {
+    local text="$1" limit="$2" ellipsis="$3"
+    local out="" width=0 i
+    if [ "$(_display_width "$text")" -le "$limit" ]; then
+        printf '%s' "$text"
+        return 0
+    fi
+    for ((i = 0; i < ${#text}; i++)); do
+        _char_cells "${text:i:1}"
+        if [ $((width + _CHAR_CELLS)) -gt $((limit - 1)) ]; then
+            break
+        fi
+        out+="${text:i:1}"
+        width=$((width + _CHAR_CELLS))
+    done
+    printf '%s%s' "$out" "$ellipsis"
+}
+
+# Matches one ANSI escape sequence (colours, cursor moves, resets).
+_ANSI_SEQ_RE=$'^\e\\[[0-9;?]*[A-Za-z]'
+
+# Cut styled text (ANSI escapes included) to a cell budget without breaking the
+# escape sequences, so a coloured status line can never spill outside the box.
+_clip_ansi() {
+    local text="$1" limit="$2"
+    local out="" rest="$text" width=0
+    while [ -n "$rest" ]; do
+        # Copy whole escape sequences without measuring them as text.
+        if [[ "$rest" =~ $_ANSI_SEQ_RE ]]; then
+            out+="${BASH_REMATCH[0]}"
+            rest="${rest:${#BASH_REMATCH[0]}}"
+            continue
+        fi
+        _char_cells "${rest:0:1}"
+        if [ $((width + _CHAR_CELLS)) -gt "$limit" ]; then
+            out+="${NC}…"
+            break
+        fi
+        out+="${rest:0:1}"
+        width=$((width + _CHAR_CELLS))
+        rest="${rest:1}"
+    done
+    printf '%s' "$out"
+}
+
 _tracklist_line_count() {
     local count
     count=$(wc -l < "$TARGET_FILE" 2>/dev/null || echo 0)
@@ -929,6 +1021,18 @@ render_tracklist() {
     term_cols="$(_terminal_columns)"
     [ "$term_cols" -gt 160 ] && term_cols=160
 
+    # The window frame and its rounded corners sit on top of the terminal text
+    # area, so every line is drawn inside a content box with a margin on both
+    # sides. Nothing is ever written into that margin, so text cannot spill
+    # over the window border.
+    local pad_x=3
+    [ "$term_cols" -lt 52 ] && pad_x=2
+    [ "$term_cols" -lt 30 ] && pad_x=1
+    local content_cols=$((term_cols - pad_x * 2))
+    [ "$content_cols" -lt 20 ] && content_cols=20
+    local indent
+    printf -v indent '%*s' "$pad_x" ''
+
     # Row budget: 8 header rows (three title/rule rows, four info rows and the
     # rule under them), the body, the rule under it, the viewport indicator,
     # the help rows, the closing rule and the status row.
@@ -941,32 +1045,84 @@ render_tracklist() {
     [ "$TRACKLIST_PAGE_ROWS" -gt 200 ] && TRACKLIST_PAGE_ROWS=200
     clamp_view_offset
 
-    # Every footer line is truncated to the terminal width so it can never wrap
-    # and push the first tracklist line out of the window.
+    # Every line is clipped to the content box so it can never wrap, spill over
+    # the window frame or push the first tracklist line out of the window.
     local piped=0
     [ -t 1 ] || piped=1
 
+    # Piped output is not shown in a window, so it is not clipped.
+    local box_limit="$content_cols"
+    [ "$piped" = "1" ] && box_limit=100000
+
+    # A rule spanning exactly the content box, never the frame.
+    local rule
+    if [ "$piped" = "1" ]; then
+        rule=$(printf '%*s' "$term_cols" '' | tr ' ' '-')
+    else
+        rule=$(printf '%*s' "$content_cols" '' | tr ' ' '-')
+    fi
+
+    # Text inside the body is indented two cells inside the content box.
+    local body_indent="${indent}  "
+    local body_limit=$((box_limit - 2))
+    [ "$body_limit" -lt 10 ] && body_limit=10
+
     footer_fit() {
-        local text="$1" limit=$((term_cols - 3)) out="" rest
-        [ "$piped" = "1" ] && limit=100000
-        [ "$limit" -lt 20 ] && limit=20
-        if [ "${#text}" -gt "$limit" ]; then text="${text:0:$limit}"; fi
+        local text="$1"
+        local limit="$body_limit" out="" rest
+        text="$(_clip_display "$text" "$limit" "…")"
         rest="$text"
         while [[ "$rest" =~ ^([^\[]*)(\[[^]]*\]) ]]; do
             out+="${BASH_REMATCH[1]}${CYAN}${BASH_REMATCH[2]}${NC}"
             rest="${rest:${#BASH_REMATCH[0]}}"
         done
         out+="$rest"
-        printf '  %b\n' "$out"
+        printf '%b%b\n' "$body_indent" "$out"
     }
 
-    # Header values are clipped the same way so long paths cannot wrap.
-    header_fit() {
-        local text="$1" limit=$((term_cols - 4))
-        [ "$piped" = "1" ] && limit=100000
-        [ "$limit" -lt 20 ] && limit=20
-        if [ "${#text}" -gt "$limit" ]; then text="${text:0:$limit}…"; fi
-        printf '%s\n' "$text"
+    # The title is centred on the content box using real terminal cell widths,
+    # so the emoji and the bullet do not shift it off centre.
+    local title_full="🎶 STREAM OF FREQUENCY • DEDICATED CONSOLE TRACKLIST VIEWER 🎶"
+    local title_mid="🎶 STREAM OF FREQUENCY • TRACKLIST VIEWER 🎶"
+    local title_short="🎶 TRACKLIST VIEWER 🎶"
+    local title_line
+    if [ "$(_display_width "$title_full")" -le "$box_limit" ]; then
+        title_line="$title_full"
+    elif [ "$(_display_width "$title_mid")" -le "$box_limit" ]; then
+        title_line="$title_mid"
+    else
+        title_line="$(_clip_display "$title_short" "$box_limit" "🎶")"
+    fi
+    local title_width=$(_display_width "$title_line")
+    local title_left=$((pad_x + (content_cols - title_width) / 2))
+    [ "$title_left" -lt "$pad_x" ] && title_left="$pad_x"
+    local title_indent
+    printf -v title_indent '%*s' "$title_left" ''
+
+    # "  • Label:  value (dim suffix)" with the label in a fixed field so the
+    # four header rows line up, and every value clipped to what is left.
+    local label_field=12
+    header_row() {
+        local label="$1" color="$2" value="$3" suffix="$4"
+        local avail=$((box_limit - 4 - label_field))
+        [ "$avail" -lt 10 ] && avail=10
+        local vcells scells pad
+        vcells="$(_display_width "$value")"
+        scells="$(_display_width "$suffix")"
+        # Keep the value readable: only trim the dim suffix to make room for a
+        # value that already fits on its own, otherwise drop the suffix.
+        if [ "$vcells" -gt "$avail" ]; then
+            value="$(_clip_display "$value" "$avail" "…")"
+            suffix=""
+        elif [ $((vcells + scells)) -gt "$avail" ]; then
+            suffix="$(_clip_display "$suffix" $((avail - vcells)) "…")"
+        fi
+        local pad_width=$((label_field - ${#label}))
+        [ "$pad_width" -lt 1 ] && pad_width=1
+        printf -v pad '%*s' "$pad_width" ''
+        printf '%s  • %b%s%b%b%s%b%b%s%b\n' \
+            "$indent" "$BOLD" "$label$pad" "$NC" \
+            "$color" "$value" "$NC" "$DIM" "$suffix" "$NC"
     }
 
     clear
@@ -976,32 +1132,53 @@ render_tracklist() {
     local last_line=$((TRACKLIST_VIEW_OFFSET + TRACKLIST_PAGE_ROWS))
     [ "$last_line" -gt "$TRACKLIST_TOTAL_LINES" ] && last_line="$TRACKLIST_TOTAL_LINES"
     [ "$last_line" -lt "$first_line" ] && last_line="$first_line"
-    local body=$(printf '%*s' "$term_cols" '' | tr ' ' '-')
-    local title_line="            🎶 STREAM OF FREQUENCY • DEDICATED CONSOLE TRACKLIST VIEWER 🎶              "
-    if [ "${#title_line}" -gt "$term_cols" ]; then
-        if [ "$term_cols" -ge 44 ]; then
-            title_line="  🎶 STREAM OF FREQUENCY • TRACKLIST VIEWER 🎶"
-        else
-            title_line="  🎶 TRACKLIST VIEWER 🎶"
-        fi
-    fi
 
-    echo -e "${BOLD}${MAGENTA}${body}${NC}"
-    echo -e "${BOLD}${CYAN}${title_line}${NC}"
-    echo -e "${BOLD}${MAGENTA}${body}${NC}"
-    echo -e "  • ${BOLD}File:${NC}        ${GREEN}$(header_fit "${filename} (${filesize}, ${TRACKLIST_TOTAL_LINES} lines)")${NC}"
-    echo -e "  • ${BOLD}Location:${NC}    ${DIM}$(header_fit "$(dirname "$TARGET_FILE")")${NC}"
-    echo -e "  • ${BOLD}Platform:${NC}    ${YELLOW}${HOST_DESC}${NC} ${DIM}(Borderless Console Mode)${NC}"
-    echo -e "  • ${BOLD}Theme:${NC}       ${MAGENTA}${THEME_DISPLAY_NAME}${NC} ${DIM}(${CURRENT_THEME})${NC}"
-    echo -e "${BOLD}${MAGENTA}${body}${NC}"
+    echo -e "${indent}${BOLD}${MAGENTA}${rule}${NC}"
+    echo -e "${title_indent}${BOLD}${CYAN}${title_line}${NC}"
+    echo -e "${indent}${BOLD}${MAGENTA}${rule}${NC}"
+    header_row "File:" "${GREEN}" "${filename} (${filesize}, ${TRACKLIST_TOTAL_LINES} lines)" ""
+    header_row "Location:" "${DIM}" "$(dirname "$TARGET_FILE")" ""
+    header_row "Platform:" "${YELLOW}" "${HOST_DESC}" " (Borderless Console Mode)"
+    header_row "Theme:" "${MAGENTA}" "${THEME_DISPLAY_NAME}" " (${CURRENT_THEME})"
+    echo -e "${indent}${BOLD}${MAGENTA}${rule}${NC}"
+
+    # One body row: indent, the text, and nothing beyond the content box.
+    body_line() {
+        local text="$1" color="$2"
+        printf '%b%b%s%b\n' "$body_indent" "$color" \
+            "$(_clip_display "$text" "$body_limit" "…")" "$NC"
+    }
+
+    # Track rows keep their own colouring but are clipped as a whole, so the
+    # remix in parentheses can never poke out of the right edge.
+    track_row() {
+        local num="$1" rest="$2"
+        local num_str out
+        printf -v num_str '%02d.' "$((10#$num))"
+        local avail=$((body_limit - ${#num_str} - 1))
+        [ "$avail" -lt 5 ] && avail=5
+        rest="$(_clip_display "$rest" "$avail" "…")"
+        if [[ "$rest" =~ ^([^-]+)[[:space:]]-[[:space:]](.+)$ ]]; then
+            local artist="${BASH_REMATCH[1]}"
+            local title="${BASH_REMATCH[2]}"
+            if [[ "$title" =~ (.*)(\([^\)]+\))(.*) ]]; then
+                local tmain="${BASH_REMATCH[1]}"
+                local remix="${BASH_REMATCH[2]}"
+                local tend="${BASH_REMATCH[3]}"
+                out="${body_indent}${BOLD}${CYAN}${num_str}${NC} ${WHITE}${artist}${NC} - ${GREEN}${tmain}${NC}${YELLOW}${remix}${NC}${tend}"
+            else
+                out="${body_indent}${BOLD}${CYAN}${num_str}${NC} ${WHITE}${artist}${NC} - ${GREEN}${title}${NC}"
+            fi
+        else
+            out="${body_indent}${BOLD}${CYAN}${num_str}${NC} ${WHITE}${rest}${NC}"
+        fi
+        printf '%b\n' "$out"
+    }
 
     # Only the visible window of the file is drawn, so line 1 can never scroll away.
     local index=0
     local drawn=0
     local offset="$TRACKLIST_VIEW_OFFSET"
-    local line_limit=$((term_cols - 4))
-    [ "$piped" = "1" ] && line_limit=100000
-    [ "$line_limit" -lt 20 ] && line_limit=20
     while IFS= read -r line || [ -n "$line" ]; do
         if [ "$index" -lt "$offset" ]; then
             index=$((index + 1))
@@ -1013,52 +1190,32 @@ render_tracklist() {
         index=$((index + 1))
         drawn=$((drawn + 1))
 
-        # Long lines are clipped so no line can wrap onto a second row and
-        # disturb the viewport arithmetic.
-        if [ "${#line}" -gt "$line_limit" ]; then
-            line="${line:0:$line_limit}…"
-        fi
-
         if [[ "$line" =~ ^={10,}$ || "$line" =~ ^-{10,}$ ]]; then
-            echo -e "${DIM}${line}${NC}"
+            printf '%b%b%s%b\n' "$body_indent" "$DIM" \
+                "$(_clip_display "$line" "$body_limit" "")" "$NC"
         elif [[ "$line" =~ (RELEASE\ INFO|TRACKLIST|SOURCE\ MANIFEST|SOURCE\ FILES) ]]; then
-            echo -e "${BOLD}${YELLOW}${line}${NC}"
+            body_line "$line" "$BOLD$YELLOW"
         elif [[ "$line" =~ ^([A-Za-z0-9\ ]+):([[:space:]]+)(.*)$ ]]; then
             local key="${BASH_REMATCH[1]}"
             local val="${BASH_REMATCH[3]}"
-            local key_limit=$((line_limit - ${#key} - 4))
-            if [ "$key_limit" -lt 10 ]; then key_limit=10; fi
-            if [ "${#val}" -gt "$key_limit" ]; then val="${val:0:$key_limit}…"; fi
-            echo -e "  ${BOLD}${BLUE}${key}:${NC} ${WHITE}${val}${NC}"
+            local key_limit=$((body_limit - ${#key} - 3))
+            if [ "$key_limit" -lt 5 ]; then key_limit=5; fi
+            val="$(_clip_display "$val" "$key_limit" "…")"
+            printf '%b%b%s:%b %b%s%b\n' "$body_indent" "$BOLD$BLUE" "$key" "$NC" "$WHITE" "$val" "$NC"
         elif [[ "$line" =~ ^([0-9]{1,3})[\.\)][[:space:]]+(.*)$ ]]; then
-            local num="${BASH_REMATCH[1]}"
-            local rest="${BASH_REMATCH[2]}"
-            if [[ "$rest" =~ ^([^-]+)[[:space:]]-[[:space:]](.+)$ ]]; then
-                local artist="${BASH_REMATCH[1]}"
-                local title="${BASH_REMATCH[2]}"
-                if [[ "$title" =~ (.*)(\([^\)]+\))(.*) ]]; then
-                    local tmain="${BASH_REMATCH[1]}"
-                    local remix="${BASH_REMATCH[2]}"
-                    local tend="${BASH_REMATCH[3]}"
-                    printf "  ${BOLD}${CYAN}%02d.${NC} ${WHITE}%s${NC} - ${GREEN}%s${NC}${YELLOW}%s${NC}%s\n" "$((10#$num))" "$artist" "$tmain" "$remix" "$tend"
-                else
-                    printf "  ${BOLD}${CYAN}%02d.${NC} ${WHITE}%s${NC} - ${GREEN}%s${NC}\n" "$((10#$num))" "$artist" "$title"
-                fi
-            else
-                printf "  ${BOLD}${CYAN}%02d.${NC} ${WHITE}%s${NC}\n" "$((10#$num))" "$rest"
-            fi
+            track_row "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
         elif [ -z "$line" ]; then
-            echo ""
+            printf '\n'
         else
-            echo -e "  ${WHITE}${line}${NC}"
+            body_line "$line" "$WHITE"
         fi
     done < "$TARGET_FILE"
 
     local padding=$((TRACKLIST_PAGE_ROWS - drawn))
     local p
-    for ((p = 0; p < padding; p++)); do echo ""; done
+    for ((p = 0; p < padding; p++)); do printf '\n'; done
 
-    echo -e "${BOLD}${MAGENTA}${body}${NC}"
+    echo -e "${indent}${BOLD}${MAGENTA}${rule}${NC}"
     if [ "$TRACKLIST_VIEW_OFFSET" -gt 0 ] || [ "$last_line" -lt "$TRACKLIST_TOTAL_LINES" ]; then
         footer_fit "Lines ${first_line}-${last_line} of ${TRACKLIST_TOTAL_LINES} • ${TRACKLIST_PAGE_ROWS} rows/page"
     else
@@ -1070,13 +1227,29 @@ render_tracklist() {
     fi
     if [ "$help_rows" -ge 4 ]; then
         footer_fit "[E] Edit Tracklist in VI  [G] Generate & Open Spek  [D] Extract & Copy Mix Audio"
-        footer_fit "[X] Export HTML  [Y] Export TEXT  (saved to ${TRACKLIST_EXPORT_PATH}/)"
+        # The path is only shown when the whole hint fits, so a narrow window
+        # gets "saved to TRACKLIST_EXPORTS/" instead of a half-cut directory.
+        if [ "$(_display_width "[X] Export HTML  [Y] Export TEXT  (saved to ${TRACKLIST_EXPORT_PATH}/)")" -le "$body_limit" ]; then
+            footer_fit "[X] Export HTML  [Y] Export TEXT  (saved to ${TRACKLIST_EXPORT_PATH}/)"
+        elif [ "$(_display_width "[X] Export HTML  [Y] Export TEXT")" -le "$body_limit" ]; then
+            footer_fit "[X] Export HTML  [Y] Export TEXT"
+        else
+            footer_fit "[X] HTML  [Y] TEXT"
+        fi
     fi
-    echo -e "${BOLD}${MAGENTA}${body}${NC}"
+    echo -e "${indent}${BOLD}${MAGENTA}${rule}${NC}"
+    # The status row is the last row of the frame. In a terminal it is written
+    # without a trailing newline: drawing exactly one row per terminal row and
+    # then emitting a newline scrolls the frame up by one, which is what used to
+    # cut the top rule off the window.
+    local status_row=""
     if [ -n "$TRACKLIST_LAST_STATUS" ]; then
-        echo -e "  ${TRACKLIST_LAST_STATUS}"
+        status_row="${body_indent}$(_clip_ansi "$TRACKLIST_LAST_STATUS" "$body_limit")${NC}"
+    fi
+    if [ "$piped" = "1" ]; then
+        printf '%b\n' "$status_row"
     else
-        echo ""
+        printf '%b' "$status_row"
     fi
 }
 

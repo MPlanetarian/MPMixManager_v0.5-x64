@@ -20,14 +20,19 @@ sys.path.insert(0, str(ROOT))
 from MP_Audio_Player_Liquid_Glass_OpenGL import player_argv  # noqa: E402
 
 
-def _run_player(argv_tail, daemon=False, status=None):
+def _run_player(argv_tail, daemon=False, status=None, mixes=None, resume=None):
     home = tempfile.mkdtemp(prefix="mp_liquid_stay_")
     try:
         result_path = Path(home) / "result.json"
         audio = Path(home) / "resume_mix.flac"
         audio.write_bytes(b"not really audio")
         argv = ["MP_Audio_Player.py"] + [part.replace("{audio}", str(audio)) for part in argv_tail]
-        scenario = {"argv": argv, "daemon": daemon, "status": status}
+        if resume:
+            payload = json.loads(json.dumps(resume).replace("{audio}", str(audio.resolve())))
+            cfg = Path(home) / ".config" / "mix-manager"
+            cfg.mkdir(parents=True, exist_ok=True)
+            (cfg / "playback_resume.json").write_text(json.dumps(payload), encoding="utf-8")
+        scenario = {"argv": argv, "daemon": daemon, "status": status, "mixes": mixes or []}
         env = os.environ.copy()
         env["HOME"] = home
         env["MP_LIQUID_STAY_OPEN_CHILD"] = "1"
@@ -60,13 +65,16 @@ def _child():
 
     class EmptyScanner:
         def __init__(self, *args, **kwargs):
-            self.mixes = []
+            self.mixes = list(scenario.get("mixes") or [])
+            self.base_dir = Path("/tmp")
+            self.folder_name = "ALL"
+            self.playlist_path = None
 
         def get_mixes(self, *args, **kwargs):
-            return []
+            return list(self.mixes)
 
         def get_latest_mix(self):
-            return None
+            return self.mixes[0] if self.mixes else None
 
     player.MixArchiveScanner = EmptyScanner
     player.MusicFolderPlaylistScanner = EmptyScanner
@@ -104,6 +112,7 @@ def _child():
 
         def run(self):
             result["ui"] = True
+            result["pinned_mode"] = getattr(self, "_user_library_mode", None)
 
     player.TerminalPlayerUI = FakeUI
     sys.argv = scenario["argv"]
@@ -237,6 +246,70 @@ class TestLiquidPlayerStaysOpen(unittest.TestCase):
             ui._sync_mode_scanner("MIX_ARCHIVE")
         self.assertEqual(ui.scanner, "archive-scanner")
         self.assertEqual(ui.mode, "MIX_ARCHIVE")
+
+    def test_play_dj_mixes_requests_mix_archive_mode(self):
+        text = (ROOT / "Mix_Archive_Manager.sh").read_text(encoding="utf-8")
+        self.assertIn(
+            'manage_mp_audio_player --mix-archive-mode ;; 2|music|',
+            text,
+        )
+
+    def test_mix_archive_launch_reloads_mixes_while_music_is_playing(self):
+        data = _run_player(
+            ["--interactive", "--mix-archive-mode"],
+            daemon=True,
+            mixes=[{"name": "Episode 12.flac", "path": "/mixes/episode_12.flac"}],
+            status={
+                "status": "ok",
+                "data": {
+                    "state": "playing",
+                    "path": "/music/track.flac",
+                    "mode": "MUSIC",
+                    "running": True,
+                },
+            },
+        )
+        self.assertTrue(data["ui"], data)
+        self.assertEqual(data["mode"], "MIX_ARCHIVE")
+        self.assertEqual(data["pinned_mode"], "MIX_ARCHIVE")
+        self.assertIsNone(data["spawn"])
+        loads = [item for item in data["ipc"] if item["cmd"] == "load_playlist"]
+        self.assertEqual(len(loads), 1, data)
+        self.assertEqual(loads[0]["kwargs"]["mode"], "MIX_ARCHIVE")
+        self.assertFalse(loads[0]["kwargs"].get("play"))
+        plays = [item for item in data["ipc"] if item["cmd"] == "play"]
+        self.assertEqual(len(plays), 1, data)
+        self.assertEqual(plays[0]["kwargs"]["file"], "/mixes/episode_12.flac")
+
+    def test_mix_archive_launch_does_not_restart_mix_already_playing(self):
+        data = _run_player(
+            ["--interactive", "--mix-archive-mode"],
+            daemon=True,
+            status={
+                "status": "ok",
+                "data": {
+                    "state": "playing",
+                    "path": "/mixes/current_mix.flac",
+                    "mode": "MIX_ARCHIVE",
+                    "running": True,
+                },
+            },
+        )
+        self.assertTrue(data["ui"], data)
+        self.assertEqual(data["mode"], "MIX_ARCHIVE")
+        self.assertNotIn("load_playlist", [item["cmd"] for item in data["ipc"]])
+        self.assertNotIn("play", [item["cmd"] for item in data["ipc"]])
+
+    def test_mix_archive_launch_ignores_a_saved_music_session(self):
+        data = _run_player(
+            ["--interactive", "--mix-archive-mode"],
+            mixes=[{"name": "Episode 12.flac", "path": "/mixes/episode_12.flac"}],
+            resume={"path": "{audio}", "position_sec": 40.0, "mode": "MUSIC"},
+        )
+        self.assertTrue(data["ui"], data)
+        self.assertEqual(data["spawn"]["mode"], "MIX_ARCHIVE")
+        self.assertEqual(data["spawn"]["file"], "/mixes/episode_12.flac")
+        self.assertNotIn(data["audio"], str(data["spawn"]["file"]))
 
     def test_interactive_attach_does_not_restart_current_playback(self):
         data = _run_player(

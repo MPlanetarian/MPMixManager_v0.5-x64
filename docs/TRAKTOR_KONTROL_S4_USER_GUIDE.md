@@ -1,11 +1,11 @@
 # Traktor Kontrol S4 Hardware MIDI Control — User Guide
-**MP Mix Archive Manager & MP Audio Player — Version 0.5.3 Stable (Sensorium)**
+**MP Mix Archive Manager & MP Audio Player — Version 0.5.4 Stable (Sensorium)**
 
 ---
 
 ## 1. Overview & Supported Hardware
 
-In Version 0.4.3, MP Mix Archive Manager introduces direct hardware MIDI integration exclusively for the **Native Instruments Traktor Kontrol S4** via the ALSA hardware MIDI port (`hw:0,0` / `/dev/snd/midiC0D0`).
+In Version 0.4.3, MP Mix Archive Manager introduces direct hardware MIDI integration exclusively for the **Native Instruments Traktor Kontrol S4** via the ALSA hardware MIDI port. The port is **auto-detected**: the S4 is usually card 0 (`hw:0,0` / `/dev/snd/midiC0D0`), but when HDMI audio or another USB interface occupies card 0 the S4 lands on a later card (for example `hw:1,0` / `/dev/snd/midiC1D0`). MP Mix Manager finds the card itself, so no port ever has to be typed.
 
 With this feature enabled, you can control the built-in **MP Audio Player** directly from your physical DJ controller without touching the keyboard or mouse.
 
@@ -31,7 +31,7 @@ By default, the Traktor Kontrol S4 boots in Native Instruments proprietary NHL/H
 
 ---
 
-## 3. Hardware MIDI Port Verification (`hw:0,0`)
+## 3. Hardware MIDI Port Verification (auto-detected)
 
 Under Linux, the Traktor Kontrol S4's USB audio/MIDI interface is handled by the kernel ALSA driver (`snd-usb-caiaq`).
 
@@ -39,12 +39,19 @@ You can verify the connection anytime in the terminal:
 ```bash
 amidi -l
 ```
-You should see:
+You should see the S4 on whichever card ALSA gave it:
 ```text
 Dir Device    Name
-IO  hw:0,0    Traktor Kontrol S4
+IO  hw:1,0    Traktor Kontrol S4
 ```
-The raw ALSA MIDI device node is located at `/dev/snd/midiC0D0`.
+The raw ALSA MIDI device node is the matching `/dev/snd/midiC<card>D<dev>` (for the line above, `/dev/snd/midiC1D0`).
+
+To see exactly what the manager resolved:
+```bash
+python3 scripts/traktor_s4_midi.py --status
+```
+
+> **Note:** the port is never hardcoded. `--port` is an optional override; leaving it out (including from the menu) lets the manager locate the S4's current card. If you pass a port that does not exist, the daemon adopts the detected one instead.
 
 ### On FreeBSD there is no ALSA
 
@@ -70,18 +77,18 @@ directly. The usual group for these nodes is `wheel`/`operator`-accessible via
 ### First-Time Device Detection Notification
 When the MP Mix Archive Manager launches and detects a connected Traktor Kontrol S4 for the first time, a prominent banner notification appears at the top of the **Manager Main Page**:
 ```text
-  🎛️  Traktor Kontrol S4 Hardware MIDI Device Detected [hw:0,0]!
-  Please navigate to Option 18 (Studio Hardware & MIDI) to enable and configure Traktor Kontrol S4 MIDI Device Mapping Controls.
+  🎛️  Traktor Kontrol S4 Hardware MIDI Device Detected (auto-detected ALSA port)!
+  Please navigate to Option 19 (Studio Hardware & MIDI) to enable and configure Traktor Kontrol S4 MIDI Device Mapping Controls.
 ```
 
 ### Accessing the Menu
-1. From the Manager Main Page, select **Option 18**:
+1. From the Manager Main Page, select **Option 19**:
    `18 | Studio Hardware, Audio Interfaces & Master Volume Control`
 2. Select **Option 3**:
    `3 | Traktor Kontrol S4 Hardware MIDI Control & Mapping`
    *(Shortcut: You can also type `s4` or `midi` from the main console menu).*
 3. Select **Option 1** (`Enable Traktor Kontrol S4 MIDI Mapping Support`).
-4. The background listener daemon starts automatically, connecting to `hw:0,0` and bridging events to the MP Audio Player.
+4. The background listener daemon starts automatically, detecting the S4's card, opening its rawmidi node, and bridging events to the MP Audio Player. The submenu header shows the resolved port and node; only one daemon can own the device, so a second start is refused instead of fighting over it.
 
 ---
 
@@ -119,7 +126,7 @@ The mapping schema is intelligently organized across the Traktor Kontrol S4 surf
 ## 6. Live MIDI Monitor & Test Mode
 
 To verify that your physical buttons, encoders, and pitch sliders are sending signals properly:
-1. Open Option 18 ➔ Option 3 ➔ **Option 4** (`Interactive Live MIDI Monitor & Packet Test`).
+1. Open Option 19 ➔ Option 3 ➔ **Option 4** (`Interactive Live MIDI Monitor & Packet Test`).
 2. Move the pitch sliders or press any button on the S4.
 3. Every packet will be printed to your terminal in real-time with hex values and the exact action executed:
 ```text
@@ -142,7 +149,7 @@ The official Native Instruments documentation has been downloaded and archived i
 * **Controller Editor Reference Manual**: `docs/Controller_Editor_Manual_English.pdf` (Covers MIDI templates, CC assignments, and S4 mapping architecture).
 * **Traktor Kontrol S4 MK2 Manual**: `docs/traktor_kontrol_s4_mk2_manual_english.pdf` (Hardware reference, MIDI mode toggling, audio interface configuration).
 
-You can open these directly via Option 18 ➔ Option 3 in the Mix Archive Manager.
+You can open these directly via Option 19 ➔ Option 3 in the Mix Archive Manager.
 
 ---
 
@@ -152,7 +159,9 @@ You can open these directly via Option 18 ➔ Option 3 in the Mix Archive Manage
   * *Check*: Make sure the S4 is in **MIDI Mode** (`SHIFT + BROWSE` on MK1 or `SHIFT + PREVIEW` on MK2). The Loop displays must say **`ON`**.
 * **Issue: `amidi -l` does not list the S4.**
   * *Check*: Check the USB connection and power supply. The S4 requires external AC power for full LED and audio operation.
-* **Issue: Permission denied reading `/dev/snd/midiC0D0`.**
-  * *Fix*: Ensure your user is in the `audio` group (`sudo usermod -aG audio $USER`), or test running `amidi -p hw:0,0 --dump`.
+* **Issue: Permission denied reading the rawmidi node.**
+  * *Fix*: Ensure your user is in the `audio` group (`sudo usermod -aG audio $USER`), or test the node shown by `--status`, e.g. `amidi -p hw:1,0 --dump`.
+* **Issue: `Device or resource busy` when opening the rawmidi node.**
+  * *Check*: The MIDI service is already running and owns the node (rawmidi input is exclusive). Use **Option 4** in the submenu, which pauses and resumes the service automatically, or run `python3 scripts/traktor_s4_midi.py --stop` first.
 * **Issue: The MP Audio Player pitch does not move.**
   * *Fix*: Ensure the MP Audio Player is running (`Option 1` or `Option 2`). The MIDI daemon automatically routes commands via IPC to any active player window.

@@ -674,6 +674,8 @@ class LiquidVisualizerMetalRenderer(MonitorSpanMixin, RandomPresetMixin, PlayerB
             ("glfwSetWindowSizeLimits", None, [c_void_p, CI, CI, CI, CI]),
             ("glfwSetWindowAttrib", None, [c_void_p, CI, CI]),
             ("glfwGetWindowAttrib", c_int, [c_void_p, CI]),
+            ("glfwHideWindow", None, [c_void_p]),
+            ("glfwShowWindow", None, [c_void_p]),
             ("glfwSetWindowMonitor", None, [c_void_p, c_void_p, CI, CI, CI, CI, CI]),
             ("glfwGetPrimaryMonitor", c_void_p, []),
             ("glfwGetMonitors", POINTER(c_void_p), [PI]),
@@ -698,11 +700,14 @@ class LiquidVisualizerMetalRenderer(MonitorSpanMixin, RandomPresetMixin, PlayerB
 
     def _create_window(self):
         g = self._glfw
+        # The owned companion opens unmapped when the Visualization button is
+        # already off, so no frame flashes before the first poll hides it.
+        start_visible = 0 if self._bond_should_start_hidden() else 1
         for hint, value in (
             (GLFW_CLIENT_API, GLFW_NO_API),
             (GLFW_RESIZABLE, GLFW_FALSE),
             (GLFW_DECORATED, GLFW_FALSE),
-            (GLFW_VISIBLE, GLFW_TRUE),
+            (GLFW_VISIBLE, start_visible),
             (GLFW_FOCUSED, GLFW_TRUE),
             (GLFW_FOCUS_ON_SHOW, GLFW_TRUE),
             (GLFW_AUTO_ICONIFY, GLFW_FALSE),
@@ -713,6 +718,7 @@ class LiquidVisualizerMetalRenderer(MonitorSpanMixin, RandomPresetMixin, PlayerB
                                     self.title.encode("utf-8"), None, None)
         if not window:
             raise RuntimeError("GLFW could not open a borderless window for Metal")
+        self._companion_visible = bool(start_visible)
         try:
             g.glfwSetWindowSizeLimits(window, int(width), int(height), int(width), int(height))
         except Exception:

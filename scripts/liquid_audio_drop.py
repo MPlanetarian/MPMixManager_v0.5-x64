@@ -27,8 +27,14 @@ try:
     from audio_formats import AUDIO_EXTENSIONS as AUDIO_DROP_EXTENSIONS
 except ImportError:  # imported as scripts.liquid_audio_drop
     from scripts.audio_formats import AUDIO_EXTENSIONS as AUDIO_DROP_EXTENSIONS
+
+try:
+    import playlist_formats as playlists
+except ImportError:  # imported as scripts.liquid_audio_drop
+    from scripts import playlist_formats as playlists  # type: ignore
+
 AUDIO_DROP_EXTENSION_SET = frozenset(AUDIO_DROP_EXTENSIONS)
-PLAYLIST_EXTENSIONS = frozenset({".m3u", ".m3u8", ".pls"})
+PLAYLIST_EXTENSIONS = frozenset(playlists.PLAYLIST_EXTENSIONS)
 DROP_FILE_LIMIT = 2000
 DROP_OSC_PREFIX = b"\x1b]5221;"
 AUDIO_DIALOG_LABEL = "Audio Files (All types)"
@@ -99,40 +105,37 @@ def _is_audio_file(path: str) -> bool:
 
 
 def _playlist_targets(path: str) -> list[str]:
-    targets = []
-    base = os.path.dirname(path)
+    """The playable files a playlist names, in playlist order.
+
+    The shared reader handles every container the player supports (M3U, M3U8,
+    XSPF, PLS and JSON), resolves relative entries against the playlist's own
+    folder and decodes ``file://`` locations. Remote URLs are left out: this
+    window only hands local files to the engine.
+    """
     try:
-        lines = Path(path).read_text(encoding="utf-8", errors="replace").splitlines()
-    except OSError:
-        return targets
-    ext = os.path.splitext(path)[1].lower()
-    for raw in lines:
-        line = raw.strip()
-        if not line or line.startswith("#"):
-            continue
-        if ext == ".pls":
-            if "=" not in line:
-                continue
-            key, value = line.split("=", 1)
-            if not key.strip().lower().startswith("file"):
-                continue
-            line = value.strip()
-        if line.lower().startswith("file:"):
-            line = path_from_drop_entry(line)
-        elif line.lower().startswith(("http://", "https://")):
-            continue
-        elif not os.path.isabs(line):
-            line = os.path.join(base, line)
-        if line:
-            targets.append(line)
-    return targets
+        return [row["path"] for row in playlists.read_playlist(path)
+                if row.get("path") and not str(row["path"]).lower().startswith(("http://", "https://"))]
+    except (OSError, ValueError):
+        return []
 
 
 def collect_dropped_audio(entries, limit: int = DROP_FILE_LIMIT) -> tuple[list[str], bool]:
     """Return playable audio paths, in drop order, and whether the cap was hit."""
+    paths, truncated, _playlist = collect_dropped_entries(entries, limit)
+    return paths, truncated
+
+
+def collect_dropped_entries(entries, limit: int = DROP_FILE_LIMIT) -> tuple[list[str], bool, str]:
+    """Like `collect_dropped_audio`, but also names the playlist that was dropped.
+
+    A dropped playlist is not just a bag of files: the player replaces its open
+    list with it. The third value is the playlist's path when the drop named
+    one, otherwise an empty string.
+    """
     found: list[str] = []
     seen: set[str] = set()
     truncated = False
+    playlist_source = ""
 
     def add_file(path: str) -> None:
         nonlocal truncated
@@ -172,6 +175,10 @@ def collect_dropped_audio(entries, limit: int = DROP_FILE_LIMIT) -> tuple[list[s
         if os.path.isdir(raw):
             add_dir(raw)
         elif ext in PLAYLIST_EXTENSIONS and os.path.isfile(raw):
+            # The first playlist in the drop is the one that defines the new
+            # list. Later playlists in the same drop add their tracks to it.
+            if not playlist_source:
+                playlist_source = raw
             for target in _playlist_targets(raw):
                 add_file(target)
                 if truncated:
@@ -180,7 +187,7 @@ def collect_dropped_audio(entries, limit: int = DROP_FILE_LIMIT) -> tuple[list[s
             add_file(raw)
         if truncated:
             break
-    return found, truncated
+    return found, truncated, playlist_source
 
 
 def audio_track_items(paths) -> list[dict]:
@@ -220,7 +227,8 @@ def is_drop_manifest(path) -> bool:
     return resolved.is_file() and resolved.parent == root and resolved.suffix == ".json"
 
 
-def write_drop_manifest(paths, truncated: bool = False, rejected: bool = False) -> Path:
+def write_drop_manifest(paths, truncated: bool = False, rejected: bool = False,
+                        playlist: str = "") -> Path:
     folder = drop_dir()
     folder.mkdir(parents=True, exist_ok=True)
     payload = {
@@ -228,6 +236,11 @@ def write_drop_manifest(paths, truncated: bool = False, rejected: bool = False) 
         "truncated": bool(truncated),
         "rejected": bool(rejected),
     }
+    if playlist:
+        # A dropped playlist replaces the open list rather than being mixed
+        # into it, so the manifest names it and the player can say which file
+        # the new list came from.
+        payload["playlist"] = str(playlist)
     dest = folder / f"{time.time_ns()}-{os.getpid()}-{uuid.uuid4().hex[:8]}.json"
     tmp = dest.with_suffix(".tmp")
     tmp.write_text(json.dumps(payload), encoding="utf-8")
@@ -242,12 +255,13 @@ def write_drop_manifest(paths, truncated: bool = False, rejected: bool = False) 
 def read_drop_manifest(path) -> dict:
     data = json.loads(Path(path).read_text(encoding="utf-8"))
     if not isinstance(data, dict):
-        return {"paths": [], "truncated": False, "rejected": True}
+        return {"paths": [], "truncated": False, "rejected": True, "playlist": ""}
     listed = data.get("paths") if isinstance(data.get("paths"), list) else []
     return {
         "paths": [str(item) for item in listed],
         "truncated": bool(data.get("truncated")),
         "rejected": bool(data.get("rejected")),
+        "playlist": str(data.get("playlist") or ""),
     }
 
 
@@ -274,8 +288,10 @@ def feed_terminal_bytes(terminal, payload: bytes) -> None:
         terminal.feed_child(payload, len(payload))
 
 
-def deliver_drop_to_terminal(terminal, paths, truncated: bool = False, rejected: bool = False) -> Path:
-    manifest = write_drop_manifest(paths, truncated=truncated, rejected=rejected)
+def deliver_drop_to_terminal(terminal, paths, truncated: bool = False, rejected: bool = False,
+                             playlist: str = "") -> Path:
+    manifest = write_drop_manifest(paths, truncated=truncated, rejected=rejected,
+                                   playlist=playlist)
     feed_terminal_bytes(terminal, drop_osc(manifest))
     return manifest
 
@@ -351,12 +367,12 @@ class AudioDropBridge:
         threading.Thread(target=self._scan, args=(list(uris),), daemon=True).start()
 
     def _scan(self, uris) -> None:
-        paths, truncated = collect_dropped_audio(uris)
-        self._enqueue(paths, truncated, rejected=not paths)
+        paths, truncated, playlist = collect_dropped_entries(uris)
+        self._enqueue(paths, truncated, rejected=not paths, playlist=playlist)
 
-    def _enqueue(self, paths, truncated: bool, rejected: bool) -> None:
+    def _enqueue(self, paths, truncated: bool, rejected: bool, playlist: str = "") -> None:
         with self._lock:
-            self._pending.append((list(paths), bool(truncated), bool(rejected)))
+            self._pending.append((list(paths), bool(truncated), bool(rejected), str(playlist)))
         self._flush()
 
     def _flush(self) -> None:
@@ -367,10 +383,11 @@ class AudioDropBridge:
             with self._lock:
                 batch = self._pending
                 self._pending = []
-            for paths, truncated, rejected in batch:
+            for paths, truncated, rejected, playlist in batch:
                 try:
                     deliver_drop_to_terminal(
                         self.terminal, paths, truncated=truncated, rejected=rejected,
+                        playlist=playlist,
                     )
                 except Exception:
                     pass

@@ -11,13 +11,15 @@ White and on the charcoal themes was either invisible or near-black on black.
 The rule is now the highest-contrast pair the surface allows:
 
 * **Liquid Glass** paints the pale still-water field on every theme except
-  Into Darkness, whose pane is void-out black. The title is black on the
-  field and white on the void. ``THEME_DARK_GLASS_INK`` is the same table the
-  shader's ``theme_uses_dark_glass`` is pinned to by
+  Into Darkness (void-out black) and Retro Linux Memories (charcoal
+  ``#2d2d2d``). The title is black on the pale field and white on those
+  dark panes. ``THEME_DARK_GLASS_INK`` is the same table the shader's
+  ``theme_uses_dark_glass`` is pinned to by
   ``tests/test_theme_notice_is_black.py``.
-* **The plain console** paints that same field, via ``theme_background()``,
-  so the title agrees with the glass. The flag stays so a caller still names
-  the surface it is drawing into.
+* **The plain console** paints ``theme_background()``. It is that same field
+  for most themes, so the title agrees with the glass; the themes with a
+  native dark terminal field get white there instead. The flag stays so a
+  caller still names the surface it is drawing into.
 
 These tests pin the helper, all three render sites (full, Mini, Micro), both
 surfaces, and the two hazards that would silently undo it: the visualizer
@@ -45,7 +47,7 @@ BLACK = (0, 0, 0)
 WHITE = (255, 255, 255)
 _SGR = re.compile(r"\x1b\[([0-9;]*)m")
 THEMES = player.EqualizerVisualizer.THEMES
-CHARCOAL_PANE = {"into_darkness_void_out"}
+CHARCOAL_PANE = {"into_darkness_void_out", "retro_linux_memories"}
 TITLE = "MPlanetarian - Dreamworlds Test Mix 2026.flac"
 
 
@@ -157,8 +159,13 @@ class NowPlayingInkHelperTests(unittest.TestCase):
             )
 
     def test_console_and_glass_titles_agree(self):
-        """Both surfaces use the still-water field, so the title ink agrees."""
+        """Where both surfaces share a field, the title ink agrees."""
+        from mp_theme_palette import glass_field_rgb, theme_background
+
         for theme in THEMES:
+            if theme_background(theme) != glass_field_rgb(theme):
+                # A native dark console field; the glass keeps its pale pane.
+                continue
             self.assertEqual(
                 player.now_playing_uses_white(theme, True),
                 player.now_playing_uses_white(theme, False),
