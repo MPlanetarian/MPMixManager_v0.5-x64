@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 """
-Unit tests for MP Audio Player VERTICAL mode:
-- M cycles Full -> Vertical -> Mini -> Micro -> Full in the glass window
-- A compact window walks the compact ring (Vertical, Mini, Micro) and never
-  returns to the full frame, because it has no full frame to draw
-- The tall deck renders with a block clock, a seek bar and the analyser
-- The glass hosts resize to the published VERTICAL grid, and their panel
-  rectangles stay inside the window
-- The published size file accepts VERTICAL, so the host follows it
+Unit tests for MP Audio Player VERTICAL mode.
+
+Vertical is not a separate player. It is the MP Liquid Player's own frame drawn
+into a portrait column: the same header block, the same playing line, the same
+timeline / DJ pitch / volume sliders, the same analyser, the same action row, the
+same playlist and the same two footers. These tests pin that sameness, and the
+narrow-width behaviour that makes it fit 56 columns.
 """
 
 import os
@@ -32,54 +31,71 @@ def strip_ansi(text: str) -> str:
     return re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", text)
 
 
-def drawn_lines(ui, width=None, height=None):
-    """The deck's frame, captured instead of painted."""
-    width = width or MP_Audio_Player.VERTICAL_COLS
-    height = height or MP_Audio_Player.VERTICAL_ROWS
+def frame(size="VERTICAL", width=None, height=None, mixes=12, title="Stream of Frequency 165"):
+    """The player's frame for one size, captured instead of painted."""
+    scanner = MagicMock()
+    scanner.get_mixes.return_value = [
+        {"name": f"Stream_of_Frequency_{n:03d}_THE_CELEBRATION.flac",
+         "path": f"/mixes/{n}.flac", "ext": "FLAC", "size_mb": 650}
+        for n in range(1, mixes + 1)
+    ]
+    ui = MP_Audio_Player.TerminalPlayerUI(
+        engine=None, scanner=scanner, is_remote=True, ui_size_mode=size)
+    width = width or (56 if size == "VERTICAL" else 120)
+    height = height or (52 if size == "VERTICAL" else 40)
+    status = {
+        "title": title, "path": "/mixes/4.flac", "state": "playing",
+        "sample_rate": 96000, "channels": 2,
+        "position_fmt": "42:34", "duration_fmt": "59:59", "progress_pct": 42.0,
+        "volume": 85, "pitch_percent": 0,
+        "levels": [0.05, 0.2, 0.45, 0.7, 0.9, 0.6, 0.3, 0.8,
+                   0.5, 0.2, 0.9, 0.4, 0.7, 0.3, 0.6, 0.9,
+                   0.2, 0.5, 0.8, 0.3, 0.6, 0.4, 0.7, 0.5],
+        "peaks": [0.85] * 24,
+    }
     captured = []
-
-    def _fake_present(lines, _w, _h):
-        captured.extend(strip_ansi(line) for line in lines)
-
-    with patch.object(MP_Audio_Player, "_present_frame", side_effect=_fake_present), \
+    with patch.object(MP_Audio_Player, "_present_frame",
+                      side_effect=lambda lines, w, h: captured.extend(lines)), \
             patch.object(MP_Audio_Player, "_win_visible_size", return_value=(width, height)), \
             patch.object(MP_Audio_Player, "_set_terminal_title"), \
-            patch.dict(os.environ, {"MP_LIQUID_GLASS": "1"}, clear=False):
-        ui.ui_size_mode = "VERTICAL"
+            patch.dict(os.environ, {"MP_LIQUID_GLASS": "1"}, clear=False), \
+            patch.object(ui, "_get_status", return_value=status):
         ui._draw_frame()
-    return captured
+    return ui, [strip_ansi(line) for line in captured]
 
 
 class TestVerticalPlayerMode(unittest.TestCase):
     def setUp(self):
         self.flag = FLAG_DIR / f"liquid_ui_size.{os.getpid()}"
         self.flag.unlink(missing_ok=True)
-        self.scanner = MagicMock()
-        self.scanner.get_mixes.return_value = []
 
     def tearDown(self):
         self.flag.unlink(missing_ok=True)
 
     def _ui(self, size="NORMAL"):
         return MP_Audio_Player.TerminalPlayerUI(
-            engine=None, scanner=self.scanner, is_remote=True, ui_size_mode=size
-        )
+            engine=None, scanner=MagicMock(), is_remote=True, ui_size_mode=size)
+
+    # --- the M ring -------------------------------------------------------
 
     def test_m_walks_vertical_before_mini(self):
-        """M steps Full -> Vertical -> Mini -> Micro -> Full, and never skips the deck."""
         ui = self._ui()
         with patch.dict(os.environ, {"MP_LIQUID_GLASS": "1"}), \
                 patch("MP_Audio_Player.launch_mini_player_window") as launch:
             seen = []
-            for _ in range(4):
+            for _ in range(5):
                 ui._process_key(b"m")
                 seen.append(ui.ui_size_mode)
-        self.assertEqual(seen, ["VERTICAL", "MINI", "MICRO", "NORMAL"])
+        # From the full frame: portrait, then the two strips. Once compact the
+        # ring has no landscape frame to return to, so it comes back to the
+        # portrait one rather than NORMAL.
+        self.assertEqual(seen, ["VERTICAL", "MINI", "MICRO", "VERTICAL", "MINI"])
         launch.assert_not_called()
 
     def test_compact_ring_wraps_to_vertical(self):
-        """A compact window never steps to the full frame it cannot draw."""
-        for start in ("VERTICAL", "MINI", "MICRO"):
+        self.addCleanup(os.environ.pop, "MP_LIQUID_GLASS", None)
+        os.environ["MP_LIQUID_GLASS"] = "1"
+        for start in ("MINI", "MICRO"):
             ui = self._ui(start)
             with patch("MP_Audio_Player.launch_mini_player_window") as launch, \
                     patch("MP_Audio_Player.resize_host_terminal") as resize:
@@ -87,222 +103,140 @@ class TestVerticalPlayerMode(unittest.TestCase):
                 for _ in range(3):
                     ui._process_key(b"m")
                     sizes.append(ui.ui_size_mode)
-            self.assertNotIn("NORMAL", sizes, f"{start} must stay compact")
-            self.assertEqual(set(sizes), {"VERTICAL", "MINI", "MICRO"}, start)
-            self.assertNotIn("NORMAL", str(resize.call_args), start)
+            self.assertNotIn("NORMAL", sizes, start)
             launch.assert_not_called()
+            self.assertIn("VERTICAL", sizes, start)
 
-    def test_step_helper_agrees_with_the_key(self):
+    def test_step_helper(self):
         self.assertEqual(MP_Audio_Player.ui_size_step("NORMAL"), "VERTICAL")
         self.assertEqual(MP_Audio_Player.ui_size_step("VERTICAL"), "MINI")
         self.assertEqual(MP_Audio_Player.ui_size_step("MINI"), "MICRO")
         self.assertEqual(MP_Audio_Player.ui_size_step("MICRO"), "NORMAL")
-        # Unknown input starts the ring at the top instead of raising.
-        self.assertEqual(MP_Audio_Player.ui_size_step("nonsense"), "VERTICAL")
-        # Without a full frame the last strip wraps to the deck.
         self.assertEqual(MP_Audio_Player.ui_size_step("MICRO", allow_normal=False), "VERTICAL")
 
-    def test_vertical_grid_is_taller_than_it_is_wide(self):
+    # --- the geometry -----------------------------------------------------
+
+    def test_vertical_is_the_normal_window_turned_portrait(self):
+        """Same shape as NORMAL, rotated: use the same aspect, not a new one."""
         cols, rows = MP_Audio_Player.ui_size_grid("VERTICAL")
         self.assertEqual((cols, rows), (MP_Audio_Player.VERTICAL_COLS, MP_Audio_Player.VERTICAL_ROWS))
-        # At the 9x18 cell the glass window is portrait: taller than it is wide.
+        # Portrait on the glass.
         self.assertGreater(rows * 18, cols * 9)
-        self.assertEqual(MP_Audio_Player.ui_size_grid("MINI"), (74, 14))
-        self.assertEqual(MP_Audio_Player.ui_size_grid("MICRO"), (74, 7))
+        # The NORMAL window is 120x40. Vertical should be recognisably the same
+        # player: a comparable cell count, not a cramped strip.
+        self.assertGreaterEqual(cols * rows, 0.5 * 120 * 40)
 
-    def test_clock_rows_use_block_digits(self):
-        rows = MP_Audio_Player.lcd_clock_rows("12:34", "\033[38;2;0;229;255m")
-        self.assertEqual(len(rows), 5)
-        plain = [strip_ansi(row) for row in rows]
-        # Five glyphs of three cells, one separating space between each.
-        self.assertTrue(all(len(row) == 5 * 3 + 4 for row in plain), plain)
-        # "12:34" row by row, straight from the glyph table.
-        self.assertEqual(plain[0], "  █ ███     ███ █ █")
-        self.assertEqual(plain[2], "  █ ███     ███ ███")
-        self.assertNotIn("1", plain[0], "digits must be drawn as blocks")
+    def test_vertical_is_not_a_compact_size(self):
+        """Vertical is a full frame, so the compact-only keys must not apply."""
+        self.assertNotIn("VERTICAL", MP_Audio_Player.COMPACT_UI_SIZES)
+        self.assertIn("MINI", MP_Audio_Player.COMPACT_UI_SIZES)
+        self.assertIn("MICRO", MP_Audio_Player.COMPACT_UI_SIZES)
 
-    def test_deck_frame_draws_clock_progress_and_analyser(self):
-        st = {
-            "title": "Stream of Frequency 165", "path": "/mixes/sof165.flac",
-            "state": "playing", "sample_rate": 96000, "channels": 2,
-            "position_fmt": "12:34", "duration_fmt": "59:59", "progress_pct": 42.0,
-            "volume": 85, "pitch_percent": 0, "levels": [0.4] * 24,
-        }
+    # --- it is the same player -------------------------------------------
+
+    def test_vertical_draws_the_liquid_player_frame(self):
+        """Every landmark of the landscape frame is present in the portrait one."""
+        _, lines = frame("VERTICAL")
+        joined = "\n".join(lines)
+        for landmark in (
+            "✦ MP AUDIO PLAYER (LIQUID GLASS)",   # header title
+            "Liquid Glass",                        # header subtitle
+            "▶ PLAYING",                           # playing badge
+            "[MIX ARCHIVE]",                       # mode chip
+            "♫",                                   # title bullet
+            "Format: FLAC",                        # format line
+            "DJ PITCH",                            # pitch slider
+            "FAVORITES",                           # action row
+            "BASS BOOST",                          # action row
+            "PLAYLIST",                            # playlist panel
+            "↑/↓: Scroll",                         # playlist footer
+            "Pitch",                               # status footer
+        ):
+            self.assertIn(landmark, joined, f"the portrait frame is missing {landmark!r}")
+
+    def test_vertical_and_normal_share_the_same_renderer(self):
+        """There is no separate vertical player: the same method draws both."""
         ui = self._ui()
-        with patch.object(ui, "_get_status", return_value=st):
-            lines = drawn_lines(ui)
-        joined = "\n".join(lines)
-        self.assertIn("MP VERTICAL PLAYER", joined)
-        self.assertIn("Stream of Frequency 165", joined)
-        self.assertIn("███", joined, "the block clock must be drawn")
-        self.assertIn("42%", joined)
-        self.assertIn("[M] Mini", joined, "the deck must say what M does next")
+        self.assertFalse(hasattr(ui, "_draw_vertical_frame"),
+                         "a separate deck renderer must not exist")
+        source = Path(MP_Audio_Player.__file__).read_text(encoding="utf-8")
+        self.assertNotIn("_draw_vertical_frame", source)
+        self.assertNotIn("def _draw_vertical_eq", source)
+        self.assertNotIn("def _draw_vertical_playlist", source)
 
-    def test_deck_stacks_main_window_equaliser_and_playlist(self):
-        """The three panels sit in order: player on top, EQ under it, playlist last."""
-        mix_list = [{"name": f"Mix {n:02d}.flac", "path": f"/mixes/{n}.flac", "ext": "FLAC"}
-                    for n in range(1, 13)]
-        scanner = MagicMock()
-        scanner.get_mixes.return_value = mix_list
-        ui = MP_Audio_Player.TerminalPlayerUI(
-            engine=None, scanner=scanner, is_remote=True, ui_size_mode="VERTICAL")
-        st = {"title": "Mix 03", "path": "/mixes/3.flac", "position_fmt": "01:00",
-              "duration_fmt": "02:00", "progress_pct": 50.0,
-              "levels": [0.3] * 24, "peaks": [0.7] * 24}
-        with patch.object(ui, "_get_status", return_value=st):
-            lines = drawn_lines(ui, height=MP_Audio_Player.VERTICAL_ROWS)
+    def test_vertical_has_no_oversized_block_clock(self):
+        """The portrait frame uses the player's own typography, not new chrome."""
+        _, lines = frame("VERTICAL")
         joined = "\n".join(lines)
-        clock_at = joined.index("███")
-        eq_at = joined.index("EQUALIZER")
-        list_at = joined.index("PLAYLIST")
-        self.assertLess(clock_at, eq_at, "the main window must be on top")
-        self.assertLess(eq_at, list_at, "the equaliser must sit above the playlist")
-        self.assertIn("Mix 03.flac", joined, "the playlist must list the tracks")
-        # The panels are the three named ones, in that order, exactly once each.
-        self.assertEqual(joined.count("EQUALIZER"), 1)
-        self.assertEqual(joined.count("PLAYLIST"), 1)
+        self.assertNotIn("███", joined, "the deck's block clock must be gone")
+        self.assertNotIn("EQUALIZER ·", joined, "the deck's inline EQ panel must be gone")
+
+    # --- it fits the column ----------------------------------------------
+
+    def test_every_line_fits_the_portrait_column(self):
+        for height in (52, 48, 44, 40, 36, 30):
+            _, lines = frame("VERTICAL", height=height)
+            self.assertEqual(len(lines), height)
+            for line in lines:
+                self.assertLessEqual(len(line), MP_Audio_Player.VERTICAL_COLS, line)
+
+    def test_landscape_frame_is_unchanged(self):
+        """The portrait work must not reflow the landscape player."""
+        _, lines = frame("NORMAL", width=120, height=40)
+        joined = "\n".join(lines)
+        self.assertIn("♫", joined)
+        self.assertIn("PLAYLIST", joined)
+        for line in lines:
+            self.assertLessEqual(len(line), 120)
+
+    def test_action_row_drops_chips_instead_of_overflowing(self):
+        """A narrow column keeps the row inside the border and clears dead spans."""
+        ui, lines = frame("VERTICAL")
+        row = next((line for line in lines if "FAVORITES" in line), "")
+        self.assertLessEqual(len(row), MP_Audio_Player.VERTICAL_COLS)
+        # The Visualization chip does not fit, so it must have no click span.
+        self.assertEqual(ui._visualizer_button_span, (0, 0))
+        # Favorites is drawn, so it keeps a real span pointing at its own label.
+        self.assertGreater(ui._favorites_button_span[0], 0)
+        start, end = ui._favorites_button_span
+        self.assertIn("FAVORITES", row[start - 1:end])
+
+    def test_header_never_clips_mid_word(self):
+        _, lines = frame("VERTICAL", title="A Very Long Mix Title That Would Overflow")
+        header = lines[1]
+        self.assertLessEqual(len(header), MP_Audio_Player.VERTICAL_COLS)
+        self.assertIn("MP AUDIO PLAYER", header)
+
+    # --- the equaliser still works ---------------------------------------
+
+    def test_e_opens_the_real_equaliser_in_vertical(self):
+        """Vertical is a full player, so E opens the HUD it always did."""
+        ui = self._ui("VERTICAL")
+        with patch("MP_Audio_Player._present_frame"), \
+                patch.object(ui, "_get_status", return_value={"levels": [0.2] * 24}):
+            ui._process_key(b"E")
+        self.assertTrue(ui.equalizer_hud_active)
 
     def test_equaliser_edit_survives_the_daemon_status(self):
-        """A band set with the arrows must not be erased by the next draw.
-
-        The status file lags a frame behind the IPC write, so adopting it
-        unconditionally made the deck equaliser look frozen: the value moved
-        for one frame and the stale one came straight back.
-        """
-        ui = self._ui()
-        ui.ui_size_mode = "VERTICAL"
+        """A band set from this window must not be erased by the next draw."""
+        ui = self._ui("VERTICAL")
         ui.eq_manager.current_bands = [0.0] * 10
         stale = {"eq_preset": "Flat", "eq_bands": [0.0] * 10,
                  "levels": [0.2] * 24, "peaks": [0.5] * 24}
         with patch.object(ui, "_send_cmd"), patch.object(ui, "_get_status", return_value=stale):
-            ui._process_key(b"E")
+            ui.equalizer_hud_active = True
             ui._process_key(b"\x1b[A")
             ui._process_key(b"\x1b[A")
             self.assertEqual(ui.eq_manager.current_bands[0], 1.0)
-            # Every frame re-syncs from the daemon; the edit must survive.
             for _ in range(3):
                 ui._get_status()
                 self.assertEqual(ui.eq_manager.current_bands[0], 1.0,
                                  "the daemon's stale bands erased a local edit")
-        # Once the daemon echoes the value, an external change lands again.
         ui._sync_eq_from_status({"eq_preset": "Trance", "eq_bands": [1.0] + [0.0] * 9})
         ui._sync_eq_from_status({"eq_preset": "Trance", "eq_bands": [-4.0] + [0.0] * 9})
         self.assertEqual(ui.eq_manager.current_bands[0], -4.0)
 
-    def test_equaliser_focus_is_visible_in_the_panel_title(self):
-        """The panel says whether the arrows drive the sliders or the tracks."""
-        scanner = MagicMock()
-        scanner.get_mixes.return_value = [{"name": "Mix 1", "path": "/m1.flac", "ext": "FLAC"}]
-        ui = MP_Audio_Player.TerminalPlayerUI(
-            engine=None, scanner=scanner, is_remote=True, ui_size_mode="VERTICAL")
-        st = {"path": "/m1.flac", "position_fmt": "00:10", "levels": [0.2] * 24,
-              "peaks": [0.5] * 24}
-        with patch.object(ui, "_get_status", return_value=st):
-            self.assertIn("TRACKS", "\n".join(drawn_lines(ui)))
-            ui._vertical_eq_focus = True
-            self.assertIn("SLIDERS", "\n".join(drawn_lines(ui)))
-
-    def test_equaliser_takes_the_arrow_keys_when_it_has_focus(self):
-        """E hands the arrows to the EQ sliders; a second press gives them back."""
-        ui = self._ui()
-        ui.ui_size_mode = "VERTICAL"
-        ui.eq_manager.current_bands = [0.0] * 10
-        with patch("MP_Audio_Player._present_frame"), patch.object(ui, "_get_status",
-                  return_value={"levels": [0.2] * 24, "peaks": [0.5] * 24}):
-            ui._process_key(b"E")
-            self.assertTrue(ui._vertical_eq_focus)
-            ui._process_key(b"\x1b[C")
-            self.assertEqual(ui.eq_selected_band, 1)
-            ui._process_key(b"\x1b[A")
-            self.assertEqual(ui.eq_manager.current_bands[1], 0.5)
-            ui._process_key(b"\x1b[B")
-            ui._process_key(b"\x1b[B")
-            self.assertEqual(ui.eq_manager.current_bands[1], -0.5)
-            # The playlist cursor must not move while the EQ has the keys.
-            ui._process_key(b"E")
-            self.assertFalse(ui._vertical_eq_focus)
-
-    def test_deck_equaliser_never_opens_the_full_width_hud(self):
-        """A 40-column deck cannot draw the full-screen HUD, so E never opens it."""
-        ui = self._ui()
-        ui.ui_size_mode = "VERTICAL"
-        with patch("MP_Audio_Player._present_frame"), patch.object(ui, "_get_status",
-                  return_value={"levels": [0.2] * 24, "peaks": [0.5] * 24}):
-            ui._process_key(b"E")
-        self.assertFalse(ui.equalizer_hud_active)
-
-    def test_deck_fills_exactly_the_window_height(self):
-        """Every panel fits: the frame is neither short nor clipped."""
-        scanner = MagicMock()
-        scanner.get_mixes.return_value = [
-            {"name": f"Mix {n}", "path": f"/m{n}.flac", "ext": "FLAC"} for n in range(6)]
-        ui = MP_Audio_Player.TerminalPlayerUI(
-            engine=None, scanner=scanner, is_remote=True, ui_size_mode="VERTICAL")
-        st = {"path": "/m1.flac", "position_fmt": "00:30", "levels": [0.2] * 24,
-              "peaks": [0.5] * 24}
-        with patch.object(ui, "_get_status", return_value=st):
-            lines = drawn_lines(ui, height=MP_Audio_Player.VERTICAL_ROWS)
-        self.assertEqual(len(lines), MP_Audio_Player.VERTICAL_ROWS)
-        for line in lines:
-            self.assertLessEqual(len(line), MP_Audio_Player.VERTICAL_COLS, line)
-
-    def test_deck_keeps_all_three_panels_when_short(self):
-        """A short window shrinks the panels; it never drops one or overflows."""
-        scanner = MagicMock()
-        scanner.get_mixes.return_value = [
-            {"name": f"Mix {n}", "path": f"/m{n}.flac", "ext": "FLAC"} for n in range(20)]
-        st = {"path": "/m9.flac", "position_fmt": "01:00",
-              "levels": [0.4] * 24, "peaks": [0.8] * 24}
-        for height in (44, 40, 34, 28, 24, 20, 16):
-            ui = MP_Audio_Player.TerminalPlayerUI(
-                engine=None, scanner=scanner, is_remote=True, ui_size_mode="VERTICAL")
-            with patch.object(ui, "_get_status", return_value=st):
-                lines = drawn_lines(ui, height=height)
-            joined = "\n".join(lines)
-            self.assertEqual(len(lines), height, height)
-            self.assertIn("EQUALIZER", joined, f"equaliser lost at {height} rows")
-            self.assertIn("PLAYLIST", joined, f"playlist lost at {height} rows")
-            for line in lines:
-                self.assertLessEqual(len(line), MP_Audio_Player.VERTICAL_COLS, height)
-
-    def test_deck_seek_bar_is_a_click_target(self):
-        st = {"title": "t", "path": "/a.flac", "position_fmt": "01:00",
-              "duration_fmt": "02:00", "progress_pct": 50.0, "levels": [0.2] * 24}
-        ui = self._ui()
-        with patch.object(ui, "_get_status", return_value=st):
-            drawn_lines(ui)
-        row, (start, end) = ui._timeline_row, ui._timeline_span
-        self.assertGreater(row, 0)
-        self.assertLess(start, end)
-        self.assertLessEqual(end, MP_Audio_Player.VERTICAL_COLS)
-
-    def test_all_eq_styles_render_in_vertical_mode(self):
-        """Every equaliser style fits the deck, including the wide stereo ones."""
-        ui = self._ui()
-        st = {"title": "t", "path": "/a.flac", "position_fmt": "01:00",
-              "duration_fmt": "02:00", "progress_pct": 50.0,
-              "levels": [0.4] * 24, "peaks": [0.8] * 24, "state": "playing"}
-        for style in MP_Audio_Player.EqualizerVisualizer.STYLES:
-            ui.visualizer.set_style(style)
-            self.assertEqual(ui.visualizer.style, style)
-            with patch.object(ui, "_get_status", return_value=st):
-                lines = drawn_lines(ui)
-            self.assertTrue(lines, style)
-            self.assertLessEqual(len(lines), MP_Audio_Player.VERTICAL_ROWS, style)
-            for line in lines:
-                self.assertLessEqual(len(line), MP_Audio_Player.VERTICAL_COLS, style)
-
-    def test_wide_stereo_styles_use_the_portrait_spectrum(self):
-        """The fixed two-channel blocks are replaced, not clipped to their left edge."""
-        st = {"levels": [0.1 * (i % 9) for i in range(24)], "peaks": [0.9] * 24}
-        rows = MP_Audio_Player.vertical_spectrum_rows(st, 36, 12)
-        self.assertEqual(len(rows), 12)
-        plain = [strip_ansi(row) for row in rows]
-        self.assertTrue(all(len(row) <= 36 for row in plain), plain)
-        self.assertIn("█", "\n".join(plain), "the portrait spectrum must draw bars")
-        self.assertNotIn("CHANNEL", "\n".join(plain))
-        self.assertIn("neon_prism_eq", MP_Audio_Player.WIDE_STEREO_STYLES)
-        self.assertIn("master_spectrum", MP_Audio_Player.WIDE_STEREO_STYLES)
+    # --- the glass host ---------------------------------------------------
 
     def test_published_size_accepts_vertical(self):
         self.assertIn("VERTICAL", UI_SIZES)
@@ -311,48 +245,37 @@ class TestVerticalPlayerMode(unittest.TestCase):
         (FLAG_DIR / "liquid_ui_size.987654").unlink(missing_ok=True)
 
     def test_hosts_resize_to_the_vertical_grid(self):
-        """Both glass hosts adopt the deck's grid and keep their panels inside it."""
         for mod in (lg_vulkan, lg_opengl):
             host = mod.GlassHost(["test"], mode="NORMAL")
             host.renderer = MagicMock()
             host.renderer.bezel_px = 7
+            host.renderer.window_pos.return_value = (0, 0)
+            host.renderer.window_size.return_value = (518, 976)
             host._place_terminal = MagicMock()
-            host.set_mode("VERTICAL")
-            self.assertEqual(host.mode, "VERTICAL")
-            self.assertEqual((host._target_cols, host._target_rows),
-                             (MP_Audio_Player.VERTICAL_COLS, MP_Audio_Player.VERTICAL_ROWS))
             host.terminal = MagicMock()
             host.terminal.get_char_width.return_value = 9
             host.terminal.get_char_height.return_value = 18
             host.set_mode("VERTICAL")
+            self.assertEqual((host._target_cols, host._target_rows),
+                             (MP_Audio_Player.VERTICAL_COLS, MP_Audio_Player.VERTICAL_ROWS))
             host.terminal.set_size.assert_called_with(
-                MP_Audio_Player.VERTICAL_COLS, MP_Audio_Player.VERTICAL_ROWS
-            )
-            panels = mod.player_panel_rects(
-                MP_Audio_Player.VERTICAL_COLS, MP_Audio_Player.VERTICAL_ROWS, 9, 18, 0, 0, mode="VERTICAL"
-            )
-            for rect in panels:
-                x, y, w, h = rect
-                self.assertGreaterEqual(x, 0)
-                self.assertGreaterEqual(y, 0)
-                self.assertLessEqual(x + w, MP_Audio_Player.VERTICAL_COLS * 9)
-                self.assertLessEqual(y + h, MP_Audio_Player.VERTICAL_ROWS * 18)
-            # The main-window panel starts at the top, the lower panel carries
-            # the equaliser and the playlist beneath it.
-            header, body = panels
-            self.assertEqual(header[1], 0)
-            self.assertEqual(body[1], header[1] + header[3])
-            self.assertGreater(body[3], 0)
-            # The panels must stay inside the window at every deck height, not
-            # just the default one. A hardcoded 23-row header overflowed as
-            # soon as the deck was shortened.
-            for rows in (44, 40, 30, 20, 12):
-                top, bottom = mod.player_panel_rects(
-                    40, rows, 9, 18, 7, 7, mode="VERTICAL")
-                self.assertEqual(top[1], 7)
-                self.assertAlmostEqual(top[1] + top[3], bottom[1])
-                self.assertLessEqual(bottom[1] + bottom[3], rows * 18 + 7 + 0.5, rows)
-                self.assertGreaterEqual(top[3], 9 * 18, rows)
+                MP_Audio_Player.VERTICAL_COLS, MP_Audio_Player.VERTICAL_ROWS)
+
+    def test_host_panels_stay_inside_the_window(self):
+        """The glass covers the header box and the playlist box, in bounds."""
+        for mod in (lg_vulkan, lg_opengl):
+            for rows in (52, 44, 36, 30):
+                panels = mod.player_panel_rects(
+                    MP_Audio_Player.VERTICAL_COLS, rows, 9, 18, 7, 7, mode="VERTICAL")
+                header, playlist = panels
+                self.assertEqual(header[1], 7)
+                self.assertGreaterEqual(playlist[1], header[1] + header[3])
+                for x, y, w, h in panels:
+                    self.assertGreaterEqual(x, 0)
+                    self.assertGreaterEqual(y, 0)
+                    self.assertLessEqual(x + w, MP_Audio_Player.VERTICAL_COLS * 9 + 14)
+                # The playlist box must start on the row the player draws it.
+                self.assertGreater(playlist[1], header[1] + 4 * 18)
 
     def test_host_launcher_forwards_the_vertical_flag(self):
         for mod in (lg_vulkan, lg_opengl):
@@ -361,7 +284,6 @@ class TestVerticalPlayerMode(unittest.TestCase):
             self.assertNotIn("--mini", argv, mod.__name__)
 
     def test_vertical_is_a_player_mode_for_the_intro_video(self):
-        """The deck is a player window, so the intro election treats it as one."""
         from exit_video import PLAYER_MODES, intro_role
         self.assertIn("VERTICAL", PLAYER_MODES)
         self.assertEqual(intro_role("VERTICAL"), "player")

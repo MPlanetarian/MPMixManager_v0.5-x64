@@ -289,120 +289,7 @@ ROWS = 40
 CHAR_W = 9
 CHAR_H = 18
 # The portrait deck M reaches first from the full window.
-VERTICAL_COLS, VERTICAL_ROWS = 40, 44
-
-
-VERTICAL_MAIN_ROWS = 12
-VERTICAL_MAIN_MIN_ROWS = 9
-VERTICAL_EQ_ROWS = 11
-VERTICAL_EQ_MIN_ROWS = 4
-VERTICAL_PLAYLIST_MIN_ROWS = 5
-
-
-def vertical_main_rows(rows: int) -> int:
-    """Rows the player gives its main window in a deck of ``rows``."""
-    usable = max(3, int(rows) - 1)
-    main_rows, eq_rows, list_rows = VERTICAL_MAIN_ROWS, VERTICAL_EQ_ROWS, VERTICAL_PLAYLIST_MIN_ROWS
-    while main_rows + eq_rows + list_rows > usable and eq_rows > VERTICAL_EQ_MIN_ROWS:
-        eq_rows -= 1
-    while main_rows + eq_rows + list_rows > usable and main_rows > VERTICAL_MAIN_MIN_ROWS:
-        main_rows -= 1
-    while main_rows + eq_rows + list_rows > usable and list_rows > 2:
-        list_rows -= 1
-    return max(1, min(main_rows, int(rows) - 1))
-
-
-def _mode_grid(mode):
-    """Terminal grid the host gives one mode."""
-    mode = str(mode or "").strip().upper()
-    if mode == "TRACKLIST":
-        return 100, 35
-    if mode == "VERTICAL":
-        return VERTICAL_COLS, VERTICAL_ROWS
-    if mode == "MINI":
-        return 74, 14
-    if mode == "MICRO":
-        return 74, 7
-    return COLS, ROWS
-
-# SFNSMono ships on macOS but has no ► ★ ✦ ≋ ◄. Those cells draw blank, and the
-# few glyphs it does have (› and ▶) sit on the playlist like stray cursors.
-OVERLAY_FONT_CANDIDATES = (
-    "/System/Library/Fonts/Menlo.ttc",
-    "/System/Library/Fonts/Monaco.ttf",
-    "/System/Library/Fonts/Supplemental/Courier New.ttf",
-    "/Library/Fonts/Courier New.ttf",
-    "/System/Library/Fonts/SFNSMono.ttf",
-)
-
-
-def load_overlay_font(size: int):
-    """Monospace face that can draw the playlist mark and the visualizer glyphs."""
-    for font_path in OVERLAY_FONT_CANDIDATES:
-        if not os.path.exists(font_path):
-            continue
-        try:
-            return ImageFont.truetype(font_path, size)
-        except Exception:
-            continue
-    return ImageFont.load_default()
-
-ANSI_COLORS = {
-    30: (0, 0, 0),
-    31: (220, 50, 50),
-    32: (50, 200, 50),
-    33: (220, 220, 50),
-    34: (50, 100, 220),
-    35: (220, 50, 220),
-    36: (50, 200, 200),
-    37: (230, 230, 230),
-    90: (120, 120, 120),
-    91: (255, 90, 90),
-    92: (90, 255, 90),
-    93: (255, 255, 90),
-    94: (90, 160, 255),
-    95: (255, 90, 255),
-    96: (90, 255, 255),
-    97: (255, 255, 90),
-}
-
-def ansi256_rgb(index: int) -> tuple[int, int, int]:
-    """xterm 256-color cube. Themes that emit 38;5 were stuck on the default ice white."""
-    n = int(index) % 256
-    if 0 <= n <= 15:
-        basic = (
-            (0, 0, 0), (220, 50, 50), (50, 200, 50), (220, 220, 50),
-            (50, 100, 220), (220, 50, 220), (50, 200, 200), (230, 230, 230),
-            (120, 120, 120), (255, 90, 90), (90, 255, 90), (255, 255, 90),
-            (90, 160, 255), (255, 90, 255), (90, 255, 255), (255, 255, 255),
-        )
-        return basic[n]
-    if n < 232:
-        cube = n - 16
-        scale = (0, 95, 135, 175, 215, 255)
-        return (scale[cube // 36], scale[(cube // 6) % 6], scale[cube % 6])
-    level = 8 + (n - 232) * 10
-    return (level, level, level)
-
-
-ANSI_BG_COLORS = {
-    40: (0, 0, 0),
-    41: (220, 50, 50),
-    42: (50, 200, 50),
-    43: (220, 220, 50),
-    44: (50, 100, 220),
-    45: (220, 50, 220),
-    46: (50, 200, 200),
-    47: (230, 230, 230),
-    100: (120, 120, 120),
-    101: (255, 90, 90),
-    102: (90, 255, 90),
-    103: (255, 255, 90),
-    104: (90, 160, 255),
-    105: (255, 90, 255),
-    106: (90, 255, 255),
-    107: (255, 255, 90),
-}
+VERTICAL_COLS, VERTICAL_ROWS = 56, 52
 
 
 def player_panel_rects(cols=COLS, rows=ROWS, char_w=CHAR_W, char_h=CHAR_H, origin_x=0, origin_y=0, mode="NORMAL"):
@@ -418,11 +305,15 @@ def player_panel_rects(cols=COLS, rows=ROWS, char_w=CHAR_W, char_h=CHAR_H, origi
     if m in ("MICRO", "MANAGER"):
         return box(2, 0, max(20, cols - 4), rows), (0.0, 0.0, 0.0, 0.0)
     elif m == "VERTICAL":
-        # The deck stacks the main window, the equaliser and the playlist.
-        main_rows = vertical_main_rows(rows)
+        # Vertical is the full player frame in a portrait column, so it uses
+        # the same two panels as NORMAL: the header block and the playlist.
+        iw = max(20, cols - 6)
+        viz_rows = 7 if rows >= 34 else (5 if rows >= 28 else 3)
+        before = 4 + 1 + 1 + 3 + (viz_rows + 3) + 2
+        body_rows = max(1, rows - (before + 1) - 4)
         return (
-            box(2, 0, max(20, cols - 4), main_rows),
-            box(2, main_rows, max(20, cols - 4), max(1, rows - main_rows)),
+            box(2, 0, iw + 2, 4),
+            box(2, before, iw + 2, body_rows + 2),
         )
     elif m == "MINI":
         return box(2, 0, max(20, cols - 4), 3), box(2, 3, max(20, cols - 4), max(1, rows - 3))

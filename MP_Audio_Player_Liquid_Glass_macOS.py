@@ -67,50 +67,7 @@ from liquid_glass_metal import (  # noqa: E402
 COLS = 120
 ROWS = 40
 # The portrait deck M reaches first from the full window.
-VERTICAL_COLS, VERTICAL_ROWS = 40, 44
-
-
-VERTICAL_MAIN_ROWS = 12
-VERTICAL_MAIN_MIN_ROWS = 9
-VERTICAL_EQ_ROWS = 11
-VERTICAL_EQ_MIN_ROWS = 4
-VERTICAL_PLAYLIST_MIN_ROWS = 5
-
-
-def vertical_main_rows(rows: int) -> int:
-    """Rows the player gives its main window in a deck of ``rows``."""
-    usable = max(3, int(rows) - 1)
-    main_rows, eq_rows, list_rows = VERTICAL_MAIN_ROWS, VERTICAL_EQ_ROWS, VERTICAL_PLAYLIST_MIN_ROWS
-    while main_rows + eq_rows + list_rows > usable and eq_rows > VERTICAL_EQ_MIN_ROWS:
-        eq_rows -= 1
-    while main_rows + eq_rows + list_rows > usable and main_rows > VERTICAL_MAIN_MIN_ROWS:
-        main_rows -= 1
-    while main_rows + eq_rows + list_rows > usable and list_rows > 2:
-        list_rows -= 1
-    return max(1, min(main_rows, int(rows) - 1))
-
-
-def _mode_grid(mode):
-    """Terminal grid the host gives one mode."""
-    mode = str(mode or "").strip().upper()
-    if mode == "TRACKLIST":
-        return 100, 35
-    if mode == "VERTICAL":
-        return VERTICAL_COLS, VERTICAL_ROWS
-    if mode == "MINI":
-        return 74, 14
-    if mode == "MICRO":
-        return 74, 7
-    return COLS, ROWS
-
-
-def ui_size_step(current: str) -> str:
-    """The next size on the M ring: Normal, Vertical, Mini, Micro."""
-    order = ("NORMAL", "VERTICAL", "MINI", "MICRO")
-    cur = str(current or "NORMAL").strip().upper()
-    if cur not in order:
-        cur = "NORMAL"
-    return order[(order.index(cur) + 1) % len(order)]
+VERTICAL_COLS, VERTICAL_ROWS = 56, 52
 
 
 def player_panel_rects(cols=130, rows=42, char_w=8, char_h=16, origin_x=0, origin_y=0, mode="NORMAL"):
@@ -130,11 +87,15 @@ def player_panel_rects(cols=130, rows=42, char_w=8, char_h=16, origin_x=0, origi
             (0.0, 0.0, 0.0, 0.0),
         )
     elif m == "VERTICAL":
-        # The deck stacks the main window, the equaliser and the playlist.
-        main_rows = vertical_main_rows(rows)
+        # Vertical is the full player frame in a portrait column, so it uses
+        # the same two panels as NORMAL: the header block and the playlist.
+        iw = max(20, cols - 6)
+        viz_rows = 7 if rows >= 34 else (5 if rows >= 28 else 3)
+        before = 4 + 1 + 1 + 3 + (viz_rows + 3) + 2
+        body_rows = max(1, rows - (before + 1) - 4)
         return (
-            box(2, 0, max(20, cols - 4), main_rows),
-            box(2, main_rows, max(20, cols - 4), max(1, rows - main_rows)),
+            box(2, 0, iw + 2, 4),
+            box(2, before, iw + 2, body_rows + 2),
         )
     elif m == "MINI":
         return (
@@ -534,6 +495,18 @@ def ensure_random_visualizer_started() -> bool:
         log_dir = Path.home() / ".config" / "mix-manager"
         log_dir.mkdir(parents=True, exist_ok=True)
         log_file = log_dir / "liquid_visualizer.log"
+
+        # Write the active state before the child starts, so its first poll
+        # already knows it belongs behind this player. A fresh player launch
+        # shows its background, so ``visible`` is reset to True; the
+        # Visualization button can hide it again. MP Gui leaves the player's
+        # on/off choice alone.
+        try:
+            from liquid_player_visualizer import mark_player_visualizer_attached
+            mark_player_visualizer_attached(
+                visible=None if os.environ.get("MP_GUI_SESSION") == "1" else True)
+        except Exception:
+            pass
 
         with open(log_file, "a") as f:
             subprocess.Popen(

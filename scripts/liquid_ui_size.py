@@ -15,7 +15,7 @@ UI_SIZES = ("NORMAL", "VERTICAL", "MINI", "MICRO")
 UI_SIZE_CYCLE = ("NORMAL", "VERTICAL", "MINI", "MICRO")
 # The portrait deck: twice as tall as it is wide at the 9x18 cell, so the
 # glass window fits a large clock and a tall analyser in one column.
-VERTICAL_COLS, VERTICAL_ROWS = 40, 44
+VERTICAL_COLS, VERTICAL_ROWS = 56, 52
 # The sizes a compact (non-full) window has a frame for.
 COMPACT_UI_SIZES = ("VERTICAL", "MINI", "MICRO")
 

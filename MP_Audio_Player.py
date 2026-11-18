@@ -229,11 +229,27 @@ RED, GREEN, YELLOW, MAGENTA, CYAN = COLOR_TRAFFIC_RED, COLOR_TRAFFIC_GREEN, COLO
 
 CONFIG_DIR = Path.home() / ".config" / "mix-manager"
 CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-SOCKET_PATH, PORT_FILE = CONFIG_DIR / "mp_audio_player.sock", CONFIG_DIR / "mp_audio_player.port"
-STATE_FILE, PID_FILE, DURATION_CACHE_FILE = CONFIG_DIR / "mp_player_state.json", CONFIG_DIR / "mp_player.pid", CONFIG_DIR / "track_durations.json"
+
+# A mixer deck runs its own engine, so it needs its own socket, pid, state and
+# resume record while still sharing the library, favorites and theme with the
+# other deck. MP_Liquid_Mixer sets MP_PLAYER_NAMESPACE per deck; every normal
+# launch leaves it empty and keeps the historical file names untouched.
+PLAYER_NAMESPACE = re.sub(r"[^A-Za-z0-9_.-]", "", os.environ.get("MP_PLAYER_NAMESPACE", "").strip())[:40]
+
+
+def _player_file(name: str) -> Path:
+    """Scope one player runtime file to this namespace (no-op without one)."""
+    if not PLAYER_NAMESPACE:
+        return CONFIG_DIR / name
+    stem, dot, ext = name.partition(".")
+    return CONFIG_DIR / f"{stem}-{PLAYER_NAMESPACE}{dot}{ext}"
+
+
+SOCKET_PATH, PORT_FILE = _player_file("mp_audio_player.sock"), _player_file("mp_audio_player.port")
+STATE_FILE, PID_FILE, DURATION_CACHE_FILE = _player_file("mp_player_state.json"), _player_file("mp_player.pid"), CONFIG_DIR / "track_durations.json"
 FAVORITES_FILE = CONFIG_DIR / "favorites.json"
-DAEMON_LOCK_FILE = CONFIG_DIR / "mp_player.lock"
-RESUME_STATE_FILE = CONFIG_DIR / "playback_resume.json"
+DAEMON_LOCK_FILE = _player_file("mp_player.lock")
+RESUME_STATE_FILE = _player_file("playback_resume.json")
 _DAEMON_LOCK_FH = None
 
 # Generated playlists (DJ_Tracks_*.json) reach tens of megabytes once a library
@@ -4003,6 +4019,19 @@ def _kill_player_processes() -> List[int]:
     return killed
 
 
+def _proc_player_namespace(pid: int) -> str:
+    """The MP_PLAYER_NAMESPACE a process was started with (empty for the default)."""
+    try:
+        raw = (Path("/proc") / str(int(pid)) / "environ").read_bytes()
+    except (OSError, ValueError):
+        return ""
+    marker = b"MP_PLAYER_NAMESPACE="
+    for chunk in raw.split(b"\x00"):
+        if chunk.startswith(marker):
+            return chunk[len(marker):].decode("utf-8", "ignore")
+    return ""
+
+
 def _audio_player_daemon_pids() -> List[int]:
     me = os.getpid()
     found: List[int] = []
@@ -4026,6 +4055,10 @@ def _audio_player_daemon_pids() -> List[int]:
         if not any(a.endswith("MP_Audio_Player.py") for a in argv):
             continue
         if "--daemon" not in argv:
+            continue
+        # A mixer deck's daemon belongs to that deck only. Retiring it because
+        # the other deck opened would silence the first one.
+        if _proc_player_namespace(pid) != PLAYER_NAMESPACE:
             continue
         found.append(pid)
     return found
@@ -6612,36 +6645,24 @@ def _get_dynamic_gradient(step: float) -> Tuple[Tuple[int, int, int], Tuple[int,
         (int(60 + 52 * math.sin(step * 0.41 + 0.5)), int(48 + 42 * math.sin(step * 0.53 + 2.4)), int(78 + 58 * math.sin(step * 0.47 + 4.1)))
     )
 
-# The stacked portrait deck. It is a third in-place size beside Mini and
-# Micro: one narrow column, a large clock, a tall analyser and its own
-# transport bar, so the player reads from across a desk instead of a row of
-# text. 40x44 is taller than it is wide by more than 2:1 at the 9x18 cell.
-VERTICAL_COLS, VERTICAL_ROWS = 40, 44
-# The deck stacks three panels: the main window (title, clock, spectrum,
-# transport), the graphic equaliser, and the playlist. The first two are fixed
-# and the playlist takes what is left, so a taller window buys track rows.
-VERTICAL_MAIN_ROWS = 12
-VERTICAL_EQ_ROWS = 11
-VERTICAL_PLAYLIST_MIN_ROWS = 5
-# The shrunk limits used when the window is shorter than the three panels want.
-VERTICAL_MAIN_MIN_ROWS = 9
-VERTICAL_EQ_MIN_ROWS = 4
-# M walks this ring. The tall view comes first: a press from the full window
-# opens the deck, then the two compact strips, then the full window again.
+# The four in-place sizes of the player. Vertical is the same full frame as
+# NORMAL, drawn into a portrait column; Mini and Micro are the compact strips.
 UI_SIZE_ORDER = ("NORMAL", "VERTICAL", "MINI", "MICRO")
-# A compact window has no room for the full frame, so its ring wraps from the
-# last strip back to the tall view instead of returning to NORMAL.
-COMPACT_UI_SIZES = ("VERTICAL", "MINI", "MICRO")
-UI_SIZE_TITLES = {"NORMAL": "MP Audio Player", "VERTICAL": "MP Vertical Audio Player", "MINI": "MP Mini Audio Player", "MICRO": "MP Micro Audio Player"}
+# The two strips that are not the full frame.
+COMPACT_UI_SIZES = ("MINI", "MICRO")
+UI_SIZE_TITLES = {
+    "NORMAL": "MP Audio Player",
+    "VERTICAL": "MP Vertical Audio Player",
+    "MINI": "MP Mini Audio Player",
+    "MICRO": "MP Micro Audio Player",
+}
+# Vertical keeps the NORMAL aspect turned ninety degrees: 120x40 landscape
+# becomes 56x52 portrait, which is 518x976 on the glass against 1094x760.
+VERTICAL_COLS, VERTICAL_ROWS = 56, 52
 
 
 def ui_size_step(current: str, allow_normal: bool = True) -> str:
-    """The next size on the M ring.
-
-    ``allow_normal`` is False inside a compact window that was opened as
-    Vertical, Mini or Micro: it has no full-size frame to go back to, so the
-    ring wraps to the tall deck.
-    """
+    """The next size on the M ring: Normal, Vertical, Mini, Micro."""
     cur = str(current or "NORMAL").strip().upper()
     if cur not in UI_SIZE_ORDER:
         cur = "NORMAL"
@@ -6654,7 +6675,7 @@ def ui_size_step(current: str, allow_normal: bool = True) -> str:
 
 
 def ui_size_grid(size: str) -> Tuple[int, int]:
-    """Columns and rows for a published size, with the deck as the fallback."""
+    """Terminal columns and rows for a published size."""
     size = str(size or "").strip().upper()
     if size == "VERTICAL":
         return VERTICAL_COLS, VERTICAL_ROWS
@@ -6663,78 +6684,6 @@ def ui_size_grid(size: str) -> Tuple[int, int]:
     if size == "MICRO":
         return 74, 7
     return 120, 40
-
-
-# 3x5 block glyphs for the oversized clock. Each row is exactly three cells, so
-# the readout aligns without measuring anything at draw time.
-_LCD_GLYPHS = {
-    "0": ("███", "█ █", "█ █", "█ █", "███"),
-    "1": ("  █", "  █", "  █", "  █", "  █"),
-    "2": ("███", "  █", "███", "█  ", "███"),
-    "3": ("███", "  █", "███", "  █", "███"),
-    "4": ("█ █", "█ █", "███", "  █", "  █"),
-    "5": ("███", "█  ", "███", "  █", "███"),
-    "6": ("███", "█  ", "███", "█ █", "███"),
-    "7": ("███", "  █", "  █", "  █", "  █"),
-    "8": ("███", "█ █", "███", "█ █", "███"),
-    "9": ("███", "█ █", "███", "  █", "███"),
-    ":": ("   ", " █ ", "   ", " █ ", "   "),
-    "-": ("   ", "   ", "███", "   ", "   "),
-    " ": ("   ", "   ", "   ", "   ", "   "),
-}
-
-
-def lcd_clock_rows(text: str, ink: str) -> List[str]:
-    """Five rows of block digits, one cell of padding between glyphs."""
-    glyphs = [_LCD_GLYPHS.get(ch, _LCD_GLYPHS[" "]) for ch in text]
-    return [" ".join(f"{ink}{glyph[row]}{NC}" for glyph in glyphs) for row in range(5)]
-
-
-# The stereo/pair styles lay their two channel meters out from fixed band
-# tables: at 40 columns they arrive 53 to 78 cells wide, so the deck would
-# only ever show their left edge. These styles get a portrait spectrum
-# instead, which is what the tall column has room for.
-WIDE_STEREO_STYLES = ("neon_prism_eq", "stardust_particles_eq", "master_spectrum", "analog_vu")
-
-
-def vertical_spectrum_rows(status: Dict[str, Any], width: int, height: int) -> List[str]:
-    """A bottom-up bar spectrum sized for the portrait deck.
-
-    One column per band plus a gap. The bars grow from the bottom row so the
-    deck reads like a meter column; each column takes the theme's bar colour
-    for its height, which is what keeps it in step with the other styles.
-    """
-    levels = _as_float_vector(status.get("levels"), 24)
-    peaks = _as_float_vector(status.get("peaks"), len(levels) or 24)
-    width = max(8, int(width))
-    height = max(2, int(height))
-    # Two leading spaces, then one cell per band with a single-space gap.
-    bands = max(4, (width - 1) // 2)
-    if len(levels):
-        picks = np.linspace(0, len(levels) - 1, bands)
-        values = np.interp(picks, np.arange(len(levels)), levels)
-    else:
-        values = np.zeros(bands)
-    peak_values = np.interp(picks, np.arange(len(peaks)), peaks) if len(peaks) >= 2 else values
-    colors = ["\033[38;2;0;229;255m", "\033[38;2;0;255;180m", "\033[38;2;255;215;0m", "\033[38;2;255;64;64m"]
-    rows = []
-    for row in range(height):
-        # Row 0 is the top of the block. A band fills every row at or below
-        # its own height, and the peak cap marks the row just above the fill.
-        frac = (height - row) / float(height)
-        cells = []
-        for index, value in enumerate(values):
-            band_h = int(round(float(value) * height))
-            cap_h = int(round(float(peak_values[index]) * height)) if index < len(peak_values) else band_h
-            level = height - row
-            if band_h >= level:
-                cells.append(f"{colors[min(3, level * 4 // max(1, height))]}█{NC}")
-            elif cap_h == level:
-                cells.append(f"{DIM}\033[38;2;255;255;255m─{NC}")
-            else:
-                cells.append(" ")
-        rows.append("  " + " ".join(cells))
-    return rows
 
 
 def ensure_mini_player_kwin_rules():
@@ -7443,9 +7392,6 @@ class TerminalPlayerUI:
         self.eq_manager = getattr(engine, "eq_manager", None) or EqualizerManager()
         self.bass_manager = getattr(engine, "bass_manager", None) or BassBoostManager()
         self.equalizer_hud_active = False
-        # The deck's inline equaliser takes the arrow keys while it has
-        # focus; otherwise the arrows drive the playlist under it.
-        self._vertical_eq_focus = False
         self.eq_selected_band = 0
         self.eq_naming_mode = False
         self.eq_custom_name_input = ""
@@ -9099,36 +9045,55 @@ class TerminalPlayerUI:
             line = head + tail
         elif room >= _display_width(tail_short):
             line = head + tail_short
-        else:
+        elif _display_width(head) <= max_cols:
             line = head
-        # Spans are 1-based terminal columns, measured from the plain-text
-        # widths so a chip with different padding cannot drift from its span.
-        fav_w = _display_width(fav_face)
-        vis_w = _display_width(vis_face)
-        export_w = _display_width(export_face)
-        bass_w = _display_width(bass_face)
-        gap_w = _display_width(gap)
-        fav_start = 3
-        fav_end = fav_start + fav_w - 1
-        vis_start = fav_end + 1 + gap_w
-        vis_end = vis_start + vis_w - 1
-        if in_favorites:
-            export_start = vis_end + 1 + gap_w
-            export_end = export_start + export_w - 1
-            bass_start = export_end + 1 + gap_w
         else:
-            export_start = export_end = 0
-            bass_start = vis_end + 1 + gap_w
-        bass_end = bass_start + bass_w - 1
-        self._export_tracks_row = len(lines) + 1 if in_favorites else 0
-        self._export_tracks_span = (export_start, export_end)
-        self._favorites_button_row = len(lines) + 1
-        self._favorites_button_span = (fav_start, fav_end)
+            # A portrait column cannot carry three chips and their gaps. Keep
+            # the labels the keys already reach and drop the widest chip, so
+            # the row fits instead of running past the border.
+            for keep in (
+                f"  {fav_btn}  {bass_btn}",
+                f"  {bass_btn}",
+                f"  {fav_btn}",
+                "",
+            ):
+                if _display_width(keep) <= max_cols:
+                    line = keep
+                    break
+            else:
+                line = ""
+        # Spans are 1-based terminal columns, measured from the text actually
+        # drawn, so a chip dropped to fit a narrow column gets no span and a
+        # click on the space where it used to be cannot fire it.
+        row = len(lines) + 1
+        self._export_tracks_row = 0
+        self._export_tracks_span = (0, 0)
+        self._favorites_button_row = 0
+        self._favorites_button_span = (0, 0)
         self._favorites_button_whole_row = False
-        self._visualizer_button_row = self._favorites_button_row
-        self._visualizer_button_span = (vis_start, vis_end)
-        self._bass_button_row = self._favorites_button_row
-        self._bass_button_span = (bass_start, bass_end)
+        self._visualizer_button_row = 0
+        self._visualizer_button_span = (0, 0)
+        self._bass_button_row = 0
+        self._bass_button_span = (0, 0)
+        for face, kind in ((fav_face, "fav"), (vis_face, "vis"),
+                           (export_face, "export"), (bass_face, "bass")):
+            if face not in line:
+                continue
+            at = _display_width(line[:line.index(face)])
+            span = (at + 1, at + _display_width(face))
+            if kind == "fav":
+                self._favorites_button_row = row
+                self._favorites_button_span = span
+            elif kind == "vis":
+                self._visualizer_button_row = row
+                self._visualizer_button_span = span
+            elif kind == "export":
+                if in_favorites:
+                    self._export_tracks_row = row
+                    self._export_tracks_span = span
+            else:
+                self._bass_button_row = row
+                self._bass_button_span = span
         lines.append(line)
 
     def _append_player_buttons(self, lines: List[str], max_cols: int):
@@ -10002,47 +9967,6 @@ class TerminalPlayerUI:
             self.running = False
             return
 
-        if self._vertical_eq_focused() and self.ui_size_mode == "VERTICAL":
-            if data in (b"\x1b[D", b"\x1bOD", b"h", b"H"):
-                self.eq_selected_band = max(0, self.eq_selected_band - 1)
-                return
-            elif data in (b"\x1b[C", b"\x1bOC", b"l", b"L"):
-                self.eq_selected_band = min(9, self.eq_selected_band + 1)
-                return
-            elif data in (b"\x1b[A", b"\x1bOA", b"k", b"+", b"="):
-                band = self.eq_selected_band
-                new_gain = round(min(12.0, self.eq_manager.current_bands[band] + 0.5), 1)
-                self.eq_manager.set_band(band, new_gain)
-                self._remember_eq_bands()
-                if self.is_remote: self._send_cmd("set_eq_band", band=band, gain=new_gain)
-                elif self.engine: self.engine.set_eq_band(band, new_gain)
-                self._notify(f"{EQ_BAND_LABELS[band]} · {new_gain:+.1f} dB", 1.5)
-                return
-            elif data in (b"\x1b[B", b"\x1bOB", b"j", b"J", b"-", b"_"):
-                band = self.eq_selected_band
-                new_gain = round(max(-12.0, self.eq_manager.current_bands[band] - 0.5), 1)
-                self.eq_manager.set_band(band, new_gain)
-                self._remember_eq_bands()
-                if self.is_remote: self._send_cmd("set_eq_band", band=band, gain=new_gain)
-                elif self.engine: self.engine.set_eq_band(band, new_gain)
-                self._notify(f"{EQ_BAND_LABELS[band]} · {new_gain:+.1f} dB", 1.5)
-                return
-            elif data in (b"p", b"P", b"\t"):
-                name = self.eq_manager.cycle_preset(1)
-                self._remember_eq_bands()
-                if self.is_remote: self._send_cmd("set_eq_preset", preset=name)
-                elif self.engine: self.engine.set_eq_preset(name)
-                self._notify(f"Equalizer Preset: {name}", 2.0)
-                return
-            elif data in (b"b", b"B"):
-                self._cycle_bass_mode(1)
-                return
-            elif data in (b"\x1b", b"E", b"\r", b"\n", b"q", b"Q"):
-                self._vertical_eq_focus = False
-                return
-            elif data == b" ":
-                self._send_cmd("toggle")
-                return
         if self.equalizer_hud_active:
             if data in (b"\x1b[D", b"\x1bOD", b"h", b"H"):
                 self.eq_selected_band = max(0, self.eq_selected_band - 1)
@@ -10124,15 +10048,6 @@ class TerminalPlayerUI:
                 return
             self._playlist_clear_armed = False
         if data in (b"i", b"I"): self.inspector_hud_active = not self.inspector_hud_active; return
-        if data in (b"E",) and self.ui_size_mode == "VERTICAL":
-            # The deck already shows a graphic EQ; E hands it the arrow keys
-            # rather than opening the full-screen HUD, which cannot fit 40
-            # columns. A second press gives the keys back to the playlist.
-            self._vertical_eq_focus = not self._vertical_eq_focused()
-            self._notify(
-                "Equalizer: arrow keys drive the sliders, Esc returns to the playlist"
-                if self._vertical_eq_focused() else "Playlist: arrow keys select a track", 2.5)
-            return
         if data in (b"E",) and self.ui_size_mode not in COMPACT_UI_SIZES:
             self.equalizer_hud_active = not self.equalizer_hud_active
             if self.equalizer_hud_active: self.inspector_hud_active = False
@@ -10189,12 +10104,16 @@ class TerminalPlayerUI:
             self._notify(f"Shuffle: {'ON' if so else 'OFF'}", 2.5)
         elif data in (b"m", b"M"):
             if os.environ.get("MP_LIQUID_GLASS") == "1":
-                self.ui_size_mode = ui_size_step(self.ui_size_mode)
+                # A window opened as Mini or Micro has no landscape frame to
+                # go back to, so it steps up to the portrait one instead.
+                self.ui_size_mode = ui_size_step(
+                    self.ui_size_mode,
+                    allow_normal=self.ui_size_mode not in COMPACT_UI_SIZES)
                 self._publish_liquid_ui_size()
                 self._notify(f"Liquid Glass Mode: {self.ui_size_mode.title()}", 2.0)
-            elif self.ui_size_mode in COMPACT_UI_SIZES:
-                # Inside a compact window M wraps round the compact ring: the
-                # tall deck, then Mini, then Micro, then the deck again.
+            elif self.ui_size_mode in COMPACT_UI_SIZES or self.ui_size_mode == "VERTICAL":
+                # Vertical is a full frame, but cycling between it and the
+                # strips is still an in-place resize, not a new window.
                 self.ui_size_mode = ui_size_step(self.ui_size_mode, allow_normal=False)
                 t_cols, t_rows = ui_size_grid(self.ui_size_mode)
                 resize_host_terminal(t_cols, t_rows, UI_SIZE_TITLES[self.ui_size_mode])
@@ -10397,7 +10316,6 @@ class TerminalPlayerUI:
         w, h = _win_visible_size((80, 24))
         w, h, st = max(40, w), max(5, h), self._get_status()
         self._arm_visualizer_text()
-        if self.ui_size_mode == "VERTICAL": return self._draw_vertical_frame(w, h, st)
         if self.ui_size_mode == "MINI": return self._draw_mini_frame(w, h, st)
         if self.ui_size_mode == "MICRO": return self._draw_micro_frame(w, h, st)
         self._sync_initial_selection(st)
@@ -10447,7 +10365,21 @@ class TerminalPlayerUI:
             preset = self._mp_visualizer_preset()
             btitle = f"✦ MP LIQUID GLASS VISUALIZER — {preset.get('id', 0)} {preset.get('name', '')} ✦"
             bsub = "Press 0-9 to change the visualizer theme  •  Shift+V returns to liquid glass"
-        btitle, bsub = btitle[:max(0, iw - 1)], bsub[:max(0, iw - 1)]
+        # A portrait column is narrower than the wording these headers were
+        # written for, so the title and subtitle are chosen from progressively
+        # shorter forms rather than sliced mid-word.
+        if self.mode == "FAVORITES":
+            btitle_forms = [btitle, "✦ MP AUDIO PLAYER — FAVORITES ✦", "✦ FAVORITES ✦"]
+            bsub_forms = [bsub, "Favorites Playlist", "Favorites"]
+        elif self.mode == "MUSIC":
+            btitle_forms = [btitle, "✦ MP AUDIO PLAYER — MUSIC ✦", "✦ MUSIC ✦"]
+            bsub_forms = [bsub, music_library_label(self.folder_name), "Music Library"]
+        else:
+            btitle_forms = [btitle, "✦ MP AUDIO PLAYER (LIQUID GLASS) ✦", "✦ MP AUDIO PLAYER ✦", "✦ MP LIQUID ✦"]
+            bsub_forms = [bsub, "Liquid Glass Translucent Surface", "Liquid Glass", "Glass"]
+        btitle = next((t for t in btitle_forms if _display_width(t) <= iw), btitle_forms[-1])
+        bsub = next((t for t in bsub_forms if _display_width(t) <= iw), bsub_forms[-1])
+        btitle, bsub = _clip_display(btitle, max(0, iw - 1)), _clip_display(bsub, max(0, iw - 1))
         # Side bars stay on the border colour. Accent colours the subtitle text only,
         # so the header edge is one colour all the way around.
         lines.extend([
@@ -10488,7 +10420,15 @@ class TerminalPlayerUI:
         # a white title. `is_lg` picks the surface: the console pane under the
         # same theme is usually dark, which is the opposite answer.
         title_ink = now_playing_ink(self.visualizer.theme, is_lg)
-        lines.append(f"  {badge}{mode_b}{rec_b}  {bold_s}{title_ink}♫  {tname}{NC}{fav_now}")
+        # Trim the title to the space the badges leave, measured on the row as
+        # drawn; a fixed character budget cannot know how wide `▶ PLAYING` and
+        # the mode chip are, which is why a portrait column ran over.
+        title_head = f"  {badge}{mode_b}{rec_b}  {bold_s}{title_ink}♫  "
+        tname = st.get("title", "Unknown Mix") or "Unknown Mix"
+        avail = max(6, iw - _display_width(title_head) - _display_width(fav_now))
+        if _display_width(tname) > avail:
+            tname = _clip_display(tname, max(1, avail - 3)) + "..."
+        lines.append(f"{title_head}{tname}{NC}{fav_now}")
         if is_rec:
             rf, rmb, rdur = os.path.basename(st.get("recording_file", "")), float(st.get("recording_bytes", 0)) / 1048576.0, format_seconds(float(st.get("recording_duration", 0.0)))
             rdot = f"{bold_s}{COLOR_TRAFFIC_RED}●{NC}" if flash else f"{dim_s}{RED}○{NC}"
@@ -10497,9 +10437,20 @@ class TerminalPlayerUI:
         bt_b = f"{bold_s}{COLOR_NEON_PINK}🎧 Output: {out_n}{NC}" if (is_bt or "bluetooth" in str(out_n).lower()) else f"{dim_s}{CYAN}🔊 Output: {out_n}{NC}"
         s4_b = f"  │  {bold_s}\033[38;2;0;255;127m🎛️ S4 MIDI [hw:0,0]{NC}" if (CONFIG_DIR / "traktor_s4_midi.pid").exists() else ""
         src_badge = " Lossless" if (w >= 116 and is_lossless_path(st.get("path", ""))) else ""
-        lines.append(f"  {dim_s}{CYAN}Format: {ext}{src_badge}  │  Sample Rate: {sr/1000:.1f} kHz  │  Channels: {ch_str}  │  {bt_b}{s4_b}{NC}" if w >= 106 else f"  {dim_s}{CYAN}Format: {ext}  │  {sr/1000:.1f} kHz  │  {bt_b}{NC}")
+        # Three widths, so a portrait column does not run past its border: the
+        # full line, then without the device name, then without the output.
+        lines.append(_fit_text_line([
+            f"  {dim_s}{CYAN}Format: {ext}{src_badge}  │  Sample Rate: {sr/1000:.1f} kHz  │  Channels: {ch_str}  │  {bt_b}{s4_b}{NC}",
+            f"  {dim_s}{CYAN}Format: {ext}  │  {sr/1000:.1f} kHz  │  {bt_b}{NC}",
+            f"  {dim_s}{CYAN}Format: {ext}  │  {sr/1000:.1f} kHz  │  {ch_str}{NC}",
+            f"  {dim_s}{CYAN}{ext} {sr/1000:.1f} kHz{NC}",
+        ], max(20, w - 1)))
 
-        pct, bw = float(st.get("progress_pct", 0.0)), max(20, min(max(54, iw - 42), iw - 28))
+        # The bar keeps at least 12 cells and gives up the rest to the labels,
+        # so `MM:SS ... MM:SS (nn.n%)` still fits a 56-column portrait window.
+        pct = float(st.get("progress_pct", 0.0))
+        label_w = 2 + _display_width(st.get("position_fmt", "00:00")) * 2 + 6 + 2
+        bw = max(12, min(max(54, iw - 42), max(12, iw - label_w)))
         fw = int((pct / 100.0) * bw)
         # The track itself is the seek target. The time labels and the
         # percentage are not: `3 + len(POSITION) + 2` is the two leading spaces,
@@ -10515,7 +10466,16 @@ class TerminalPlayerUI:
         pitch_start = _display_width(pitch_pfx) + 1
         pitch_span = (pitch_start, pitch_start + _display_width(pitch_trk) - 1)
         lines.extend([f"{pitch_pfx}{pitch_trk}{pitch_sfx}", ""])
-        lines.extend(self.visualizer.render(st, width=w, height=(7 if h >= 34 else (5 if h >= 28 else 3))) + [""])
+        # A landscape window keeps its familiar 7/5/3 analyser so the playlist
+        # below is untouched. The portrait column has height to spare, so there
+        # the analyser takes what the fixed rows leave, with the playlist
+        # keeping the larger share so it stays a playlist.
+        if self.ui_size_mode == "VERTICAL":
+            spare = max(0, h - 17 - 9)
+            analyser_h = max(3, min(20, 8 + spare // 3))
+        else:
+            analyser_h = 7 if h >= 34 else (5 if h >= 28 else 3)
+        lines.extend(self.visualizer.render(st, width=w, height=analyser_h) + [""])
 
         active_tracks = self._get_active_tracks()
         prompt_line = self._favorites_prompt_line()
@@ -10710,7 +10670,8 @@ class TerminalPlayerUI:
         lines.append(_fit_text_line([
             f"  🔊 Vol: {vol}  │  🎚 Pitch: {pbadge}  │  🎛 EQ: {bold_s}{eq_p_col}{eq_p}{NC}  │  {bass_badge}  │  📊 Vis: {bold_s}{COLOR_NEON_PINK}{eq_n}{NC}  │  🔀 Shuf: {shuf}  │  🔁 Rep: {rep}  │  🎨 {bold_s}{COLOR_HOT_PURPLE}{th_n}{NC}",
             f"  Vol: {vol}  │  Pitch: {pbadge}  │  EQ: {bold_s}{eq_p_col}{eq_p}{NC}  │  {bass_badge}  │  Vis: {bold_s}{COLOR_NEON_PINK}{eq_n}{NC}  │  Shuf: {shuf}  │  Rep: {rep}",
-            f"  Vol {vol}  Pitch {pbadge}  EQ {eq_p}  BASS {self._bass_mode().upper()}  Vis {eq_n}  Shuf {shuf}  Rep {rep}"
+            f"  Vol {vol}  Pitch {pbadge}  EQ {eq_p}  BASS {self._bass_mode().upper()}  Vis {eq_n}  Shuf {shuf}  Rep {rep}",
+            f"  Vol {vol}  Pitch {pbadge}  {eq_p}",
         ], max(20, w - 1)))
         if self.mode == "MUSIC":
             g_bottom = f"[G] {g_key}  " if is_lg else ""
@@ -10734,7 +10695,8 @@ class TerminalPlayerUI:
             lines.append(_fit_text_line([
                 f"  {hint_col}[3] Favorites  [H] Mark Fav  [1] Mix Archive  [2] Music  [D] Clear Playlist{export_hint}  [Space] Play/Pause  [R] Record WAV  [M] Vertical  [L] Liquid Glass  [Z] MP Liquid Visualizer  [Q] Queue  [G] {g_key}  [+/-] Pitch ±1% (±20% max)  [0] Pitch Reset  [v/V] Vol  [u] Mute  [s] Shuffle  [y] Repeat  [n/p] Next/Prev  [a] Audio/BT  [O] Open  [T] Tracklist  [w] Export  [F] Files  [E] Equalizer HUD  [b] Bass Boost  [e] Vis  [Esc] Exit{NC}",
                 f"  {hint_col}[3] Favorites  [H] Mark  [1] Mix Archive  [2] Music  [D] Clear{export_hint}  Space Play  R Rec  M Vertical  L Glass  Q Queue  G {g_key}  +/- Pitch  0 Reset  v/V Vol  u Mute  s Shuf  y Rep  n/p Skip  O Open  T List  E EQ  b Bass  Esc Exit{NC}",
-                f"  {hint_col}[3] Fav  [H] Mark  [1] Mix  [2] Music  [D] Clear{export_hint}  Space Play  R Rec  M Vertical  Q Queue  G {g_key}  v/V Vol  u Mute  s Shuf  y Rep  n/p Skip  E EQ  b Bass  Esc Exit{NC}"
+                f"  {hint_col}[3] Fav  [H] Mark  [1] Mix  [2] Music  [D] Clear{export_hint}  Space Play  R Rec  M Vertical  Q Queue  G {g_key}  v/V Vol  u Mute  s Shuf  y Rep  n/p Skip  E EQ  b Bass  Esc Exit{NC}",
+                f"  {hint_col}Space Play  M Mini  E EQ  b Bass  c Theme  Esc Exit{NC}"
             ], max(20, w - 1)))
         # Drop the breathing rows rather than a control line if the frame runs
         # past the console height. The Bass Boost row made this reachable at
@@ -10742,6 +10704,13 @@ class TerminalPlayerUI:
         while len(lines) > h and spacers and lines[spacer_at] == "":
             del lines[spacer_at]
             spacers -= 1
+        # The portrait column can be taller than its content when the playlist
+        # has fewer entries than rows. The spare rows belong to the playlist,
+        # above the two footer rows, so it fills the glass without a blank
+        # strip under the key hints. A landscape frame is never padded.
+        if self.ui_size_mode == "VERTICAL":
+            while len(lines) < h:
+                lines.insert(max(0, len(lines) - 2), "")
         if is_lg:
             lines = [_strip_bold_ansi(l) for l in lines]
         self._present(lines, w, h)
@@ -10816,276 +10785,6 @@ class TerminalPlayerUI:
         else:
             g_early = f"\033[38;2;0;229;255m[G]{NC} {text_col}{g_key}{NC}  " if is_lg else ""
             lines.append(f"  \033[38;2;0;229;255m[3]{NC} \033[38;2;255;196;0mFavorites{NC}  \033[38;2;0;229;255m[H]{NC} {text_col}Mark{NC}  \033[38;2;0;229;255m[1]{NC} {text_col}Mix{NC}  \033[38;2;0;229;255m[2]{NC} {text_col}Music{NC}  \033[38;2;0;229;255m[D]{NC} {text_col}Clear{NC}  {g_early}\033[38;2;0;229;255m[Space]{NC} {text_col}Play{NC}  \033[38;2;0;229;255m[Q]{NC} {text_col}Queue{NC}  \033[38;2;0;229;255m[R]{NC} {text_col}Rec{NC}  \033[38;2;0;229;255m[b]{NC} {text_col}Bass{NC}  \033[38;2;0;229;255m[n/p]{NC} {text_col}Skip{NC}  \033[38;2;255;215;0m[M]{NC} {text_col}Micro{NC}  \033[38;2;255;64;64mEsc{NC} {text_col}Close{NC}")
-        if is_lg:
-            lines = [_strip_bold_ansi(l) for l in lines]
-        self._present(lines, w, h)
-
-    def _vertical_eq_focused(self) -> bool:
-        """True when the deck's equaliser owns the arrow keys.
-
-        Read through a method so a partially built UI (a test instance, or one
-        made with ``__new__``) answers "playlist" instead of raising.
-        """
-        return bool(getattr(self, "_vertical_eq_focus", False))
-
-    # Short band names, in EQ_BAND_LABELS order, so a 40-column deck can label
-    # every slider. Three cells each keeps them inside a band column.
-    _VERTICAL_EQ_LABELS = ("31", "62", "125", "250", "500", "1k", "2k", "4k", "8k", "16k")
-
-    def _vertical_panels(self, h: int) -> Tuple[int, int, int]:
-        """Rows for the three stacked panels: main window, equaliser, playlist.
-
-        The deck is one column split top to bottom, the way a stacked media
-        player has always been arranged: the main window with the clock and the
-        spectrum on top, the graphic equaliser under it, and the playlist at the
-        bottom. The main window and the equaliser are fixed so the panels cannot
-        reflow as the track changes; the playlist takes what is left, so a
-        taller window buys track rows.
-        """
-        # The last row is the key hint, so the panels get everything above it.
-        # When the window is shorter than they want, the equaliser gives up rows
-        # first and the main window second; the playlist keeps its minimum so
-        # there is always somewhere to see the queue.
-        usable = max(3, h - 1)
-        main_rows, eq_rows = VERTICAL_MAIN_ROWS, VERTICAL_EQ_ROWS
-        # Give rows up in the order that keeps the deck readable: the equaliser
-        # shrinks first, the main window second, and the playlist keeps at least
-        # two rows (a header and one track) throughout.
-        list_rows = VERTICAL_PLAYLIST_MIN_ROWS
-        while main_rows + eq_rows + list_rows > usable and eq_rows > VERTICAL_EQ_MIN_ROWS:
-            eq_rows -= 1
-        while main_rows + eq_rows + list_rows > usable and main_rows > 10:
-            main_rows -= 1
-        while main_rows + eq_rows + list_rows > usable and list_rows > 2:
-            list_rows -= 1
-        # Any remaining rows are the playlist's; a tall window just lists more.
-        # The main window and the equaliser keep their height, so the top half
-        # never changes shape between tracks. The playlist takes every row that
-        # is left; a short list simply shows its empty rows, the way a playlist
-        # pane does.
-        list_rows = max(list_rows, usable - main_rows - eq_rows)
-        return main_rows, eq_rows, list_rows
-
-    def _vertical_panel_top(self, label: str, iw: int, b_col: str, text_col: str) -> str:
-        return _boxed_rule("┌", label, "┐", iw, b_col, text_col)
-
-    def _vertical_panel_bottom(self, iw: int, b_col: str) -> str:
-        return _boxed_rule("└", "─" * 1, "┘", iw, b_col, b_col)
-
-    def _vertical_panel_row(self, body: str, iw: int, b_col: str, ink: str = "") -> str:
-        """One interior row of a stacked panel, padded to the panel width."""
-        body = _clip_display(body, iw)
-        pad = max(0, iw - _display_width(body))
-        return f"  {b_col}│{NC}{ink}{body}{NC}{' ' * pad}{b_col}│{NC}"
-
-    def _draw_vertical_eq(self, iw: int, rows: int, b_col: str, text_col: str) -> List[str]:
-        """The equaliser band, drawn as a graphic EQ between the other two.
-
-        Ten sliders across the column, each a block meter with its band under
-        it, so the block reads like the sliders on a hardware unit rather than a
-        list. The selected band is the one the arrow keys and +/- drive.
-        """
-        gains = list(self.eq_manager.current_bands)
-        sel = max(0, min(len(gains) - 1, int(self.eq_selected_band)))
-        preset = self.eq_manager.active_preset
-        # The panel title says which control the arrow keys drive, so the focus
-        # is never a guess: SLIDERS means they move the bands, TRACKS means
-        # they select a row in the playlist below.
-        focus = self._vertical_eq_focused()
-        mode_tag = "SLIDERS" if focus else "TRACKS"
-        top = self._vertical_panel_top(f"── EQUALIZER · {preset} · {mode_tag} ", iw, b_col, text_col)
-        bottom = self._vertical_panel_bottom(iw, b_col)
-        # Strict budget: the panel never grows past the rows it was given, so
-        # the three panels always sum to the window height. With room for the
-        # band names it is top + meters + names + bottom; without, the names
-        # drop and the meters take the space.
-        budget = max(1, int(rows))
-        if budget < 3:
-            return [top]
-        with_names = budget >= 4
-        meter_rows = max(1, budget - (3 if with_names else 2))
-        lines = [top]
-        band_cells = max(2, iw // 10)
-        step = 24.0 / max(1, meter_rows - 1)
-        for row in range(meter_rows):
-            level = 12.0 - row * step          # row 0 is +12 dB
-            centre = abs(level) <= step / 2.0
-            cells = []
-            for index, gain in enumerate(gains):
-                hit = abs(float(gain) - level) <= step / 2.0
-                if index == sel:
-                    glyph = "█" if hit else ("┼" if centre else "┆")
-                    hot = COLOR_NEON_PINK if (hit or focus) else (COLOR_ELECTRIC_CYAN if centre else COLOR_HOT_PURPLE)
-                    ink = hot
-                elif hit:
-                    glyph = "█"
-                    ink = COLOR_TRAFFIC_GREEN if float(gain) > 0 else (COLOR_TRAFFIC_AMBER if float(gain) < 0 else COLOR_ELECTRIC_CYAN)
-                else:
-                    glyph = "━" if centre else "│"
-                    ink = COLOR_ELECTRIC_CYAN if centre else DIM
-                cells.append(f"{ink}{glyph * band_cells}{NC}")
-            lines.append(self._vertical_panel_row(" " + "".join(cells), iw, b_col))
-        if with_names:
-            labels = "".join(
-                f"{BOLD}{COLOR_NEON_PINK if i == sel else COLOR_LILAC}{self._VERTICAL_EQ_LABELS[i][:band_cells]:^{band_cells}}{NC}"
-                for i in range(len(gains))
-            )
-            lines.append(self._vertical_panel_row(" " + labels, iw, b_col))
-        lines.append(bottom)
-        return lines[:budget]
-
-    def _draw_vertical_playlist(self, iw: int, rows: int, st: Dict[str, Any],
-                                b_col: str, text_col: str) -> List[str]:
-        """The playlist band: the scrolling track list under the equaliser."""
-        tracks = self._get_active_tracks()
-        now_path = st.get("path", "")
-        noun = self._entry_noun()
-        lines = [self._vertical_panel_top(f"── PLAYLIST · {len(tracks)} {noun} ", iw, b_col, text_col)]
-        view = max(1, rows - 2)
-        if self.selected_row < self.scroll_offset:
-            self.scroll_offset = self.selected_row
-        elif self.selected_row >= self.scroll_offset + view:
-            self.scroll_offset = self.selected_row - view + 1
-        if not tracks:
-            lines.append(self._vertical_panel_row(f" No {noun} loaded.", iw, b_col, DIM))
-            for _ in range(max(0, view - 1)):
-                lines.append(self._vertical_panel_row("", iw, b_col))
-            lines.append(self._vertical_panel_bottom(iw, b_col))
-            return lines
-        # `NN. ` then the name, then the length on the right when one is known.
-        num_w = max(2, len(str(len(tracks))))
-        name_w = max(6, iw - num_w - 4)
-        for row in range(view):
-            index = self.scroll_offset + row
-            if index >= len(tracks):
-                lines.append(self._vertical_panel_row("", iw, b_col))
-                continue
-            track = tracks[index]
-            name = str(track.get("name", ""))
-            if _display_width(name) > name_w:
-                name = _clip_display(name, max(1, name_w - 3)) + "..."
-            playing = track.get("path") == now_path
-            selected = index == self.selected_row
-            marker = PLAYLIST_ACTIVE_MARK if playing else ("▸" if selected else " ")
-            row_ink = COLOR_NEON_PINK if selected else text_col
-            body = f" {marker}{index + 1:>{num_w}d}. {name}"
-            lines.append(self._vertical_panel_row(body, iw, b_col, row_ink))
-        lines.append(self._vertical_panel_bottom(iw, b_col))
-        return lines
-
-    def _draw_vertical_frame(self, w: int, h: int, st: Dict[str, Any]):
-        """The portrait deck: a stacked player in one narrow column.
-
-        The window is twice as tall as it is wide, so the frame is stacked the
-        way a compact desktop player has always been: a main window with the
-        block-digit clock, the spectrum and the transport on top, the graphic
-        equaliser under it, and the playlist filling the bottom. That is what
-        the tall shape is for -- the three panels sit one above the other
-        instead of competing for one row of text.
-        """
-        self._arm_visualizer_text()
-        self._reset_click_targets()
-        self._sync_initial_selection(st)
-        t_now = time.time()
-        g1, g2, _ = _get_dynamic_gradient(t_now)
-        c1, c2 = f"\033[38;2;{g1[0]};{g1[1]};{g1[2]}m", f"\033[38;2;{g2[0]};{g2[1]};{g2[2]}m"
-        target_cols, target_rows = VERTICAL_COLS, VERTICAL_ROWS
-        if (w != target_cols or h != target_rows) and sys.platform.startswith(("linux", "freebsd")) \
-                and not os.environ.get("KONSOLE_DBUS_SERVICE") and not os.environ.get("MP_LIQUID_GLASS"):
-            sys.stdout.write(f"\033[8;{target_rows};{target_cols}t")
-        _set_terminal_title(UI_SIZE_TITLES["VERTICAL"])
-        is_lg = bool(os.environ.get("MP_LIQUID_GLASS"))
-        bold_s = "" if is_lg else BOLD
-        text_col = theme_body_ansi(self.visualizer.theme) if is_lg else theme_console_body_ansi(self.visualizer.theme)
-        iw = max(24, min(w - 4, VERTICAL_COLS - 4))
-        pal = self.visualizer.get_theme_palette()
-        border = pal.get("border", COLOR_HOT_PURPLE)
-        b_col = border if is_lg else f"{BOLD}{border}"
-        if is_lg and self.mp_visualizer_on:
-            header_title = "✦ MP LIQUID VISUALIZER ✦"
-        else:
-            header_title = "✦ MP VERTICAL PLAYER (GLASS) ✦" if is_lg else "✦ MP VERTICAL PLAYER ✦"
-
-        main_rows, eq_rows, list_rows = self._vertical_panels(h)
-
-        # One rule with the title in it, not a three-row box: the main window is
-        # the compact half of the deck, so its chrome stays at one line and the
-        # rows go to the clock and the spectrum.
-        lines = [_boxed_rule("╭", f"── {header_title} ", "╮", iw, c1, c2)]
-        state = st.get("state", "stopped")
-        badge = (f"{bold_s}{playing_badge_ink(self.visualizer.theme, is_lg)}▶ PLAY{NC}" if state == "playing"
-                 else (f"{bold_s}\033[38;2;255;191;0m⏸ PAUSE{NC}" if state == "paused"
-                       else f"{bold_s}\033[38;2;255;64;64m⏹ STOP{NC}"))
-        is_rec, flash = bool(st.get("recording", False)), (int(t_now * 1.5) % 2 == 0)
-        rec_b = f" {bold_s}\033[38;2;255;64;64m● REC{NC}" if (is_rec and flash) else (f" \033[38;2;255;100;100m○ REC{NC}" if is_rec else "")
-        tname = st.get("title", "Unknown Track")
-        if _display_width(tname) > iw - 4:
-            tname = _clip_display(tname, max(1, iw - 7)) + "..."
-        lines.append(f"  {badge}{rec_b} {bold_s}{now_playing_ink(self.visualizer.theme, is_lg)}{tname}{NC}")
-        # The oversized clock is what makes the deck readable from across a
-        # desk; it is the top panel's centrepiece.
-        clock = st.get("position_fmt", "00:00") or "00:00"
-        for row in lcd_clock_rows(clock, c1):
-            pad = max(0, (iw - _display_width(row)) // 2)
-            lines.append(f"  {' ' * pad}{row}")
-        # The spectrum strip is the analyser's place in the main window, in the
-        # portrait bars so it fits the column whatever style is selected.
-        # Everything between the clock and the seek bar is spectrum. Two rows
-        # below it are reserved: the seek bar and the transport line. Reserving
-        # three left the main window one row short and the pad turned that into
-        # a blank line under the transport.
-        spectrum_rows = max(1, main_rows - len(lines) - 2)
-        # vertical_spectrum_rows carries its own two-space frame indent; inside
-        # the deck the panel already sits at column 3, so drop one indent.
-        for row in vertical_spectrum_rows(st, max(20, iw), spectrum_rows):
-            lines.append(f"  {row[2:]}" if row.startswith("  ") else row)
-        pct, bw = float(st.get("progress_pct", 0.0)), max(10, iw - 8)
-        fw = int((pct / 100.0) * bw)
-        bar_fill = f"\033[38;2;0;229;255m{'━' * fw}\033[38;2;255;255;255m●{NC}"
-        bar_empty = f"\033[38;2;90;105;135m{'─' * max(0, bw - fw - 1)}{NC}"
-        vertical_bar_start = 3
-        self._timeline_row = len(lines) + 1
-        self._timeline_span = (vertical_bar_start, vertical_bar_start + bw - 1)
-        lines.append(f"  {bar_fill}{bar_empty} {text_col}{pct:.0f}%{NC}")
-        vol = f"{st.get('volume', 85)}%" if not st.get("muted") else "\033[38;2;255;64;64mMUTE\033[0m"
-        pval = int(st.get("pitch_percent", 0))
-        knob_col = self.visualizer.pitch_control_colors()["knob"]
-        p_str = f"{knob_col}0%{NC}" if pval == 0 else f"{knob_col}{pval:+d}%{NC}"
-        lines.append(_fit_text_line([
-            f"  {text_col}{st.get('position_fmt', '00:00')}/{st.get('duration_fmt', '00:00')}{NC}  🔉 \033[38;2;0;229;255m{vol}{NC}  🎚 {p_str}  {bass_mode_badge(self._bass_mode(), bool(bold_s))}",
-            f"  {st.get('position_fmt', '00:00')}/{st.get('duration_fmt', '00:00')}  {vol}",
-        ], max(20, w - 1)))
-        if len(lines) > main_rows:
-            lines = lines[:main_rows]
-        while len(lines) < main_rows:
-            lines.append("")
-
-        lines.extend(self._draw_vertical_eq(iw, eq_rows, b_col, text_col))
-        lines.extend(self._draw_vertical_playlist(iw, list_rows, st, b_col, text_col))
-
-        prompt_line = self._favorites_prompt_line()
-        if prompt_line:
-            lines.append(_fit_text_line([prompt_line], max(20, w - 1)))
-        elif t_now < self.notification_time and self.notification_msg:
-            lines.append(f"  {self._notification_ansi(bold_s)}📂 {self.notification_msg}{NC}")
-        elif self._vertical_eq_focused():
-            lines.append(_fit_text_line([
-                f"  \033[38;2;0;229;255m[←/→]{NC} {text_col}Band{NC}  \033[38;2;0;229;255m[↑/↓]{NC} {text_col}Gain{NC}  \033[38;2;0;229;255m[P]{NC} {text_col}Preset{NC}  \033[38;2;255;64;64m[Esc]{NC} {text_col}Done{NC}",
-                f"  [←/→] Band  [↑/↓] Gain  [P] Preset  \033[38;2;255;64;64mEsc{NC}",
-                f"  [←/→] [↑/↓] Gain  [P] Preset  [Esc]",
-            ], max(20, w - 1)))
-        elif is_lg:
-            lines.append(_fit_text_line([
-                f"  \033[38;2;0;229;255m[↑/↓]{NC} {text_col}Track{NC}  \033[38;2;0;229;255m[E]{NC} {text_col}EQ{NC}  \033[38;2;255;215;0m[M]{NC} {text_col}Mini{NC}  \033[38;2;255;64;64m[Esc]{NC} {text_col}Close{NC}",
-                f"  [↑/↓] Track  [E] EQ  \033[38;2;255;215;0m[M]{NC} Mini  \033[38;2;255;64;64mEsc{NC}",
-                f"  [↑/↓] [E] EQ  [M] Mini  [Esc]",
-            ], max(20, w - 1)))
-        else:
-            lines.append(_fit_text_line([
-                f"  \033[38;2;0;229;255m[Space]{NC} {text_col}Play{NC}  \033[38;2;0;229;255m[↑/↓]{NC} {text_col}Track{NC}  \033[38;2;0;229;255m[E]{NC} {text_col}EQ{NC}  \033[38;2;0;229;255m[e]{NC} {text_col}Vis{NC}",
-                f"  [Space] Play  [↑/↓] Track  [E] EQ  [e] Vis",
-                f"  [Space] [↑/↓] [E] EQ  [e] Vis",
-            ], max(20, w - 1)))
         if is_lg:
             lines = [_strip_bold_ansi(l) for l in lines]
         self._present(lines, w, h)
@@ -11196,7 +10895,7 @@ class TerminalPlayerUI:
             lines = [_strip_bold_ansi(l) for l in lines]
         self._present(lines, w, h)
 
-def _spawn_player_daemon(file_path: Optional[str] = None, auto_bluetooth: bool = True, mode: str = "MIX_ARCHIVE", music_folder: Optional[str] = None, playlist_path: Optional[str] = None, seek_to: Optional[float] = None) -> Optional[int]:
+def _spawn_player_daemon(file_path: Optional[str] = None, auto_bluetooth: bool = True, mode: str = "MIX_ARCHIVE", music_folder: Optional[str] = None, playlist_path: Optional[str] = None, seek_to: Optional[float] = None, no_autoplay: bool = False) -> Optional[int]:
     if is_player_daemon_running():
         # A live PID is not enough: older/crashed startup paths can leave a
         # daemon holding the playback lock after its IPC listener disappeared.
@@ -11234,6 +10933,8 @@ def _spawn_player_daemon(file_path: Optional[str] = None, auto_bluetooth: bool =
             pass
     _cleanup_stale_daemon_files()
     cmd = [sys.executable, str(Path(__file__).resolve()), "--daemon"] + ([] if auto_bluetooth else ["--no-bluetooth-auto"])
+    if no_autoplay:
+        cmd.append("--no-autoplay")
     if mode == "MUSIC":
         cmd.append("--music-mode")
         if music_folder: cmd.extend(["--music-folder", str(music_folder)])
@@ -11273,6 +10974,10 @@ def _start_headset_controls(engine) -> None:
     """
     if not sys.platform.startswith("linux"):
         return
+    if PLAYER_NAMESPACE:
+        # A mixer deck is a second engine on the same bus name; only the
+        # default player claims the desktop media keys.
+        return
     try:
         from mp_mpris import start_mpris_service
     except ImportError:
@@ -11302,6 +11007,9 @@ def main():
         (("--vol",), dict(type=str)), (("--seek",), dict(type=float)),
         (("--seek-to", "--position"), dict(type=float, default=None)),
         (("--resume",), dict(action="store_true")),
+        # A mixer deck opens ready to play but silent: no resume, no first-run
+        # sample, no "latest mix". Space (or the player's own Play) starts it.
+        (("--no-autoplay",), dict(action="store_true")),
         (("--status",), dict(action="store_true")), (("--status-line",), dict(action="store_true")),
         (("--play-latest",), dict(action="store_true")), (("--get-latest-mix",), dict(action="store_true")),
         (("--list-mixes",), dict(action="store_true")), (("--open-file-manager", "-f"), dict(action="store_true")),
@@ -11739,7 +11447,11 @@ def main():
 
         if not daemon_running:
             resume_f, resume_pos = None, 0.0
-            if not tf and RESUME_STATE_FILE.is_file():
+            if not tf and args.no_autoplay:
+                # A mixer deck must never inherit the previous session or the
+                # first-run sample: it opens with the library and stays silent.
+                pass
+            elif not tf and RESUME_STATE_FILE.is_file():
                 try:
                     res_data = json.loads(RESUME_STATE_FILE.read_text(encoding="utf-8"))
                     if res_data and res_data.get("path") and os.path.isfile(res_data["path"]):
@@ -11789,7 +11501,12 @@ def main():
                         }, indent=2), encoding="utf-8")
                     except Exception: pass
             latest = scanner.get_latest_mix() if not is_music else (mixes[0] if mixes else None)
-            init_f = tf or resume_f or (latest["path"] if latest else (mixes[0]["path"] if mixes else None))
+            if args.no_autoplay:
+                # Only an explicit file is loaded; otherwise the daemon opens
+                # the playlist on track 0, paused.
+                init_f = tf
+            else:
+                init_f = tf or resume_f or (latest["path"] if latest else (mixes[0]["path"] if mixes else None))
             if tf and args.seek_to is not None:
                 init_pos = float(args.seek_to)
             elif not tf and resume_f:
@@ -11802,7 +11519,7 @@ def main():
             # status file fills in as soon as the engine is up.
             spawned_pid = _spawn_player_daemon(init_f, auto_bluetooth=auto_bt, mode=current_mode,
                                                music_folder=folder_target, playlist_path=args.playlist,
-                                               seek_to=init_pos)
+                                               seek_to=init_pos, no_autoplay=args.no_autoplay)
         else:
             spawned_pid = None
             d_data = d_status.get("data", {}) if d_status else {}
@@ -11812,6 +11529,9 @@ def main():
                 if args.seek_to is not None:
                     play_kw["position"] = float(args.seek_to)
                 send_ipc_command("play", **play_kw)
+            elif args.no_autoplay:
+                # The deck's engine is already up; nothing starts by itself.
+                pass
             elif requested_music and str(d_data.get("mode") or "").upper() != "MUSIC":
                 send_ipc_command("load_playlist", mode="MUSIC", folder_name=folder_target, playlist_path=args.playlist, play=True)
             elif d_state == "stopped" or not d_data.get("path"):
@@ -11884,7 +11604,7 @@ def main():
     engine = AudioEngine(mixes, auto_bluetooth=auto_bt, mode=current_mode)
     engine.playlist_path = str(args.playlist or (getattr(scanner, "playlist_path", "") or ""))
     PlayerIPCServer(engine).start()
-    if mixes and not explicit_missing: engine.load_track(init_idx, True, start_position=init_pos)
+    if mixes and not explicit_missing: engine.load_track(init_idx, not args.no_autoplay, start_position=init_pos)
     _start_headset_controls(engine)
 
     try:

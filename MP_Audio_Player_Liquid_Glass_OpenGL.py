@@ -192,31 +192,9 @@ def _kill_player_processes() -> List[int]:
 COLS, ROWS = 120, 40
 # The portrait deck. It is the size M reaches first from the full window: one
 # narrow column, so the glass rectangle is taller than it is wide.
-VERTICAL_COLS, VERTICAL_ROWS = 40, 44
+VERTICAL_COLS, VERTICAL_ROWS = 56, 52
 
 
-# The deck's main-window height, mirrored from MP_Audio_Player so the host and
-# the child agree without the host importing the whole player. It shrinks with
-# the window the same way the player's own budget does.
-VERTICAL_MAIN_ROWS = 12
-VERTICAL_MAIN_MIN_ROWS = 9
-VERTICAL_EQ_ROWS = 11
-VERTICAL_EQ_MIN_ROWS = 4
-VERTICAL_PLAYLIST_MIN_ROWS = 5
-
-
-def vertical_main_rows(rows: int) -> int:
-    """Rows the player gives its main window in a deck of ``rows``."""
-    usable = max(3, int(rows) - 1)
-    main_rows = eq_rows = list_rows = 0
-    main_rows, eq_rows, list_rows = VERTICAL_MAIN_ROWS, VERTICAL_EQ_ROWS, VERTICAL_PLAYLIST_MIN_ROWS
-    while main_rows + eq_rows + list_rows > usable and eq_rows > VERTICAL_EQ_MIN_ROWS:
-        eq_rows -= 1
-    while main_rows + eq_rows + list_rows > usable and main_rows > VERTICAL_MAIN_MIN_ROWS:
-        main_rows -= 1
-    while main_rows + eq_rows + list_rows > usable and list_rows > 2:
-        list_rows -= 1
-    return max(1, min(main_rows, int(rows) - 1))
 # Used when Hack is not installed, and when a measured cell has no face yet.
 DEFAULT_FONT = "Monospace 11"
 # Glass shader opacity when the window opens. VTE text remains fully opaque.
@@ -290,14 +268,15 @@ def player_panel_rects(cols, rows, char_w, char_h, origin_x, origin_y, mode="NOR
     if mode in ("MICRO", "MANAGER"):
         return (box(1, 0, max(20, cols - 2), rows), (0.0, 0.0, 0.0, 0.0))
     if mode == "VERTICAL":
-        # The deck stacks three panels: the main window, the equaliser and the
-        # playlist. Each panel keeps its own rectangle so the glass behind them
-        # is shaped to the thing it sits under, not one slab down the column.
-        main_rows = vertical_main_rows(rows)
-        return (
-            box(1, 0, max(20, cols - 2), main_rows),
-            box(1, main_rows, max(20, cols - 2), max(1, rows - main_rows)),
-        )
+        # Vertical is the full player frame in a portrait column, so the glass
+        # covers the same two boxes it draws: the header block on top, and the
+        # playlist box below the analyser. The analyser takes whatever height
+        # the fixed rows leave, so the playlist's first row follows the window.
+        # The offset is measured from the drawn frame at every height.
+        iw = max(20, cols - 6)
+        playlist_top = max(5, rows - 20)
+        playlist_rows = max(2, rows - playlist_top)
+        return box(2, 0, iw + 2, 4), box(2, playlist_top, iw + 2, playlist_rows)
     if mode == "MINI":
         return (box(2, 0, iw, 3), box(2, 3, iw, max(1, rows - 3)))
     if mode == "TRACKLIST":
@@ -1754,7 +1733,11 @@ class GlassHost:
             if reader is None:
                 from liquid_player_visualizer import read_player_visualizer_state as reader
                 self._read_vis_state = reader
-            active = bool(reader().get("active"))
+            state = reader()
+            # The outline exists to keep text readable over the scene. When
+            # the Visualization button hides the window the pane is ordinary
+            # glass again, so the outline goes with it.
+            active = bool(state.get("active")) and state.get("visible") is not False
         except Exception:
             return
         if active == getattr(self, "_vis_text_on", False):
@@ -1906,6 +1889,12 @@ def _companion_already_running() -> bool:
         return False
 
 
+def _host_is_manager() -> bool:
+    """True when this host is MP Gui rather than the MP Liquid Player."""
+    return (os.environ.get("MP_GUI_SESSION") == "1"
+            or os.environ.get("MP_LIQUID_GLASS_MANAGER") == "1")
+
+
 def ensure_random_visualizer_started() -> bool:
     try:
         if sys.platform == "win32":
@@ -1932,10 +1921,13 @@ def ensure_random_visualizer_started() -> bool:
 
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         # Write the active state before the child starts, so its first poll
-        # already knows it belongs behind this player.
+        # already knows it belongs behind this player. Only the Liquid Player
+        # resets ``visible``: MP Gui must not un-hide a companion the player
+        # deliberately turned off.
         try:
             from liquid_player_visualizer import mark_player_visualizer_attached
-            mark_player_visualizer_attached()
+            mark_player_visualizer_attached(
+                visible=None if _host_is_manager() else True)
         except Exception:
             pass
         extra_kw = {"creationflags": 0x00000208} if sys.platform == "win32" else {"start_new_session": True}
