@@ -25,9 +25,16 @@ every two seconds and exits once the manager that started it has gone away.
     X / Square / Nintendo Y      play or pause (SPACE), the left face button
     LB / L1, RB / R1             page up, page down
     LT / L2 / ZL, RT / R2 / ZR   previous track (CHAR:[), next track (CHAR:n)
+
+A Steam Controller arrives in "lizard mode", where it reports itself as a
+keyboard and mouse instead of a pad. Opening its gamepad node -- which this
+bridge does -- makes hid_steam turn lizard mode off, so the pad starts driving
+the menus without Steam running. Its left pad and D-pad both arrive as
+BTN_DPAD_* presses and its triggers as ABS_HAT2X / ABS_HAT2Y.
 """
 
 import argparse
+import gzip
 import os
 import re
 import select
@@ -59,9 +66,12 @@ BTN_THUMBR = 0x13E
 
 ABS_X, ABS_Y, ABS_Z, ABS_RX, ABS_RY, ABS_RZ = 0x00, 0x01, 0x02, 0x03, 0x04, 0x05
 ABS_HAT0X, ABS_HAT0Y = 0x10, 0x11
-ABS_HAT2X, ABS_HAT2Y = 0x12, 0x13  # Steam Controller triggers
-ABS_DPAD_UP, ABS_DPAD_DOWN, ABS_DPAD_LEFT, ABS_DPAD_RIGHT = 0x220, 0x221, 0x222, 0x223
-DPAD_BUTTONS = {ABS_DPAD_UP: "UP", ABS_DPAD_DOWN: "DOWN", ABS_DPAD_LEFT: "LEFT", ABS_DPAD_RIGHT: "RIGHT"}
+# hid_steam reports the triggers on HAT2 (0x14/0x15), not HAT1.
+ABS_HAT2X, ABS_HAT2Y = 0x14, 0x15
+HAT_CODES = (ABS_HAT0X, ABS_HAT0Y)
+# The Steam Controller sends its D-pad and left pad as BTN_DPAD_* key events.
+BTN_DPAD_UP, BTN_DPAD_DOWN, BTN_DPAD_LEFT, BTN_DPAD_RIGHT = 0x220, 0x221, 0x222, 0x223
+DPAD_BUTTONS = {BTN_DPAD_UP: "UP", BTN_DPAD_DOWN: "DOWN", BTN_DPAD_LEFT: "LEFT", BTN_DPAD_RIGHT: "RIGHT"}
 
 # Confirm and back follow the label each player reads: A, Cross or the Nintendo A
 # confirms; B, Circle or the Nintendo B goes back. The drivers do not agree on the
@@ -82,6 +92,7 @@ SHOULDER_KEYS = {BTN_TL: "PAGE_UP", BTN_TR: "PAGE_DOWN"}
 TRIGGER_KEYS = {ABS_Z: "CHAR:[", ABS_RZ: "CHAR:n", ABS_HAT2Y: "CHAR:[", ABS_HAT2X: "CHAR:n"}
 
 STICK_PRESS, STICK_RELEASE = 0.55, 0.35
+HAT_PRESS, HAT_RELEASE = 0.50, 0.35
 TRIGGER_PRESS, TRIGGER_RELEASE = 0.60, 0.40
 REPEAT_DELAY, REPEAT_INTERVAL = 0.40, 0.12
 DUPLICATE_WINDOW = 0.06
@@ -96,6 +107,9 @@ CODE_NAMES = {
     BTN_THUMBL: "BTN_THUMBL", BTN_THUMBR: "BTN_THUMBR",
     ABS_X: "ABS_X", ABS_Y: "ABS_Y", ABS_Z: "ABS_Z", ABS_RX: "ABS_RX", ABS_RY: "ABS_RY",
     ABS_RZ: "ABS_RZ", ABS_HAT0X: "ABS_HAT0X", ABS_HAT0Y: "ABS_HAT0Y",
+    ABS_HAT2X: "ABS_HAT2X/RT", ABS_HAT2Y: "ABS_HAT2Y/LT",
+    BTN_DPAD_UP: "BTN_DPAD_UP", BTN_DPAD_DOWN: "BTN_DPAD_DOWN",
+    BTN_DPAD_LEFT: "BTN_DPAD_LEFT", BTN_DPAD_RIGHT: "BTN_DPAD_RIGHT",
 }
 EVENT = struct.Struct("@llHHi")  # struct input_event: timeval, type, code, value
 ABSINFO_SIZE = 24  # struct input_absinfo
@@ -182,27 +196,41 @@ class PadState:
         self.family = family
         self.ranges = ranges or {}
         self.layout = LAYOUTS[family]
-        self.hat = {ABS_HAT0X: 0, ABS_HAT0Y: 0}
+        self.hat = {ABS_HAT0X: 0.0, ABS_HAT0Y: 0.0}
         self.stick = {ABS_X: 0.0, ABS_Y: 0.0}
         self.sources = {"hat": None, "stick": None, "dpad": None}
+        self.dpad_held = []
         self.direction = None
         self.repeat_at = None
         self.trigger_held = {code: False for code in TRIGGER_KEYS}
 
-    def _level(self, code, value):
-        """Triggers scale to 0..1 and sticks to -1..1."""
+    def _level(self, code, value, span=None):
+        """Triggers scale to 0..1, sticks and hats to -1..1."""
+        low, high = self.ranges.get(code, span or (-32768, 32767))
+        if high <= low:
+            return 0.0
         if code in TRIGGER_KEYS:
-            low, high = self.ranges.get(code, (0, 255))
             return (value - low) / (high - low)
-        low, high = self.ranges.get(code, (-32768, 32767))
         return (value - (low + high) / 2) / ((high - low) / 2)
 
+    def _hat_level(self, code, value):
+        """-1..1 for a hat. Windows-style hats send -1/0/1; a Steam pad sends an analog value."""
+        span = self.ranges.get(code)
+        if span and span[1] - span[0] > 2:
+            return self._level(code, value)
+        return float((value > 0) - (value < 0))
+
     def _hat_direction(self):
-        if self.hat[ABS_HAT0Y]:
-            return "DOWN" if self.hat[ABS_HAT0Y] > 0 else "UP"
-        if self.hat[ABS_HAT0X]:
-            return "RIGHT" if self.hat[ABS_HAT0X] > 0 else "LEFT"
-        return None
+        """The hat is analog on a Steam pad, so it needs the same hysteresis as a stick."""
+        x = self._hat_level(ABS_HAT0X, self.hat[ABS_HAT0X])
+        y = self._hat_level(ABS_HAT0Y, self.hat[ABS_HAT0Y])
+        held = self.sources["hat"] is not None
+        limit = HAT_RELEASE if held else HAT_PRESS
+        if abs(x) < limit and abs(y) < limit:
+            return None
+        if abs(y) >= abs(x):
+            return "DOWN" if y > 0 else "UP"
+        return "RIGHT" if x > 0 else "LEFT"
 
     def _stick_direction(self):
         x, y = self.stick[ABS_X], self.stick[ABS_Y]
@@ -225,6 +253,16 @@ class PadState:
     def handle(self, event_type, code, value, now):
         """Keys for one input event: button presses and direction changes only."""
         if event_type == EV_KEY:
+            release = value == 0
+            if code in DPAD_BUTTONS:
+                if value == 2:
+                    return []  # kernel autorepeat: the pad already owns the repeat timing
+                direction = DPAD_BUTTONS[code]
+                if direction in self.dpad_held:
+                    self.dpad_held.remove(direction)
+                if not release:
+                    self.dpad_held.append(direction)
+                return self._update("dpad", self.dpad_held[-1] if self.dpad_held else None, now)
             if value != 1:
                 return []
             layout = self.layout
@@ -238,16 +276,14 @@ class PadState:
             return [key] if key else []
         if event_type != EV_ABS:
             return []
-        if code in self.hat:
+        if code in HAT_CODES:
             self.hat[code] = value
             return self._update("hat", self._hat_direction(), now)
-        if code in DPAD_BUTTONS:
-            return self._update("dpad", DPAD_BUTTONS[code] if value else None, now)
         if code in self.stick:
             self.stick[code] = self._level(code, value)
             return self._update("stick", self._stick_direction(), now)
         if code in TRIGGER_KEYS:
-            level = self._level(code, value)
+            level = self._level(code, value, (0, 255))
             if not self.trigger_held[code] and level >= TRIGGER_PRESS:
                 self.trigger_held[code] = True
                 return [TRIGGER_KEYS[code]]
@@ -328,7 +364,7 @@ class Bridge:
             return
         self.refused.discard(path)
         ranges = {}
-        for code in (ABS_X, ABS_Y, ABS_Z, ABS_RZ):
+        for code in (ABS_X, ABS_Y, ABS_Z, ABS_RZ, ABS_RX, ABS_RY, *HAT_CODES, ABS_HAT2X, ABS_HAT2Y):
             span = abs_range(fd, code)
             if span:
                 ranges[code] = span
@@ -413,6 +449,23 @@ def controllers_by_vendor(devices, vendor):
     return [device for device in devices if device["vendor"] == vendor]
 
 
+def kernel_has(option):
+    """Whether the running kernel was built with CONFIG_<option> set."""
+    try:
+        with gzip.open("/proc/config.gz", "rt", errors="replace") as handle:
+            text = handle.read()
+    except OSError:
+        try:
+            with open(f"/boot/config-{os.uname().release}", encoding="utf-8", errors="replace") as handle:
+                text = handle.read()
+        except OSError:
+            return None  # cannot tell
+    for line in text.splitlines():
+        if line.startswith(f"CONFIG_{option}="):
+            return True
+    return False
+
+
 def driver_problem(driver):
     """What to do when a controller's driver is not loaded."""
     try:
@@ -437,21 +490,44 @@ def doctor():
     for path, name, family in found:
         print(f"  {FAMILY_LABELS[family]:<11} {path:<18} {name}")
     problems = []
-    for vendor, driver in ((0x057E, "hid_nintendo"), (0x28DE, "hid_steam")):
+    for vendor, driver in ((0x045E, "xpad"), (0x054C, "hid_playstation"),
+                           (0x057E, "hid_nintendo"), (0x28DE, "hid_steam")):
         nodes = controllers_by_vendor(devices, vendor)
-        bound = any(has_key(device["keys"], BTN_SOUTH) for device in nodes)
-        if nodes and not bound:
-            problems.append((driver, nodes))
+        if not nodes:
+            continue
+        if any(has_key(device["keys"], BTN_SOUTH) for device in nodes):
+            continue
+        # A Steam Controller sits in lizard mode (a keyboard and a mouse) until
+        # its gamepad node is opened, so the driver can be bound and still look
+        # missing. Only call it a missing driver when the module is absent.
+        if vendor == 0x28DE and any("valve" in device["name"].lower()
+                                    or "steam" in device["name"].lower() for device in nodes):
+            problems.append((driver, nodes, "lizard"))
+            continue
+        problems.append((driver, nodes, "missing"))
     if not problems:
         if not found:
             print("No controller is connected. Switch one on, then run this again.")
+        else:
+            print("Every connected pad has a driver. Press a button in the live test if one is silent.")
         return 0
     print()
-    for driver, nodes in problems:
+    for driver, nodes, kind in problems:
         for device in nodes:
             print(f"Present but not usable: {device['name']}")
-        print(f"  Missing driver: {driver}")
-        print(f"  {driver_problem(driver)}")
+        if kind == "lizard":
+            print("  Driver: hid_steam (bound, but the pad is emulating a keyboard and mouse)")
+            print("  The Manager turns that off the moment it opens the pad, so start the")
+            print("  Manager and press a button. If it stays silent, hold the Steam button")
+            print("  and press Y to switch the pad on, then run this again.")
+        else:
+            print(f"  Missing driver: {driver}")
+            print(f"  {driver_problem(driver)}")
+    wireless = kernel_has("BT_HIDP")
+    if wireless is False:
+        print()
+        print("Bluetooth pads cannot connect on this kernel: CONFIG_BT_HIDP is not set.")
+        print("Plug the pad in with USB, or boot a kernel built with CONFIG_BT_HIDP=m.")
     return 1
 
 

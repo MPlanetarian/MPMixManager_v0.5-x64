@@ -1,11 +1,26 @@
-# Nintendo Controller Support on this Kernel
+# Controller Support on this Kernel
 
-The running kernel (`7.3.4-mplanetarian-dreamworlds-ultra-v1`) was built with
-`# CONFIG_HID_NINTENDO is not set`, so a Switch Pro Controller or Joy-Con cannot
-appear until that driver exists. `hid-nintendo` is now installed as a module
-built from the kernel's own build tree, and it matches this kernel exactly.
+## What the running kernel can do
 
-## What is installed
+The Manager's bridge is controller-agnostic, but each pad needs a kernel driver.
+On the kernel this machine is currently booted into (`7.3.0-mplanetarian-dreamworlds-ultra-v1`):
+
+| Pad | Driver | State on 7.3.0 |
+|---|---|---|
+| Xbox (any) | `xpad` | Ready |
+| Steam Controller | `hid_steam` | Ready |
+| Switch Pro / Joy-Con | `hid_nintendo` | Built as a module for 7.3.4 only |
+| DualShock 4 / DualSense | `hid_playstation` | Built as a module for 7.3.4 only |
+
+`7.3.4-mplanetarian-dreamworlds-ultra-v1` was built with
+`CONFIG_HID_NINTENDO=m`, `CONFIG_HID_PLAYSTATION=m`, `CONFIG_HID_SONY=m` and
+`CONFIG_HID_STEAM=m`, and those modules are installed for it. Boot that entry
+and all four families are available. On 7.3.0 only Xbox and Steam pads appear.
+
+Boot the 7.3.4 entry from the boot menu, or rebuild the drivers for 7.3.0 the
+same way described below.
+
+## What is installed for 7.3.4
 
 | Item | Value |
 |---|---|
@@ -55,6 +70,46 @@ sudo restorecon -v "/lib/modules/$(uname -r)/kernel/drivers/hid/hid-nintendo.ko"
 
 If a future kernel is built from source, set `CONFIG_HID_NINTENDO=m` in its
 `.config` before building, and the module is produced with the rest of the tree.
+
+## Steam Controller
+
+A Steam Controller plugged in over USB is picked up by `hid_steam` (already
+built into this kernel), but it starts in *lizard mode*: it presents itself as a
+keyboard and a mouse instead of a pad, so it never appears in `--list` and its
+trackpads move the pointer around the menus.
+
+The Manager fixes this by itself. `gamepad_bridge.py` opens the pad's gamepad
+node, and `hid_steam` disables lizard mode whenever that node is open, so the
+pad drives the menus without Steam running. Nothing needs to be configured.
+
+| Steam input | Key the Manager reads |
+|---|---|
+| Left pad, or the D-pad | UP / DOWN / LEFT / RIGHT (repeats while held) |
+| A | ENTER |
+| B | ESC |
+| X | SPACE (play or pause) |
+| Left / right shoulder | PAGE_UP / PAGE_DOWN |
+| Left / right trigger | `CHAR:[` / `CHAR:n` (previous / next track) |
+
+Two details differ from the other pads, and the bridge handles both:
+
+- The left pad and D-pad arrive as `BTN_DPAD_*` key presses, not as hat axes.
+- The triggers arrive as `ABS_HAT2X` / `ABS_HAT2Y` (**not** `ABS_HAT1*`, which is
+  what earlier versions of the bridge listened for), and the left pad arrives on
+  `ABS_HAT0X` / `ABS_HAT0Y` as a full `-32767..32767` axis rather than `-1..1`.
+
+If the pad is silent, `./scripts/gamepad_bridge.py --doctor` now says whether it
+is in lizard mode rather than claiming the driver is missing. Hold the Steam
+button and press **Y** to switch the pad on if it has gone to sleep.
+
+## Bluetooth pads need CONFIG_BT_HIDP
+
+This kernel has `# CONFIG_BT_HIDP is not set`, so *no* controller can connect
+over Bluetooth whatever driver it needs: `bluetoothctl` reports
+`br-connection-create-socket`, and the pad never reaches `hid_steam`,
+`hid-nintendo` or `hid-playstation`. USB works. For a wireless Switch Pro
+Controller or DualShock 4, either use its USB cable or boot a kernel built with
+`CONFIG_BT_HIDP=m`.
 
 ## PlayStation controllers needed the same fix
 

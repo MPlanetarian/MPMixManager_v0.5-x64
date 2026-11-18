@@ -152,6 +152,32 @@ class ControllerDetection(unittest.TestCase):
             ("/dev/input/event22", "Valve Software Steam Controller", "steam"),
         ])
 
+    def test_the_steam_controllers_real_node_is_found(self):
+        # From /proc/bus/input/devices with a Steam Controller on USB, once the
+        # kernel has left lizard mode.
+        block = """\
+I: Bus=0003 Vendor=28de Product=1102 Version=0111
+N: Name="Steam Controller"
+P: Phys=usb-0000:00:14.0-9.4/input2
+H: Handlers=event15 js1
+B: PROP=0
+B: EV=b
+B: KEY=3f00000000 0 0 0 7fdb000600000000 0 0 0 0
+B: ABS=33001b
+"""
+        self.assertEqual(gb.find_controllers(gb.parse_device_table(block)),
+                         [("/dev/input/event15", "Steam Controller", "steam")])
+
+    def test_a_steam_pad_in_lizard_mode_is_not_mistaken_for_a_keyboard(self):
+        # Lizard mode: two keyboard/mouse nodes with no gamepad buttons at all.
+        table = "\n".join([
+            device_block(0x28DE, "Valve Software Wired Controller", "sysrq kbd leds event13",
+                         key_words(0x01, 0x1C)),
+            device_block(0x28DE, "Valve Software Wired Controller", "mouse2 event14",
+                         key_words(0x110)),
+        ])
+        self.assertEqual(gb.find_controllers(gb.parse_device_table(table)), [])
+
     def test_key_bitmap_reads_the_highest_word_first(self):
         self.assertTrue(gb.has_key(XBOX_KEYS, gb.BTN_SOUTH))
         self.assertTrue(gb.has_key(XBOX_KEYS, gb.BTN_START))
@@ -222,6 +248,50 @@ B: KEY=0
         self.assertNotIn("Missing driver", output.getvalue())
 
 
+class SteamDoctor(unittest.TestCase):
+    """A Steam pad in lizard mode looks like a keyboard, not a missing driver."""
+
+    LIZARD_BLOCK = """\
+I: Bus=0003 Vendor=28de Product=1102 Version=0111
+N: Name="Valve Software Wired Controller"
+H: Handlers=sysrq kbd leds event13
+B: KEY=1f0000 0 0 0 0
+"""
+
+    def doctor_output(self, table):
+        import contextlib
+        import io
+        original = gb.read_device_table
+        gb.read_device_table = lambda: table
+        output = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(output):
+                code = gb.doctor()
+        finally:
+            gb.read_device_table = original
+        return code, output.getvalue()
+
+    def test_lizard_mode_is_explained_without_blaming_the_driver(self):
+        code, text = self.doctor_output(gb.parse_device_table(self.LIZARD_BLOCK))
+        self.assertEqual(code, 1)
+        self.assertIn("Present but not usable: Valve Software Wired Controller", text)
+        self.assertIn("hid_steam", text)
+        self.assertIn("keyboard and mouse", text)
+        self.assertNotIn("Missing driver", text)
+
+    def test_a_bound_steam_pad_is_reported_as_ready(self):
+        block = """\
+I: Bus=0003 Vendor=28de Product=1102 Version=0111
+N: Name="Steam Controller"
+H: Handlers=event15 js1
+B: KEY=3f00000000 0 0 0 7fdb000600000000 0 0 0 0
+"""
+        code, text = self.doctor_output(gb.parse_device_table(block))
+        self.assertEqual(code, 0)
+        self.assertIn("Steam       /dev/input/event15", text)
+        self.assertNotIn("Missing driver", text)
+
+
 class FaceButtonLayouts(unittest.TestCase):
     def keys(self, family, *codes):
         pad = gb.PadState(family)
@@ -245,6 +315,22 @@ class FaceButtonLayouts(unittest.TestCase):
         self.assertEqual(self.keys("xbox", gb.BTN_TL, gb.BTN_TR), ["PAGE_UP", "PAGE_DOWN"])
         self.assertEqual(self.keys("nintendo", gb.BTN_TL2, gb.BTN_TR2), ["CHAR:[", "CHAR:n"])
         self.assertEqual(self.keys("xbox", gb.BTN_TL2), [])
+
+    def test_steam_face_buttons_follow_the_xbox_labels(self):
+        self.assertEqual(self.keys("steam", gb.BTN_SOUTH, gb.BTN_EAST), ["ENTER", "ESC"])
+        self.assertEqual(self.keys("steam", gb.BTN_NORTH), ["SPACE"])
+        self.assertEqual(self.keys("steam", gb.BTN_TL, gb.BTN_TR), ["PAGE_UP", "PAGE_DOWN"])
+
+    def test_playstation_uses_square_not_triangle_for_play_pause(self):
+        self.assertEqual(self.keys("playstation", gb.BTN_SOUTH), ["ENTER"])  # Cross
+        self.assertEqual(self.keys("playstation", gb.BTN_EAST), ["ESC"])  # Circle
+        self.assertEqual(self.keys("playstation", gb.BTN_WEST), ["SPACE"])  # Square
+        self.assertEqual(self.keys("playstation", gb.BTN_NORTH), [])  # Triangle
+
+    def test_a_steam_digital_trigger_does_not_double_fire(self):
+        pad = gb.PadState("steam", {gb.ABS_HAT2X: (0, 255), gb.ABS_HAT2Y: (0, 255)})
+        self.assertEqual(pad.handle(gb.EV_ABS, gb.ABS_HAT2X, 255, 0.0), ["CHAR:n"])
+        self.assertEqual(pad.handle(gb.EV_KEY, gb.BTN_TR2, 1, 0.1), [])
 
     def test_releases_and_kernel_autorepeat_send_nothing(self):
         pad = gb.PadState("xbox")
@@ -283,6 +369,58 @@ class MovementAndTriggers(unittest.TestCase):
         for step, (value, expected) in enumerate(pulls):
             self.assertEqual(pad.handle(gb.EV_ABS, gb.ABS_RZ, value, float(step)), expected, value)
         self.assertEqual(pad.handle(gb.EV_ABS, gb.ABS_Z, 1023, 9.0), ["CHAR:["])
+
+
+class SteamController(unittest.TestCase):
+    """hid_steam's own node: an analog left pad, a key-event D-pad and HAT2 triggers."""
+
+    RANGES = {
+        gb.ABS_X: (-32767, 32767), gb.ABS_Y: (-32767, 32767),
+        gb.ABS_HAT0X: (-32767, 32767), gb.ABS_HAT0Y: (-32767, 32767),
+        gb.ABS_HAT2X: (0, 255), gb.ABS_HAT2Y: (0, 255),
+    }
+
+    def pad(self):
+        return gb.PadState("steam", self.RANGES)
+
+    def test_the_left_pad_is_analog_and_needs_a_real_push(self):
+        pad = self.pad()
+        self.assertEqual(pad.handle(gb.EV_ABS, gb.ABS_HAT0X, 400, 0.0), [])  # resting drift
+        self.assertEqual(pad.handle(gb.EV_ABS, gb.ABS_HAT0X, 32767, 0.1), ["RIGHT"])
+        self.assertEqual(pad.handle(gb.EV_ABS, gb.ABS_HAT0X, 20000, 0.2), [])  # still held
+        self.assertEqual(pad.handle(gb.EV_ABS, gb.ABS_HAT0X, 0, 0.3), [])
+
+    def test_a_windows_style_dpad_still_works(self):
+        pad = gb.PadState("xbox")
+        self.assertEqual(pad.handle(gb.EV_ABS, gb.ABS_HAT0Y, 1, 0.0), ["DOWN"])
+        self.assertEqual(pad.handle(gb.EV_ABS, gb.ABS_HAT0Y, 0, 0.1), [])
+
+    def test_the_dpad_arrives_as_key_events_and_repeats(self):
+        pad = self.pad()
+        self.assertEqual(pad.handle(gb.EV_KEY, gb.BTN_DPAD_DOWN, 1, 0.0), ["DOWN"])
+        self.assertEqual(pad.repeat(0.39), [])
+        self.assertEqual(pad.repeat(0.41), ["DOWN"])
+        self.assertEqual(pad.handle(gb.EV_KEY, gb.BTN_DPAD_DOWN, 0, 0.5), [])
+        self.assertEqual(pad.repeat(0.9), [])
+
+    def test_kernel_autorepeat_on_the_dpad_is_not_replayed(self):
+        pad = self.pad()
+        self.assertEqual(pad.handle(gb.EV_KEY, gb.BTN_DPAD_UP, 1, 0.0), ["UP"])
+        self.assertEqual(pad.handle(gb.EV_KEY, gb.BTN_DPAD_UP, 2, 0.2), [])
+
+    def test_a_diagonal_dpad_does_not_cancel_a_held_direction(self):
+        pad = self.pad()
+        self.assertEqual(pad.handle(gb.EV_KEY, gb.BTN_DPAD_UP, 1, 0.0), ["UP"])
+        self.assertEqual(pad.handle(gb.EV_KEY, gb.BTN_DPAD_RIGHT, 1, 0.1), ["RIGHT"])
+        self.assertEqual(pad.handle(gb.EV_KEY, gb.BTN_DPAD_RIGHT, 0, 0.2), ["UP"])
+        self.assertEqual(pad.handle(gb.EV_KEY, gb.BTN_DPAD_UP, 0, 0.3), [])
+
+    def test_triggers_are_reported_on_hat2_as_0_to_255(self):
+        pad = self.pad()
+        self.assertEqual(pad.handle(gb.EV_ABS, gb.ABS_HAT2Y, 255, 0.0), ["CHAR:["])  # left
+        self.assertEqual(pad.handle(gb.EV_ABS, gb.ABS_HAT2X, 255, 0.1), ["CHAR:n"])  # right
+        self.assertEqual(pad.handle(gb.EV_ABS, gb.ABS_HAT2X, 0, 0.2), [])
+        self.assertEqual(pad.handle(gb.EV_ABS, gb.ABS_HAT2X, 255, 0.3), ["CHAR:n"])
 
 
 class EventDecoding(unittest.TestCase):
@@ -455,6 +593,57 @@ class VirtualPadEndToEnd(unittest.TestCase):
         self.assertEqual(keys[:1], ["ENTER"])
         self.assertEqual(keys[1:2], ["DOWN"])
         self.assertGreaterEqual(keys.count("DOWN"), 2)
+
+    def test_virtual_steam_pad_sends_keys_through_the_bridge(self):
+        """The Steam node's real shapes: analog left pad, key D-pad, HAT2 triggers."""
+        from evdev import AbsInfo, UInput, ecodes as e
+
+        def axis(low, high):
+            return AbsInfo(value=0, min=low, max=high, fuzz=0, flat=0, resolution=0)
+
+        caps = {
+            e.EV_KEY: [e.BTN_SOUTH, e.BTN_EAST, e.BTN_NORTH, e.BTN_WEST,
+                       e.BTN_TL, e.BTN_TR, e.BTN_TL2, e.BTN_TR2,
+                       e.BTN_DPAD_UP, e.BTN_DPAD_DOWN, e.BTN_DPAD_LEFT, e.BTN_DPAD_RIGHT],
+            e.EV_ABS: [
+                (e.ABS_X, axis(-32767, 32767)),
+                (e.ABS_Y, axis(-32767, 32767)),
+                (e.ABS_HAT0X, axis(-32767, 32767)),
+                (e.ABS_HAT0Y, axis(-32767, 32767)),
+                (e.ABS_HAT2X, axis(0, 255)),
+                (e.ABS_HAT2Y, axis(0, 255)),
+            ],
+        }
+        pad = UInput(caps, name="Steam Controller", vendor=0x28DE, product=0x1102)
+        with tempfile.TemporaryFile() as captured:
+            bridge = subprocess.Popen([sys.executable, str(HELPER)], stdout=captured, stderr=subprocess.DEVNULL)
+            try:
+                time.sleep(2.5)
+                pad.write(e.EV_KEY, e.BTN_SOUTH, 1)  # A -> ENTER
+                pad.syn()
+                pad.write(e.EV_KEY, e.BTN_SOUTH, 0)
+                pad.syn()
+                pad.write(e.EV_KEY, e.BTN_DPAD_DOWN, 1)  # D-pad -> DOWN + repeat
+                pad.syn()
+                time.sleep(1.0)
+                pad.write(e.EV_KEY, e.BTN_DPAD_DOWN, 0)
+                pad.syn()
+                pad.write(e.EV_ABS, e.ABS_HAT2X, 255)  # right trigger -> next track
+                pad.syn()
+                time.sleep(0.3)
+                pad.write(e.EV_ABS, e.ABS_HAT2X, 0)
+                pad.syn()
+                time.sleep(0.3)
+            finally:
+                pad.close()
+                bridge.terminate()
+                bridge.wait(timeout=5)
+            captured.seek(0)
+            keys = captured.read().decode("ascii").split()
+        self.assertEqual(keys[:1], ["ENTER"])
+        self.assertEqual(keys[1:2], ["DOWN"])
+        self.assertGreaterEqual(keys.count("DOWN"), 2)
+        self.assertIn("CHAR:n", keys)
 
 
 if __name__ == "__main__":
