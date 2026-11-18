@@ -25,6 +25,7 @@ from liquid_visualizer_session import (  # noqa: E402
     stop_companion_for_mode,
     stop_companion_playback,
     stop_companion_visualizer,
+    stop_player_audio,
 )
 try:  # The four-window cap ships beside the host; a lone copy still runs.
     from mp_instance_limit import host_allowed, notify_limit  # noqa: E402
@@ -35,7 +36,7 @@ except ImportError:
     def notify_limit(role, message=None):  # type: ignore[misc]
         print(message or f"{role} is already open 4 times.", file=sys.stderr)
 try:  # The exit movie ships beside the host too.
-    from exit_video import ExitVideo, play_player_intro  # noqa: E402
+    from exit_video import ExitVideo, is_last_window_open, play_player_intro  # noqa: E402
 except ImportError:
     class ExitVideo:  # type: ignore[no-redef]
         """Stub used when the tree was copied without scripts/exit_video.py."""
@@ -55,6 +56,10 @@ except ImportError:
     def play_player_intro(*_args, **_kwargs):  # type: ignore[misc]
         """Stub: no intro movie when scripts/exit_video.py is missing."""
         return False
+
+    def is_last_window_open(*_args, **_kwargs):  # type: ignore[misc]
+        """Stub: assume the last window, so audio is never left running."""
+        return True
 from liquid_glass_metal import (  # noqa: E402
     LiquidGlassRendererMetal,
     check_apple_silicon_support,
@@ -420,6 +425,9 @@ class MetalGlassHost:
         if not self.embed_check:
             stop_companion_for_mode(self.mode, player_gui=self.mode != "TRACKLIST")
         if not self.embed_check and self.mode in ("NORMAL", "MANAGER", "VERTICAL", "MINI", "MICRO"):
+            # Ask before the movie is elected: electing marks this window as
+            # closing, so afterwards every host would look like the last one.
+            last = is_last_window_open(self.mode)
             video = ExitVideo(self.mode)
             try:
                 if video.start():
@@ -428,6 +436,12 @@ class MetalGlassHost:
                 pass
             finally:
                 video.finish()
+            # The closing movie is silent, so once the last window is gone the
+            # mix has nothing left to play to. Stop it rather than leaving the
+            # audio running to an empty desktop. A second player window still
+            # open keeps playing, which is why this is gated on `last`.
+            if last:
+                stop_player_audio()
 
     def close(self, master_fd=None):
         if master_fd is not None:

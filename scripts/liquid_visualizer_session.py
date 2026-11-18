@@ -341,6 +341,23 @@ def _send_player_stop() -> None:
 
 def stop_companion_playback() -> None:
     """Stop music started from the Mix Manager GUI. The glass host stays up."""
+    stop_player_audio()
+
+
+def stop_player_audio() -> None:
+    """Silence the audio engine and clear the daemon, leaving windows alone.
+
+    The Liquid Player host owns a child ``MP_Audio_Player.py`` that runs the
+    daemon, and the daemon keeps its output stream open after the window that
+    started it is gone. Closing the last MP Liquid Player therefore left the
+    mix playing to an empty desktop. The exit movie is silent, so there is
+    nothing to keep the audio device open for once the glass has gone.
+
+    ``stop`` is the daemon's own shutdown command: it saves the resume point,
+    closes the stream and retires the process. The worker pids are signalled
+    afterwards as a backstop, for a daemon that is wedged or was started by an
+    older build that did not answer ``stop``.
+    """
     _send_player_stop()
     pids = _playback_engine_pids()
     for pid in pids:

@@ -86,13 +86,12 @@ class TestVerticalPlayerMode(unittest.TestCase):
             for _ in range(5):
                 ui._process_key(b"m")
                 seen.append(ui.ui_size_mode)
-        # From the full frame: portrait, then the two strips. Once compact the
-        # ring has no landscape frame to return to, so it comes back to the
-        # portrait one rather than NORMAL.
-        self.assertEqual(seen, ["VERTICAL", "MINI", "MICRO", "VERTICAL", "MINI"])
+        # The ring closes: portrait, the two strips, then the full frame.
+        self.assertEqual(seen, ["VERTICAL", "MINI", "MICRO", "NORMAL", "VERTICAL"])
         launch.assert_not_called()
 
-    def test_compact_ring_wraps_to_vertical(self):
+    def test_the_ring_always_closes(self):
+        """M from any size reaches NORMAL again within four presses."""
         self.addCleanup(os.environ.pop, "MP_LIQUID_GLASS", None)
         os.environ["MP_LIQUID_GLASS"] = "1"
         for start in ("MINI", "MICRO"):
@@ -100,19 +99,21 @@ class TestVerticalPlayerMode(unittest.TestCase):
             with patch("MP_Audio_Player.launch_mini_player_window") as launch, \
                     patch("MP_Audio_Player.resize_host_terminal") as resize:
                 sizes = []
-                for _ in range(3):
+                for _ in range(4):
                     ui._process_key(b"m")
                     sizes.append(ui.ui_size_mode)
-            self.assertNotIn("NORMAL", sizes, start)
             launch.assert_not_called()
-            self.assertIn("VERTICAL", sizes, start)
+            self.assertIn("NORMAL", sizes,
+                          f"from {start} the ring must come back to NORMAL")
 
     def test_step_helper(self):
         self.assertEqual(MP_Audio_Player.ui_size_step("NORMAL"), "VERTICAL")
         self.assertEqual(MP_Audio_Player.ui_size_step("VERTICAL"), "MINI")
         self.assertEqual(MP_Audio_Player.ui_size_step("MINI"), "MICRO")
         self.assertEqual(MP_Audio_Player.ui_size_step("MICRO"), "NORMAL")
-        self.assertEqual(MP_Audio_Player.ui_size_step("MICRO", allow_normal=False), "VERTICAL")
+        # `allow_normal=False` must still close the ring: making NORMAL
+        # unreachable left the window stuck in the compact sizes.
+        self.assertEqual(MP_Audio_Player.ui_size_step("MICRO", allow_normal=False), "NORMAL")
 
     # --- the geometry -----------------------------------------------------
 
@@ -189,17 +190,34 @@ class TestVerticalPlayerMode(unittest.TestCase):
         for line in lines:
             self.assertLessEqual(len(line), 120)
 
-    def test_action_row_drops_chips_instead_of_overflowing(self):
-        """A narrow column keeps the row inside the border and clears dead spans."""
+    def test_action_row_fits_and_keeps_the_visualization_button(self):
+        """The row fits the column, and the VISUALIZATION toggle survives it.
+
+        The toggle has no other way in from the deck, so it shortens with the
+        other chips instead of being dropped for want of room.
+        """
         ui, lines = frame("VERTICAL")
-        row = next((line for line in lines if "FAVORITES" in line), "")
+        row = next((line for line in lines if "FAV" in line), "")
         self.assertLessEqual(len(row), MP_Audio_Player.VERTICAL_COLS)
-        # The Visualization chip does not fit, so it must have no click span.
-        self.assertEqual(ui._visualizer_button_span, (0, 0))
-        # Favorites is drawn, so it keeps a real span pointing at its own label.
+        self.assertIn("VIS", row, "the Visualization button must be drawn")
+        self.assertNotEqual(ui._visualizer_button_span, (0, 0),
+                            "the Visualization button must be clickable")
+        start, end = ui._visualizer_button_span
+        self.assertIn("VIS", row[start - 1:end])
+        # Favorites is drawn too, with a span pointing at its own label.
         self.assertGreater(ui._favorites_button_span[0], 0)
         start, end = ui._favorites_button_span
-        self.assertIn("FAVORITES", row[start - 1:end])
+        self.assertIn("FAV", row[start - 1:end])
+
+    def test_the_visualization_button_works_in_vertical(self):
+        """Clicking it toggles the visualizer state, exactly as in Normal."""
+        ui, lines = frame("VERTICAL")
+        row = next((line for line in lines if "FAV" in line), "")
+        start, end = ui._visualizer_button_span
+        self.assertNotEqual((start, end), (0, 0))
+        with patch.object(ui, "_toggle_mp_visualizer") as toggle:
+            ui._on_mouse_sgr(0, start, ui._visualizer_button_row, b"M")
+        toggle.assert_called_once()
 
     def test_header_never_clips_mid_word(self):
         _, lines = frame("VERTICAL", title="A Very Long Mix Title That Would Overflow")

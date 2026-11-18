@@ -163,6 +163,25 @@ def _limiter():
     return mp_instance_limit
 
 
+def is_last_window_open(role: str = "") -> bool:
+    """True when no other MP Gui or MP Liquid Player window is still open.
+
+    Read-only: unlike `should_play_exit_video` it marks nothing, so it can be
+    asked before the movie is elected. A host uses this to decide whether the
+    audio it owns has anything left to play to, which must not depend on
+    whether the closing movie is enabled.
+    """
+    limiter = _limiter()
+    if limiter is None:
+        # Without the counter the safest reading is "this was the last one":
+        # leaving audio running with no window on screen is the worse bug.
+        return True
+    try:
+        return not limiter.remaining_windows(os.getpid())
+    except Exception:
+        return True
+
+
 def should_play_exit_video(role: str = "") -> bool:
     """Mark this host as closing and report whether it is the last window.
 

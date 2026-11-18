@@ -220,3 +220,67 @@ class TestStreamOfFrequencyEqualizer(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTwoChannelEqualizersSplitEvenly(unittest.TestCase):
+    """Neon Prism and Stardust draw a left and a right half.
+
+    Both asked for a fixed 16 bands per channel. Sixteen bands at two cells
+    each needs 32 cells, but a portrait column gives each half about 24, so the
+    row grew past the border and the whole right channel was pushed off the
+    window. The bands now follow the room and the halves are equal.
+    """
+
+    def _render(self, style, width):
+        import re
+        import MP_Audio_Player as player
+        st = {
+            "levels_left": [0.6] * 24, "levels_right": [0.5] * 24,
+            "peaks_left": [0.8] * 24, "peaks_right": [0.7] * 24,
+            "levels": [0.55] * 24, "peaks": [0.75] * 24, "state": "playing",
+        }
+        vis = player.EqualizerVisualizer()
+        vis.set_style(style)
+        if style == "neon_prism_eq":
+            raw = vis.render_neon_prism_eq(
+                st["levels_left"], st["levels_right"],
+                st["peaks_left"], st["peaks_right"], width=width, height=7)
+        else:
+            raw = vis.render_stardust_particles_eq(
+                st["levels_left"], st["levels_right"],
+                st["peaks_left"], st["peaks_right"], width=width, height=7)
+        return [re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", line) for line in raw]
+
+    def test_no_line_runs_past_the_column(self):
+        for style in ("neon_prism_eq", "stardust_particles_eq"):
+            for width in (120, 80, 56, 44):
+                lines = self._render(style, width)
+                for line in lines:
+                    self.assertLessEqual(len(line), width, f"{style} at {width}: {line!r}")
+
+    def test_both_channels_are_visible_at_portrait_width(self):
+        lines = self._render("neon_prism_eq", 56)
+        header = lines[0]
+        self.assertIn("LEFT", header)
+        self.assertIn("RIGHT", header, "the right channel was pushed off the window")
+
+    def test_the_two_halves_are_the_same_width(self):
+        """The divider sits in the middle, not 59% of the way across."""
+        lines = self._render("neon_prism_eq", 56)
+        for line in (lines[0], lines[-1]):
+            divider = "┬" if "┬" in line else "┴"
+            left, _, right = line.partition(divider)
+            # Strip the frame: the two leading spaces and the outer corners are
+            # not part of either channel, so comparing them raw overstates the
+            # left half by exactly those two cells.
+            left = left.lstrip(" ")[1:]
+            right = right[:-1]
+            # Equal to within the one cell an odd column count leaves over.
+            self.assertLessEqual(abs(len(left) - len(right)), 1,
+                                 f"the halves are uneven: {left!r} vs {right!r}")
+
+    def test_the_band_count_follows_the_room(self):
+        wide = self._render("neon_prism_eq", 120)[0]
+        narrow = self._render("neon_prism_eq", 56)[0]
+        self.assertIn("16", wide, "a wide console still shows all 16 bands")
+        self.assertNotIn("16", narrow, "a portrait column cannot fit 16")

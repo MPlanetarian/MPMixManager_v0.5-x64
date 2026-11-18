@@ -114,18 +114,22 @@ class TestMiniMicroPlayerFeatures(unittest.TestCase):
             launch.assert_not_called()
             self.assertEqual(ui.ui_size_mode, "MICRO")
             resize.assert_called_with(74, 7, "MP Micro Audio Player")
-            # Micro wraps to the tall deck; a compact window has no full frame.
+            # Micro closes the ring back to the full frame.
             ui._process_key(b"M")
+            launch.assert_not_called()
+            self.assertEqual(ui.ui_size_mode, "NORMAL")
+            resize.assert_called_with(120, 40, "MP Audio Player")
+            # From NORMAL the ring continues on to Vertical.
+            ui._process_key(b"m")
             launch.assert_not_called()
             self.assertEqual(ui.ui_size_mode, "VERTICAL")
             resize.assert_called_with(
-                MP_Audio_Player.VERTICAL_COLS, MP_Audio_Player.VERTICAL_ROWS, "MP Vertical Audio Player"
-            )
-            # And the deck continues on to Mini.
+                MP_Audio_Player.VERTICAL_COLS, MP_Audio_Player.VERTICAL_ROWS,
+                "MP Vertical Audio Player")
+            # And back to the full landscape frame.
             ui._process_key(b"m")
             launch.assert_not_called()
             self.assertEqual(ui.ui_size_mode, "MINI")
-            resize.assert_called_with(74, 14, "MP Mini Audio Player")
 
     @mock.patch.object(sys, "argv", ["MP_Audio_Player.py", "--mini"])
     @mock.patch("MP_Audio_Player.is_player_daemon_running", return_value=True)

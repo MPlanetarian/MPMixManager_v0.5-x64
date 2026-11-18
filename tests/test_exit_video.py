@@ -365,3 +365,90 @@ class TestExitVideoModule(LimiterCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestClosingTheLastWindowStopsTheAudio(unittest.TestCase):
+    """The daemon outlived the window that owned it, so the mix played on.
+
+    The Liquid Player host runs `MP_Audio_Player.py`, which opens the audio
+    device and keeps it open. Destroying the glass never told it to stop, so
+    closing the player left the mix playing to an empty desktop. The closing
+    movie is silent, so once the last window is gone there is nothing left to
+    play to.
+    """
+
+    def test_a_read_only_probe_exists_and_marks_nothing(self):
+        """It must be askable before the movie election, which marks."""
+        source = (ROOT / "scripts" / "exit_video.py").read_text(encoding="utf-8")
+        body = source.split("def is_last_window_open", 1)[1].split("\ndef ", 1)[0]
+        # Check the code, not the prose that explains it.
+        code = body.split('"""', 2)[-1]
+        self.assertNotIn("_closing_file(", code)
+        self.assertNotIn("should_play_exit_video", code)
+
+    def test_the_probe_answers_both_ways(self):
+        me = os.getpid()
+        cmd = "python3 MP_Audio_Player_Liquid_Glass_OpenGL.py"
+        real = limiter.process_table
+        try:
+            limiter.process_table = lambda: [(me, cmd)]
+            self.assertTrue(exit_video_mod.is_last_window_open("NORMAL"))
+            limiter.process_table = lambda: [(me, cmd), (4242, cmd)]
+            self.assertFalse(exit_video_mod.is_last_window_open("NORMAL"))
+        finally:
+            limiter.process_table = real
+
+    def test_every_host_stops_the_audio_after_the_movie(self):
+        for name in HOSTS:
+            text = (ROOT / name).read_text(encoding="utf-8")
+            with self.subTest(host=name):
+                self.assertIn("stop_player_audio", text, name)
+                self.assertIn("is_last_window_open", text, name)
+
+    def test_the_audio_stop_runs_after_the_movie_not_before(self):
+        """The movie is silent, but the mix should stop when it is over."""
+        for name in HOSTS:
+            text = (ROOT / name).read_text(encoding="utf-8")
+            with self.subTest(host=name):
+                movie = text.index("video.finish()")
+                stop = text.index("stop_player_audio()")
+                self.assertLess(movie, stop, f"{name} stops the audio too early")
+
+    def test_the_last_window_probe_is_read_before_the_election(self):
+        """Electing marks the window closing, so asking afterwards always says last."""
+        for name in HOSTS:
+            text = (ROOT / name).read_text(encoding="utf-8")
+            with self.subTest(host=name):
+                if "is_last_window_open" not in text:
+                    continue
+                probe = text.index("is_last_window_open(")
+                start = text.index("video.start()", probe)
+                self.assertLess(probe, start, f"{name} probes after electing")
+
+    def test_a_second_open_window_keeps_playing(self):
+        """Closing one of two player windows must leave the other's audio up."""
+        for name in HOSTS:
+            text = (ROOT / name).read_text(encoding="utf-8")
+            with self.subTest(host=name):
+                # The stop is gated, never unconditional.
+                self.assertIn("if last:", text, name)
+
+    def test_the_tracklist_viewer_never_stops_the_audio(self):
+        """It shares the player's audio and must not silence it."""
+        for name in HOSTS:
+            text = (ROOT / name).read_text(encoding="utf-8")
+            with self.subTest(host=name):
+                for line in text.splitlines():
+                    if "stop_player_audio()" in line:
+                        context = text[:text.index(line)].rsplit("\n", 2)[-2:]
+                        joined = " ".join(context)
+                        self.assertNotIn('"TRACKLIST"', joined, name)
+
+    def test_stop_player_audio_sends_the_daemons_own_stop(self):
+        """`stop` saves the resume point and closes the stream; a bare kill does not."""
+        source = (ROOT / "scripts" / "liquid_visualizer_session.py").read_text(encoding="utf-8")
+        body = source.split("def stop_player_audio", 1)[1].split("\ndef ", 1)[0]
+        self.assertIn("_send_player_stop()", body)
+        # The daemon answers `stop` by retiring itself; the pid sweep is a
+        # backstop for a wedged or older daemon.
+        self.assertIn("_playback_engine_pids()", body)

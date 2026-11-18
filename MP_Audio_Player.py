@@ -85,6 +85,47 @@ def _ensure_audio_backends():
         try: import sounddevice as sd
         except ImportError: pass
 
+
+def _configured_output_device(sd_module=None):
+    """Resolve MP_AUDIO_OUTPUT_DEVICE to a PortAudio output index.
+
+    MP Mix Manager Audio Settings (Settings -> Studio Hardware) writes the
+    choice. An index is used as given, a name is matched against the output
+    device list (case-insensitively, first match wins), and "default" or an
+    empty value means "let PortAudio decide", which is the old behaviour.
+    Returns None when there is no usable selection, so the caller keeps its
+    normal fallbacks.
+    """
+    raw = os.environ.get("MP_AUDIO_OUTPUT_DEVICE", "").strip()
+    if not raw or raw.lower() in ("default", "auto", "system"):
+        return None
+    try:
+        index = int(raw)
+        return index if index >= 0 else None
+    except ValueError:
+        pass
+    module = sd_module
+    if module is None:
+        _ensure_audio_backends()
+        module = sd
+    if module is None:
+        return None
+    try:
+        wanted = raw.lower()
+        for idx, device in enumerate(module.query_devices()):
+            if int(device.get("max_output_channels", 0)) < 1:
+                continue
+            if str(device.get("name", "")).strip().lower() == wanted:
+                return idx
+        for idx, device in enumerate(module.query_devices()):
+            if int(device.get("max_output_channels", 0)) < 1:
+                continue
+            if wanted in str(device.get("name", "")).strip().lower():
+                return idx
+    except Exception:
+        return None
+    return None
+
 try: import termios, tty
 except ImportError: termios = tty = None
 
@@ -2531,7 +2572,8 @@ def crusher_bass_response_db(freqs, peak_db: float):
     return float(peak_db) * np.exp(-(octaves / sigma) ** 2)
 
 
-def bass_mode_chip(mode: str, bold: bool = True, theme_name: str = "") -> str:
+def bass_mode_chip(mode: str, bold: bool = True, theme_name: str = "",
+                   face: Optional[str] = None) -> str:
     """A filled chip for the active bass mode, so every mode keeps its colour.
 
     This is the Liquid hosts' form: a 48;2 background block, like the
@@ -2541,11 +2583,14 @@ def bass_mode_chip(mode: str, bold: bool = True, theme_name: str = "") -> str:
     CLI and ``--list-bass-modes`` output stable.
     """
     name = mode if mode in BASS_BOOST_MODES else "Normal"
+    # ``face`` lets a narrow row draw a shorter chip ("BASS:HIGH") without
+    # losing the mode's own colour.
+    text = face if face is not None else f" BASS BOOST: {name.upper()} "
     if theme_name:
         # The mode keeps its own hue (neutral / green / amber) but is lifted
         # into the theme so it belongs to the surrounding row.
         hue = {"Normal": (150, 190, 235), "Medium": (110, 230, 140), "High": (245, 190, 95)}[name]
-        return theme_chip(theme_name, f" BASS BOOST: {name.upper()} ", bold=bold, lift=0.25, hue=hue)
+        return theme_chip(theme_name, text, bold=bold, lift=0.25, hue=hue)
     (br, bg_, bb), (fr, fg_, fb) = BASS_MODE_STYLE[name]
     weight = "1;" if bold else ""
     return (
@@ -2899,6 +2944,21 @@ class AudioEngine:
             k = (d if d is None else int(d), int(r), e is not None)
             if r > 0 and k not in seen: seen.add(k); attempts.append((d, int(r), e))
         if sd is None: return attempts
+
+        # MP Mix Manager Audio Settings publishes the chosen output device as
+        # MP_AUDIO_OUTPUT_DEVICE (an index, a name, or "default"). It is tried
+        # before the system default so the selection actually takes effect;
+        # every later fallback still follows, so a device that has been
+        # unplugged degrades to the default instead of leaving the player mute.
+        chosen = _configured_output_device(sd)
+        if chosen is not None:
+            try:
+                info = sd.query_devices(chosen, "output")
+                native = int(info.get("default_samplerate") or 48000)
+                for rate in (native, 48000, 44100, 96000, 88200):
+                    add(chosen, rate, None)
+            except Exception:
+                pass
 
         if sys.platform == "darwin" and self._mac_output_device is not None:
             try:
@@ -4140,6 +4200,34 @@ def _clip_display(text: str, max_cols: int) -> str:
     if i < n: out.append(NC)
     return "".join(out)
 
+def _wrap_display(text: str, width: int) -> List[str]:
+    """Split ``text`` into lines at word boundaries, each no wider than ``width``.
+
+    The empty-playlist guidance is written for a wide console. A portrait
+    column used to run it past the panel border, so it is wrapped here rather
+    than clipped: the instruction is worth more as two short lines than as one
+    truncated one.
+    """
+    width = max(4, int(width))
+    words = str(text or "").split()
+    if not words:
+        return [""]
+    lines: List[str] = []
+    current = ""
+    for word in words:
+        candidate = f"{current} {word}".strip()
+        if _display_width(candidate) <= width:
+            current = candidate
+            continue
+        if current:
+            lines.append(current)
+        # A single word longer than the column is clipped, not left to overflow.
+        current = word if _display_width(word) <= width else _clip_display(word, width)
+    if current:
+        lines.append(current)
+    return lines or [""]
+
+
 def _boxed_rule(left: str, text: str, right: str, inner: int, color: str, text_color: Optional[str] = None) -> str:
     """One horizontal rule with a label in it: `left ─── label ─── right`.
 
@@ -4807,8 +4895,27 @@ class EqualizerVisualizer:
         selected_theme = theme or default_theme
         try:
             th_file = CONFIG_DIR / "theme"
-            if not selected_theme and th_file.is_file():
-                selected_theme = th_file.read_text(encoding="utf-8").strip().lower()
+            # A Liquid Mixer deck is started with --theme once and must still
+            # follow the shared file afterwards, exactly like MP Gui and the
+            # standalone player. Without this a C press in the mixer recoloured
+            # the mixer chrome but left both decks on the theme they booted
+            # with, so the two windows disagreed.
+            _mixer_deck = os.environ.get("MP_LIQUID_GLASS_MIXER") == "1"
+            if (not selected_theme or _mixer_deck) and th_file.is_file():
+                _shared = th_file.read_text(encoding="utf-8").strip().lower()
+                if _shared:
+                    # Adopt the shared value only when it resolves to a theme
+                    # this player can actually paint; a stale or foreign id
+                    # must not displace the --theme the deck was started with.
+                    _probe = _THEME_ALIASES.get(_shared, _shared)
+                    if _probe not in self.THEMES:
+                        try:
+                            from mixer_core import DECK_THEME_FALLBACK as _fb
+                            _probe = _fb.get(_probe, _probe)
+                        except Exception:
+                            pass
+                    if _probe in self.THEMES:
+                        selected_theme = _shared
             # Dreamworlds Ultra is the built-in default when no theme has ever
             # been saved, so a bare player launch matches MP Gui and the CLI.
             if not selected_theme:
@@ -4884,6 +4991,19 @@ class EqualizerVisualizer:
 
     def set_theme(self, name: str):
         c = _THEME_ALIASES.get(str(name).strip().lower(), str(name).strip().lower())
+        # A Liquid Mixer deck follows the shared theme file, which may name a
+        # theme this player's table does not carry (blood_moon, tokyo, ...).
+        # Map it to the closest accepted theme instead of leaving the deck on
+        # whatever it booted with.
+        if c not in self.THEMES:
+            # Only a theme the mixer genuinely offers may be remapped. Garbage
+            # must stay garbage so sync_theme_from_file() reports no change and
+            # an unknown value cannot silently repaint the window.
+            try:
+                from mixer_core import DECK_THEME_FALLBACK as _fallback
+                c = _fallback.get(c, c)
+            except Exception:
+                pass
         if c in self.THEMES:
             self.theme_idx = self.THEMES.index(c)
             if c == "stream_of_frequency":
@@ -5071,15 +5191,32 @@ class EqualizerVisualizer:
 
     def render_neon_prism_eq(self, levels_l: np.ndarray, levels_r: np.ndarray, peaks_l: np.ndarray, peaks_r: np.ndarray, width: int = 80, height: int = 7, rms: float = 0.0, peak_db: float = -60.0) -> List[str]:
         target_iw = max(20, width - 6 if width >= 26 else width - 4)
-        ch_w_l = (target_iw - 1) // 2
-        ch_w_r = target_iw - 1 - ch_w_l
-        n = max(16, (ch_w_l - 2) // 2)
+        # Odd cell counts are handed to the right half so the two channels are
+        # as even as the column allows.
+        ch_w_l = target_iw // 2
+        ch_w_r = target_iw - ch_w_l
+        # The band count follows the room, not a fixed 16. Every band is two
+        # cells wide, so demanding 16 in a portrait column overflowed each half
+        # and pushed the whole right channel off the window. 16 stays the
+        # maximum on a wide console; a narrow one shows fewer, evenly split.
+        n = max(4, min(16, (ch_w_l - 2) // 2))
         bl, br, pl, pr = self._resample_bands(levels_l, levels_r, peaks_l, peaks_r, n)
         is_beat = rms > 0.13 or peak_db > -5.0
         bolt = "\033[1;38;2;255;255;255m" if is_beat else ("\033[1;38;2;255;215;0m" if rms > 0.07 else COLOR_HOT_PURPLE)
         div = "\033[1;38;2;247;37;133m" if is_beat else self.b_col
-        lh = f"── {bolt}⚡{NC}{self.b_col} LEFT ({n}-BAND NEON PRISM) "
-        rh = f"── {bolt}⚡{NC}{self.b_col} RIGHT ({n}-BAND NEON PRISM) "
+        # Each half's heading must fit its own column, or the row grows past
+        # the border and the right channel is pushed off the window. The long
+        # form is kept on a wide console; a portrait one uses shorter words.
+        def _half_label(side: str, cells: int) -> str:
+            for text in (f"── {bolt}⚡{NC}{self.b_col} {side} ({n}-BAND NEON PRISM) ",
+                         f"── {bolt}⚡{NC}{self.b_col} {side} ({n} BAND) ",
+                         f"── {bolt}⚡{NC}{self.b_col} {side} ({n}) ",
+                         f"── {bolt}⚡{NC}{self.b_col} {side} "):
+                if _display_width(text) <= cells:
+                    return text
+            return f"── {side} "
+        lh = _half_label("LEFT", ch_w_l)
+        rh = _half_label("RIGHT", ch_w_r)
         hdr = f"╭{lh}{'─' * max(0, ch_w_l - _display_width(lh))}┬{rh}{'─' * max(0, ch_w_r - _display_width(rh))}╮"
         lines = [f"  {self.b_col}{hdr}{NC}"]
         for r in range(height - 1, -1, -1):
@@ -5104,10 +5241,11 @@ class EqualizerVisualizer:
 
     def render_stardust_particles_eq(self, levels_l: np.ndarray, levels_r: np.ndarray, peaks_l: np.ndarray, peaks_r: np.ndarray, width: int = 80, height: int = 7, rms: float = 0.0, peak_db: float = -60.0) -> List[str]:
         target_iw = max(20, width - 6 if width >= 26 else width - 4)
-        ch_w_l = (target_iw - 1) // 2
-        ch_w_r = target_iw - 1 - ch_w_l
+        ch_w_l = target_iw // 2
+        ch_w_r = target_iw - ch_w_l
         min_w = min(ch_w_l, ch_w_r)
-        n = max(16, (min_w - 2) // 2)
+        # Fit the bands to the narrower half instead of demanding 16 of them.
+        n = max(4, min(16, (min_w - 2) // 2))
         bl, br, pl, pr = self._resample_bands(levels_l, levels_r, peaks_l, peaks_r, n)
         now, is_beat = time.time(), (rms > 0.13 or peak_db > -5.0)
         scol = "\033[1;38;2;255;255;255m" if is_beat else ("\033[1;38;2;255;215;0m" if rms > 0.07 else COLOR_HOT_PURPLE)
@@ -5117,10 +5255,21 @@ class EqualizerVisualizer:
         m_r = max(0, (ch_w_r - (2 * n - 1)) // 2)
         col_map_l = [min(ch_w_l - 1, m_l + b * 2) for b in range(n)]
         col_map_r = [min(ch_w_r - 1, m_r + b * 2) for b in range(n)]
-        lt = f"LEFT ({n}-BAND CHROMA STARDUST)"
-        rt = f"RIGHT ({n}-BAND CHROMA STARDUST)"
-        lh = f"── {scol}{spark}{NC}{self.b_col} {lt} "; lh += "─" * max(0, ch_w_l - _display_width(lh))
-        rh = f"── {scol}{spark}{NC}{self.b_col} {rt} "; rh += "─" * max(0, ch_w_r - _display_width(rh))
+        # Each half's heading must fit its own column. The long form is used
+        # when it fits; a portrait column falls back to shorter wording rather
+        # than letting the row grow past the border.
+        def _stardust_label(side: str, cells: int) -> str:
+            for text in (f"── {scol}{spark}{NC}{self.b_col} {side} ({n}-BAND CHROMA STARDUST) ",
+                         f"── {scol}{spark}{NC}{self.b_col} {side} ({n} BAND) ",
+                         f"── {scol}{spark}{NC}{self.b_col} {side} ({n}) ",
+                         f"── {self.b_col} {side} "):
+                if _display_width(text) <= cells:
+                    return text
+            return f"── {side} "
+        lh = _stardust_label("LEFT", ch_w_l)
+        lh += "─" * max(0, ch_w_l - _display_width(lh))
+        rh = _stardust_label("RIGHT", ch_w_r)
+        rh += "─" * max(0, ch_w_r - _display_width(rh))
         lines = [f"  {self.b_col}╭{lh}┬{rh}╮{NC}"]
 
         for ch_idx, (bands, pks, ch_w, col_map) in enumerate(((bl, pl, ch_w_l, col_map_l), (br, pr, ch_w_r, col_map_r))):
@@ -6662,16 +6811,19 @@ VERTICAL_COLS, VERTICAL_ROWS = 56, 52
 
 
 def ui_size_step(current: str, allow_normal: bool = True) -> str:
-    """The next size on the M ring: Normal, Vertical, Mini, Micro."""
+    """The next size on the M ring: Normal, Vertical, Mini, Micro, Normal.
+
+    The ring always closes, so pressing M four times from any size comes back
+    to it. ``allow_normal`` is kept for callers that predate Vertical and
+    still ask for a compact-only step, but it never removes NORMAL from the
+    ring: making it unreachable left the window stuck in the compact sizes
+    with no way back to the full frame.
+    """
     cur = str(current or "NORMAL").strip().upper()
     if cur not in UI_SIZE_ORDER:
         cur = "NORMAL"
     start = UI_SIZE_ORDER.index(cur)
-    for step in range(1, len(UI_SIZE_ORDER) + 1):
-        nxt = UI_SIZE_ORDER[(start + step) % len(UI_SIZE_ORDER)]
-        if allow_normal or nxt != "NORMAL":
-            return nxt
-    return "VERTICAL"
+    return UI_SIZE_ORDER[(start + 1) % len(UI_SIZE_ORDER)]
 
 
 def ui_size_grid(size: str) -> Tuple[int, int]:
@@ -7384,6 +7536,12 @@ class TerminalPlayerUI:
     def __init__(self, engine: Optional[AudioEngine], scanner: Union[MixArchiveScanner, MusicFolderPlaylistScanner], is_remote: bool = False, default_style: Optional[str] = None, default_theme: Optional[str] = None, mode: str = "MIX_ARCHIVE", folder_name: str = "ALL", ui_size_mode: str = "NORMAL", keep_library: bool = False):
         self.engine, self.scanner, self.is_remote = engine, scanner, is_remote
         self.mode, self.folder_name, self.ui_size_mode = str(mode or "MIX_ARCHIVE").upper(), str(folder_name or "ALL").upper(), str(ui_size_mode or "NORMAL").upper()
+        # A window opened as PORTRAIT, MINI or MICRO is a sized frame for its
+        # whole life, so M always resizes it in place. Only the plain console
+        # player turns M into "open a compact window", because that is what the
+        # key means there. Tracking this at launch is what stops a sized window
+        # from launching a second one the moment the ring passes NORMAL.
+        self._sized_frame_at_launch = self.ui_size_mode != "NORMAL"
         self.keep_library = bool(keep_library)
         # Set when the user presses [1] or [2]. Stale daemon status must not
         # put the other library back until that daemon has caught up.
@@ -9014,6 +9172,12 @@ class TerminalPlayerUI:
         theme_name = getattr(getattr(self, "visualizer", None), "theme", "") or ""
         fav_face = f"  {favorite_glyph(True)} FAVORITES  "
         vis_face = "  VISUALIZATION  "
+        # A portrait column cannot carry the long word. The chip is a toggle
+        # the user needs in every size, so it shortens rather than being
+        # dropped; `vis_face` is what the click span is measured from, so it is
+        # assigned the face actually drawn.
+        vis_face_short = "  VISUAL  "
+        vis_face_min = "  VIS  "
         export_face = " EXPORT TRACKS "
         bass_mode = self._bass_mode()
         bass_face = f" BASS BOOST: {bass_mode.upper()} "
@@ -9021,12 +9185,15 @@ class TerminalPlayerUI:
         fav_btn = f"\033[1;38;2;255;196;0m{fav_face}\033[0m"
         # Each filled chip takes the selected theme's hue, so the button row
         # belongs to the palette instead of reading as three black blocks.
-        if on:
-            vis_btn = theme_chip(theme_name, vis_face, lift=0.9)
-        else:
-            vis_btn = theme_chip(theme_name, vis_face, lift=0.0)
+        lift = 0.9 if on else 0.0
+        vis_btn = theme_chip(theme_name, vis_face, lift=lift)
+        vis_btn_short = theme_chip(theme_name, vis_face_short, lift=lift)
+        vis_btn_min = theme_chip(theme_name, vis_face_min, lift=lift)
         export_btn = theme_chip(theme_name, export_face, lift=0.32)
         bass_btn = bass_mode_chip(bass_mode, theme_name=theme_name)
+        bass_face_short = f" BASS:{bass_mode.upper()} "
+        bass_btn_short = bass_mode_chip(bass_mode, theme_name=theme_name,
+                                        face=bass_face_short)
         gap = "   "
         # Export Tracks belongs to the Favorites playlist only. The Mix Archive
         # and Music playlists have nothing to export, so the chip is left out of
@@ -9040,28 +9207,70 @@ class TerminalPlayerUI:
         ident = f"{int(preset.get('id', 0))} {preset.get('name', '')}"
         tail = f"   ON  {ident}   [0-9] theme  [Shift+V] glass  [b] bass" if on else "   [Shift+V] MP Visualizer  [b] bass"
         tail_short = f"   {ident}" if on else "   [Shift+V]"
-        room = max_cols - _display_width(head)
-        if room >= _display_width(tail):
-            line = head + tail
-        elif room >= _display_width(tail_short):
-            line = head + tail_short
-        elif _display_width(head) <= max_cols:
-            line = head
-        else:
-            # A portrait column cannot carry three chips and their gaps. Keep
-            # the labels the keys already reach and drop the widest chip, so
-            # the row fits instead of running past the border.
-            for keep in (
-                f"  {fav_btn}  {bass_btn}",
-                f"  {bass_btn}",
-                f"  {fav_btn}",
-                "",
+
+        # Every chip shrinks in the same order on every size, so the row never
+        # runs past the border and the VISUALIZATION toggle is never the thing
+        # that disappears. A portrait column carries the short forms; a wide
+        # console keeps the long ones.
+        fav_faces = (fav_face, "  ★ FAV  ", " ★ ")
+        vis_faces = (vis_face, vis_face_short, vis_face_min)
+        bass_faces = (bass_face, bass_face_short, " BASS ")
+        gap_faces = ("   ", "  ", " ")
+
+        def build(fi, vi, bi, gi):
+            fav = theme_chip(theme_name, fav_faces[fi], bold=True, lift=0.0,
+                             hue=(255, 196, 0))
+            vis = (vis_btn, vis_btn_short, vis_btn_min)[vi]
+            bas = (bass_btn, bass_btn_short,
+                   theme_chip(theme_name, bass_faces[2], lift=0.25,
+                              hue=(150, 190, 235)))[bi]
+            pieces = [fav, vis]
+            if in_favorites:
+                pieces.append(export_btn)
+            pieces.append(bas)
+            g = gap_faces[gi]
+            return "  " + g.join(pieces), fav_faces[fi], vis_faces[vi], bass_faces[bi]
+
+        # Try the widest form first, then the shorter labels, then narrower
+        # gaps. The first combination that fits is drawn.
+        line = None
+        for fi, vi, bi, gi in (
+            (0, 0, 0, 0), (0, 1, 0, 0), (0, 1, 1, 0), (1, 1, 1, 0),
+            (1, 1, 1, 1), (2, 2, 1, 1), (2, 2, 2, 2),
+        ):
+            candidate, ff, vf, bf = build(fi, vi, bi, gi)
+            if _display_width(candidate) <= max_cols:
+                line = candidate
+                fav_face, vis_face, bass_face = ff, vf, bf
+                break
+        if line is None:
+            # Even the smallest chips did not fit. Drop the bass chip first:
+            # `b` reaches the dial from anywhere, while the VISUALIZATION
+            # toggle is the one control with no other way in from the deck, so
+            # it is the last thing to go.
+            fav_t = theme_chip(theme_name, " ★ ", bold=True, lift=0.0, hue=(255, 196, 0))
+            vis_t = vis_btn_min
+            bass_t = theme_chip(theme_name, " B ", lift=0.25, hue=(150, 190, 235))
+            for pieces, faces in (
+                ((fav_t, vis_t, bass_t), (" ★ ", "  VIS  ", " B ")),
+                ((fav_t, vis_t), (" ★ ", "  VIS  ", " B ")),
+                ((vis_t,), (" ★ ", "  VIS  ", " B ")),
             ):
-                if _display_width(keep) <= max_cols:
-                    line = keep
+                candidate = "  " + " ".join(pieces)
+                if _display_width(candidate) <= max_cols:
+                    line = candidate
+                    fav_face, vis_face, bass_face = faces
                     break
             else:
                 line = ""
+                fav_face, vis_face, bass_face = (" ★ ", "  VIS  ", " B ")
+        # Keep the tail only when the full chips fitted; a shortened row is
+        # already at its budget.
+        room = max_cols - _display_width(line)
+        if room >= _display_width(tail):
+            line = line + tail
+        elif room >= _display_width(tail_short):
+            line = line + tail_short
         # Spans are 1-based terminal columns, measured from the text actually
         # drawn, so a chip dropped to fit a narrow column gets no span and a
         # click on the space where it used to be cannot fire it.
@@ -10104,17 +10313,16 @@ class TerminalPlayerUI:
             self._notify(f"Shuffle: {'ON' if so else 'OFF'}", 2.5)
         elif data in (b"m", b"M"):
             if os.environ.get("MP_LIQUID_GLASS") == "1":
-                # A window opened as Mini or Micro has no landscape frame to
-                # go back to, so it steps up to the portrait one instead.
-                self.ui_size_mode = ui_size_step(
-                    self.ui_size_mode,
-                    allow_normal=self.ui_size_mode not in COMPACT_UI_SIZES)
+                # One ring for every size: Normal, Vertical, Mini, Micro and
+                # back to Normal, so the full frame is always reachable.
+                self.ui_size_mode = ui_size_step(self.ui_size_mode)
                 self._publish_liquid_ui_size()
                 self._notify(f"Liquid Glass Mode: {self.ui_size_mode.title()}", 2.0)
-            elif self.ui_size_mode in COMPACT_UI_SIZES or self.ui_size_mode == "VERTICAL":
-                # Vertical is a full frame, but cycling between it and the
-                # strips is still an in-place resize, not a new window.
-                self.ui_size_mode = ui_size_step(self.ui_size_mode, allow_normal=False)
+            elif self._sized_frame_at_launch or self.ui_size_mode != "NORMAL":
+                # A sized frame resizes in place, including when the ring has
+                # passed through NORMAL on its way round. Only the plain
+                # console player asks for a compact window.
+                self.ui_size_mode = ui_size_step(self.ui_size_mode)
                 t_cols, t_rows = ui_size_grid(self.ui_size_mode)
                 resize_host_terminal(t_cols, t_rows, UI_SIZE_TITLES[self.ui_size_mode])
             else:
@@ -10496,12 +10704,36 @@ class TerminalPlayerUI:
         else:
             q_len, q_paths = int(st.get("queue_len", 0)), list(st.get("queue", []))
             qb = f" • Queue: {q_len}" if q_len > 0 else ""
+            # The title is part of the panel's top rule, so it has to fit the
+            # column. A narrow portrait window used to slice it mid-word
+            # (`... (14 Mixes A┐`), which reads as a broken border rather than
+            # a heading. Each mode offers progressively shorter wordings and
+            # the longest one that fits is used; the counts survive longest
+            # because they are the part that changes.
+            n_tracks = len(active_tracks)
             if self.mode == "FAVORITES":
-                list_title = f"── FAVORITES PLAYLIST ({len(active_tracks)} saved{qb}) "
+                list_title = _fit_text_line([
+                    f"── FAVORITES PLAYLIST ({n_tracks} saved{qb}) ",
+                    f"── FAVORITES ({n_tracks} saved{qb}) ",
+                    f"── FAVORITES ({n_tracks}{qb}) ",
+                    f"── FAVORITES ",
+                ], iw)
             elif self.mode == "MUSIC":
-                list_title = f"── MUSIC LIBRARY: {music_library_label(self.folder_name)} ({len(active_tracks)} Tracks{qb}) "
+                library = music_library_label(self.folder_name)
+                list_title = _fit_text_line([
+                    f"── MUSIC LIBRARY: {library} ({n_tracks} Tracks{qb}) ",
+                    f"── MUSIC: {library} ({n_tracks}{qb}) ",
+                    f"── MUSIC ({n_tracks} tracks{qb}) ",
+                    f"── MUSIC LIBRARY ",
+                ], iw)
             else:
-                list_title = f"── MP MIX ARCHIVE PLAYLIST ({len(active_tracks)} Mixes Available{qb}) "
+                list_title = _fit_text_line([
+                    f"── MP MIX ARCHIVE PLAYLIST ({n_tracks} Mixes Available{qb}) ",
+                    f"── MIX ARCHIVE PLAYLIST ({n_tracks} mixes{qb}) ",
+                    f"── MIX ARCHIVE ({n_tracks} mixes{qb}) ",
+                    f"── MIXES ({n_tracks}{qb}) ",
+                    "── PLAYLIST ",
+                ], iw)
             # The title text is part of the rule, so it shares the border ink.
             # Passing the body colour here left the title's own `──` and `─`
             # glyphs in a different hue from the rest of the panel outline.
@@ -10531,7 +10763,14 @@ class TerminalPlayerUI:
                     em1, em2 = "No audio tracks found in the Music playlist.", "Configure Music folders with main menu option 2. Mix Archive folders use option 13."
                 else:
                     em1, em2 = "No audio mixes found in the Mix Archive playlist.", "Configure Mix Archive folders with main menu option 13. Music folders use option 2."
-                for em in (em1, em2): lines.append(f"  {b_col}│{NC} {bold_s}{COLOR_TRAFFIC_AMBER}{em}{NC}{' ' * max(0, iw - _display_width(em) - 2)}{b_col}│{NC}")
+                # The guidance lines are longer than a portrait column, so they
+                # are wrapped into the panel instead of running past its border.
+                empty_rows = []
+                for em in (em1, em2):
+                    for chunk in _wrap_display(em, max(8, iw - 2)):
+                        empty_rows.append(chunk)
+                for em in empty_rows[:max(2, vrows)]:
+                    lines.append(f"  {b_col}│{NC} {bold_s}{COLOR_TRAFFIC_AMBER}{em}{NC}{' ' * max(0, iw - _display_width(em) - 2)}{b_col}│{NC}")
                 for _ in range(max(0, vrows - 2)): lines.append(f"  {b_col}│{NC}{' ' * iw}{b_col}│{NC}")
             else:
                 # A tall Liquid Glass window paints dozens of these rows every

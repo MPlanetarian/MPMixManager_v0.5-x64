@@ -181,7 +181,8 @@ class TestLiquidGlassPlayerFeatures(unittest.TestCase):
             ui._draw_frame()
             self.assertTrue(mock_present.called)
 
-            # Press 'm': MICRO -> NORMAL
+            # Press 'm': MICRO -> NORMAL. The ring always closes, so the full
+            # frame is reachable from every size.
             ui._process_key(b"m")
             self.assertEqual(ui.ui_size_mode, "NORMAL")
             mock_launch.assert_not_called()

@@ -1094,6 +1094,13 @@ class LiquidVisualizerVulkanRenderer(MonitorSpanMixin, RandomPresetMixin, Player
             return
         if (width, height) == tuple(self._windowed_size) and not apply:
             return
+        # The corner mask is built from `_win_size`, which `_live_window_size`
+        # prefers over `_windowed_size`. A bond resize goes through here, and
+        # the window-manager size callback can land a frame later or not at
+        # all, so without this the mask kept the previous window's shape and
+        # the old corners stayed square on the new rectangle -- exactly what a
+        # bonded visualizer showed after the player switched to Vertical.
+        self._win_size = (width, height)
         changed = (width, height) != tuple(self._windowed_size)
         self._windowed_size = (width, height)
         if not self.is_fullscreen:
@@ -1274,6 +1281,9 @@ class LiquidVisualizerVulkanRenderer(MonitorSpanMixin, RandomPresetMixin, Player
             ("glfwSetCursorPosCallback", VP, [VP, VP]), ("glfwSetFramebufferSizeCallback", VP, [VP, VP]),
             ("glfwSetWindowPosCallback", VP, [VP, VP]), ("glfwSetWindowAttrib", None, [VP, CI, CI]),
             ("glfwGetWindowAttrib", CI, [VP, CI]), ("glfwRestoreWindow", None, [VP]), ("glfwFocusWindow", None, [VP]),
+            # The Liquid Player's Visualization button hides and shows the
+            # companion through these; hiding keeps the context and the bond.
+            ("glfwHideWindow", None, [VP]), ("glfwShowWindow", None, [VP]),
             ("glfwSetWindowIconifyCallback", VP, [VP, VP]), ("glfwWindowHintString", None, [CI, CP]),
             ("glfwGetWin32Window", VP, [VP]), ("glfwGetCocoaWindow", VP, [VP]),
             ("glfwGetX11Display", VP, [VP]), ("glfwGetX11Window", U64, [VP]),
@@ -1353,8 +1363,11 @@ class LiquidVisualizerVulkanRenderer(MonitorSpanMixin, RandomPresetMixin, Player
             except Exception:
                 pass
         focus = GLFW_FALSE if bonded_start else GLFW_TRUE
+        # The owned companion opens unmapped when the Visualization button is
+        # already off, so no frame flashes before the first poll hides it.
+        visible = GLFW_FALSE if self._bond_should_start_hidden() else GLFW_TRUE
         for k, v in ((GLFW_CLIENT_API, GLFW_NO_API), (GLFW_RESIZABLE, GLFW_FALSE), (GLFW_DECORATED, GLFW_FALSE),
-                     (GLFW_FOCUS_ON_SHOW, focus), (GLFW_VISIBLE, GLFW_TRUE), (GLFW_FOCUSED, focus), (GLFW_AUTO_ICONIFY, GLFW_FALSE)):
+                     (GLFW_FOCUS_ON_SHOW, focus), (GLFW_VISIBLE, visible), (GLFW_FOCUSED, focus), (GLFW_AUTO_ICONIFY, GLFW_FALSE)):
             g.glfwWindowHint(k, v)
         if hasattr(g, "glfwWindowHintString"):
             try:
@@ -1369,6 +1382,7 @@ class LiquidVisualizerVulkanRenderer(MonitorSpanMixin, RandomPresetMixin, Player
             self._windowed_size = (ww, wh)
         w = g.glfwCreateWindow(ww, wh, self.title.encode("utf-8"), None, None)
         if not w: raise RuntimeError("GLFW could not open a borderless window for Vulkan")
+        self._companion_visible = bool(visible)
         if hasattr(g, "glfwSetWindowAttrib"):
             try: g.glfwSetWindowAttrib(w, GLFW_AUTO_ICONIFY, GLFW_FALSE)
             except Exception: pass
