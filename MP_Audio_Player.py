@@ -5212,8 +5212,10 @@ class EqualizerVisualizer:
 
         lt = f"LEFT CHANNEL ({n}-BAND)"
         rt = f"RIGHT CHANNEL ({n}-BAND)"
-        lh = f"── {lt} "; lh += "─" * max(0, ch_w_l - _display_width(lh))
-        rh = f"── {rt} "; rh += "─" * max(0, ch_w_r - _display_width(rh))
+        lh = self._rule_label(lt, ch_w_l) if (ch_w_l >= 18) else self._rule_label(f"L ({n})", ch_w_l)
+        lh += "─" * max(0, ch_w_l - _display_width(lh))
+        rh = self._rule_label(rt, ch_w_r) if (ch_w_r >= 18) else self._rule_label(f"R ({n})", ch_w_r)
+        rh += "─" * max(0, ch_w_r - _display_width(rh))
         hdr = f"╭{lh}┬{rh}╮"
         lines = [f"  {self.b_col}{hdr}{NC}"]
 
@@ -5242,10 +5244,23 @@ class EqualizerVisualizer:
             lines.append(f"  {self.b_col}│{NC}{col}{ls}{NC}{self.b_col}│{NC}{col}{rs}{NC}{self.b_col}│{NC}")
         return lines + self._stereo_footer(ch_w_l, ch_w_r)
 
+    def _rule_label(self, label: str, inner: int, prefix: str = "── ") -> str:
+        """A rule label that always fits ``inner`` columns.
+
+        The deck is 40 columns wide. A fixed header such as the oscilloscope's
+        name is wider than that inner width even at the smallest console, and
+        the dashes after it were computed as ``max(0, ...)``, so the row simply
+        grew past the box and pushed its right corner off the window. Clip the
+        words instead, and keep the corner.
+        """
+        inner = max(4, int(inner))
+        text = label if label.startswith(prefix) else f"{prefix}{label}"
+        return text if _display_width(text) <= inner else _clip_display(text, inner)
+
     def render_master_spectrum(self, levels: np.ndarray, peaks: np.ndarray, width: int = 80, height: int = 7) -> List[str]:
         target_iw = max(20, width - 6 if width >= 26 else width - 4)
         num_bars = max(16, (target_iw - 2) // 3)
-        hdr = "── HIGH-RESOLUTION MASTER FREQUENCY SPECTRUM (30Hz - 18kHz) "
+        hdr = self._rule_label("HIGH-RESOLUTION MASTER FREQUENCY SPECTRUM (30Hz - 18kHz) ", target_iw)
         top_line = f"  {self.b_col}╭{hdr}{'─' * max(0, target_iw - _display_width(hdr))}╮{NC}"
         bot_line = f"  {self.b_col}╰{'─' * target_iw}╯{NC}"
         lines = [top_line]
@@ -5311,7 +5326,7 @@ class EqualizerVisualizer:
         st = status or {}
         target_iw = max(20, width - 6 if width >= 26 else width - 4)
         iw = max(16, target_iw - 4)
-        hdr = "── DYNAMIC OSCILLOSCOPE AUDIO WAVEFORM "
+        hdr = self._rule_label("DYNAMIC OSCILLOSCOPE AUDIO WAVEFORM ", target_iw)
         top_l = f"  {self.b_col}╭{hdr}{'─' * max(0, target_iw - _display_width(hdr))}╮{NC}"
         bot_l = f"  {self.b_col}╰{'─' * target_iw}╯{NC}"
 
@@ -6597,6 +6612,122 @@ def _get_dynamic_gradient(step: float) -> Tuple[Tuple[int, int, int], Tuple[int,
         (int(60 + 52 * math.sin(step * 0.41 + 0.5)), int(48 + 42 * math.sin(step * 0.53 + 2.4)), int(78 + 58 * math.sin(step * 0.47 + 4.1)))
     )
 
+# The stacked portrait deck. It is a third in-place size beside Mini and
+# Micro: one narrow column, a large clock, a tall analyser and its own
+# transport bar, so the player reads from across a desk instead of a row of
+# text. 40x46 is taller than it is wide by more than 2:1 at the 9x18 cell.
+VERTICAL_COLS, VERTICAL_ROWS = 40, 46
+# M walks this ring. The tall view comes first: a press from the full window
+# opens the deck, then the two compact strips, then the full window again.
+UI_SIZE_ORDER = ("NORMAL", "VERTICAL", "MINI", "MICRO")
+# A compact window has no room for the full frame, so its ring wraps from the
+# last strip back to the tall view instead of returning to NORMAL.
+COMPACT_UI_SIZES = ("VERTICAL", "MINI", "MICRO")
+UI_SIZE_TITLES = {"NORMAL": "MP Audio Player", "VERTICAL": "MP Vertical Audio Player", "MINI": "MP Mini Audio Player", "MICRO": "MP Micro Audio Player"}
+
+
+def ui_size_step(current: str, allow_normal: bool = True) -> str:
+    """The next size on the M ring.
+
+    ``allow_normal`` is False inside a compact window that was opened as
+    Vertical, Mini or Micro: it has no full-size frame to go back to, so the
+    ring wraps to the tall deck.
+    """
+    cur = str(current or "NORMAL").strip().upper()
+    if cur not in UI_SIZE_ORDER:
+        cur = "NORMAL"
+    start = UI_SIZE_ORDER.index(cur)
+    for step in range(1, len(UI_SIZE_ORDER) + 1):
+        nxt = UI_SIZE_ORDER[(start + step) % len(UI_SIZE_ORDER)]
+        if allow_normal or nxt != "NORMAL":
+            return nxt
+    return "VERTICAL"
+
+
+def ui_size_grid(size: str) -> Tuple[int, int]:
+    """Columns and rows for a published size, with the deck as the fallback."""
+    size = str(size or "").strip().upper()
+    if size == "VERTICAL":
+        return VERTICAL_COLS, VERTICAL_ROWS
+    if size == "MINI":
+        return 74, 14
+    if size == "MICRO":
+        return 74, 7
+    return 120, 40
+
+
+# 3x5 block glyphs for the oversized clock. Each row is exactly three cells, so
+# the readout aligns without measuring anything at draw time.
+_LCD_GLYPHS = {
+    "0": ("███", "█ █", "█ █", "█ █", "███"),
+    "1": ("  █", "  █", "  █", "  █", "  █"),
+    "2": ("███", "  █", "███", "█  ", "███"),
+    "3": ("███", "  █", "███", "  █", "███"),
+    "4": ("█ █", "█ █", "███", "  █", "  █"),
+    "5": ("███", "█  ", "███", "  █", "███"),
+    "6": ("███", "█  ", "███", "█ █", "███"),
+    "7": ("███", "  █", "  █", "  █", "  █"),
+    "8": ("███", "█ █", "███", "█ █", "███"),
+    "9": ("███", "█ █", "███", "  █", "███"),
+    ":": ("   ", " █ ", "   ", " █ ", "   "),
+    "-": ("   ", "   ", "███", "   ", "   "),
+    " ": ("   ", "   ", "   ", "   ", "   "),
+}
+
+
+def lcd_clock_rows(text: str, ink: str) -> List[str]:
+    """Five rows of block digits, one cell of padding between glyphs."""
+    glyphs = [_LCD_GLYPHS.get(ch, _LCD_GLYPHS[" "]) for ch in text]
+    return [" ".join(f"{ink}{glyph[row]}{NC}" for glyph in glyphs) for row in range(5)]
+
+
+# The stereo/pair styles lay their two channel meters out from fixed band
+# tables: at 40 columns they arrive 53 to 78 cells wide, so the deck would
+# only ever show their left edge. These styles get a portrait spectrum
+# instead, which is what the tall column has room for.
+WIDE_STEREO_STYLES = ("neon_prism_eq", "stardust_particles_eq", "master_spectrum", "analog_vu")
+
+
+def vertical_spectrum_rows(status: Dict[str, Any], width: int, height: int) -> List[str]:
+    """A bottom-up bar spectrum sized for the portrait deck.
+
+    One column per band plus a gap. The bars grow from the bottom row so the
+    deck reads like a meter column; each column takes the theme's bar colour
+    for its height, which is what keeps it in step with the other styles.
+    """
+    levels = _as_float_vector(status.get("levels"), 24)
+    peaks = _as_float_vector(status.get("peaks"), len(levels) or 24)
+    width = max(8, int(width))
+    height = max(2, int(height))
+    # Two leading spaces, then one cell per band with a single-space gap.
+    bands = max(4, (width - 1) // 2)
+    if len(levels):
+        picks = np.linspace(0, len(levels) - 1, bands)
+        values = np.interp(picks, np.arange(len(levels)), levels)
+    else:
+        values = np.zeros(bands)
+    peak_values = np.interp(picks, np.arange(len(peaks)), peaks) if len(peaks) >= 2 else values
+    colors = ["\033[38;2;0;229;255m", "\033[38;2;0;255;180m", "\033[38;2;255;215;0m", "\033[38;2;255;64;64m"]
+    rows = []
+    for row in range(height):
+        # Row 0 is the top of the block. A band fills every row at or below
+        # its own height, and the peak cap marks the row just above the fill.
+        frac = (height - row) / float(height)
+        cells = []
+        for index, value in enumerate(values):
+            band_h = int(round(float(value) * height))
+            cap_h = int(round(float(peak_values[index]) * height)) if index < len(peak_values) else band_h
+            level = height - row
+            if band_h >= level:
+                cells.append(f"{colors[min(3, level * 4 // max(1, height))]}█{NC}")
+            elif cap_h == level:
+                cells.append(f"{DIM}\033[38;2;255;255;255m─{NC}")
+            else:
+                cells.append(" ")
+        rows.append("  " + " ".join(cells))
+    return rows
+
+
 def ensure_mini_player_kwin_rules():
     if not sys.platform.startswith(("linux", "freebsd")):
         return
@@ -6614,7 +6745,8 @@ def ensure_mini_player_kwin_rules():
 
         rules_defs = [
             ("MP Mini Audio Player (Fixed Size)", "MP Mini Audio Player"),
-            ("MP Micro Audio Player (Fixed Size)", "MP Micro Audio Player")
+            ("MP Micro Audio Player (Fixed Size)", "MP Micro Audio Player"),
+            ("MP Vertical Audio Player (Fixed Size)", "MP Vertical Audio Player")
         ]
         modified = False
         for desc, title in rules_defs:
@@ -6684,9 +6816,12 @@ def _setup_mini_terminal_appearance():
             except Exception: pass
         ensure_mini_player_kwin_rules()
 
-def _build_window_cmd(mini: bool, mode: str, folder_name: str, playlist_path: str, theme: Optional[str], style: Optional[str], micro: bool = False) -> List[str]:
+def _build_window_cmd(mini: bool, mode: str, folder_name: str, playlist_path: str, theme: Optional[str], style: Optional[str], micro: bool = False, size: Optional[str] = None) -> List[str]:
     cmd = [sys.executable or "python3", str(Path(__file__).resolve()), "--interactive"]
-    if micro:
+    size = str(size or "").strip().upper()
+    if size in ("VERTICAL", "MINI", "MICRO"):
+        cmd.append(f"--{size.lower()}")
+    elif micro:
         cmd.append("--micro")
     elif mini:
         cmd.append("--mini")
@@ -6789,10 +6924,19 @@ def resize_host_terminal(columns: int, rows: int, title: str) -> None:
     except Exception:
         pass
 
-def launch_mini_player_window(mode: str = "MIX_ARCHIVE", folder_name: str = "ALL", playlist_path: str = "", theme: Optional[str] = None, style: Optional[str] = None, micro: bool = False) -> bool:
-    title = "MP Micro Audio Player" if micro else "MP Mini Audio Player"
-    t_rows = "7" if micro else "14"
-    cmd = _build_window_cmd(not micro, mode, folder_name, playlist_path, theme, style, micro=micro)
+def launch_mini_player_window(mode: str = "MIX_ARCHIVE", folder_name: str = "ALL", playlist_path: str = "", theme: Optional[str] = None, style: Optional[str] = None, micro: bool = False, size: str = "") -> bool:
+    """Open a compact player window: the tall deck, Mini, or Micro.
+
+    ``size`` names the frame directly. ``micro`` and ``mini`` are the older
+    flags and still work, so every existing caller keeps its behaviour.
+    """
+    size = str(size or "").strip().upper()
+    if size not in COMPACT_UI_SIZES:
+        size = "MICRO" if micro else "MINI"
+    title = UI_SIZE_TITLES[size]
+    t_cols, t_rows = ui_size_grid(size)
+    t_rows = str(t_rows)
+    cmd = _build_window_cmd(False, mode, folder_name, playlist_path, theme, style, micro=micro, size=size)
     base_dir = str(get_base_dir())
     if sys.platform.startswith(("linux", "freebsd")):
         _setup_mini_terminal_appearance()
@@ -6806,7 +6950,7 @@ def launch_mini_player_window(mode: str = "MIX_ARCHIVE", folder_name: str = "ALL
             "--workdir", base_dir,
             "--qwindowtitle", title,
             "-p", f"tabtitle={title}",
-            "-p", "TerminalColumns=74",
+            "-p", f"TerminalColumns={t_cols}",
             "-p", f"TerminalRows={t_rows}",
             "-p", "ScrollBarPosition=0",
             "-e", "bash", "-c", cmd_str
@@ -6817,12 +6961,13 @@ def launch_mini_player_window(mode: str = "MIX_ARCHIVE", folder_name: str = "ALL
                     subprocess.run(["xprop", "-name", title, "-f", "_NET_WM_WINDOW_OPACITY", "32c", "-set", "_NET_WM_WINDOW_OPACITY", "0x4d000000"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 threading.Thread(target=_set_hints, daemon=True).start()
             return True
+        geometry = f"{t_cols}x{t_rows}"
         for term, targs in [
-            ("gnome-terminal", [f"--title={title}", f"--geometry=74x{t_rows}", "--", "bash", "-c", cmd_str]),
-            ("xfce4-terminal", [f"--title={title}", f"--geometry=74x{t_rows}", "--hide-menubar", "--hide-borders", "-e", f"bash -c '{cmd_str}'"]),
-            ("alacritty", ["--title", title, "-o", "window.opacity=0.30", "-o", "window.dimensions.columns=74", "-o", f"window.dimensions.lines={t_rows}", "-e", "bash", "-c", cmd_str]),
-            ("foot", ["-T", title, "-w", f"74x{t_rows}", "-a", "0.30", "bash", "-c", cmd_str]),
-            ("xterm", ["-title", title, "-geometry", f"74x{t_rows}", "-e", "bash", "-c", cmd_str]),
+            ("gnome-terminal", [f"--title={title}", f"--geometry={geometry}", "--", "bash", "-c", cmd_str]),
+            ("xfce4-terminal", [f"--title={title}", f"--geometry={geometry}", "--hide-menubar", "--hide-borders", "-e", f"bash -c '{cmd_str}'"]),
+            ("alacritty", ["--title", title, "-o", "window.opacity=0.30", "-o", f"window.dimensions.columns={t_cols}", "-o", f"window.dimensions.lines={t_rows}", "-e", "bash", "-c", cmd_str]),
+            ("foot", ["-T", title, "-w", geometry, "-a", "0.30", "bash", "-c", cmd_str]),
+            ("xterm", ["-title", title, "-geometry", geometry, "-e", "bash", "-c", cmd_str]),
             ("xdg-terminal-exec", ["bash", "-c", cmd_str])
         ]:
             if shutil.which(term) and _run_bg([term] + targs): return True
@@ -6830,7 +6975,7 @@ def launch_mini_player_window(mode: str = "MIX_ARCHIVE", folder_name: str = "ALL
         c_str = " ".join(f'\\"{a}\\"' for a in cmd)
         return _run_bg(["osascript", "-e", f'tell application "Terminal" to do script "{c_str}"'])
     elif sys.platform == "win32":
-        if shutil.which("wt.exe") and _run_bg(["wt.exe", "-w", "new", "--title", title, "-p", "Command Prompt", "--size", f"74,{t_rows}"] + cmd): return True
+        if shutil.which("wt.exe") and _run_bg(["wt.exe", "-w", "new", "--title", title, "-p", "Command Prompt", "--size", f"{t_cols},{t_rows}"] + cmd): return True
         c_str = " ".join(f'"{a}"' for a in cmd)
         try: subprocess.Popen(f'start "{title}" {c_str}', shell=True); return True
         except Exception: pass
@@ -6861,6 +7006,7 @@ def launch_liquid_glass_player(
     style: Optional[str] = None,
     mini: bool = False,
     micro: bool = False,
+    vertical: bool = False,
     no_visualizer: bool = False,
 ) -> bool:
     if sys.platform not in ("linux", "darwin", "win32") and not sys.platform.startswith("freebsd"):
@@ -6922,6 +7068,8 @@ def launch_liquid_glass_player(
         cmd.append("--micro")
     elif mini:
         cmd.append("--mini")
+    elif vertical:
+        cmd.append("--vertical")
     if str(mode or "").upper() == "MUSIC":
         cmd.append("--music-mode")
         if folder_name and str(folder_name).upper() != "ALL":
@@ -8698,10 +8846,10 @@ class TerminalPlayerUI:
         chip = bass_mode_label(mode)
         chip_w = _display_width(chip)
         pct = BASS_BOOST_FRACTIONS.get(mode, 0.0) * 100.0
-        if self.ui_size_mode in ("MINI", "MICRO"):
-            # Mini and Micro are fixed at 14 and 7 rows, so the button chip
-            # would push a line off the frame. They keep the compact badge in
-            # the now-playing line and the `[b] Bass` hint below.
+        if self.ui_size_mode in COMPACT_UI_SIZES:
+            # The compact frames are fixed, so the button chip would push a
+            # line off them. They keep the compact badge in the now-playing
+            # line and the `[b] Bass` hint below.
             chip = ""
             chip_w = 0
         head = f"{button}  {count} saved"
@@ -9464,14 +9612,14 @@ class TerminalPlayerUI:
         self._orig_fd = fd
         self._orig_termios = old_settings
         self._win_cstate = cstate
-        if self.ui_size_mode in ("MINI", "MICRO"):
+        if self.ui_size_mode in COMPACT_UI_SIZES:
             _setup_mini_terminal_appearance()
-            t_rows = 7 if self.ui_size_mode == "MICRO" else 14
+            t_cols, t_rows = ui_size_grid(self.ui_size_mode)
             # Konsole on Wayland applies CSI 8 to the reported size only. The real
             # window size is set at launch (-p TerminalRows) or by resize_host_terminal.
             if not os.environ.get("KONSOLE_DBUS_SERVICE"):
-                sys.stdout.write(f"\033[8;{t_rows};74t")
-            _set_terminal_title(f"MP {'Mini' if self.ui_size_mode == 'MINI' else 'Micro'} Audio Player")
+                sys.stdout.write(f"\033[8;{t_rows};{t_cols}t")
+            _set_terminal_title(UI_SIZE_TITLES[self.ui_size_mode])
         else:
             _set_terminal_title("MP Audio Player")
         self._publish_liquid_ui_size()
@@ -9882,7 +10030,7 @@ class TerminalPlayerUI:
                 return
             self._playlist_clear_armed = False
         if data in (b"i", b"I"): self.inspector_hud_active = not self.inspector_hud_active; return
-        if data in (b"E",) and self.ui_size_mode not in ("MINI", "MICRO"):
+        if data in (b"E",) and self.ui_size_mode not in COMPACT_UI_SIZES:
             self.equalizer_hud_active = not self.equalizer_hud_active
             if self.equalizer_hud_active: self.inspector_hud_active = False
             return
@@ -9938,19 +10086,15 @@ class TerminalPlayerUI:
             self._notify(f"Shuffle: {'ON' if so else 'OFF'}", 2.5)
         elif data in (b"m", b"M"):
             if os.environ.get("MP_LIQUID_GLASS") == "1":
-                if self.ui_size_mode == "NORMAL":
-                    self.ui_size_mode = "MINI"
-                elif self.ui_size_mode == "MINI":
-                    self.ui_size_mode = "MICRO"
-                else:
-                    self.ui_size_mode = "NORMAL"
+                self.ui_size_mode = ui_size_step(self.ui_size_mode)
                 self._publish_liquid_ui_size()
-                self._notify(f"Liquid Glass Mode: {self.ui_size_mode}", 2.0)
-            elif self.ui_size_mode in ("MINI", "MICRO"):
-                self.ui_size_mode = "MICRO" if self.ui_size_mode == "MINI" else "MINI"
-                t_rows = 7 if self.ui_size_mode == "MICRO" else 14
-                title = f"MP {'Micro' if self.ui_size_mode == 'MICRO' else 'Mini'} Audio Player"
-                resize_host_terminal(74, t_rows, title)
+                self._notify(f"Liquid Glass Mode: {self.ui_size_mode.title()}", 2.0)
+            elif self.ui_size_mode in COMPACT_UI_SIZES:
+                # Inside a compact window M wraps round the compact ring: the
+                # tall deck, then Mini, then Micro, then the deck again.
+                self.ui_size_mode = ui_size_step(self.ui_size_mode, allow_normal=False)
+                t_cols, t_rows = ui_size_grid(self.ui_size_mode)
+                resize_host_terminal(t_cols, t_rows, UI_SIZE_TITLES[self.ui_size_mode])
             else:
                 ok = launch_mini_player_window(
                     self.mode,
@@ -9971,6 +10115,7 @@ class TerminalPlayerUI:
                 style=self.visualizer.style,
                 mini=(self.ui_size_mode == "MINI"),
                 micro=(self.ui_size_mode == "MICRO"),
+                vertical=(self.ui_size_mode == "VERTICAL"),
             )
             self._notify("✦ Launched MP Audio Player (Liquid Glass)" if ok else "Failed to open Liquid Glass Player window", 3.0)
         elif data in (b"z", b"Z"):
@@ -9992,7 +10137,7 @@ class TerminalPlayerUI:
             nr = modes[(modes.index(cr) + 1) % 3] if cr in modes else "all"
             self.cached_status["repeat"] = nr
             self._notify(f"Repeat: {nr.upper()}", 2.5)
-        elif (data in (b"e", b"E") if self.ui_size_mode in ("MINI", "MICRO") else data == b"e"):
+        elif (data in (b"e", b"E") if self.ui_size_mode in COMPACT_UI_SIZES else data == b"e"):
             self.visualizer.cycle_style()
             self._notify(f"Visualizer: {self.visualizer.get_style_display_name()}", 2.5)
         elif data in (b"c", b"C"):
@@ -10149,6 +10294,7 @@ class TerminalPlayerUI:
         w, h = _win_visible_size((80, 24))
         w, h, st = max(40, w), max(5, h), self._get_status()
         self._arm_visualizer_text()
+        if self.ui_size_mode == "VERTICAL": return self._draw_vertical_frame(w, h, st)
         if self.ui_size_mode == "MINI": return self._draw_mini_frame(w, h, st)
         if self.ui_size_mode == "MICRO": return self._draw_micro_frame(w, h, st)
         self._sync_initial_selection(st)
@@ -10467,8 +10613,8 @@ class TerminalPlayerUI:
             g_bottom = f"[G] {g_key}  " if is_lg else ""
             lines.extend([
                 _fit_text_line([
-                    f"  {bold_s}{COLOR_TRAFFIC_GREEN}TRACK CONTROLS:{NC} {bold_s}{COLOR_ELECTRIC_CYAN}[3]{NC} {bold_s}Favorites{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[H]{NC} {bold_s}Mark Fav{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[1]{NC} {bold_s}Mix Archive{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[2]{NC} {bold_s}Music{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[D]{NC} {bold_s}Clear Playlist{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[Space]{NC} {bold_s}Play/Pause{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[R]{NC} {bold_s}Record WAV{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[M]{NC} {bold_s}Mini Mode{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[L]{NC} {bold_s}Liquid Glass{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[Z]{NC} {bold_s}MP Liquid Visualizer{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[Q]{NC} {bold_s}Queue{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[G]{NC} {bold_s}{g_key}{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[I]{NC} {bold_s}Track Inspector{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[E]{NC} {bold_s}Equalizer HUD{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[b]{NC} {bold_s}Bass Boost{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[/]{NC} {bold_s}Search{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[n/p]{NC} {bold_s}Skip{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[+/-]{NC} {bold_s}Pitch{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[v/V]{NC} {bold_s}Vol{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[u]{NC} {bold_s}Mute{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[Esc]{NC} {bold_s}Exit{NC}",
-                    f"  {bold_s}{COLOR_TRAFFIC_GREEN}CONTROLS:{NC} {bold_s}[3] Favorites{NC}  {bold_s}[H] Mark{NC}  {bold_s}[1] Mix Archive{NC}  {bold_s}[2] Music{NC}  {bold_s}[D] Clear{NC}  {bold_s}[Space] Play{NC}  {bold_s}[R] Rec WAV{NC}  {bold_s}[M] Mini{NC}  {bold_s}[L] Liquid{NC}  {bold_s}[Q] Queue{NC}  {bold_s}[G] {g_key}{NC}  {bold_s}[E] Equalizer{NC}  {bold_s}[b] Bass{NC}  {bold_s}[/] Search{NC}  {bold_s}[n/p] Skip{NC}  {bold_s}[u] Mute{NC}  {bold_s}[Esc] Exit{NC}",
+                    f"  {bold_s}{COLOR_TRAFFIC_GREEN}TRACK CONTROLS:{NC} {bold_s}{COLOR_ELECTRIC_CYAN}[3]{NC} {bold_s}Favorites{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[H]{NC} {bold_s}Mark Fav{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[1]{NC} {bold_s}Mix Archive{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[2]{NC} {bold_s}Music{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[D]{NC} {bold_s}Clear Playlist{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[Space]{NC} {bold_s}Play/Pause{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[R]{NC} {bold_s}Record WAV{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[M]{NC} {bold_s}Vertical{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[L]{NC} {bold_s}Liquid Glass{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[Z]{NC} {bold_s}MP Liquid Visualizer{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[Q]{NC} {bold_s}Queue{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[G]{NC} {bold_s}{g_key}{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[I]{NC} {bold_s}Track Inspector{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[E]{NC} {bold_s}Equalizer HUD{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[b]{NC} {bold_s}Bass Boost{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[/]{NC} {bold_s}Search{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[n/p]{NC} {bold_s}Skip{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[+/-]{NC} {bold_s}Pitch{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[v/V]{NC} {bold_s}Vol{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[u]{NC} {bold_s}Mute{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[Esc]{NC} {bold_s}Exit{NC}",
+                    f"  {bold_s}{COLOR_TRAFFIC_GREEN}CONTROLS:{NC} {bold_s}[3] Favorites{NC}  {bold_s}[H] Mark{NC}  {bold_s}[1] Mix Archive{NC}  {bold_s}[2] Music{NC}  {bold_s}[D] Clear{NC}  {bold_s}[Space] Play{NC}  {bold_s}[R] Rec WAV{NC}  {bold_s}[M] Vertical{NC}  {bold_s}[L] Liquid{NC}  {bold_s}[Q] Queue{NC}  {bold_s}[G] {g_key}{NC}  {bold_s}[E] Equalizer{NC}  {bold_s}[b] Bass{NC}  {bold_s}[/] Search{NC}  {bold_s}[n/p] Skip{NC}  {bold_s}[u] Mute{NC}  {bold_s}[Esc] Exit{NC}",
                     f"  {bold_s}[3] Fav  [H] Mark  [1] Mix  [2] Music  [D] Clear  Space Play  [Q] Queue  [G] {g_key}  [E] EQ  [b] Bass  [/] Search  n/p Skip  Esc Exit{NC}"
                 ], max(20, w - 1)),
                 _fit_text_line([
@@ -10483,9 +10629,9 @@ class TerminalPlayerUI:
             # there rather than advertising a key that does nothing.
             export_hint = "  Export Tracks" if self.mode == "FAVORITES" else ""
             lines.append(_fit_text_line([
-                f"  {hint_col}[3] Favorites  [H] Mark Fav  [1] Mix Archive  [2] Music  [D] Clear Playlist{export_hint}  [Space] Play/Pause  [R] Record WAV  [M] Mini Mode  [L] Liquid Glass  [Z] MP Liquid Visualizer  [Q] Queue  [G] {g_key}  [+/-] Pitch ±1% (±20% max)  [0] Pitch Reset  [v/V] Vol  [u] Mute  [s] Shuffle  [y] Repeat  [n/p] Next/Prev  [a] Audio/BT  [O] Open  [T] Tracklist  [w] Export  [F] Files  [E] Equalizer HUD  [b] Bass Boost  [e] Vis  [Esc] Exit{NC}",
-                f"  {hint_col}[3] Favorites  [H] Mark  [1] Mix Archive  [2] Music  [D] Clear{export_hint}  Space Play  R Rec  M Mini  L Glass  Q Queue  G {g_key}  +/- Pitch  0 Reset  v/V Vol  u Mute  s Shuf  y Rep  n/p Skip  O Open  T List  E EQ  b Bass  Esc Exit{NC}",
-                f"  {hint_col}[3] Fav  [H] Mark  [1] Mix  [2] Music  [D] Clear{export_hint}  Space Play  R Rec  M Mini  Q Queue  G {g_key}  v/V Vol  u Mute  s Shuf  y Rep  n/p Skip  E EQ  b Bass  Esc Exit{NC}"
+                f"  {hint_col}[3] Favorites  [H] Mark Fav  [1] Mix Archive  [2] Music  [D] Clear Playlist{export_hint}  [Space] Play/Pause  [R] Record WAV  [M] Vertical  [L] Liquid Glass  [Z] MP Liquid Visualizer  [Q] Queue  [G] {g_key}  [+/-] Pitch ±1% (±20% max)  [0] Pitch Reset  [v/V] Vol  [u] Mute  [s] Shuffle  [y] Repeat  [n/p] Next/Prev  [a] Audio/BT  [O] Open  [T] Tracklist  [w] Export  [F] Files  [E] Equalizer HUD  [b] Bass Boost  [e] Vis  [Esc] Exit{NC}",
+                f"  {hint_col}[3] Favorites  [H] Mark  [1] Mix Archive  [2] Music  [D] Clear{export_hint}  Space Play  R Rec  M Vertical  L Glass  Q Queue  G {g_key}  +/- Pitch  0 Reset  v/V Vol  u Mute  s Shuf  y Rep  n/p Skip  O Open  T List  E EQ  b Bass  Esc Exit{NC}",
+                f"  {hint_col}[3] Fav  [H] Mark  [1] Mix  [2] Music  [D] Clear{export_hint}  Space Play  R Rec  M Vertical  Q Queue  G {g_key}  v/V Vol  u Mute  s Shuf  y Rep  n/p Skip  E EQ  b Bass  Esc Exit{NC}"
             ], max(20, w - 1)))
         # Drop the breathing rows rather than a control line if the frame runs
         # past the console height. The Bass Boost row made this reachable at
@@ -10571,6 +10717,121 @@ class TerminalPlayerUI:
             lines = [_strip_bold_ansi(l) for l in lines]
         self._present(lines, w, h)
 
+    def _draw_vertical_frame(self, w: int, h: int, st: Dict[str, Any]):
+        """The portrait deck: one narrow column, a large clock, a tall analyser.
+
+        M reaches this size before Mini and Micro. The window is twice as tall
+        as it is wide, so the frame is stacked rather than spread across a
+        row: title, block-digit clock, full-width timeline, a tall equaliser
+        block, then the transport keys. It stays inside the same 44-column
+        grid on every host, which is what lets the glass window swap its own
+        rectangle without the two panels shifting.
+        """
+        self._arm_visualizer_text()
+        self._reset_click_targets()
+        self._sync_initial_selection(st)
+        t_now = time.time()
+        g1, g2, _ = _get_dynamic_gradient(t_now)
+        c1, c2 = f"\033[38;2;{g1[0]};{g1[1]};{g1[2]}m", f"\033[38;2;{g2[0]};{g2[1]};{g2[2]}m"
+        target_cols, target_rows = VERTICAL_COLS, VERTICAL_ROWS
+        if (w != target_cols or h != target_rows) and sys.platform.startswith(("linux", "freebsd")) \
+                and not os.environ.get("KONSOLE_DBUS_SERVICE") and not os.environ.get("MP_LIQUID_GLASS"):
+            sys.stdout.write(f"\033[8;{target_rows};{target_cols}t")
+        _set_terminal_title(UI_SIZE_TITLES["VERTICAL"])
+        is_lg = bool(os.environ.get("MP_LIQUID_GLASS"))
+        g_key = "MP Gui" if is_lg else "Spek"
+        bold_s = "" if is_lg else BOLD
+        text_col = theme_body_ansi(self.visualizer.theme) if is_lg else theme_console_body_ansi(self.visualizer.theme)
+        iw = max(24, min(w - 4, VERTICAL_COLS - 4))
+        if is_lg and self.mp_visualizer_on:
+            header_title = "✦ MP LIQUID VISUALIZER ✦"
+        else:
+            header_title = '✦ MP VERTICAL PLAYER (GLASS) ✦' if is_lg else "✦ MP VERTICAL PLAYER ✦"
+        lines = [
+            f"  {c1}╭{'─' * iw}╮{NC}",
+            f"  {c1}│{c2}{header_title.center(iw)}{c1}│{NC}",
+            f"  {c1}╰{'─' * iw}╯{NC}",
+        ]
+        state = st.get("state", "stopped")
+        badge = (f"{bold_s}{playing_badge_ink(self.visualizer.theme, is_lg)}▶ PLAY{NC}" if state == "playing"
+                 else (f"{bold_s}\033[38;2;255;191;0m⏸ PAUSE{NC}" if state == "paused"
+                       else f"{bold_s}\033[38;2;255;64;64m⏹ STOP{NC}"))
+        is_rec, flash = bool(st.get("recording", False)), (int(t_now * 1.5) % 2 == 0)
+        rec_b = f" {bold_s}\033[38;2;255;64;64m● REC{NC}" if (is_rec and flash) else (f" \033[38;2;255;100;100m○ REC{NC}" if is_rec else "")
+        mode_str = "MUSIC" if self.mode == "MUSIC" else ("FAV" if self.mode == "FAVORITES" else "MIX")
+        tname, av = st.get("title", "Unknown Track"), max(14, iw - 6)
+        if _display_width(tname) > av:
+            tname = _clip_display(tname, av - 3) + "..."
+        lines.append(f"  {badge}{rec_b} {bold_s}{now_playing_ink(self.visualizer.theme, is_lg)}{tname}{NC}")
+        ext = os.path.splitext(st.get("path", ""))[1][1:].upper() or "FLAC"
+        sr, ch_s = st.get("sample_rate", 44100), ("Stereo" if st.get("channels", 2) == 2 else "Mono")
+        dev_s = f"{'🎧' if st.get('bluetooth_connected') else '🔊'} {st.get('output_device', 'Speakers')}"
+        if _display_width(dev_s) > max(8, iw - 14):
+            dev_s = _clip_display(dev_s, max(6, iw - 17)) + "..."
+        lines.append(_fit_text_line([
+            f"  \033[38;2;0;229;255m[{mode_str}]{NC} {text_col}{ext} · {sr / 1000:.1f} kHz · {ch_s}{NC}  {text_col}{dev_s}{NC}",
+            f"  [{mode_str}] {ext} · {sr / 1000:.1f} kHz  {dev_s}",
+        ], max(20, w - 1)))
+        # The oversized clock is the reason this mode exists: it is legible
+        # from the mixer, not just from the chair. Five block rows, centred in
+        # the column so the readout sits on the same axis as everything below.
+        clock = st.get("position_fmt", "00:00") or "00:00"
+        for row in lcd_clock_rows(clock, c1):
+            pad = max(0, (iw - _display_width(row)) // 2)
+            lines.append(f"  {' ' * pad}{row}")
+        pct, bw = float(st.get("progress_pct", 0.0)), max(10, iw - 8)
+        fw = int((pct / 100.0) * bw)
+        bar_fill = f"\033[38;2;0;229;255m{'━' * fw}\033[38;2;255;255;255m●{NC}"
+        bar_empty = f"\033[38;2;90;105;135m{'─' * max(0, bw - fw - 1)}{NC}"
+        # Two leading spaces, then the bar itself: a click on it seeks.
+        vertical_bar_start = 3
+        self._timeline_row = len(lines) + 1
+        self._timeline_span = (vertical_bar_start, vertical_bar_start + bw - 1)
+        lines.append(f"  {bar_fill}{bar_empty} {text_col}{pct:.0f}%{NC}")
+        lines.append(_fit_text_line([
+            f"  {text_col}{st.get('position_fmt', '00:00')}{NC} elapsed  │  {text_col}{st.get('duration_fmt', '00:00')}{NC} total",
+            f"  {st.get('position_fmt', '00:00')} / {st.get('duration_fmt', '00:00')}",
+        ], max(20, w - 1)))
+        vol = f"{st.get('volume', 85)}%" if not st.get("muted") else "\033[38;2;255;64;64mMUTED\033[0m"
+        pval = int(st.get("pitch_percent", 0))
+        knob_col = self.visualizer.pitch_control_colors()["knob"]
+        p_str = f"{knob_col}0%{NC}" if pval == 0 else f"{knob_col}{pval:+d}%{NC}"
+        lines.append(_fit_text_line([
+            f"  🔊 {text_col}Vol{NC} \033[38;2;0;229;255m{vol}{NC}  │  🎚 {text_col}Pitch{NC} {p_str}  │  🎨 {c1}{self.visualizer.get_theme_display_name()[:12]}{NC}",
+            f"  Vol {vol}  Pitch {p_str}",
+        ], max(20, w - 1)))
+        lines.append(_fit_text_line([
+            f"  {bass_mode_badge(self._bass_mode(), bool(bold_s))}  │  🎛 {bold_s}{c2}{self.visualizer.get_style_display_name()[:16]}{NC}",
+            f"  {self.visualizer.get_style_display_name()[:18]}",
+        ], max(20, w - 1)))
+        # The analyser takes every row left over. The wide stereo and spectrum
+        # styles paint a fixed two-channel block that is wider than the deck,
+        # so those styles get the portrait spectrum instead; the rest are
+        # drawn at the column width and the wide ones are clipped as a
+        # backstop.
+        lines.append("")
+        vis_i = len(lines)
+        room = max(2, h - vis_i - 4)   # two key rows, the notice, one spacer
+        if self.visualizer.style in WIDE_STEREO_STYLES:
+            block = vertical_spectrum_rows(st, max(20, iw), room)
+        else:
+            block = self.visualizer.render(st, width=max(20, iw), height=room)[:room]
+        lines.extend(_clip_display(line, iw) if _display_width(line) > iw else line for line in block)
+        prompt_line = self._favorites_prompt_line()
+        if prompt_line:
+            lines.append(_fit_text_line([prompt_line], max(20, w - 1)))
+        elif t_now < self.notification_time and self.notification_msg:
+            lines.append(f"  {self._notification_ansi(bold_s)}📂 {self.notification_msg}{NC}")
+        elif is_lg:
+            lines.append(f"  \033[38;2;0;229;255m[Shift+V]{NC} {text_col}Visualizer{NC}  \033[38;2;0;229;255m[b]{NC} {text_col}Bass{NC}")
+            lines.append(f"  \033[38;2;255;215;0m[M]{NC} {text_col}Mini{NC}  \033[38;2;255;64;64m[Esc]{NC} {text_col}Close{NC}")
+        else:
+            lines.append(f"  \033[38;2;0;229;255m[Space]{NC} {text_col}Play{NC}  \033[38;2;0;229;255m[n/p]{NC} {text_col}Skip{NC}  \033[38;2;0;229;255m[v/V]{NC} {text_col}Vol{NC}  \033[38;2;0;229;255m[b]{NC} {text_col}Bass{NC}")
+            lines.append(f"  \033[38;2;0;229;255m[e]{NC} {text_col}Vis{NC}  \033[38;2;0;229;255m[c]{NC} {text_col}Theme{NC}  \033[38;2;0;229;255m[G]{NC} {text_col}{g_key}{NC}  \033[38;2;255;215;0m[M]{NC} {text_col}Mini{NC}  \033[38;2;255;64;64m[Esc]{NC} {text_col}Close{NC}")
+        if is_lg:
+            lines = [_strip_bold_ansi(l) for l in lines]
+        self._present(lines, w, h)
+
     def _draw_micro_frame(self, w: int, h: int, st: Dict[str, Any]):
         self._arm_visualizer_text()
         self._reset_click_targets()
@@ -10633,7 +10894,7 @@ class TerminalPlayerUI:
         # The pitch readout is the exception: it follows the theme accent, the
         # same ink as the full-frame knob, so C recolours it here too.
         r1 = f" {badge}{rec_d} {now_playing_ink(self.visualizer.theme, is_lg)}{tname}{NC} │ \033[38;2;0;229;255m{st.get('position_fmt', '00:00')}/{st.get('duration_fmt', '00:00')}{NC} │ Vol: \033[38;2;0;229;255m{vol_str}{NC} │ {knob_col}Pitch: {p_txt}{NC} "
-        next_mode_lbl = "Full" if is_lg else "Mini"
+        next_mode_lbl = "Full" if is_lg else "Vertical"
         r2 = f" 🎛 [{m_str}] │ {bass_mode_badge(self._bass_mode(), bool(bold_s))} │ 🎨 {c1}{self.visualizer.get_theme_display_name()[:10]}{NC} │ \033[38;2;255;215;0m[M] {next_mode_lbl}{NC} "
         if is_lg and self.mp_visualizer_on:
             micro_hdr = "✦ MP LIQUID GLASS VISUALIZER ✦"
@@ -10664,8 +10925,8 @@ class TerminalPlayerUI:
                 lines = lines[: vis_i + room]
         if t_now < self.notification_time and self.notification_msg: lines.append(f"  {self._notification_ansi(bold_s)}📂 {self.notification_msg}{NC}")
         else:
-            m_hint = "[M] Full" if is_lg else "[M] Mini"
-            m_hint_short = "M Full" if is_lg else "M Mini"
+            m_hint = "[M] Full" if is_lg else "[M] Vertical"
+            m_hint_short = "M Full" if is_lg else "M Vertical"
             g_micro = f"\033[1;38;2;0;229;255m[G]{NC} {text_col}{g_key}{NC}  " if is_lg else ""
             lines.append(_fit_text_line([
                 f"  \033[1;38;2;0;229;255m[D]{NC} {text_col}Clear{NC}  \033[1;38;2;0;229;255m[Space]{NC} {text_col}Play{NC}  \033[1;38;2;0;229;255m[Q]{NC} {text_col}Que{NC}  \033[1;38;2;0;229;255m[R]{NC} {text_col}Rec{NC}  \033[1;38;2;0;229;255m[G]{NC} {text_col}{g_key}{NC}  \033[1;38;2;0;229;255m[n/p]{NC} {text_col}Skip{NC}  \033[1;38;2;0;229;255m[v/V]{NC} {text_col}Vol{NC}  \033[1;38;2;0;229;255m[s]{NC} {text_col}Shuf{NC}  \033[1;38;2;0;229;255m[e]{NC} {text_col}EQ{NC}  \033[1;38;2;0;229;255m[b]{NC} {text_col}Bass{NC}  \033[1;38;2;0;229;255m[c]{NC} {text_col}Theme{NC}  \033[1;38;2;255;215;0m{m_hint}{NC}  \033[1;38;2;255;64;64mEsc{NC} {text_col}Close{NC}",
@@ -10794,7 +11055,8 @@ def main():
         (("--music-folder",), dict(type=str, default="ALL")), (("--playlist",), dict(type=str, default="")),
         (("--no-bluetooth-auto",), dict(action="store_true")), (("--bluetooth-status",), dict(action="store_true")),
         (("--bluetooth-route",), dict(action="store_true")), (("--mini",), dict(action="store_true")),
-        (("--micro",), dict(action="store_true")), (("--spek", "--generate-spek", "-g"), dict(action="store_true")),
+        (("--micro",), dict(action="store_true")), (("--vertical",), dict(action="store_true")),
+        (("--spek", "--generate-spek", "-g"), dict(action="store_true")),
         (("--new-window", "--window", "-w"), dict(action="store_true")), (("--only-if-running",), dict(action="store_true")),
         (("--shuffle",), dict(action="store_true")), (("--repeat",), dict(action="store_true")),
         (("--liquid", "--liquid-glass", "--glass"), dict(action="store_true", help="Launch MP Audio Player in Liquid Glass mode")),
@@ -11311,7 +11573,7 @@ def main():
                     send_ipc_command("play", file=latest["path"])
         _retire_extra_player_daemons(prefer_pid=spawned_pid)
 
-        ui_mode = "MICRO" if args.micro else ("MINI" if args.mini else "NORMAL")
+        ui_mode = "MICRO" if args.micro else ("MINI" if args.mini else ("VERTICAL" if getattr(args, "vertical", False) else "NORMAL"))
         def _term_sig(s, f):
             try:
                 runtime = _load_tty_runtime()

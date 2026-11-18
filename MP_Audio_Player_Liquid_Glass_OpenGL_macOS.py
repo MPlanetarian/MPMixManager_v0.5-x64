@@ -288,6 +288,22 @@ COLS = 120
 ROWS = 40
 CHAR_W = 9
 CHAR_H = 18
+# The portrait deck M reaches first from the full window.
+VERTICAL_COLS, VERTICAL_ROWS = 40, 46
+
+
+def _mode_grid(mode):
+    """Terminal grid the host gives one mode."""
+    mode = str(mode or "").strip().upper()
+    if mode == "TRACKLIST":
+        return 100, 35
+    if mode == "VERTICAL":
+        return VERTICAL_COLS, VERTICAL_ROWS
+    if mode == "MINI":
+        return 74, 14
+    if mode == "MICRO":
+        return 74, 7
+    return COLS, ROWS
 
 # SFNSMono ships on macOS but has no ► ★ ✦ ≋ ◄. Those cells draw blank, and the
 # few glyphs it does have (› and ▶) sit on the playlist like stray cursors.
@@ -381,6 +397,9 @@ def player_panel_rects(cols=COLS, rows=ROWS, char_w=CHAR_W, char_h=CHAR_H, origi
     m = str(mode).upper()
     if m in ("MICRO", "MANAGER"):
         return box(2, 0, max(20, cols - 4), rows), (0.0, 0.0, 0.0, 0.0)
+    elif m == "VERTICAL":
+        # The deck stacks a header, one tall analyser and a key strip.
+        return box(2, 5, max(20, cols - 4), max(6, rows - 13)), (0.0, 0.0, 0.0, 0.0)
     elif m == "MINI":
         return box(2, 0, max(20, cols - 4), 3), box(2, 3, max(20, cols - 4), max(1, rows - 3))
     elif m == "TRACKLIST":
@@ -402,6 +421,8 @@ def player_argv(mode="NORMAL", extra_args=None):
         cmd.append("--mini")
     elif m == "MICRO":
         cmd.append("--micro")
+    elif m == "VERTICAL":
+        cmd.append("--vertical")
     if extra_args:
         cmd.extend(extra_args)
     return cmd
@@ -1292,9 +1313,9 @@ class OpenGLGlassHost:
         self.is_maximized = False
         self._saved_rect = None
         margin = LiquidGlassRendererOpenGL.bezel_px
-        self._target_cols, self._target_rows = COLS, ROWS
+        self._target_cols, self._target_rows = _mode_grid(self.mode)
         self._window_w, self._window_h = macos_liquid_player_window_size(
-            COLS, ROWS, CHAR_W, CHAR_H, margin
+            self._target_cols, self._target_rows, CHAR_W, CHAR_H, margin
         )
         self.overlay = TerminalOverlay(self._target_cols, self._target_rows)
 
@@ -1359,6 +1380,33 @@ class OpenGLGlassHost:
                 self._target_cols, self._target_rows, char_w, char_h, margin, margin, mode=self.mode
             )
         )
+
+    def _follow_child_ui_size(self):
+        """Grow or shrink with the size the player published.
+
+        M is decided by the player, because during search that letter is text.
+        Without this the window kept the full grid while the child drew the
+        deck, so the tall view was cropped to the middle of a wide frame.
+        """
+        if self.mode in ("MANAGER", "TRACKLIST") or not self.child_pid:
+            return
+        try:
+            from liquid_ui_size import read_ui_size
+        except ImportError:
+            return
+        config_dir = Path.home() / ".config" / "mix-manager"
+        size = read_ui_size(config_dir, int(self.child_pid))
+        if not size or size == self.mode:
+            return
+        self.mode = size
+        cols, rows = _mode_grid(size)
+        margin = self.renderer.bezel_px if self.renderer else 7
+        self._window_w = cols * CHAR_W + 2 * margin
+        self._window_h = rows * CHAR_H + 2 * margin
+        self._apply_terminal_size(cols, rows)
+        if self.renderer:
+            self.renderer.set_window_size(self._window_w, self._window_h)
+            self._sync_panels()
 
     def run(self):
         self.master_fd, slave_fd = pty.openpty()
@@ -1440,6 +1488,7 @@ class OpenGLGlassHost:
                             pass
 
                 self.renderer.poll()
+                self._follow_child_ui_size()
                 self.renderer.draw(theme)
 
                 pid_res, _ = os.waitpid(self.child_pid, os.WNOHANG)

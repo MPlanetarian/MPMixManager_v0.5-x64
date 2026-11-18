@@ -147,7 +147,7 @@ class TestLiquidGlassPlayerFeatures(unittest.TestCase):
             host.terminal.set_size.assert_called_with(mod.COLS, mod.ROWS)
 
     def test_audio_player_m_key_inside_liquid_glass(self):
-        """Verifies pressing 'm'/'M' inside Liquid Glass cycles mode in-place without spawning external window, and renders all frames cleanly."""
+        """Verifies pressing 'm'/'M' inside Liquid Glass cycles mode in-place (Normal, Vertical, Mini, Micro) without spawning an external window, and renders all frames cleanly."""
         mock_scanner = MagicMock()
         mock_scanner.get_mixes.return_value = []
         ui = MP_Audio_Player.TerminalPlayerUI(
@@ -160,7 +160,14 @@ class TestLiquidGlassPlayerFeatures(unittest.TestCase):
         with patch.dict(os.environ, {"MP_LIQUID_GLASS": "1"}), \
              patch("MP_Audio_Player.launch_mini_player_window") as mock_launch, \
              patch("MP_Audio_Player._present_frame") as mock_present:
-            # Press 'm': NORMAL -> MINI
+            # Press 'm': NORMAL -> VERTICAL
+            ui._process_key(b"m")
+            self.assertEqual(ui.ui_size_mode, "VERTICAL")
+            mock_launch.assert_not_called()
+            ui._draw_frame()
+            mock_present.assert_called()
+
+            # Press 'm': VERTICAL -> MINI
             ui._process_key(b"m")
             self.assertEqual(ui.ui_size_mode, "MINI")
             mock_launch.assert_not_called()

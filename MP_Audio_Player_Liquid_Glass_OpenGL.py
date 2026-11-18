@@ -190,6 +190,9 @@ def _kill_player_processes() -> List[int]:
 
 
 COLS, ROWS = 120, 40
+# The portrait deck. It is the size M reaches first from the full window: one
+# narrow column, so the glass rectangle is taller than it is wide.
+VERTICAL_COLS, VERTICAL_ROWS = 40, 46
 # Used when Hack is not installed, and when a measured cell has no face yet.
 DEFAULT_FONT = "Monospace 11"
 # Glass shader opacity when the window opens. VTE text remains fully opaque.
@@ -262,6 +265,11 @@ def player_panel_rects(cols, rows, char_w, char_h, origin_x, origin_y, mode="NOR
     iw = max(20, cols - 4)
     if mode in ("MICRO", "MANAGER"):
         return (box(1, 0, max(20, cols - 2), rows), (0.0, 0.0, 0.0, 0.0))
+    if mode == "VERTICAL":
+        # The deck is a header, a tall analyser and a key strip. The analyser
+        # takes every row between them, so one panel covers the whole column
+        # and the header panel sits on top of it.
+        return (box(1, 5, max(20, cols - 2), max(6, rows - 13)), (0.0, 0.0, 0.0, 0.0))
     if mode == "MINI":
         return (box(2, 0, iw, 3), box(2, 3, iw, max(1, rows - 3)))
     if mode == "TRACKLIST":
@@ -300,7 +308,7 @@ def manager_argv():
 
 def player_argv(mode="NORMAL", extra_args=None):
     cmd = [sys.executable, str(ROOT / "MP_Audio_Player.py"), "--interactive"]
-    if mode in ("MINI", "MICRO"):
+    if mode in ("VERTICAL", "MINI", "MICRO"):
         cmd.append(f"--{mode.lower()}")
     if extra_args:
         cmd.extend(extra_args)
@@ -343,6 +351,8 @@ def _child_env(as_dict=False):
 def _mode_grid(mode):
     if mode == "TRACKLIST":
         return 100, 35
+    if mode == "VERTICAL":
+        return VERTICAL_COLS, VERTICAL_ROWS
     if mode == "MINI":
         return 74, 14
     if mode == "MICRO":
@@ -1160,7 +1170,7 @@ class GlassHost:
         from gi.repository import Gdk
         if keyval not in (Gdk.KEY_h, Gdk.KEY_H):
             return False
-        if self.mode in ("NORMAL", "MINI", "MICRO"):
+        if self.mode in ("NORMAL", "VERTICAL", "MINI", "MICRO"):
             return False
         if self.mode == "MANAGER":
             return bool(state & Gdk.ModifierType.CONTROL_MASK)
@@ -1420,7 +1430,7 @@ class GlassHost:
         # companion the user is watching down with it.
         if not self.embed_check:
             stop_companion_for_mode(self.mode, player_gui=self.mode != "TRACKLIST")
-        if not self.embed_check and self.mode in ("NORMAL", "MANAGER", "MINI", "MICRO"):
+        if not self.embed_check and self.mode in ("NORMAL", "MANAGER", "VERTICAL", "MINI", "MICRO"):
             video = ExitVideo(self.mode)
             try:
                 if video.start():
@@ -1976,7 +1986,7 @@ def main(argv):
             # like nothing happened at all. Say it on the desktop as well.
             notify_limit(counted_role)
             return 1
-    mode = "MINI" if "--mini" in argv else ("MICRO" if "--micro" in argv else "NORMAL")
+    mode = "MINI" if "--mini" in argv else ("MICRO" if "--micro" in argv else ("VERTICAL" if "--vertical" in argv else "NORMAL"))
     # Mark the MP Gui session before the companion is spawned: _visualizer_env
     # reads MP_GUI_SESSION to give that child MP_VISUALIZER_MATCH_GUI=1, which
     # is what makes it bond behind MP Gui instead of behind a Liquid Player.

@@ -106,7 +106,7 @@ class TestMiniMicroPlayerFeatures(unittest.TestCase):
             self.assertIn("new window", ui.notification_msg)
 
     def test_m_toggles_mini_and_micro_inside_compact_window(self):
-        """Inside an already-open Mini or Micro window, M switches between those sizes and resizes the terminal."""
+        """Inside an already-open compact window, M wraps the compact sizes and resizes the terminal."""
         ui = MP_Audio_Player.TerminalPlayerUI(None, None, is_remote=True, ui_size_mode="MINI")
         with mock.patch("MP_Audio_Player.launch_mini_player_window") as launch, \
              mock.patch("MP_Audio_Player.resize_host_terminal") as resize:
@@ -114,7 +114,15 @@ class TestMiniMicroPlayerFeatures(unittest.TestCase):
             launch.assert_not_called()
             self.assertEqual(ui.ui_size_mode, "MICRO")
             resize.assert_called_with(74, 7, "MP Micro Audio Player")
+            # Micro wraps to the tall deck; a compact window has no full frame.
             ui._process_key(b"M")
+            launch.assert_not_called()
+            self.assertEqual(ui.ui_size_mode, "VERTICAL")
+            resize.assert_called_with(
+                MP_Audio_Player.VERTICAL_COLS, MP_Audio_Player.VERTICAL_ROWS, "MP Vertical Audio Player"
+            )
+            # And the deck continues on to Mini.
+            ui._process_key(b"m")
             launch.assert_not_called()
             self.assertEqual(ui.ui_size_mode, "MINI")
             resize.assert_called_with(74, 14, "MP Mini Audio Player")

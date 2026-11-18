@@ -53,6 +53,9 @@ except ImportError:
         return False
 
 COLS, ROWS = 120, 40
+# The portrait deck. It is the size M reaches first from the full window: one
+# narrow column, so the glass rectangle is taller than it is wide.
+VERTICAL_COLS, VERTICAL_ROWS = 40, 46
 # Used when Hack is not installed. Linux uses Hack 11 when that family is present.
 DEFAULT_FONT = "Monospace 11"
 CONFIG_DIR = Path.home() / ".config" / "mix-manager"
@@ -115,6 +118,10 @@ def player_panel_rects(cols, rows, cw, ch, ox, oy, mode="NORMAL"):
     iw = max(20, cols - 4)
     if mode in ("MICRO", "MANAGER"):
         return b(1, 0, max(20, cols - 2), rows), (0.0, 0.0, 0.0, 0.0)
+    if mode == "VERTICAL":
+        # The deck stacks a header, one tall analyser and a key strip, so the
+        # analyser panel carries the whole middle of the column.
+        return b(1, 5, max(20, cols - 2), max(6, rows - 13)), (0.0, 0.0, 0.0, 0.0)
     if mode == "MINI":
         return b(2, 0, iw, 3), b(2, 3, iw, max(1, rows - 3))
     if mode == "TRACKLIST":
@@ -122,6 +129,20 @@ def player_panel_rects(cols, rows, cw, ch, ox, oy, mode="NORMAL"):
     iw = max(20, cols - 6)
     before = 14 + (7 if rows >= 34 else (5 if rows >= 28 else 3))
     return b(2, 0, iw + 2, 4), b(2, before, iw + 2, max(1, rows - before - 5) + 2)
+
+
+def _mode_grid(mode):
+    """Terminal grid the host gives one mode."""
+    mode = str(mode or "").strip().upper()
+    if mode == "TRACKLIST":
+        return 100, 35
+    if mode == "VERTICAL":
+        return VERTICAL_COLS, VERTICAL_ROWS
+    if mode == "MINI":
+        return 74, 14
+    if mode == "MICRO":
+        return 74, 7
+    return COLS, ROWS
 
 
 def _import_gtk():
@@ -153,7 +174,7 @@ def manager_argv():
 
 def player_argv(mode="NORMAL", extra_args=None):
     cmd = [sys.executable, str(ROOT / "MP_Audio_Player.py"), "--interactive"]
-    if mode in ("MINI", "MICRO"):
+    if mode in ("VERTICAL", "MINI", "MICRO"):
         cmd.append(f"--{mode.lower()}")
     if extra_args:
         cmd.extend(extra_args)
@@ -199,8 +220,14 @@ class GlassHost:
         self.slider = None
         self.clear_opacity = 0.70
         self._last_top_click = 0.0
-        self._target_cols = 100 if self.mode == "TRACKLIST" else (74 if self.mode in ("MINI", "MICRO") else COLS)
-        self._target_rows = 35 if self.mode == "TRACKLIST" else (14 if self.mode == "MINI" else (7 if self.mode == "MICRO" else ROWS))
+        if self.mode == "TRACKLIST":
+            self._target_cols, self._target_rows = 100, 35
+        elif self.mode == "VERTICAL":
+            self._target_cols, self._target_rows = VERTICAL_COLS, VERTICAL_ROWS
+        elif self.mode in ("MINI", "MICRO"):
+            self._target_cols, self._target_rows = 74, (14 if self.mode == "MINI" else 7)
+        else:
+            self._target_cols, self._target_rows = COLS, ROWS
 
     def _char_dims(self):
         if self.terminal is not None:
@@ -369,7 +396,7 @@ class GlassHost:
             self.is_maximized = True
         else:
             pos, _ = self._saved_rect or (window_launch_origin(72, 64), (1280, 820))
-            cols, rows = (74, 14) if self.mode == "MINI" else ((74, 7) if self.mode == "MICRO" else (COLS, ROWS))
+            cols, rows = _mode_grid(self.mode)
             self._target_cols, self._target_rows = cols, rows
             self.renderer.set_window_pos(pos[0], pos[1])
             restore_w, restore_h = cols * cw + 2 * m, rows * ch + 2 * m
@@ -386,7 +413,7 @@ class GlassHost:
         if self.renderer is None:
             return
         self.is_maximized = False
-        cols, rows = (74, 14) if self.mode == "MINI" else ((74, 7) if self.mode == "MICRO" else (COLS, ROWS))
+        cols, rows = _mode_grid(self.mode)
         self._target_cols, self._target_rows = cols, rows
         cw, ch = self._char_dims()
         m = self.renderer.bezel_px
@@ -534,7 +561,7 @@ class GlassHost:
         from gi.repository import Gdk
         if keyval not in (Gdk.KEY_h, Gdk.KEY_H):
             return False
-        if self.mode in ("NORMAL", "MINI", "MICRO"):
+        if self.mode in ("NORMAL", "VERTICAL", "MINI", "MICRO"):
             return False
         if self.mode == "MANAGER":
             return bool(state & Gdk.ModifierType.CONTROL_MASK)
@@ -818,7 +845,7 @@ class GlassHost:
         silently and the movie waits for the last one.
         """
         self.close()
-        if not self.embed_check and self.mode in ("NORMAL", "MANAGER", "MINI", "MICRO"):
+        if not self.embed_check and self.mode in ("NORMAL", "MANAGER", "VERTICAL", "MINI", "MICRO"):
             # Retire the companion before the movie, not after it: leaving it
             # up put a full-size visualizer on the desktop with no window in
             # front of it for the whole clip. An embed check is only a probe
@@ -1341,7 +1368,7 @@ def main(argv):
             # like nothing happened at all. Say it on the desktop as well.
             notify_limit(counted_role)
             return 1
-    mode = "MINI" if "--mini" in argv else ("MICRO" if "--micro" in argv else "NORMAL")
+    mode = "MINI" if "--mini" in argv else ("MICRO" if "--micro" in argv else ("VERTICAL" if "--vertical" in argv else "NORMAL"))
     manager = bool(opts.get("manager"))
     # Mark the MP Gui session before the companion is spawned: _visualizer_env
     # reads MP_GUI_SESSION to give that child MP_VISUALIZER_MATCH_GUI=1, which

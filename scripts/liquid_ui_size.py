@@ -1,4 +1,4 @@
-"""Player-published Full / Mini / Micro size for the Liquid Glass window.
+"""Player-published Full / Vertical / Mini / Micro size for the Glass window.
 
 The glass host must not bind M itself. During search that letter is text, and
 the player is the only place that knows the difference. The player writes the
@@ -9,7 +9,27 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-UI_SIZES = ("NORMAL", "MINI", "MICRO")
+UI_SIZES = ("NORMAL", "VERTICAL", "MINI", "MICRO")
+# The order M steps through in the glass window. The tall stacked view sits
+# between the full console and the two compact strips.
+UI_SIZE_CYCLE = ("NORMAL", "VERTICAL", "MINI", "MICRO")
+# The portrait deck: twice as tall as it is wide at the 9x18 cell, so the
+# glass window fits a large clock and a tall analyser in one column.
+VERTICAL_COLS, VERTICAL_ROWS = 40, 46
+# The sizes a compact (non-full) window has a frame for.
+COMPACT_UI_SIZES = ("VERTICAL", "MINI", "MICRO")
+
+
+def size_grid(mode: str) -> tuple[int, int]:
+    """Terminal columns and rows the glass host should give a mode."""
+    mode = str(mode or "").strip().upper()
+    if mode == "VERTICAL":
+        return VERTICAL_COLS, VERTICAL_ROWS
+    if mode == "MINI":
+        return 74, 14
+    if mode == "MICRO":
+        return 74, 7
+    return 120, 40
 
 
 def _path(config_dir: Path, pid: int) -> Path:

@@ -47,7 +47,7 @@ EXIT_VIDEO_TIMEOUT_SECONDS = 90
 # away and never show it.
 INTRO_SCRIPT_ARG = "--intro"
 INTRO_VIDEO_TIMEOUT_SECONDS = 90
-PLAYER_MODES = ("NORMAL", "MINI", "MICRO")
+PLAYER_MODES = ("NORMAL", "VERTICAL", "MINI", "MICRO")
 
 # The loader script is the single player implementation. Hosts pass --exit so
 # it plays Exit_MP_Video.mp4 instead of the startup logo.

@@ -66,6 +66,31 @@ from liquid_glass_metal import (  # noqa: E402
 
 COLS = 120
 ROWS = 40
+# The portrait deck M reaches first from the full window.
+VERTICAL_COLS, VERTICAL_ROWS = 40, 46
+
+
+def _mode_grid(mode):
+    """Terminal grid the host gives one mode."""
+    mode = str(mode or "").strip().upper()
+    if mode == "TRACKLIST":
+        return 100, 35
+    if mode == "VERTICAL":
+        return VERTICAL_COLS, VERTICAL_ROWS
+    if mode == "MINI":
+        return 74, 14
+    if mode == "MICRO":
+        return 74, 7
+    return COLS, ROWS
+
+
+def ui_size_step(current: str) -> str:
+    """The next size on the M ring: Normal, Vertical, Mini, Micro."""
+    order = ("NORMAL", "VERTICAL", "MINI", "MICRO")
+    cur = str(current or "NORMAL").strip().upper()
+    if cur not in order:
+        cur = "NORMAL"
+    return order[(order.index(cur) + 1) % len(order)]
 
 
 def player_panel_rects(cols=130, rows=42, char_w=8, char_h=16, origin_x=0, origin_y=0, mode="NORMAL"):
@@ -82,6 +107,12 @@ def player_panel_rects(cols=130, rows=42, char_w=8, char_h=16, origin_x=0, origi
     if m in ("MICRO", "MANAGER"):
         return (
             box(2, 0, max(20, cols - 4), rows),
+            (0.0, 0.0, 0.0, 0.0),
+        )
+    elif m == "VERTICAL":
+        # The deck stacks a header, one tall analyser and a key strip.
+        return (
+            box(2, 5, max(20, cols - 4), max(6, rows - 13)),
             (0.0, 0.0, 0.0, 0.0),
         )
     elif m == "MINI":
@@ -120,6 +151,8 @@ def player_argv(mode="NORMAL", extra_args=None):
         cmd.append("--mini")
     elif m == "MICRO":
         cmd.append("--micro")
+    elif m == "VERTICAL":
+        cmd.append("--vertical")
     if extra_args:
         cmd.extend(extra_args)
     return cmd
@@ -171,8 +204,14 @@ class MetalGlassHost:
         self._last_top_click = 0.0
         self._last_top_click_x = 0
         self._last_top_click_y = 0
-        self._target_cols = 100 if self.mode == "TRACKLIST" else (74 if self.mode in ("MINI", "MICRO") else COLS)
-        self._target_rows = 35 if self.mode == "TRACKLIST" else (14 if self.mode == "MINI" else (7 if self.mode == "MICRO" else ROWS))
+        if self.mode == "TRACKLIST":
+            self._target_cols, self._target_rows = 100, 35
+        elif self.mode == "VERTICAL":
+            self._target_cols, self._target_rows = VERTICAL_COLS, VERTICAL_ROWS
+        elif self.mode in ("MINI", "MICRO"):
+            self._target_cols, self._target_rows = 74, (14 if self.mode == "MINI" else 7)
+        else:
+            self._target_cols, self._target_rows = COLS, ROWS
 
     def _on_bezel(self, x, y, width, height):
         margin = self.renderer.bezel_px
@@ -200,6 +239,32 @@ class MetalGlassHost:
             player_panel_rects(cols, rows, char_w, char_h, margin, margin, mode=self.mode)
         )
 
+    def _follow_child_ui_size(self):
+        """Grow or shrink with the size the player published.
+
+        M belongs to the player, because during search that letter is text.
+        Without this the window kept the full grid while the child drew the
+        deck, so the tall view was cropped to the middle of a wide frame.
+        """
+        if self.mode in ("MANAGER", "TRACKLIST") or not self.child_pid:
+            return
+        try:
+            from liquid_ui_size import read_ui_size
+        except ImportError:
+            return
+        size = read_ui_size(Path.home() / ".config" / "mix-manager", int(self.child_pid))
+        if not size or size == self.mode:
+            return
+        self.mode = size
+        self._target_cols, self._target_rows = _mode_grid(size)
+        if self.renderer:
+            margin = self.renderer.bezel_px
+            self.renderer.set_window_size(
+                self._target_cols * 9 + 2 * margin,
+                self._target_rows * 18 + 2 * margin,
+            )
+            self._sync_panels()
+
     def toggle_maximize(self):
         """Toggle fullscreen maximize across active display workarea."""
         if self.renderer is None:
@@ -221,12 +286,7 @@ class MetalGlassHost:
             self.is_maximized = True
         else:
             pos, size = getattr(self, "_saved_rect", ((72, 64), (1280, 820)))
-            if self.mode == "MINI":
-                cols, rows = 74, 14
-            elif self.mode == "MICRO":
-                cols, rows = 74, 7
-            else:
-                cols, rows = COLS, ROWS
+            cols, rows = _mode_grid(self.mode)
             self._target_cols = cols
             self._target_rows = rows
             win_w = cols * char_w + 2 * margin
@@ -238,19 +298,12 @@ class MetalGlassHost:
             self.is_maximized = False
 
     def cycle_mode(self):
-        """Cycle between Normal, Mini, and Micro modes in-place."""
+        """Cycle Normal, Vertical, Mini and Micro in-place, in that order."""
         char_w, char_h = 9, 18
         margin = self.renderer.bezel_px
 
-        if self.mode == "NORMAL":
-            self.mode = "MINI"
-            self._target_cols, self._target_rows = 74, 14
-        elif self.mode == "MINI":
-            self.mode = "MICRO"
-            self._target_cols, self._target_rows = 74, 7
-        else:
-            self.mode = "NORMAL"
-            self._target_cols, self._target_rows = COLS, ROWS
+        self.mode = ui_size_step(self.mode)
+        self._target_cols, self._target_rows = _mode_grid(self.mode)
 
         ww = self._target_cols * char_w + 2 * margin
         wh = self._target_rows * char_h + 2 * margin
@@ -332,6 +385,7 @@ class MetalGlassHost:
 
                 # Poll window events to keep macOS WindowServer responsive
                 self.renderer.poll()
+                self._follow_child_ui_size()
 
                 self._sync_panels()
                 self.renderer.draw(theme)
@@ -383,7 +437,7 @@ class MetalGlassHost:
         # companion the user is watching down with it.
         if not self.embed_check:
             stop_companion_for_mode(self.mode, player_gui=self.mode != "TRACKLIST")
-        if not self.embed_check and self.mode in ("NORMAL", "MANAGER", "MINI", "MICRO"):
+        if not self.embed_check and self.mode in ("NORMAL", "MANAGER", "VERTICAL", "MINI", "MICRO"):
             video = ExitVideo(self.mode)
             try:
                 if video.start():
@@ -589,7 +643,7 @@ def main(argv):
             # like nothing happened at all. Say it on the desktop as well.
             notify_limit(counted_role)
             return 1
-    mode = "MINI" if "--mini" in argv else ("MICRO" if "--micro" in argv else "NORMAL")
+    mode = "MINI" if "--mini" in argv else ("MICRO" if "--micro" in argv else ("VERTICAL" if "--vertical" in argv else "NORMAL"))
     # Mark the MP Gui session before the companion is spawned so that child
     # bonds behind MP Gui. The intro runs before the visualizer too.
     if manager and not embed and not tracklist_path:
