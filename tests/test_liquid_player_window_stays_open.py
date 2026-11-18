@@ -73,13 +73,15 @@ def _child():
     player.time.sleep = lambda *args, **kwargs: None
     player._retire_extra_player_daemons = lambda *args, **kwargs: None
 
-    def fake_spawn(file_path=None, auto_bluetooth=True, mode="MIX_ARCHIVE", music_folder=None, playlist_path=None, seek_to=None):
+    def fake_spawn(file_path=None, auto_bluetooth=True, mode="MIX_ARCHIVE", music_folder=None,
+                   playlist_path=None, seek_to=None, no_autoplay=False):
         result["spawn"] = {
             "file": file_path,
             "seek_to": seek_to,
             "mode": mode,
             "music_folder": music_folder,
             "playlist_path": playlist_path,
+            "no_autoplay": no_autoplay,
         }
         return 4242
 

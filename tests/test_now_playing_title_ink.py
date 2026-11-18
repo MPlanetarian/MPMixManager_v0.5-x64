@@ -273,11 +273,12 @@ class InkSurvivesThePostProcessorsTests(unittest.TestCase):
 
 
 class EveryRenderSiteUsesTheHelperTests(unittest.TestCase):
-    def test_all_three_frames_resolve_through_one_helper(self):
+    def test_every_frame_resolves_through_one_helper(self):
+        """Full, Vertical, Mini and Micro all colour the title from the helper."""
         source = (ROOT / "MP_Audio_Player.py").read_text(encoding="utf-8")
         self.assertEqual(
-            source.count("now_playing_ink(self.visualizer.theme, is_lg)"), 3,
-            "full, Mini and Micro must all use the shared helper",
+            source.count("now_playing_ink(self.visualizer.theme, is_lg)"), 4,
+            "full, Vertical, Mini and Micro must all use the shared helper",
         )
 
     def test_no_frame_hard_codes_a_theme_ink_for_the_title(self):
