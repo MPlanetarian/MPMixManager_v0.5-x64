@@ -192,7 +192,7 @@ def _kill_player_processes() -> List[int]:
 COLS, ROWS = 120, 40
 # The portrait deck. It is the size M reaches first from the full window: one
 # narrow column, so the glass rectangle is taller than it is wide.
-VERTICAL_COLS, VERTICAL_ROWS = 40, 46
+VERTICAL_COLS, VERTICAL_ROWS = 40, 52
 # Used when Hack is not installed, and when a measured cell has no face yet.
 DEFAULT_FONT = "Monospace 11"
 # Glass shader opacity when the window opens. VTE text remains fully opaque.
@@ -266,10 +266,16 @@ def player_panel_rects(cols, rows, char_w, char_h, origin_x, origin_y, mode="NOR
     if mode in ("MICRO", "MANAGER"):
         return (box(1, 0, max(20, cols - 2), rows), (0.0, 0.0, 0.0, 0.0))
     if mode == "VERTICAL":
-        # The deck is a header, a tall analyser and a key strip. The analyser
-        # takes every row between them, so one panel covers the whole column
-        # and the header panel sits on top of it.
-        return (box(1, 5, max(20, cols - 2), max(6, rows - 13)), (0.0, 0.0, 0.0, 0.0))
+        # The deck stacks three panels: the main window, the equaliser and the
+        # playlist. Each panel keeps its own rectangle so the glass behind them
+        # is shaped to the thing it sits under, not one slab down the column.
+        # Row heights match the player's own VERTICAL_MAIN_ROWS / EQ_ROWS.
+        main_rows, eq_rows = 23, 11
+        list_rows = max(5, rows - main_rows - eq_rows)
+        return (
+            box(1, 0, max(20, cols - 2), main_rows),
+            box(1, main_rows, max(20, cols - 2), eq_rows + list_rows),
+        )
     if mode == "MINI":
         return (box(2, 0, iw, 3), box(2, 3, iw, max(1, rows - 3)))
     if mode == "TRACKLIST":

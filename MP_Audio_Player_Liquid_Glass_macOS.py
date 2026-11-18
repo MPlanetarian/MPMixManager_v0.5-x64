@@ -67,7 +67,7 @@ from liquid_glass_metal import (  # noqa: E402
 COLS = 120
 ROWS = 40
 # The portrait deck M reaches first from the full window.
-VERTICAL_COLS, VERTICAL_ROWS = 40, 46
+VERTICAL_COLS, VERTICAL_ROWS = 40, 52
 
 
 def _mode_grid(mode):
@@ -110,10 +110,12 @@ def player_panel_rects(cols=130, rows=42, char_w=8, char_h=16, origin_x=0, origi
             (0.0, 0.0, 0.0, 0.0),
         )
     elif m == "VERTICAL":
-        # The deck stacks a header, one tall analyser and a key strip.
+        # The deck stacks the main window, the equaliser and the playlist.
+        main_rows, eq_rows = 23, 11
+        list_rows = max(5, rows - main_rows - eq_rows)
         return (
-            box(2, 5, max(20, cols - 4), max(6, rows - 13)),
-            (0.0, 0.0, 0.0, 0.0),
+            box(2, 0, max(20, cols - 4), main_rows),
+            box(2, main_rows, max(20, cols - 4), eq_rows + list_rows),
         )
     elif m == "MINI":
         return (

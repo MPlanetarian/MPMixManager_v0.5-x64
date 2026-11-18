@@ -55,7 +55,7 @@ except ImportError:
 COLS, ROWS = 120, 40
 # The portrait deck. It is the size M reaches first from the full window: one
 # narrow column, so the glass rectangle is taller than it is wide.
-VERTICAL_COLS, VERTICAL_ROWS = 40, 46
+VERTICAL_COLS, VERTICAL_ROWS = 40, 52
 # Used when Hack is not installed. Linux uses Hack 11 when that family is present.
 DEFAULT_FONT = "Monospace 11"
 CONFIG_DIR = Path.home() / ".config" / "mix-manager"
@@ -119,9 +119,16 @@ def player_panel_rects(cols, rows, cw, ch, ox, oy, mode="NORMAL"):
     if mode in ("MICRO", "MANAGER"):
         return b(1, 0, max(20, cols - 2), rows), (0.0, 0.0, 0.0, 0.0)
     if mode == "VERTICAL":
-        # The deck stacks a header, one tall analyser and a key strip, so the
-        # analyser panel carries the whole middle of the column.
-        return b(1, 5, max(20, cols - 2), max(6, rows - 13)), (0.0, 0.0, 0.0, 0.0)
+        # The deck stacks three panels: the main window, the equaliser and the
+        # playlist. Each keeps its own rectangle, so the glass behind them is
+        # shaped to the thing it sits under rather than one slab down the
+        # column. Row heights match the player's VERTICAL_MAIN_ROWS / EQ_ROWS.
+        main_rows, eq_rows = 23, 11
+        list_rows = max(5, rows - main_rows - eq_rows)
+        return (
+            b(1, 0, max(20, cols - 2), main_rows),
+            b(1, main_rows, max(20, cols - 2), eq_rows + list_rows),
+        )
     if mode == "MINI":
         return b(2, 0, iw, 3), b(2, 3, iw, max(1, rows - 3))
     if mode == "TRACKLIST":
