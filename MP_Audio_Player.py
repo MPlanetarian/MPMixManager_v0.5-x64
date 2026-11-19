@@ -1400,6 +1400,26 @@ def choose_export_m3u_gui() -> Optional[str]:
             except Exception: pass
     return None
 
+def choose_playlist_file_gui() -> Optional[str]:
+    """Ask the desktop for a playlist file. None means "no dialog available"."""
+    if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY") or sys.platform in ("win32", "darwin")):
+        return None
+    globs = " ".join(f"*{ext}" for ext in (".m3u", ".m3u8", ".xspf", ".pls", ".json"))
+    label = "Playlist Files"
+    for cmd in (
+        ["kdialog", "--title", "Open a Playlist", "--getopenfilename", os.path.expanduser("~"), f"{globs} | {label}"],
+        ["zenity", "--file-selection", "--title=Open a Playlist", f"--filename={os.path.expanduser('~')}/",
+         f"--file-filter={label} | {globs}"],
+    ):
+        if shutil.which(cmd[0]):
+            try:
+                res = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+                return res.stdout.strip() if res.returncode == 0 and res.stdout.strip() else ""
+            except Exception:
+                pass
+    return None
+
+
 def choose_audio_file_gui() -> Optional[str]:
     if sys.platform == "win32":
         try:
@@ -1561,6 +1581,66 @@ def _write_archive_scan_cache(dirs: Sequence[Path], rows: Sequence[Dict[str, Any
         pass
 
 
+class ImportedPlaylistScanner:
+    """A window showing one playlist file, in the file's own order.
+
+    Opening a playlist replaces the list the player is showing rather than
+    adding to it: the user pointed at a specific set, so that set is what the
+    window is now about. `mixes` is the same shape MixArchiveScanner produces,
+    so every caller below (search, export, queue, the renderer) works unchanged.
+    """
+
+    def __init__(self, rows: List[Dict[str, Any]], playlist_path: str = ""):
+        self.base_dir = Path(playlist_path).parent if playlist_path else Path(".")
+        self.playlist_path = str(playlist_path or "")
+        self.mixes: List[Dict[str, Any]] = [dict(r) for r in (rows or [])]
+        self._search_cache = {}
+
+    def get_mixes(self, query: str = "") -> List[Dict[str, Any]]:
+        q = str(query or "").lower().strip()
+        if not q:
+            return self.mixes
+        if q in getattr(self, "_search_cache", {}):
+            return self._search_cache[q]
+        tokens = q.split()
+
+        def hit(row: Dict[str, Any]) -> bool:
+            hay = f"{row.get('name', '')} {row.get('path', '')}".lower()
+            return all(tok in hay for tok in tokens)
+
+        found = [row for row in self.mixes if hit(row)]
+        self._search_cache[q] = found
+        return found
+
+    def playlist_targets(self) -> List[str]:
+        return [str(r.get("path", "")) for r in self.mixes]
+
+
+def _complete_playlist_path(typed: str) -> str:
+    """Tab-complete a partially typed path against the filesystem.
+
+    Only the last component is completed, so a deep path survives. A single
+    match is returned in full; several matches extend the typed text as far as
+    they agree. An unmatched tail is left exactly as typed.
+    """
+    text = str(typed or "")
+    if not text:
+        return text
+    directory, tail = os.path.split(text)
+    probe = os.path.expanduser(directory or text if not directory else directory)
+    try:
+        entries = os.listdir(os.path.expanduser(probe))
+    except OSError:
+        return text
+    matches = sorted(e for e in entries if e.startswith(tail))
+    if not matches:
+        return text
+    if len(matches) == 1:
+        return os.path.join(directory if directory else "", matches[0]) if directory else matches[0]
+    common = os.path.commonprefix(matches)
+    return os.path.join(directory, common) if directory else common
+
+
 class MixArchiveScanner:
     def __init__(self, base_dir: Union[Path, str]):
         self.base_dir = Path(base_dir)
@@ -1684,6 +1764,21 @@ class MusicFolderPlaylistScanner:
         self.playlist_path = Path(playlist_path) if playlist_path else None
         self._load_playlist()
 
+    def _rows_from_playlist_formats(self) -> List[Dict[str, Any]]:
+        """Rows for any container playlist_formats understands.
+
+        Relative entries resolve against the playlist's own folder, which is
+        what a hand-written .m3u8 beside the audio expects.
+        """
+        try:
+            scripts = str(Path(__file__).resolve().parent / "scripts")
+            if scripts not in sys.path:
+                sys.path.insert(0, scripts)
+            import playlist_formats as formats
+            return formats.read_playlist(self.playlist_path) or []
+        except Exception:
+            return []
+
     def _load_playlist(self):
         pl_dir = self.base_dir / "PLAYLISTS_GENERATED"
         if not self.playlist_path or not self.playlist_path.is_file():
@@ -1708,6 +1803,25 @@ class MusicFolderPlaylistScanner:
             data = load_playlist_json(self.playlist_path)
             if data is not None:
                 self.mixes = data
+                return
+        # Every container the exporter writes must open here too. The old
+        # hand-rolled reader only understood m3u, so an XSPF or PLS file was
+        # read line by line and its XML/INI keys became "tracks".
+        rows = self._rows_from_playlist_formats()
+        if rows:
+            now = time.time()
+            for row in rows:
+                path = str(row.get("path") or "")
+                bname = os.path.basename(path)
+                self.mixes.append({
+                    "name": bname, "title": row.get("title") or os.path.splitext(bname)[0],
+                    "path": path,
+                    "ext": (os.path.splitext(path)[1][1:] or "AUDIO").upper(),
+                    "size_mb": 0.0,
+                    "duration_fmt": row.get("duration_fmt") or "00:00",
+                    "mtime": now, "folder": self.folder_name,
+                })
+            if self.mixes:
                 return
         try:
             cur_t, cur_d, now = "", "00:00", time.time()
@@ -3752,6 +3866,32 @@ class AudioEngine:
         self.stop_playback(reset_position=True)
         return removed
 
+    def replace_playlist(self, rows: List[Dict[str, Any]], playlist_path: str = "",
+                         mode: str = "PLAYLIST", play: bool = True) -> int:
+        """Replace the engine's list with ``rows`` and optionally start it.
+
+        This is what "open a playlist" means: the file the user pointed at *is*
+        the new list, so nothing from the previous one survives. Returns the
+        number of tracks installed.
+        """
+        installed = [dict(r) for r in (rows or []) if isinstance(r, dict)]
+        try:
+            self.stop_playback()
+        except Exception:
+            pass
+        self.playlist = installed
+        try:
+            self.play_queue.clear()
+        except Exception:
+            self.play_queue = []
+        self.current_index = 0
+        self.current_track = installed[0] if installed else None
+        self.playlist_path = str(playlist_path or "")
+        self.mode = str(mode or "PLAYLIST")
+        if installed and play:
+            self.load_track(0, True)
+        return len(installed)
+
     def prepend_dropped_audio(self, paths) -> int:
         """Put dropped audio at the front of the playlist and play the first file."""
         items = audio_track_items(paths)
@@ -4166,6 +4306,35 @@ class PlayerIPCServer:
             elif cmd == "get_bass":
                 res.update(bass_mode=e.bass_manager.mode, bass_modes=list(BASS_BOOST_MODES),
                            bass_peak_db=e.bass_manager.peak_db())
+            elif cmd == "export_playlist":
+                # The daemon owns the live list, so it is the one that must
+                # write it: a fresh scan would miss a dropped set and any
+                # filter the window is showing.
+                rows = list(getattr(e, "playlist", []) or [])
+                needle = str(req.get("filter") or "").lower().strip()
+                if needle:
+                    rows = [r for r in rows
+                            if needle in f"{r.get('name', '')} {r.get('path', '')}".lower()]
+                ok, res_or_msg = export_playlist_file(
+                    rows, req.get("path"), req.get("format"))
+                if ok:
+                    res.update(success=True, exported=len(rows), path=res_or_msg)
+                    if needle:
+                        res["filter"] = str(req.get("filter"))
+                else:
+                    res.update(success=False, status="error", message=res_or_msg)
+            elif cmd == "open_playlist":
+                rows = req.get("tracks") or req.get("playlist") or []
+                try:
+                    loaded = e.replace_playlist(
+                        rows,
+                        playlist_path=str(req.get("playlist_path") or ""),
+                        mode=str(req.get("mode") or "PLAYLIST"),
+                        play=bool(req.get("play", True)),
+                    )
+                    res.update(status="ok", loaded=loaded, mode=getattr(e, "mode", "PLAYLIST"))
+                except Exception as exc:
+                    res.update(status="error", message=str(exc))
             elif cmd == "load_playlist":
                 loaded = load_engine_playlist(
                     e,
@@ -4200,6 +4369,34 @@ def _cleanup_stale_daemon_files():
     for p in (PID_FILE, SOCKET_PATH, PORT_FILE): p.unlink(missing_ok=True)
     try: STATE_FILE.write_text(json.dumps({"running": False, "state": "stopped"}), encoding="utf-8")
     except OSError: pass
+
+def _playlist_rows_for_drop(playlist_path: str) -> List[Dict[str, Any]]:
+    """The rows a dropped playlist names, in its own order.
+
+    A playlist may list tracks that are not reachable right now (a share that
+    is not mounted, a file moved on the server). The rows are still returned so
+    the window can show what the file contains; the caller decides whether any
+    of them can play.
+    """
+    scripts = str(Path(__file__).resolve().parent / "scripts")
+    if scripts not in sys.path:
+        sys.path.insert(0, scripts)
+    import playlist_formats as formats
+    rows = formats.read_playlist(playlist_path)
+    out: List[Dict[str, Any]] = []
+    for row in rows or []:
+        path = str((row or {}).get("path") or "").strip()
+        if not path:
+            continue
+        out.append({
+            "name": os.path.basename(path),
+            "path": path,
+            "ext": (os.path.splitext(path)[1][1:] or "").upper(),
+            "size_mb": (os.path.getsize(path) / (1024.0 * 1024.0)) if os.path.isfile(path) else 0.0,
+            "mtime": 0.0,
+        })
+    return out
+
 
 def _drop_paths_from_request(manifest, files) -> List[str]:
     paths: List[str] = []
@@ -8100,6 +8297,10 @@ class TerminalPlayerUI:
         self.export_format_mode = False
         self.export_tracks = None
         self.export_format = ".m3u8"
+        # Opening a playlist: a typed path prompt with Tab completion.
+        self.open_playlist_mode = False
+        self.open_playlist_path = ""
+        self._last_playlist_dir = ""
         self._playlist_clear_armed = False
         # Favorites clear decision window, DJ export and Traktor playlist prompts.
         self.favorites_clear_confirm = False
@@ -9018,6 +9219,50 @@ class TerminalPlayerUI:
         for name, value in defaults.items():
             if not hasattr(self, name):
                 setattr(self, name, value)
+
+    def _playlist_prompt_line(self, _unused: str = "") -> str:
+        """The one row that says what the player is waiting for right now.
+
+        Favorites decisions come first (they were the original owner of this
+        row), then the export prompts, then the open-playlist prompt. An idle
+        player returns "" so the caller can paint nothing.
+        """
+        fav = self._favorites_prompt_line()
+        if fav:
+            return fav
+        if getattr(self, "export_format_mode", False):
+            choices = "   ".join(f"[{i}] {name}" for i, (_key, name) in
+                                 enumerate(self._EXPORT_FORMATS, 1))
+            return (f"  {BOLD}{COLOR_TRAFFIC_AMBER}Export Playlist — choose a type:  "
+                    f"{choices}   [Esc] Cancel{NC}")
+        if getattr(self, "export_mode", False):
+            fmt = str(self.export_format or "").lstrip(".").upper() or "M3U8"
+            return (f"  {BOLD}{COLOR_TRAFFIC_AMBER}Export as {fmt} to: "
+                    f"[{self.export_path}█]  (Enter: Save, Esc: Cancel){NC}")
+        if getattr(self, "open_playlist_mode", False):
+            return (f"  {BOLD}{COLOR_ELECTRIC_CYAN}Open playlist: "
+                    f"[{self.open_playlist_path}█]  (Enter: Open, Tab: complete, Esc: Cancel){NC}")
+        return ""
+
+    def _list_panel_title(self, count: Optional[int] = None) -> str:
+        """The playlist panel heading for whatever the window is showing.
+
+        An opened playlist names the file it came from, so the heading says
+        which set is on screen rather than implying it is the archive.
+        """
+        n = len(self._get_active_tracks()) if count is None else int(count)
+        mode = str(getattr(self, "mode", "")).upper()
+        noun = self._entry_noun().capitalize()
+        name = self._opened_playlist_name()
+        if name and mode == "PLAYLIST":
+            return f"OPENED PLAYLIST — {name} ({n} {noun})"
+        if mode == "FAVORITES":
+            return f"FAVORITES PLAYLIST ({n} {noun})"
+        if mode == "MUSIC":
+            return f"MUSIC LIBRARY ({n} {noun})"
+        if mode == "PLAYLIST":
+            return f"OPENED PLAYLIST ({n} {noun})"
+        return f"MP MIX ARCHIVE PLAYLIST ({n} {noun})"
 
     def _favorites_prompt_line(self) -> str:
         """Inline hint shown on the prompt row while a Favorites decision is open."""
@@ -10269,6 +10514,98 @@ class TerminalPlayerUI:
             return self._notify(f"Playing: {os.path.basename(chosen)}", 3.5)
         self._notify("No audio file selected. Press [F] for File Manager.", 3.0)
 
+    def _load_playlist_file(self, playlist_path: str, play: bool = True) -> bool:
+        """Open a playlist file into the window, replacing what it showed.
+
+        Every container the exporter writes is accepted (m3u, m3u8, xspf, pls,
+        json). A file the reader cannot parse, or one that names no tracks,
+        leaves the current list alone and says why. A remote window asks its
+        engine to take the list; when the engine does not answer within a few
+        seconds the open is reported as failed rather than looking successful.
+        """
+        path = str(playlist_path or "").strip()
+        if not path:
+            return False
+        path = os.path.expanduser(path)
+        if not os.path.isfile(path):
+            self._notify("That playlist was not found.", 4.0)
+            return False
+        try:
+            rows = _playlist_rows_for_drop(path)
+        except ValueError as exc:
+            self._notify(f"Not a supported playlist: {exc}", 4.0)
+            return False
+        except Exception:
+            self._notify("Could not read that playlist.", 4.0)
+            return False
+        if not rows:
+            # Distinguish "we could not read it" from "it holds no tracks":
+            # playlist_formats raises ValueError for a container it does not
+            # know, and that is a different message from an empty one.
+            try:
+                scripts = str(Path(__file__).resolve().parent / "scripts")
+                if scripts not in sys.path:
+                    sys.path.insert(0, scripts)
+                import playlist_formats as _pf
+                ext = os.path.splitext(path)[1].lower()
+                if ext not in _pf.PLAYLIST_EXTENSION_SET:
+                    self._notify(f"Not a supported playlist type: {ext or '(none)'}.", 4.0)
+                    return False
+            except Exception:
+                pass
+            self._notify("That playlist is empty.", 4.0)
+            return False
+        reachable = [r for r in rows if os.path.isfile(str(r.get("path", "")))]
+        if not reachable:
+            self._notify(
+                f"Opened playlist: {len(rows)} tracks, none are on this machine.", 5.0)
+            return False
+        self.scanner = ImportedPlaylistScanner(rows, path)
+        self.mode = "PLAYLIST"
+        self.search_mode = False
+        self.search_query = ""
+        self.selected_row = 0
+        self.scroll_offset = 0
+        self._playlist_clear_armed = False
+        self._last_playlist_dir = os.path.dirname(path) or self._last_playlist_dir
+        if self.is_remote:
+            deadline = time.monotonic() + 6.0
+            answered = None
+            for _ in range(4):
+                answered = send_ipc_command("open_playlist", playlist_path=path,
+                                            tracks=[dict(r) for r in reachable],
+                                            play=bool(play))
+                # An empty dict is still a reply: the daemon answered, it just
+                # had nothing to add. Only None means "no answer".
+                if answered is not None:
+                    break
+                if time.monotonic() >= deadline:
+                    break
+                time.sleep(0.25)
+            if answered is None:
+                self._notify("The player engine is not answering. The playlist was not opened.", 4.5)
+                return False
+        elif self.engine:
+            load_engine_playlist(self.engine, playlist=[str(r["path"]) for r in rows],
+                                 mode="PLAYLIST", play=bool(play))
+        first = os.path.basename(str(reachable[0].get("path", "")))
+        missing = len(rows) - len(reachable)
+        note = (f"Opened playlist: {first}" if len(reachable) == 1 else
+                f"Opened playlist with {len(reachable)} tracks, starting with {first}")
+        if missing:
+            note += f" ({missing} not found)"
+        self._notify(note, 4.0)
+        return True
+
+    def _entry_noun(self) -> str:
+        """What this library's rows are called in messages ("mixes"/"tracks")."""
+        return "tracks" if str(getattr(self, "mode", "")).upper() in ("MUSIC", "PLAYLIST") else "mixes"
+
+    def _opened_playlist_name(self) -> str:
+        """The file name of the playlist the window is showing, or ""."""
+        path = str(getattr(self.scanner, "playlist_path", "") or "")
+        return os.path.basename(path) if path else ""
+
     def _install_dropped_tracks(self, items: List[Dict[str, Any]]) -> None:
         dropped = {item["path"] for item in items}
         current = list(getattr(self.scanner, "mixes", []) or [])
@@ -10303,6 +10640,61 @@ class TerminalPlayerUI:
             self._notify("Could not read the dropped audio files.", 3.5)
             return
         items = audio_track_items(data.get("paths") or [])
+        playlist_path = str(data.get("playlist") or "")
+        if playlist_path:
+            # A playlist names its own order, and its entries may point at a
+            # share that is not mounted right now. Keep the rows either way so
+            # the listener can see what the file contains, and say plainly when
+            # none of them are reachable instead of starting nothing quietly.
+            if not os.path.isfile(playlist_path):
+                try:
+                    path.unlink(missing_ok=True)
+                except Exception:
+                    pass
+                self._notify("That dropped playlist is not readable.", 4.0)
+                return
+            listed = _playlist_rows_for_drop(playlist_path) or items
+            if not listed:
+                try:
+                    path.unlink(missing_ok=True)
+                except Exception:
+                    pass
+                self._notify("That dropped playlist is empty.", 4.0)
+                return
+            reachable = [t for t in listed if os.path.isfile(str(t.get("path", "")))]
+            self.scanner.mixes = list(listed)
+            if hasattr(self.scanner, "_search_cache_initialized"):
+                self.scanner._search_cache_initialized = None
+            self.mode = "PLAYLIST"
+            self.search_mode = False
+            self.search_query = ""
+            self.selected_row = 0
+            self.scroll_offset = 0
+            self._playlist_clear_armed = False
+            try:
+                path.unlink(missing_ok=True)
+            except Exception:
+                pass
+            if not reachable:
+                self._notify(
+                    f"Opened dropped playlist: {len(listed)} tracks, none are on this machine.",
+                    5.0)
+                return
+            if self.is_remote:
+                # The engine owns the audio on a remote client, so it has to
+                # take the drop. Say so when it does not answer, rather than
+                # claiming a playlist is playing when nothing is.
+                answered = send_ipc_command("drop_audio", manifest=str(path))
+                if not answered:
+                    self._notify("The player engine is not answering that drop.", 4.0)
+                    return
+            elif self.engine:
+                self.engine.load_track(0, True)
+            first = os.path.basename(str(reachable[0].get("path", "")))
+            self._notify(
+                f"Opened dropped playlist: {first}" if len(reachable) == 1 else
+                f"Opened dropped playlist with {len(reachable)} tracks, starting with {first}", 4.0)
+            return
         if not items:
             try:
                 path.unlink(missing_ok=True)
@@ -10311,6 +10703,7 @@ class TerminalPlayerUI:
             if data.get("rejected"):
                 self._notify("No audio files in that drop. All audio types can be dropped onto the player.", 4.0)
             return
+        # Loose audio files join the front of the list that is already open.
         self._install_dropped_tracks(items)
         notice = self._drop_notice(items, bool(data.get("truncated")))
         if self.is_remote:
@@ -10644,6 +11037,30 @@ class TerminalPlayerUI:
                     if c.isprintable(): self.eq_custom_name_input += c
                 except Exception: pass
                 return
+        if getattr(self, "open_playlist_mode", False):
+            if data == b"\x1b":
+                self.open_playlist_mode = False
+                self._notify("Open playlist cancelled", 2.5)
+                return
+            if data in (b"\r", b"\n"):
+                target = self.open_playlist_path.strip()
+                self.open_playlist_mode = False
+                if target:
+                    self._load_playlist_file(target)
+                return
+            if data == b"\t":
+                self.open_playlist_path = _complete_playlist_path(self.open_playlist_path)
+                return
+            if data in (b"\x7f", b"\x08"):
+                self.open_playlist_path = self.open_playlist_path[:-1]
+                return
+            try:
+                chunk = data.decode("utf-8", "ignore")
+            except Exception:
+                return
+            if chunk.isprintable():
+                self.open_playlist_path += chunk
+            return
         if getattr(self, "export_format_mode", False):
             if data == b"\x1b":
                 self.export_format_mode = False; self.export_tracks = None; self._notify("Export cancelled", 2.5)
@@ -10958,6 +11375,14 @@ class TerminalPlayerUI:
                 return
             self._playlist_clear_armed = False
         if data in (b"i", b"I"): self.inspector_hud_active = not self.inspector_hud_active; return
+        if data in (b"O",):
+            chosen = choose_playlist_file_gui()
+            if chosen:
+                self._load_playlist_file(chosen)
+            else:
+                self.open_playlist_mode = True
+                self.open_playlist_path = getattr(self, "_last_playlist_dir", "") or ""
+            return
         if data in (b"E",) and self.ui_size_mode not in COMPACT_UI_SIZES:
             self.equalizer_hud_active = not self.equalizer_hud_active
             if self.equalizer_hud_active: self.inspector_hud_active = False
@@ -11633,7 +12058,7 @@ class TerminalPlayerUI:
                     row_cache[cache_key] = line
                     lines.append(line)
             if self.mode == "FAVORITES":
-                list_footer = "── ↑/↓: Scroll  •  Enter: Play  •  Export Tracks  •  [H]: Mark  •  [D]: Clear  •  [1]: Mix Archive  •  [2]: Music  •  Q: Queue  •  /: Search "
+                list_footer = "── ↑/↓: Scroll  •  Enter: Play  •  [O] Open Playlist • [w] Export  •  [H]: Mark  •  [D]: Clear  •  [1]: Mix Archive  •  [2]: Music  •  Q: Queue  •  /: Search "
             elif self.mode == "MUSIC":
                 list_footer = f"── ↑/↓: Scroll • Enter: Play • [1] Mix • [2] Music • [3] Favorites • [H] Mark • Q: Queue • D: Clear • G: {g_key} • /: Search "
             else:
@@ -12031,6 +12456,9 @@ def main():
         (("--play-latest",), dict(action="store_true")), (("--get-latest-mix",), dict(action="store_true")),
         (("--list-mixes",), dict(action="store_true")), (("--open-file-manager", "-f"), dict(action="store_true")),
         (("--tracklist", "-t"), dict(action="store_true")), (("--export-playlist", "-e"), dict(nargs="?", const="default")),
+        (("--export-format",), dict(type=str, default=None, help="Container for --export-playlist: m3u, m3u8, xspf, pls or json")),
+        (("--open-playlist",), dict(type=str, default=None, help="Open a playlist file into the player")),
+        (("--filter",), dict(type=str, default=None, help="Only export rows matching this text")),
         (("--tracklist-export",), dict(type=str, choices=("html", "text", "txt"), default=None,
                                        help="Export the tracklist of the selected mix to HTML or TEXT in TRACKLIST_EXPORTS")),
         (("--style", "--eq"), dict(type=str, choices=EqualizerVisualizer.STYLES)), (("--theme",), dict(type=str, choices=EqualizerVisualizer.THEMES)),
@@ -12114,10 +12542,49 @@ def main():
 
     if args.export_playlist is not None:
         mixes = MixArchiveScanner(base_dir).get_mixes()
-        dest = os.path.expanduser("~/Desktop/MP_Archive_Playlist.m3u") if (args.export_playlist in ("default", "") or not args.export_playlist) else args.export_playlist
-        ok, res = export_playlist_m3u(mixes, dest)
-        print(f"✔ Exported {len(mixes)} mixes to .m3u playlist: {res}" if ok else f"✖ Failed to export playlist: {res}")
+        fmt = str(getattr(args, "export_format", "") or "").lstrip(".").lower() or None
+        if args.export_playlist in ("default", "") or not args.export_playlist:
+            dest = os.path.expanduser(f"~/Desktop/MP_Archive_Playlist.{fmt or 'm3u8'}")
+        else:
+            dest = args.export_playlist
+        needle = str(getattr(args, "filter", "") or "").lower().strip()
+        if needle:
+            mixes = [m for m in mixes
+                     if needle in f"{m.get('name', '')} {m.get('path', '')}".lower()]
+            if not mixes:
+                # Nothing matched, so there is nothing to write: do not leave an
+                # empty file behind that looks like a successful export.
+                print(f"✖ The filter matched no tracks: {needle}", file=sys.stderr)
+                sys.exit(1)
+        ok, res = export_playlist_file(mixes, dest, fmt)
+        print(f"✔ Exported {len(mixes)} mixes to {(fmt or os.path.splitext(res)[1].lstrip('.') or 'm3u8')} playlist: {res}"
+              if ok else f"✖ Failed to export playlist: {res}")
         sys.exit(0 if ok else 1)
+
+    if getattr(args, "open_playlist", None):
+        wanted = os.path.expanduser(str(args.open_playlist))
+        if not os.path.isfile(wanted):
+            print(f"✖ Not a readable playlist: {wanted}", file=sys.stderr)
+            sys.exit(1)
+        try:
+            rows = _playlist_rows_for_drop(wanted)
+        except Exception as exc:
+            print(f"✖ Not a readable playlist: {exc}", file=sys.stderr)
+            sys.exit(1)
+        if not rows:
+            print(f"✖ {os.path.basename(wanted)} has no tracks that exist", file=sys.stderr)
+            sys.exit(1)
+        reachable = [r for r in rows if os.path.isfile(str(r.get("path", "")))]
+        if is_player_daemon_running():
+            reply = send_ipc_command("open_playlist", playlist_path=wanted,
+                                     tracks=[dict(r) for r in reachable],
+                                     play=True)
+            if not reply or str(reply.get("status", "")).lower() == "error":
+                print(f"✖ The player engine did not open {os.path.basename(wanted)}", file=sys.stderr)
+                sys.exit(1)
+        print(f"✔ Opened {os.path.basename(wanted)}: {len(rows)} track(s)"
+              + (f", {len(rows) - len(reachable)} not found" if len(reachable) != len(rows) else ""))
+        sys.exit(0)
 
     if args.spek:
         tp = os.path.abspath(args.file) if (args.file and os.path.exists(args.file)) else ((st.get("data", {}).get("path") if (daemon_running and (st := send_ipc_command("status"))) else None))

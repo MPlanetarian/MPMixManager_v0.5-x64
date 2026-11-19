@@ -773,7 +773,7 @@ Two releases back, October 24, 2026. Current release notes are [What's New in v0
   - **"Dynamic Liquid Glass [Rainbow Colours] (New)" Theme**: Dynamic hue shifting that cycles slowly through all rainbow colors in real time, accompanied by a 6-second sinusoidal breathing transparency oscillation (±9% shift) and a firmer, crisper 10% base transparency reduction.
   - **"MP Dreamworlds Liquid Transparency" [Special Edition]**: Theme featuring deep liquid ocean glass (`#4899ef`), crystalline aqua cyan (`#00f5ff`), and liquid amethyst (`#c77dff`).
 - 🎵 **Continuous Music Playback Across Manager Exit**: Closing the terminal manager safely skips terminating Liquid Glass processes (`is_liquid_glass_open`), allowing you to keep enjoying your music uninterrupted.
-- 🎁 **Desktop Icon & First-Run Reward System**: Includes an ultra-high-resolution 512x512 translucent liquid glass desktop icon (`assets/mp_liquid_glass_icon.png`). On first launch, a desktop shortcut (`~/Desktop/MP_Liquid_Glass_Audio_Player.desktop`) is automatically installed alongside a heartfelt welcome message from MPlanetarian.
+- 🎁 **Desktop Icon & First-Run Reward System**: Every MP app — MP Mix Manager, MP Gui, MP Liquid Player, MP Liquid Mixer and the Visualisation Generator — plus the system tray now shares one icon: **Dreamworld Aurora**, designed by MPlanetarian (`assets/Dreamworld_Aurora.png`, shipped as `assets/dreamworld_aurora.{png,ico,svg}`). On first launch, a desktop shortcut (`~/Desktop/MP_Liquid_Glass_Audio_Player.desktop`) is automatically installed alongside a heartfelt welcome message from MPlanetarian.
 
 ---
 
