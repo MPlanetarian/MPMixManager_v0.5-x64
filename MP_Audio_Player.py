@@ -9910,7 +9910,10 @@ class TerminalPlayerUI:
         # this the engine refused the track inside load_track and the deck did
         # nothing at all: no sound, no message. Mount on a worker: a wedged
         # share can take tens of seconds, and the deck must stay responsive.
-        if path and not os.path.isfile(path):
+        # A remote client has no view of this machine's filesystem, so the
+        # check would refuse every row it is told to play. Only a local player
+        # can judge whether the file is reachable.
+        if not self.is_remote and path and not os.path.isfile(path):
             share = music_share_for_path(path)
             if share:
                 self._notify(f"Mounting {share.get('id')} - {os.path.basename(path)}...", 6.0)

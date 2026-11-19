@@ -28,7 +28,11 @@ def proc(pid, ppid, cmdline, environ=""):
 
 class TestRoles(unittest.TestCase):
     def test_four_buttons_in_launch_order(self):
-        apps = control.app_definitions()
+        # app_definitions() lists installed apps only; pin all four so the
+        # assertion does not depend on this machine's installed_apps file.
+        with patch.object(control, "installed_components",
+                          return_value=set(control.ROLE_ORDER)):
+            apps = control.app_definitions()
         self.assertEqual(
             [app["id"] for app in apps],
             ["gui", "manager", "liquid", "visualizer"],
@@ -94,7 +98,12 @@ class TestDetection(unittest.TestCase):
 
     def test_status_payload_carries_a_running_flag_per_app(self):
         processes = [proc(12, 1, "python3 /opt/MP_Audio_Player_Liquid_Glass.py")]
+        # app_status() only lists installed apps, and that set comes from the
+        # user's config. Pin all four so the assertion does not depend on what
+        # this machine happens to have set up.
         with patch.object(control, "is_supported", return_value=True), \
+             patch.object(control, "installed_components",
+                          return_value=set(control.ROLE_ORDER)), \
              patch.object(control, "_process_table", return_value=processes):
             status = control.app_status()
         self.assertTrue(status["supported"])
@@ -116,7 +125,11 @@ class TestLaunch(unittest.TestCase):
         self.assertEqual(spawn.call_count, 1)
 
     def test_launching_when_open_focuses_instead(self):
+        # launch_app refuses an app that is not installed, and the installed
+        # set comes from the user's config, so pin it here too.
         with patch.object(control, "is_supported", return_value=True), \
+             patch.object(control, "installed_components",
+                          return_value=set(control.ROLE_ORDER)), \
              patch.object(control, "running_roles", return_value={"liquid"}), \
              patch.object(control, "_focus", return_value=True) as focus, \
              patch.object(control, "_spawn") as spawn:

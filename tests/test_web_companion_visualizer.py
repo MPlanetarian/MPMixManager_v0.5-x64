@@ -297,8 +297,13 @@ class PageMarkupTest(unittest.TestCase):
 
     def _page(self, tty_mode):
         import mix_web_companion as companion
+        # The launch pad only renders a button for an installed app, and the
+        # installed set lives in the user's config, so pin all four here or the
+        # page depends on what this machine happens to have set up.
         with patch.object(control, "is_supported", return_value=True), \
-             patch.object(control, "tty_mode_active", return_value=tty_mode):
+             patch.object(control, "tty_mode_active", return_value=tty_mode), \
+             patch.object(control, "installed_components",
+                          return_value=set(control.ROLE_ORDER)):
             return companion.render_html_page(companion.THEMES["cosmic_supernova"])
 
     def test_visualizer_button_is_rendered(self):
