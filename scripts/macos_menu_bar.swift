@@ -8,13 +8,14 @@ private let terminateNow: @convention(c) (Int32) -> Void = { _ in
     _exit(0)
 }
 
-final class MenuBarController: NSObject, NSApplicationDelegate {
+final class MenuBarController: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let root: String
     let iconPath: String
     let python: String
     let stay: Bool
     let lockFD: Int32
     var statusItem: NSStatusItem?
+    var muteItem: NSMenuItem?
     var absentSince: Date?
     var pollInFlight = false
 
@@ -41,17 +42,24 @@ final class MenuBarController: NSObject, NSApplicationDelegate {
             button.setAccessibilityLabel("MP Mix Manager")
         }
         let menu = NSMenu()
+        menu.delegate = self
         let entries = [
             ("launch-gui", "Launch MP Gui"),
             ("launch-liquid", "Launch MP Liquid Player"),
             ("launch-manager", "Launch MP Mix Manager"),
             ("web-audio", "Start / Stop MP Audio Player (Web)"),
+            ("rescan-archive", "Rescan Mix Archive Folders"),
+            ("rescan-music", "Rescan Music Folders"),
+            ("mute-audio", "Mute MP Player Audio"),
         ]
         for (ident, title) in entries where self.entryEnabled(ident) {
             let menuItem = NSMenuItem(title: title, action: #selector(performAction(_:)), keyEquivalent: "")
             menuItem.target = self
             menuItem.representedObject = ident
             menu.addItem(menuItem)
+            if ident == "mute-audio" {
+                muteItem = menuItem
+            }
         }
         menu.addItem(.separator())
         let closeItem = NSMenuItem(
@@ -115,6 +123,23 @@ final class MenuBarController: NSObject, NSApplicationDelegate {
                 }
             }
         }
+    }
+
+    /// The mute item states what a click does, so its title follows the
+    /// player instead of being fixed at build time. mp_system_tray.py owns the
+    /// state read, so the console tray and the menu bar cannot disagree.
+    func refreshMuteTitle() {
+        guard let item = muteItem else { return }
+        DispatchQueue.global(qos: .utility).async {
+            let title = self.runPython(["--action-label", "mute-audio"])?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard !title.isEmpty else { return }
+            DispatchQueue.main.async { item.title = title }
+        }
+    }
+
+    func menuWillOpen(_ menu: NSMenu) {
+        refreshMuteTitle()
     }
 
     func pollRoles() {

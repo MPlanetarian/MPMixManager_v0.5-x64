@@ -142,12 +142,58 @@ class TestDynamicRainbowLiquidGlass(unittest.TestCase):
         self.assertNotIn("blur(", cards,
                          "backdrop-filter over the animating wash re-blurs every frame")
 
-    def test_the_hue_timer_is_not_a_ten_hertz_style_recalc(self):
-        """Each hue tick rewrites 27 theme variables, so it must not run at 10 Hz."""
+    def test_the_hue_is_not_stepped_from_javascript(self):
+        """The 4 Hz --rainbow-hue timer was the second cause of the iOS reload.
+
+        Every tick rewrote a registered custom property that 27 other
+        properties derive from, so each one was a whole-document style
+        recalculation. Measured in WebKitGTK at 430x932 the timer grew the
+        WebContent process by 0.81 MB/s (about 49 MB a minute) and used 4.8% of
+        a core while nothing else moved. iOS ends a WebContent process that
+        grows like that while it is also decoding FLAC, and Safari reloads the
+        page - the "snaps back to the top and restarts the mix" report.
+        The same colour turn is now a compositor-only CSS animation.
+        """
         html_out = render_html_page(WEB_THEMES["dynamic_rainbow_liquid_glass"])
         sync = html_out.split("function syncRainbowDrive()", 1)[1]
-        self.assertIn("setInterval(tickRainbow, 250)", sync)
-        self.assertNotIn("setInterval(tickRainbow, 100)", sync)
+        self.assertNotIn("setInterval(tickRainbow", sync,
+                         "a timer that rewrites --rainbow-hue restyles the whole page")
+        self.assertNotIn("setInterval(tickRainbow", html_out,
+                         "no hue timer may be started anywhere")
+
+    def test_the_wash_turns_its_hue_on_the_compositor(self):
+        """The colour motion must come from CSS, not from JS restyling."""
+        def strip_comments(css: str) -> str:
+            return re.sub(r"/\*.*?\*/", "", css, flags=re.S)
+
+        html_out = render_html_page(WEB_THEMES["dynamic_rainbow_liquid_glass"])
+        active = strip_comments(
+            html_out.split("body.dynamic-rainbow-glass-active #rainbowWash {", 1)[1].split("}", 1)[0]
+        )
+        self.assertIn("dynamicRainbowSpin", active,
+                      "the wash must carry the hue rotation")
+        self.assertIn("hue-rotate", strip_comments(html_out),
+                      "the rotation must be a filter animation")
+
+    def test_a_playing_mix_is_never_covered_by_the_gate(self):
+        """The gate must not lock a page whose audio is already running.
+
+        On an iPhone `maybeAutoStartStream()` bailed out of the gesture branch
+        without marking the automatic attempt as spent, so every 2 s poll
+        re-showed the engage gate. `overlay-active` sets the body to
+        position: fixed, so the dashboard was pinned to the top of the screen,
+        unusable, while the mix played underneath. The renderer now refuses to
+        cover a playing element, and the branch spends its one attempt.
+        """
+        html_out = render_html_page(WEB_THEMES["dynamic_rainbow_liquid_glass"])
+        render = html_out.split("function renderStreamOverlay()", 1)[1].split("\n        }}", 1)[0]
+        self.assertIn("audioElIsPlaying()", render,
+                      "the gate must check the element before covering the page")
+        auto = html_out.split("function maybeAutoStartStream()", 1)[1].split("\n        }}", 1)[0]
+        self.assertIn("streamAutoStarted = true", auto,
+                      "the iPhone gesture branch must spend its one attempt")
+        self.assertIn("hideStreamOverlay()", auto,
+                      "a playing mix must dismiss the gate")
 
     def test_web_companion_rainbow_css_available_without_reload(self):
         """The rainbow animation rules must ship with every render.

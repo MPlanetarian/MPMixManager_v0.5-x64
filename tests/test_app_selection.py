@@ -128,7 +128,7 @@ class TestStateFile(SelectionBase):
 
 
 class TestShortcutsFollowTheSelection(SelectionBase):
-    def test_all_four_still_writes_four(self):
+    def test_all_four_still_writes_every_shortcut(self):
         with tempfile.TemporaryDirectory() as tmp:
             desktop = Path(tmp) / "Desktop"
             paths = install_desktop_shortcuts(
@@ -144,7 +144,7 @@ class TestShortcutsFollowTheSelection(SelectionBase):
                 [f"{name}.desktop" for name in SHORTCUT_NAMES],
             )
 
-    def test_one_app_writes_only_that_shortcut(self):
+    def test_one_app_writes_that_shortcut_and_the_linux_mixer(self):
         with tempfile.TemporaryDirectory() as tmp:
             desktop = Path(tmp) / "Desktop"
             apps = Path(tmp) / "applications"
@@ -156,9 +156,18 @@ class TestShortcutsFollowTheSelection(SelectionBase):
                 launcher_dir=Path(tmp) / "launchers",
                 components=["gui"],
             )
-            self.assertEqual([path.name for path in paths], ["MP Gui.desktop"])
-            self.assertEqual(sorted(p.name for p in desktop.glob("*.desktop")), ["MP Gui.desktop"])
-            self.assertEqual(sorted(p.name for p in apps.glob("*.desktop")), ["MP Gui.desktop"])
+            self.assertEqual(
+                [path.name for path in paths],
+                ["MP Gui.desktop", "MP Liquid Mixer.desktop"],
+            )
+            self.assertEqual(
+                sorted(p.name for p in desktop.glob("*.desktop")),
+                ["MP Gui.desktop", "MP Liquid Mixer.desktop"],
+            )
+            self.assertEqual(
+                sorted(p.name for p in apps.glob("*.desktop")),
+                ["MP Gui.desktop", "MP Liquid Mixer.desktop"],
+            )
 
     def test_switching_to_one_app_removes_the_other_three(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -172,7 +181,7 @@ class TestShortcutsFollowTheSelection(SelectionBase):
                 launcher_dir=Path(tmp) / "launchers",
                 components=list(selection.COMPONENTS),
             )
-            self.assertEqual(len(list(desktop.glob("*.desktop"))), 4)
+            self.assertEqual(len(list(desktop.glob("*.desktop"))), 5)
             install_desktop_shortcuts(
                 ROOT,
                 platform_name="linux",
@@ -181,7 +190,10 @@ class TestShortcutsFollowTheSelection(SelectionBase):
                 launcher_dir=Path(tmp) / "launchers",
                 components=["liquid"],
             )
-            self.assertEqual(sorted(p.name for p in desktop.glob("*.desktop")), ["MP Liquid Player.desktop"])
+            self.assertEqual(
+                sorted(p.name for p in desktop.glob("*.desktop")),
+                ["MP Liquid Mixer.desktop", "MP Liquid Player.desktop"],
+            )
             self.assertFalse((apps / "MP Gui.desktop").exists())
 
     def test_the_stored_selection_is_used_when_none_is_passed(self):
@@ -195,7 +207,10 @@ class TestShortcutsFollowTheSelection(SelectionBase):
                 apps_dir=Path(tmp) / "applications",
                 launcher_dir=Path(tmp) / "launchers",
             )
-            self.assertEqual([path.name for path in paths], ["MP Liquid Visualizer.desktop"])
+            self.assertEqual(
+                [path.name for path in paths],
+                ["MP Liquid Visualizer.desktop", "MP Liquid Mixer.desktop"],
+            )
 
     def test_presence_check_only_requires_the_selected_apps(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -212,7 +227,14 @@ class TestShortcutsFollowTheSelection(SelectionBase):
             self.assertFalse(desktop_shortcuts_present(desktop, "linux", list(selection.COMPONENTS)))
 
     def test_selected_names_keeps_display_order(self):
-        self.assertEqual(selected_names(["visualizer", "manager"]), ("MP Mix Manager", "MP Liquid Visualizer"))
+        self.assertEqual(
+            selected_names(["visualizer", "manager"]),
+            ("MP Mix Manager", "MP Liquid Visualizer", "MP Liquid Mixer"),
+        )
+        self.assertEqual(
+            selected_names(["visualizer", "manager"], "macos"),
+            ("MP Mix Manager", "MP Liquid Visualizer"),
+        )
         self.assertEqual(selected_names([]), SHORTCUT_NAMES)
 
     def test_windows_shortcuts_receive_the_selection(self):
@@ -244,13 +266,30 @@ class TestTrayMenuFollowsTheSelection(SelectionBase):
         ids = [ident for ident, _label in tray.menu_entries()]
         self.assertEqual(
             ids,
-            ["launch-gui", "launch-liquid", "launch-manager", "web-audio", "close-all"],
+            [
+                "launch-gui",
+                "launch-liquid",
+                "launch-manager",
+                "web-audio",
+                "rescan-archive",
+                "rescan-music",
+                "mute-audio",
+                "close-all",
+            ],
         )
 
     def test_a_one_app_install_hides_the_other_launchers(self):
         selection.write(["gui"])
         ids = [ident for ident, _label in tray.menu_entries()]
-        self.assertEqual(ids, ["launch-gui", "web-audio", "close-all"])
+        self.assertEqual(ids, ["launch-gui", "web-audio", "rescan-archive", "rescan-music", "mute-audio", "close-all"])
+
+    def test_the_rescan_and_mute_entries_survive_every_selection(self):
+        for chosen in (["manager"], ["gui"], ["liquid"], ["visualizer"], ["gui", "liquid"]):
+            with self.subTest(components=chosen):
+                selection.write(chosen)
+                ids = [ident for ident, _label in tray.menu_entries()]
+                for ident in ("rescan-archive", "rescan-music", "mute-audio"):
+                    self.assertIn(ident, ids)
 
     def test_close_all_and_the_web_entry_survive_every_selection(self):
         for chosen in (["manager"], ["gui"], ["liquid"], ["visualizer"], ["gui", "liquid"]):

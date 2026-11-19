@@ -21,12 +21,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import mp_app_selection as selection  # noqa: E402
 from install_desktop_shortcuts import (  # noqa: E402
-    COMPONENT_BY_NAME,
     SHORTCUT_NAMES,
     _remove_deselected,
     apps_dir_for,
     desktop_dir_for,
     detect_platform,
+    selected_names,
 )
 
 # Files that belong to one app. Shared files are listed under the globs below
@@ -196,10 +196,11 @@ def state_paths(config_dir: Path, clearing: list[str], installed: list[str]) -> 
 
 
 def _shortcut_keep(remain: list[str]) -> tuple[str, ...]:
-    chosen = set(remain)
-    return tuple(
-        name for name in SHORTCUT_NAMES if COMPONENT_BY_NAME.get(name) in chosen
-    )
+    if not remain:
+        return tuple()
+    # selected_names() also keeps the Linux-only extras, so uninstalling one of
+    # the four apps cannot delete the mixer shortcut.
+    return selected_names(remain, detect_platform())
 
 
 def _drop_shortcuts(desktop: Path, apps: Path, remain: list[str], dry_run: bool) -> None:

@@ -20,6 +20,10 @@ behind the whole surface.
 | **4 channels + crossfader** | Faders A and B apply per-deck gain; the crossfader is equal-power (both decks at -3 dB in the centre). C and D are inactive placeholders. |
 | **Internal / External mixing** | Internal applies the software faders and crossfader. External hands both decks to the house mixer at unity and bypasses the software levels. |
 | **MP Visualizer behind** | A locked companion MP Liquid Visualizer runs behind the mixer at the mixer's exact rectangle in both full screen and windowed mode. It follows every move/resize, cannot be detached (Z/double-click are ignored on a locked companion), and is relaunched if it is closed or killed. The **VISUALIZER** button (or `V`) only hides/shows it. |
+| **Exit_MP_Video.mp4 brackets the window** | On every launch the shared loader movie plays **before** the mixer window exists, and after the last window closes the same movie plays **after** the window is gone. Both use `scripts/display_loader_video.sh` (`--intro-force` / `--exit-force`), so the movie, player choice, borderless window and timeout are the ones every other MP window uses. Each launch path (desktop shortcut, `X` in another MP window, or `run.sh`) shares this one implementation, so the movie never plays twice. |
+| **Desktop shortcut** | `MP Liquid Mixer.desktop` on the Desktop and in the application menu on Linux, written by `scripts/install_desktop_shortcuts.py` in the same style as the other four MP entries. It points at `scripts/launch_liquid_mixer.sh` through `mp-desktop-exec`, so moving or renaming the install keeps it working. macOS and Windows do not get one: the mixer needs X11/XWayland, VTE and ALSA. |
+| **WAV / FLAC at 4 GiB** | The master output records as WAV (default) or FLAC at a fixed 4 GiB part ceiling. WAV sizes are unsigned 32-bit, so a part passes the old 2 GiB wall; at the ceiling the next file is `..._PART_2`, `..._PART_3`, and so on. |
+| **Themed chrome** | A **Trance Connection Enabled** status lamp, a live system clock, the **WAV/FLAC** toggle, a **24-Bit** badge and the **DREAMWORLDS PRODUCTIONS / MPLANETARIAN** credit all use the active theme's accent and secondary colours, so `C` repaints them with the rest of the window. |
 | **Transparency bar** | The player's own 20%-80% slider range at the bottom of the screen, applied to the whole glass window so the visualizer shows through. |
 | **Tempo & sync** | Vertical pitch sliders for A/B, master-tempo ownership, and Sync. BPM tags give a true beat match; without tags the target copies the master's pitch. The master follows the most recently started deck and hands over when its track ends. |
 | **Themes** | `C` cycles the same theme list as every other MP window. The players follow the shared `theme` file within a second, so both decks and the chrome change together. The mixer also repaints each deck terminal's background and ink from the theme, including when `C` is pressed inside a deck or in MP Gui. |
@@ -31,6 +35,10 @@ behind the whole surface.
 ```bash
 ./MP_Liquid_Mixer/run.sh
 ```
+
+Or open **MP Liquid Mixer** from the Desktop/application menu. The shortcut
+starts the same `run.sh`, so either way `Exit_MP_Video.mp4` plays before the
+window appears and again after it closes.
 
 Full screen is the default. Useful flags:
 
@@ -56,8 +64,20 @@ finds Python itself; no install step.
 | **Channel C / D** | Inactive in 0.0.1 ("SOON") |
 | **MIXER mode button** or `X` | Internal (software faders) / External (unity, house mixer) |
 | **VISUALIZER** button or `V` | Show/hide the visualizer behind the mixer (it is never detached) |
+| **Trance Connection Enabled** | Themed status lamp in the top bar |
+| **WAV / FLAC** button | Toggle the recording container. The label shows the next recording's format; a live recording restarts in the chosen one. |
+| **24-Bit** | Themed badge beside the format button; it is informational and does nothing when pressed |
+| **DREAMWORLDS PRODUCTIONS / MPLANETARIAN** | Themed credit button in the mixer panel |
+| **EXPORT MIXES** | Moves finished recordings into the primary `MIX_ARCHIVE`: WAV to its root, FLAC to `FLAC_CONVERTED_OUTPUTS`. With no archive configured, nothing is moved and the MP Tray posts a setup reminder. |
+| **Clock** | Real-time system clock (date and `HH:MM:SS`), read when the mixer opens and refreshed every second |
 | **Transparency bar** (drag) | Window opacity, 20%-80%, persisted |
 | `C` | Next theme. In a deck the player handles `C` itself (so search can still type "c"); here it writes the same shared theme file, and the mixer follows it. |
+| `R` or **REC** | Start/stop master-output recording |
+| `M` | Open MP Mix Manager in a new Konsole window (`Mix_Archive_Manager.sh`) |
+| `Z` | Open an MP Liquid Visualizer window |
+| `W` | Open the MP Black Glass window (the Liquid Glass host on Into Darkness / Void Out) |
+| `L` | Open MP Liquid Player |
+| `G` | Open MP Gui |
 | `F11` or **double-click the top bar** | Toggle full screen and a 1920x1080 centred window |
 | **Drag the top bar** | Move the window while it is windowed |
 | **Drag the bottom-right grip** | Resize the window (minimum 960x540) |
@@ -65,17 +85,82 @@ finds Python itself; no install step.
 
 Inside a deck the player's own keys keep working: `Space` play/pause, arrows to
 seek, `1`/`2`/`3` libraries, `/` search, and the rest of the MP Audio Player
-key map. The mixer only takes `C`, `V`, `X`, `F11` and `Esc`, and only when the
-deck is not the focused widget.
+key map. The mixer only takes `C`, `V`, `X`, `R`, `M`, `Z`, `W`, `L`, `G`,
+`F11` and `Esc`, and only when the deck is not the focused widget.
+
+---
+
+## Recording
+
+The master output is recorded as **PCM 16-bit stereo WAV** by default. The
+format button switches to **FLAC** and back; both formats use the same capture
+and the same fixed ceiling.
+
+- **The limit is exactly 4 GiB and is not configurable.** A WAV part is capped
+  at 4,294,967,248 bytes of audio (44-byte header excluded, rounded down to a
+  whole 16-bit stereo frame). The RIFF `ChunkSize` and `data` size are written
+  as **unsigned 32-bit** fields, so a part is not trapped at 2 GiB.
+- **Parts continue automatically.** When the current part reaches the ceiling
+  it is finalised and recording continues as `..._PART_2.wav` (or `.flac`),
+  then `..._PART_3`, and so on. The original file keeps its name and is part 1.
+- **FLAC** is encoded with the `flac` command from raw PCM (or `ffmpeg`, which
+  the suite already requires, when `flac` is absent). Its part limit is 16 MiB
+  below the 4 GiB line so encoder buffering can never push a file over.
+- The record log (`liquid_mixer_recording.log`) is written beside the parts.
+
+### Exporting to MIX_ARCHIVE
+
+The **EXPORT MIXES** button moves finished recordings out of
+`MP_AUDIOWAV_REC_OUTPUT` into the primary archive:
+
+| Recording | Destination |
+| :--- | :--- |
+| `*.wav` (including `_PART_2`, `_PART_3`, ...) | `<MIX_ARCHIVE>/` |
+| `*.flac` (including parts) | `<MIX_ARCHIVE>/FLAC_CONVERTED_OUTPUTS/` |
+
+- The primary archive is `MIX_ARCHIVE_DIR`, read from the environment first and
+  then from `config.env`. A configured path that is not currently a directory
+  (an unplugged drive) is reported instead of guessed.
+- If no `MIX_ARCHIVE_DIR` has ever been set, **nothing is scanned or moved**.
+  The MP Tray posts "Set up a primary MIX_ARCHIVE folder before you can export
+  mixes."
+- On success the MP Tray notification names the archive path and how many WAV
+  and FLAC files were moved.
+- Export scans both the archive's recording folder and the install-tree
+  fallback, so recordings made before the archive was configured are included.
+- Existing files are never overwritten; a name clash gets a numeric suffix.
+  The recording log is left in place.
+- Export is refused while a recording is live, so the open part is never moved
+  out from under the capture thread.
 
 The decks deliberately **do not autoplay**. Each starts in **Music mode** with the
 Music Folders playlist loaded and its first track paused; `Space` or the player's
 Play button starts it.
 
+### Opening it with `X`
+
+`X` opens this window from **MP Gui**, **MP Liquid Player**, and the console
+**MP Mix Manager**. All three call `scripts/liquid_mixer_launch.py`, so they
+share one launch path with the desktop shortcut:
+
+| State | What `X` does |
+| :--- | :--- |
+| No mixer open | Opens exactly one window |
+| Mixer already open | Raises that window; never opens a second one |
+| Mixer still starting | Says it is starting; never opens a second one |
+| Text console (TTY Audio Mode, no display) | The console menu says a desktop is needed; in the terminal player `X` keeps its old stop-and-exit meaning |
+
+Only one mixer can exist at a time because both decks live in fixed IPC
+namespaces. The window holds `~/.config/mix-manager/liquid_mixer.lock` with
+`flock` for its whole life, and the launcher reads that same lock. A short-lived
+claim file (`liquid_mixer_launch.json`) covers the moment between the spawn and
+the lock being taken, so two presses in a row cannot both start a window. Close
+the mixer window and `X` opens a fresh one.
+
 Only one mixer can run at a time: it holds `~/.config/mix-manager/liquid_mixer.lock`
-for its lifetime. A second launch prints that it is already open and exits,
-because both decks live in fixed IPC namespaces and would otherwise retire each
-other's engines.
+for its lifetime. A second launch raises the window that owns the lock and
+exits, because both decks live in fixed IPC namespaces and would otherwise
+retire each other's engines. `X` in any MP window reaches that same check.
 
 The deck terminals render on their own dark pane inside the pale glass card.
 The window's transparency still applies to the whole surface, so the visualizer
@@ -91,6 +176,9 @@ MP_Liquid_Mixer/
   mixer_core.py        # model, equal-power curve, IPC, themes, layout
   run.sh               # launcher
   README.md            # this file
+scripts/
+  liquid_mixer_launch.py   # the X key: launch once, raise after that
+  launch_liquid_mixer.sh   # interpreter/install-tree launcher the shortcut uses
 ```
 
 `LiquidMixer` subclasses `GlassHost` from

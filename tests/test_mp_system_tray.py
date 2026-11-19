@@ -134,6 +134,9 @@ class TestMenu(unittest.TestCase):
                 "Launch MP Liquid Player",
                 "Launch MP Mix Manager",
                 "Start / Stop MP Audio Player (Web)",
+                "Rescan Mix Archive Folders",
+                "Rescan Music Folders",
+                "Mute MP Player Audio",
                 "Close MP Mix Manager (Closes everything)",
             ],
         )
@@ -650,6 +653,172 @@ class TestCloseAllClosesEverything(unittest.TestCase):
         self.assertIn("DispatchQueue.global", fn)
         # The quit is posted back to the main queue, after runPython returns.
         self.assertLess(fn.index("runPython"), fn.index("NSApp.terminate"))
+
+
+class TestTrayRescans(unittest.TestCase):
+    """The tray's rescan entries run the console menu's own code paths.
+
+    Storage Management > 4 ("Rescan Mix Archive Folders") and
+    Option 2 > 3 > A ("Generate / Refresh Playlists") used to be reachable only
+    from the console. The tray must call the same implementation, or the two
+    front ends can disagree about what a rescan covers.
+    """
+
+    def test_every_tray_has_the_same_scan_and_mute_entries(self):
+        for name in (
+            "scripts/mp_system_tray.py",
+            "scripts/windows_tray.ps1",
+        ):
+            text = (ROOT / name).read_text(encoding="utf-8")
+            self.assertIn("Rescan Mix Archive Folders", text, name)
+            self.assertIn("Rescan Music Folders", text, name)
+            self.assertIn("Mute MP Player Audio", text, name)
+            self.assertIn("Unmute MP Player Audio", text, name)
+        # The menu bar posts the entries itself but takes the live mute title
+        # from the tray module, so it only needs the initial label.
+        text = (ROOT / "scripts" / "macos_menu_bar.swift").read_text(encoding="utf-8")
+        self.assertIn("Rescan Mix Archive Folders", text)
+        self.assertIn("Rescan Music Folders", text)
+        self.assertIn("Mute MP Player Audio", text)
+        self.assertIn('"--action-label", "mute-audio"', text)
+
+    def test_the_manager_owns_the_archive_rescan(self):
+        text = (ROOT / "Mix_Archive_Manager.sh").read_text(encoding="utf-8")
+        self.assertIn("_mp_rescan_archive_run() {", text)
+        self.assertIn("--rescan-archive", text)
+        # It must reuse the same cache invalidation and statistics as the menu.
+        fn = text.split("_mp_rescan_archive_run() {", 1)[1].split("\n}", 1)[0]
+        self.assertIn("clear_archive_dir_cache", fn)
+        self.assertIn("invalidate_archive_stats_cache", fn)
+        self.assertIn("show_stats --force", fn)
+        self.assertIn("get_all_mix_archive_dirs --refresh", fn)
+        self.assertIn("RESCAN_STATUS=", fn)
+
+    def test_the_tray_calls_the_archive_rescan_flag(self):
+        text = (ROOT / "scripts" / "mp_system_tray.py").read_text(encoding="utf-8")
+        fn = text.split("def rescan_archive(", 1)[1].split("\ndef ", 1)[0]
+        self.assertIn("--rescan-archive", fn)
+        self.assertIn("Mix_Archive_Manager.sh", fn)
+
+    def test_the_tray_builds_the_music_playlists_the_menu_builds(self):
+        text = (ROOT / "scripts" / "mp_system_tray.py").read_text(encoding="utf-8")
+        fn = text.split("def rescan_music_folders(", 1)[1].split("\ndef ", 1)[0]
+        self.assertIn("music_folders_manager.py", fn)
+        self.assertIn("--generate", fn)
+        self.assertIn("ALL", fn)
+
+    def test_the_rescan_reports_through_a_desktop_notification(self):
+        text = (ROOT / "scripts" / "mp_system_tray.py").read_text(encoding="utf-8")
+        self.assertIn("def notify(", text)
+        self.assertIn("notify-send", text)
+        # The tray slots post the notice only after the worker finished.
+        self.assertIn("notify(title, rescan_message(action_id, result)", text)
+
+    def test_the_scan_runs_off_the_qt_thread(self):
+        text = (ROOT / "scripts" / "mp_system_tray.py").read_text(encoding="utf-8")
+        fn = text.split("def _run_rescan(", 1)[1].split("\n    def ", 1)[0]
+        self.assertIn("run_rescan(action_id, base)", fn)
+        self.assertIn('state_box["done"] = True', fn)
+        # And the dispatch slot only starts it, so the menu never freezes.
+        slot = text.split("def dispatch(action_id: str) -> None:", 1)[1].split(
+            "\n    web_audio_action = None", 1
+        )[0]
+        self.assertIn("start_rescan(action_id)", slot)
+        self.assertNotIn("run_rescan(action_id, base)", slot)
+
+    def test_the_archive_notice_wording_matches_the_scan(self):
+        result = {
+            "ok": True, "folders": 2, "flacs": 484, "wavs": 52,
+            "pending_wavs": 7, "missing_tracklists": 5,
+        }
+        message = tray.archive_rescan_message(result)
+        self.assertIn("2 archive folders scanned", message)
+        self.assertIn("484 FLACs", message)
+        self.assertIn("7 WAVs waiting for conversion", message)
+        self.assertIn("5 missing tracklists", message)
+
+    def test_a_failed_scan_says_why(self):
+        message = tray.archive_rescan_message({"ok": False, "detail": "Drive is offline."})
+        self.assertIn("failed", message)
+        self.assertIn("Drive is offline.", message)
+        music = tray.music_rescan_message({"ok": False, "detail": "No music folders are configured."})
+        self.assertIn("No music folders are configured.", music)
+
+    def test_the_rescan_result_parser_reads_the_reported_keys(self):
+        # The parser is what stands between the manager's output and the
+        # notice, so a renamed key must not silently show zeroes forever.
+        text = (ROOT / "scripts" / "mp_system_tray.py").read_text(encoding="utf-8")
+        fn = text.split("def rescan_archive(", 1)[1].split("\ndef ", 1)[0]
+        for key in ("status", "folders", "flacs", "wavs", "pending_wavs", "missing_tracklists"):
+            self.assertIn(f'fields.get("{key}")', fn)
+
+
+class TestTrayMute(unittest.TestCase):
+    """The mute entry states the action, not the state."""
+
+    def test_the_label_follows_the_player(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config = Path(tmp)
+            with patch.dict(os.environ, {"MP_PLAYER_CONFIG_DIR": str(config)}):
+                self.assertEqual(tray.mute_menu_label(), "Mute MP Player Audio")
+                tray.player_state_file().write_text('{"muted": true}', encoding="utf-8")
+                self.assertEqual(tray.mute_menu_label(), "Unmute MP Player Audio")
+                tray.player_state_file().write_text('{"muted": false}', encoding="utf-8")
+                self.assertEqual(tray.mute_menu_label(), "Mute MP Player Audio")
+
+    def test_a_missing_state_file_reads_as_audible(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.dict(os.environ, {"MP_PLAYER_CONFIG_DIR": tmp}):
+                self.assertFalse(tray.player_muted())
+
+    def test_the_toggle_uses_the_players_ipc_answer(self):
+        import json
+        import socket as socket_module
+        import threading
+
+        if not hasattr(socket_module, "AF_UNIX"):
+            self.skipTest("AF_UNIX IPC")
+        with tempfile.TemporaryDirectory() as tmp:
+            config = Path(tmp)
+            server = socket_module.socket(socket_module.AF_UNIX, socket_module.SOCK_STREAM)
+            server.bind(str(config / "mp_audio_player.sock"))
+            server.listen(2)
+            replies = iter([False, True])
+
+            def serve():
+                for answer in replies:
+                    conn, _ = server.accept()
+                    conn.recv(4096)
+                    conn.sendall(json.dumps({"status": "ok", "muted": answer}).encode())
+                    conn.close()
+
+            worker = threading.Thread(target=serve, daemon=True)
+            worker.start()
+            with patch.dict(os.environ, {"MP_PLAYER_CONFIG_DIR": str(config)}):
+                # The state file still says audible, so an implementation that
+                # only re-read the file would keep showing "Mute".
+                tray.player_state_file().write_text('{"muted": false}', encoding="utf-8")
+                first = tray.toggle_player_mute()
+                self.assertEqual(first["muted"], False)
+                second = tray.toggle_player_mute()
+                self.assertEqual(second["muted"], True)
+            server.close()
+
+    def test_the_label_is_re_read_when_the_menu_opens(self):
+        text = (ROOT / "scripts" / "mp_system_tray.py").read_text(encoding="utf-8")
+        self.assertIn("menu.aboutToShow.connect(refresh_menu_labels)", text)
+        self.assertIn("refresh_mute_label()", text)
+        # The menu bar asks the same module rather than keeping its own copy.
+        swift = (ROOT / "scripts" / "macos_menu_bar.swift").read_text(encoding="utf-8")
+        self.assertIn('"--action-label", "mute-audio"', swift)
+
+    def test_the_not_running_case_is_reported(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.dict(os.environ, {"MP_PLAYER_CONFIG_DIR": tmp}):
+                result = tray.toggle_player_mute()
+        self.assertFalse(result["supported"])
+        text = (ROOT / "scripts" / "mp_system_tray.py").read_text(encoding="utf-8")
+        self.assertIn("MP Audio Player is not running", text)
 
 
 if __name__ == "__main__":

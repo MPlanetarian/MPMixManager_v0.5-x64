@@ -1137,6 +1137,9 @@ else
     echo -e "${GREEN}      ✓ Installing ${_mp_apps_count} applications: ${CYAN}${_mp_apps_headline}${NC}"
 fi
 echo -e "${DIM}        Selection saved to ~/.config/mix-manager/installed_apps${NC}"
+if [ "$(uname -s 2>/dev/null)" = "Linux" ]; then
+    echo -e "${DIM}        The Linux MP Liquid Mixer shortcut is added beside the selection.${NC}"
+fi
 echo -e "${DIM}        Change it later: ./install.sh --apps all      (or --apps gui)${NC}"
 unset _mp_apps_count _mp_app _mp_apps_ans
 echo ""
@@ -1156,6 +1159,9 @@ if [ "$HOST_OS" = "windows" ] || [ "$HOST_OS" = "wsl" ]; then
 elif [ -n "$MP_PYTHON" ]; then
     if "$MP_PYTHON" "$SCRIPT_DIR/scripts/install_desktop_shortcuts.py" --root "$SCRIPT_DIR" --components "$MP_APPS_SELECTION"; then
         echo -e "${GREEN}      ✓ Desktop shortcuts: ${MP_APPS_LABELS:-MP Mix Manager}${NC}"
+        if [ "$(uname -s 2>/dev/null)" = "Linux" ]; then
+            echo -e "${GREEN}      ✓ MP Liquid Mixer shortcut installed.${NC}"
+        fi
     else
         echo -e "${YELLOW}      ⚠ Desktop shortcuts could not be created.${NC}"
     fi

@@ -135,12 +135,13 @@ class TestPlayerQueue(unittest.TestCase):
         self.assertTrue(ui.running)
 
     def test_ui_exit_keys_still_exit(self):
-        """Escape, Ctrl+C and 'x' still exit; 'b' is the Bass Boost dial now.
+        """Escape and Ctrl+C exit; `x` is the MP Liquid Mixer launcher now.
 
         `b` used to be a second Exit key. It is the Bass Boost dial since 0.5,
-        matching the Crusher ANC 2's dial, so only Escape / Ctrl+C / x leave
-        the player. Every other B entry point is asserted below so the change
-        cannot silently strand the user with no way out.
+        and `x` became the mixer launcher when MP Liquid Mixer shipped. Only
+        Escape and Ctrl+C leave the player, and `q` still queues the selected
+        row, so the two remaining exits are pinned here and in
+        tests/test_liquid_mixer_launch.py.
         """
         mock_scanner = MagicMock()
         mock_scanner.get_mixes.return_value = self.playlist
@@ -155,8 +156,10 @@ class TestPlayerQueue(unittest.TestCase):
         self.assertFalse(ui.running)
 
         ui.running = True
-        ui._process_key(b"x")     # Stop & exit
-        self.assertFalse(ui.running)
+        with patch.object(MP_Audio_Player, "launch_liquid_mixer", return_value="opened") as launch:
+            ui._process_key(b"x")  # Open MP Liquid Mixer
+        launch.assert_called_once()
+        self.assertTrue(ui.running, "'x' must never close the player")
 
     def test_ui_key_b_cycles_bass_mode_without_exiting(self):
         """Verifies 'b' / 'B' step the MP Bass Boost dial and keep the UI alive."""

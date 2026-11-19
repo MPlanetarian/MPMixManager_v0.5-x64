@@ -237,6 +237,69 @@ function Get-MpSuiteCloseFile {
     return (Join-Path $env:USERPROFILE ".config\mix-manager\instances\suite.closing")
 }
 
+function Get-MpPlayerStateFile {
+    return (Join-Path $env:USERPROFILE ".config\mix-manager\mp_player_state.json")
+}
+
+function Get-MpPlayerMuted {
+    # The player rewrites its state file continuously, and it is this file the
+    # player window, the Web Companion and the Mac menu bar all read. Reading
+    # it here keeps one notion of "muted" for every front end.
+    $path = Get-MpPlayerStateFile
+    if (-not (Test-Path -LiteralPath $path)) { return $false }
+    try {
+        $state = Get-Content -LiteralPath $path -Raw -ErrorAction Stop | ConvertFrom-Json
+        return [bool]$state.muted
+    } catch {
+        return $false
+    }
+}
+
+function Get-MpMuteLabel {
+    if (Get-MpPlayerMuted) { return "Unmute MP Player Audio" }
+    return "Mute MP Player Audio"
+}
+
+function Send-MpPlayerCommand {
+    # Talk to the player's own IPC socket. The tray must not import the player
+    # (that pulls in PortAudio and the whole engine), so it speaks the same
+    # small JSON protocol the headset buttons and Web Companion use. Windows
+    # has no AF_UNIX, so the player listens on the TCP port in the port file.
+    param([string]$Command)
+    $cfg = Join-Path $env:USERPROFILE ".config\mix-manager"
+    $portFile = Join-Path $cfg "mp_audio_player.port"
+    if (-not (Test-Path -LiteralPath $portFile)) { return $false }
+    $payload = [System.Text.Encoding]::UTF8.GetBytes((@{ cmd = $Command } | ConvertTo-Json -Compress))
+    try {
+        $port = [int]((Get-Content -LiteralPath $portFile -Raw).Trim())
+        $client = New-Object System.Net.Sockets.TcpClient
+        $client.Connect("127.0.0.1", $port)
+        $stream = $client.GetStream()
+        $stream.Write($payload, 0, $payload.Length)
+        $stream.Flush()
+        $buffer = New-Object byte[] 4096
+        $read = $stream.Read($buffer, 0, $buffer.Length)
+        $client.Close()
+        return ($read -gt 0)
+    } catch {
+        return $false
+    }
+}
+
+function Show-MpNotice {
+    # The window manager's balloon/notification is the Windows equivalent of
+    # the desktop notice the Linux and macOS trays post when a rescan ends.
+    param([string]$Title, [string]$Message)
+    try {
+        if ($notify) {
+            $notify.ShowBalloonTip(8000, $Title, $Message, [System.Windows.Forms.ToolTipIcon]::Info)
+            return
+        }
+    } catch {
+    }
+    Write-MpTrayLog "$Title`: $Message"
+}
+
 function Set-MpSuiteClosing {
     # The windows being stopped read this file and stay silent, so the movie
     # does not run twice for one close. It is the same marker the Python tray
@@ -362,15 +425,158 @@ $script:closeState = $null
 $script:closeTimer = $null
 $script:closeItem = $null
 $script:closeItemText = ""
+$script:muteItem = $null
+$script:rescanProcess = $null
+$script:rescanTimer = $null
+$script:rescanAction = ""
+$script:rescanItems = @()
+$script:rescanOutFile = ""
+$script:rescanErrFile = ""
 
 function Register-MpLaunch {
     $script:busyUntil = (Get-Date).AddSeconds(20)
     $script:absentSince = $null
 }
 
+function Set-MpRescanItemsEnabled {
+    param([bool]$Enabled)
+    foreach ($entry in @($script:rescanItems)) {
+        if (-not $entry) { continue }
+        $entry.Item.Enabled = $Enabled
+        $entry.Item.Text = $entry.Text
+    }
+}
+
+function Start-MpRescanProcess {
+    # A large archive or a slow SMB share takes minutes. Running the scan in
+    # the menu handler froze the icon the same way an inline Close All did, so
+    # it runs as a child process and a UI timer collects the result.
+    param([string]$ActionId)
+    if ($script:rescanProcess -and -not $script:rescanProcess.HasExited) { return }
+    $bash = Get-MpBash
+    if (-not $bash) {
+        Show-MpNotice -Title "MP Mix Manager" -Message "No Bash environment was found for the rescan."
+        return
+    }
+    $posixRoot = $Root -replace '\\', '/'
+    $outFile = Join-Path $env:TEMP ("mp-rescan-{0}.out" -f ([guid]::NewGuid().ToString("N")))
+    $errFile = "$outFile.err"
+    if ($ActionId -eq "rescan-archive") {
+        $argumentList = @("`"$posixRoot/Mix_Archive_Manager.sh`"", "--rescan-archive")
+    } else {
+        $argumentList = @("-c", "`"python3 '$posixRoot/scripts/music_folders_manager.py' --generate ALL`"")
+    }
+    try {
+        # Redirect to files instead of pipes: a scan that prints megabytes of
+        # progress would fill a pipe buffer and block forever if nothing read
+        # it while the icon was still being used.
+        $proc = Start-Process -FilePath $bash -ArgumentList $argumentList `
+            -WorkingDirectory $Root -WindowStyle Hidden -PassThru `
+            -RedirectStandardOutput $outFile -RedirectStandardError $errFile
+    } catch {
+        Show-MpNotice -Title "MP Mix Manager" -Message "The rescan could not start: $($_.Exception.Message)"
+        return
+    }
+    $script:rescanProcess = $proc
+    $script:rescanAction = $ActionId
+    $script:rescanOutFile = $outFile
+    $script:rescanErrFile = $errFile
+    Set-MpRescanItemsEnabled -Enabled $false
+    $timer = New-Object System.Windows.Forms.Timer
+    $timer.Interval = 500
+    $timer.Add_Tick({
+        try {
+            if (-not $script:rescanProcess -or -not $script:rescanProcess.HasExited) { return }
+            if ($script:rescanTimer) {
+                $script:rescanTimer.Stop()
+                $script:rescanTimer.Dispose()
+                $script:rescanTimer = $null
+            }
+            $stdout = ""
+            $stderr = ""
+            # The scan wrote to files (see Start-MpRescanProcess), so read
+            # them rather than a pipe nobody was draining.
+            try {
+                if (Test-Path -LiteralPath $script:rescanOutFile) {
+                    $stdout = [System.IO.File]::ReadAllText($script:rescanOutFile)
+                }
+            } catch { }
+            try {
+                if (Test-Path -LiteralPath $script:rescanErrFile) {
+                    $stderr = [System.IO.File]::ReadAllText($script:rescanErrFile)
+                }
+            } catch { }
+            if (Test-Path -LiteralPath $script:rescanOutFile) {
+                Remove-Item -LiteralPath $script:rescanOutFile -Force -ErrorAction SilentlyContinue
+            }
+            if (Test-Path -LiteralPath $script:rescanErrFile) {
+                Remove-Item -LiteralPath $script:rescanErrFile -Force -ErrorAction SilentlyContinue
+            }
+            Set-MpRescanItemsEnabled -Enabled $true
+            $action = $script:rescanAction
+            try { $script:rescanProcess.Dispose() } catch { }
+            $script:rescanProcess = $null
+            Show-MpRescanResult -ActionId $action -Stdout $stdout -Stderr $stderr
+        } catch {
+            Write-MpTrayLog "rescan result failed: $($_.Exception.Message)"
+        }
+    })
+    $script:rescanTimer = $timer
+    $timer.Start()
+}
+
+function Show-MpRescanResult {
+    param([string]$ActionId, [string]$Stdout, [string]$Stderr)
+    $strip = [regex]::new("\x1B\[[0-9;?]*[ -/]*[@-~]")
+    $text = $strip.Replace((($Stdout, $Stderr) -join "`n"), "")
+    if ($ActionId -eq "rescan-archive") {
+        $fields = @{}
+        foreach ($line in ($text -split "`n")) {
+            if ($line -match '^RESCAN_([A-Z_]+)=(.*)$') { $fields[$Matches[1]] = $Matches[2].Trim() }
+        }
+        if ($fields["STATUS"] -ne "ok") {
+            $detail = $fields["DETAIL"]
+            if (-not $detail) { $detail = "The archive rescan did not finish." }
+            Show-MpNotice -Title "Rescan Mix Archive Folders" -Message "Archive rescan failed. $detail"
+            return
+        }
+        $parts = @(
+            "$($fields["FOLDERS"]) archive folder(s) scanned",
+            "$($fields["FLACS"]) FLACs",
+            "$($fields["WAVS"]) converted WAVs"
+        )
+        if ([int]$fields["PENDING_WAVS"] -gt 0) { $parts += "$($fields["PENDING_WAVS"]) WAVs waiting for conversion" }
+        if ([int]$fields["MISSING_TRACKLISTS"] -gt 0) { $parts += "$($fields["MISSING_TRACKLISTS"]) missing tracklists" }
+        Show-MpNotice -Title "Rescan Mix Archive Folders" -Message ($parts -join " | ")
+        return
+    }
+    $complete = @($text -split "`n" | Where-Object { $_ -match 'Playlist Generation Complete \(([0-9,]+) total tracks' })
+    if ($complete.Count -eq 0) {
+        $detail = @($text -split "`n" | Where-Object { $_.Trim() } | Select-Object -Last 1)
+        if (-not $detail) { $detail = "The music folder rescan did not finish." }
+        Show-MpNotice -Title "Rescan Music Folders" -Message "Music folder rescan failed. $detail"
+        return
+    }
+    $null = $complete[-1] -match '\(([0-9,]+) total tracks'
+    $tracks = $Matches[1]
+    $saved = @($text -split "`n" | Where-Object { $_ -match 'Saved .* Playlist:' }).Count
+    Show-MpNotice -Title "Rescan Music Folders" -Message "$saved music folder(s) refreshed | $tracks tracks in ALL"
+}
+
 function Invoke-MpTrayAction {
     param([string]$ActionId)
     if ($script:closing) { return }
+    if ($ActionId -eq "rescan-archive" -or $ActionId -eq "rescan-music") {
+        Start-MpRescanProcess -ActionId $ActionId
+        return
+    }
+    if ($ActionId -eq "mute-audio") {
+        if (-not (Send-MpPlayerCommand -Command "mute")) {
+            Show-MpNotice -Title "Mute MP Player Audio" -Message "MP Audio Player is not running, so there is no audio to mute."
+        }
+        if ($script:muteItem) { $script:muteItem.Text = Get-MpMuteLabel }
+        return
+    }
     if ($ActionId -eq "close") {
         $script:closing = $true
         # The movie runs for about 40 seconds, then the suite is stopped. Doing
@@ -746,6 +952,9 @@ try {
         @{ Id = "gui"; Label = "Launch MP Gui"; Component = "gui" },
         @{ Id = "liquid"; Label = "Launch MP Liquid Player"; Component = "liquid" },
         @{ Id = "manager"; Label = "Launch MP Mix Manager"; Component = "manager" },
+        @{ Id = "rescan-archive"; Label = "Rescan Mix Archive Folders"; Component = "" },
+        @{ Id = "rescan-music"; Label = "Rescan Music Folders"; Component = "" },
+        @{ Id = "mute-audio"; Label = "Mute MP Player Audio"; Component = "" },
         @{ Id = "close"; Label = "Close MP Mix Manager (Closes everything)"; Component = "" }
     )
     $installed = Get-MpInstalledComponents -InstallRoot $Root
@@ -763,8 +972,20 @@ try {
             # Keep a handle so the label can say "Closing..." and a second
             # click cannot start a second movie.
             $script:closeItem = $item
+        } elseif ($entry.Id -eq "mute-audio") {
+            # Keep a handle so the title can say Unmute while the player is
+            # muted. Unlike the Linux tray this item is refreshed as the menu
+            # opens, because WinForms has no per-open callback.
+            $script:muteItem = $item
+        } elseif ($entry.Id -like "rescan-*") {
+            # Both scan items are disabled while one runs, so a second click
+            # cannot start a second scan over the same folders.
+            $script:rescanItems += ,@{ Item = $item; Text = [string]$entry.Label }
         }
     }
+    $menu.Add_Opening({
+        if ($script:muteItem) { $script:muteItem.Text = Get-MpMuteLabel }
+    })
     $notify.ContextMenuStrip = $menu
     $notify.Add_MouseUp({
         param($sender, $eventArgs)

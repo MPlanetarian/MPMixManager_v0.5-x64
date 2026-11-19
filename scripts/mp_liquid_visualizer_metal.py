@@ -968,8 +968,22 @@ class LiquidVisualizerMetalRenderer(MonitorSpanMixin, RandomPresetMixin, PlayerB
         if cached is not None and cached[0] == steps:
             self._library, self._pipeline = cached[1], cached[2]
             return
-        source = translate_cached(SHADER_DIR / "mp_liquid_visualizer.frag",
-                                  fold_preset=preset_id, march_steps=steps)
+        custom_source = None
+        try:
+            try:
+                from mp_visualizer_user_presets import metal_source_for
+            except ImportError:
+                from scripts.mp_visualizer_user_presets import metal_source_for  # type: ignore
+            custom_source = metal_source_for(preset)
+        except Exception:
+            custom_source = None
+        if custom_source:
+            # The generator already translated this preset's GLSL with the
+            # same mp_metal_shader translator, so compile the packaged MSL.
+            source = custom_source
+        else:
+            source = translate_cached(SHADER_DIR / "mp_liquid_visualizer.frag",
+                                      fold_preset=preset_id, march_steps=steps)
         digest = source_digest(source)
         # A binary archive turns the ~2.5 s shader compile into a disk load on
         # every launch after the first, which is what makes the window appear

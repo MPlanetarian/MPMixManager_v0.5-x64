@@ -24,7 +24,7 @@ SCRIPTS_DIR = PROJECT_ROOT / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
-CONFIG_DIR = Path.home() / ".config" / "mix-manager"
+CONFIG_DIR = Path(os.environ.get("MP_LIQUID_MIXER_CONFIG_DIR", "") or (Path.home() / ".config" / "mix-manager"))
 CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 
 STATE_PATH = CONFIG_DIR / "liquid_mixer.json"
@@ -570,6 +570,11 @@ def layout(width: int = DESIGN_W, height: int = DESIGN_H) -> Dict[str, Tuple[flo
         "browse_button": rect(852, 686, 216, 28),
         "mode_button": rect(852, 726, 216, 40),
         "record_button": rect(852, 800, 216, 40),
+        "format_button": rect(852, 770, 104, 26),
+        "bitdepth_button": rect(964, 770, 104, 26),
+        "credit_button": rect(852, 862, 216, 34),
+        "clock_button": rect(852, 904, 216, 46),
+        "export_button": rect(852, 954, 216, 30),
         "xfader": rect(852, 620, 216, 52),
         "pitch_a": rect(810, 150, 26, 420),
         "pitch_b": rect(1084, 150, 26, 420),
@@ -577,6 +582,7 @@ def layout(width: int = DESIGN_W, height: int = DESIGN_H) -> Dict[str, Tuple[flo
         "sync_b": rect(1706, 94, 70, 28),
         "opacity": rect(192, 1040, 1536, 24),
         "visualizer_button": rect(1600, 14, 196, 36),
+        "trance_button": rect(540, 14, 300, 36),
         "close_button": rect(1836, 14, 48, 36),
     }
     # Channel strips: the volume faders are a quarter of their old height.

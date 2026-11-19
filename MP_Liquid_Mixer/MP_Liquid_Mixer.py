@@ -15,8 +15,10 @@ own - not a reimplementation.
 from __future__ import annotations
 
 import argparse
+import datetime
 import json
 import os
+import shutil
 import signal
 import subprocess
 import threading
@@ -34,6 +36,7 @@ for path in (str(MIXER_DIR), str(PROJECT_ROOT), str(SCRIPTS_DIR)):
 
 import mixer_core as core  # noqa: E402
 import mixer_evdev as mixer_evdev  # noqa: E402
+import mixer_export as mixer_export  # noqa: E402
 import mixer_recording as mixer_recording  # noqa: E402
 
 # The host forces GDK_BACKEND=x11 and requires GdkX11 - the window needs an X11
@@ -48,6 +51,8 @@ from MP_Audio_Player_Liquid_Glass_OpenGL import (  # noqa: E402
 )
 
 CONFIG_DIR = core.CONFIG_DIR
+# "Into Darkness (Void Out)" is the opaque black-glass pane in this suite.
+BLACK_GLASS_THEME = "into_darkness_void_out"
 
 
 def _rgba(color: Tuple[int, int, int], alpha: float = 1.0) -> Tuple[float, float, float, float]:
@@ -222,11 +227,90 @@ class LiquidMixer(GlassHost):
         self._rec_second = -1
         self._s4_last_seen = 0.0
         self._s4_status_text = "S4: starting"
+        # The wall clock is read from the system when the window is constructed
+        # and then once a second in _tick, so it ticks even when nothing else
+        # in the mixer changes.
+        _now = datetime.datetime.now()
+        self._clock_text = _now.strftime("%H:%M:%S")
+        self._clock_date = _now.strftime("%a %d %b %Y")
+        self._clock_second = _now.second
+        self.trance_connection_enabled = True
 
     # ------------------------------------------------------------------
     # window / lifecycle
     # ------------------------------------------------------------------
+    def _play_loader_video(self, flag: str) -> None:
+        """Play Exit_MP_Video.mp4 through the shared loader script.
+
+        ``--intro-force`` runs before the mixer window exists and
+        ``--exit-force`` runs after it has been destroyed, so the movie is the
+        only thing on screen in both cases. The script resolves the movie,
+        picks the player and bounds the wait itself; a missing movie or player
+        must never stop the mixer from opening or closing.
+        """
+        script = SCRIPTS_DIR / "display_loader_video.sh"
+        if not script.is_file():
+            _log(f"loader video skipped: {script} is missing")
+            return
+        env = dict(os.environ)
+        # A desktop launch has no terminal for the skip key. Without this the
+        # exit movie would try to read stdin and can wait for a keypress.
+        env["MP_EXIT_VIDEO_NO_TTY"] = "1"
+        # A parent MP window may have set the one-shot player-intro handshake;
+        # the mixer plays its own movie regardless.
+        env.pop("MP_PLAYER_INTRO_DONE", None)
+        _log(f"playing loader video {flag}")
+        try:
+            subprocess.run(
+                ["bash", str(script), flag],
+                cwd=str(PROJECT_ROOT),
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                env=env,
+            )
+        except Exception as exc:  # never block the window on the movie
+            _log(f"loader video {flag} failed: {exc}")
+
+    def _release_launch_claim(self) -> None:
+        """Retire this launch's "starting" claim now that the window is up.
+
+        ``scripts/liquid_mixer_launch.py`` writes the claim between Popen and
+        this moment so two X presses cannot both spawn. Only the pid that
+        wrote it may clear it, and a claim whose process died is ignored, so a
+        failed launch never blocks the next press.
+        """
+        try:
+            import liquid_mixer_launch
+            liquid_mixer_launch.release_launch_claim(os.getpid())
+        except Exception:
+            pass
+
+    def _destroy_window(self) -> None:
+        """Close the window before the exit movie starts.
+
+        Gtk.main() only stops the main loop; the toplevel is still mapped until
+        the process exits. Destroying it here and draining pending events makes
+        the exit movie appear over an empty desktop, as the requirement says.
+        """
+        window = self.window
+        self.window = None
+        if window is not None:
+            try:
+                window.destroy()
+            except Exception:
+                pass
+        try:
+            from gi.repository import Gtk as _Gtk
+            while _Gtk.events_pending():
+                _Gtk.main_iteration_do(False)
+        except Exception:
+            pass
+
     def run(self) -> int:
+        # Before the window is built: the loader movie is the only thing the
+        # user sees while the decks start.
+        self._play_loader_video("--intro-force")
         GLib, Gtk, Vte = _import_gtk()
         import gi
         gi.require_version("Pango", "1.0")
@@ -317,10 +401,17 @@ class LiquidMixer(GlassHost):
         signal.signal(signal.SIGINT, lambda *_: self._quit_from_signal())
         signal.signal(signal.SIGTERM, lambda *_: self._quit_from_signal())
 
+        # The window is mapped and the decks are starting, so the X key can
+        # stop saying "starting" and focus this window instead.
+        self._release_launch_claim()
+
         try:
             Gtk.main()
         finally:
             self._shutdown()
+            self._destroy_window()
+            # Only after the mixer window is gone.
+            self._play_loader_video("--exit-force")
         return 0
 
     def _quit_from_signal(self) -> None:
@@ -956,6 +1047,75 @@ class LiquidMixer(GlassHost):
     def _event_from_deck(self, widget) -> bool:
         return any(deck.get("vte") is widget for deck in self.decks.values())
 
+    # ------------------------------------------------------------------
+    # launch the other MP windows
+    # ------------------------------------------------------------------
+    def _launch_detached(self, argv, label: str) -> bool:
+        """Start another MP window without taking the mixer down with it."""
+        env = dict(os.environ)
+        # The new window is its own host, not a deck owned by this mixer.
+        for key in ("GDK_BACKEND", "MP_LIQUID_GLASS_MIXER", "MP_PLAYER_NAMESPACE",
+                    "MP_PLAYER_INTRO_DONE"):
+            env.pop(key, None)
+        try:
+            subprocess.Popen(
+                [str(part) for part in argv],
+                cwd=str(PROJECT_ROOT),
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+                env=env,
+            )
+            _log(f"launched {label}")
+            return True
+        except Exception as exc:
+            _log(f"could not launch {label}: {exc!r}")
+            return False
+
+    def _open_manager(self) -> bool:
+        """MP Mix Manager in a new Konsole window."""
+        launcher = PROJECT_ROOT / "bin" / "launch-manager"
+        if launcher.is_file():
+            return self._launch_detached([launcher], "MP Mix Manager")
+        konsole = shutil.which("konsole") or "/usr/bin/konsole"
+        return self._launch_detached(
+            [konsole, "--separate", "--workdir", str(PROJECT_ROOT),
+             "-p", "tabtitle=MP Mix Archive Manager",
+             "-e", str(PROJECT_ROOT / "Mix_Archive_Manager.sh")],
+            "MP Mix Manager",
+        )
+
+    def _open_visualizer(self) -> bool:
+        launcher = SCRIPTS_DIR / "launch_liquid_visualizer.sh"
+        if launcher.is_file():
+            return self._launch_detached(["bash", launcher], "MP Liquid Visualizer")
+        return self._launch_detached(
+            [sys.executable, PROJECT_ROOT / "MP_Liquid_Visualizer.py"],
+            "MP Liquid Visualizer",
+        )
+
+    def _open_liquid_player(self, theme: Optional[str] = None) -> bool:
+        launcher = SCRIPTS_DIR / "launch_liquid_glass.sh"
+        argv = ["bash", launcher]
+        if theme:
+            argv.extend(["--theme", theme])
+        if not launcher.is_file():
+            argv = [sys.executable, PROJECT_ROOT / "MP_Audio_Player_Liquid_Glass_OpenGL.py"]
+            if theme:
+                argv.extend(["--theme", theme])
+        return self._launch_detached(argv, "MP Liquid Player")
+
+    def _open_mp_gui(self) -> bool:
+        # --keep-theme leaves the mixer's current theme file alone.
+        return self._launch_detached(
+            ["bash", PROJECT_ROOT / "MP_Gui.sh", "--keep-theme"], "MP Gui"
+        )
+
+    def _open_black_glass(self) -> bool:
+        """The Liquid Glass host on its opaque black Into Darkness theme."""
+        return self._open_liquid_player(BLACK_GLASS_THEME)
+
     def _on_key(self, widget, event) -> bool:
         Gdk = self.Gdk
         key = event.keyval
@@ -979,6 +1139,24 @@ class LiquidMixer(GlassHost):
             self.model.save()
             self.area.queue_draw()
             return True
+        if not from_deck:
+            # Quick launch of the other MP windows. The deck terminals keep
+            # these keys for their own search/mode handling.
+            if key == Gdk.KEY_m:
+                self._open_manager()
+                return True
+            if key == Gdk.KEY_z:
+                self._open_visualizer()
+                return True
+            if key == Gdk.KEY_w:
+                self._open_black_glass()
+                return True
+            if key == Gdk.KEY_l:
+                self._open_liquid_player()
+                return True
+            if key == Gdk.KEY_g:
+                self._open_mp_gui()
+                return True
         if key == Gdk.KEY_F11:
             self._toggle_fullscreen()
             return True
@@ -1122,6 +1300,9 @@ class LiquidMixer(GlassHost):
             self._window_resize = (window_w, window_h, event.x_root, event.y_root)
             return True
         if y < self.boxes["top_bar"][3]:
+            if core.inside(x, y, self.boxes["trance_button"]):
+                # Status lamp: it deliberately does not change the audio.
+                return True
             if core.inside(x, y, self.boxes["visualizer_button"]):
                 self._toggle_visualizer()
                 self.area.queue_draw()
@@ -1191,6 +1372,17 @@ class LiquidMixer(GlassHost):
             return True
         if core.inside(x, y, self.boxes["record_button"]):
             self._toggle_recording()
+            return True
+        if core.inside(x, y, self.boxes["format_button"]):
+            self._toggle_recording_format()
+            return True
+        if core.inside(x, y, self.boxes["bitdepth_button"]) or \
+                core.inside(x, y, self.boxes["credit_button"]) or \
+                core.inside(x, y, self.boxes["clock_button"]):
+            # The badge, the credit and the clock are labels, not controls.
+            return True
+        if core.inside(x, y, self.boxes["export_button"]):
+            self._export_mixes()
             return True
         if core.inside(x, y, self.boxes["visualizer_button"]):
             self._toggle_visualizer()
@@ -1288,6 +1480,36 @@ class LiquidMixer(GlassHost):
         self._rec_second = -1
         self.area.queue_draw()
 
+    def _toggle_recording_format(self) -> None:
+        """WAV <-> FLAC. A live recording restarts in the chosen container."""
+        self.recorder.set_format("FLAC" if self.recorder.format == "WAV" else "WAV")
+        self._rec_second = -1
+        self.area.queue_draw()
+
+    def _export_mixes(self) -> None:
+        """Move finished recordings into the primary MIX_ARCHIVE.
+
+        The live part is still open, so exporting while recording is refused
+        rather than moving a file the capture thread is writing. With no
+        archive configured nothing is scanned or moved.
+        """
+        if self.recorder.is_recording:
+            mixer_export.notify(
+                "MP Liquid Mixer",
+                "Stop the current recording before exporting mixes.",
+                "dialog-warning",
+            )
+            _log("export mixes refused: a recording is in progress")
+            return
+        result = mixer_export.export_recordings(self.recorder.base)
+        _log(
+            "export mixes: action=%s archive=%s wav=%s flac=%s failed=%s"
+            % (result.get("action"), result.get("archive"), result.get("wav"),
+               result.get("flac"), len(result.get("failed") or []))
+        )
+        mixer_export.notify_export(result)
+        self.area.queue_draw()
+
     def _drag_channel(self, channel: str, y: float) -> None:
         box = self.boxes[f"strip_{channel}"]
         value = core.fader_value_from_y(y, box)
@@ -1347,6 +1569,12 @@ class LiquidMixer(GlassHost):
     def _tick(self) -> bool:
         if self._closing:
             return False
+        current = datetime.datetime.now()
+        if current.second != self._clock_second:
+            self._clock_second = current.second
+            self._clock_text = current.strftime("%H:%M:%S")
+            self._clock_date = current.strftime("%a %d %b %Y")
+            self.area.queue_draw()
         was_recording = self.recorder.is_recording
         self.recorder.tick()
         if self.recorder.is_recording:
@@ -1561,6 +1789,20 @@ class LiquidMixer(GlassHost):
         self._text(cr, box[0] + 320 * s, box[1] + 25 * s, f"v{core.VERSION}", 12 * s, glass_ink, 0.55)
         self._text(cr, box[0] + 960 * s, box[1] + 22 * s, core.theme_label(self.theme), 14 * s, accent, 0.95, bold=True, anchor="middle")
 
+        # Trance Connection status. It is a button in the suite's style; it is
+        # a status lamp, so pressing it does not change the audio path.
+        tb = self.boxes["trance_button"]
+        cr.set_source_rgba(*_rgba(accent, 0.16))
+        self._rounded(cr, tb[0], tb[1], tb[2], tb[3], 9 * s)
+        cr.fill()
+        cr.set_source_rgba(*_rgba(accent, 0.78))
+        cr.set_line_width(max(1.0, 1.2 * s))
+        self._rounded(cr, tb[0], tb[1], tb[2], tb[3], 9 * s)
+        cr.stroke()
+        self._text(cr, tb[0] + tb[2] / 2, tb[1] + 10 * s,
+                   "Trance Connection Enabled", 11 * s, glass_ink, 0.95,
+                   bold=True, anchor="middle", max_width=tb[2] - 16 * s)
+
         # S4 fader status sits just left of the visualizer button.
         s4_text, s4_color = self._s4_status()
         vx = self.boxes["visualizer_button"]
@@ -1663,7 +1905,11 @@ class LiquidMixer(GlassHost):
         self._paint_xfader(cr, s, accent, secondary, glass_ink)
         self._paint_browse_button(cr, s, accent, secondary, glass_ink)
         self._paint_mode_button(cr, s, accent, glass_ink)
+        self._paint_format_buttons(cr, s, accent, secondary, glass_ink)
         self._paint_record_button(cr, s, accent, secondary, glass_ink)
+        self._paint_credit_button(cr, s, accent, secondary, glass_ink)
+        self._paint_clock_button(cr, s, accent, secondary, glass_ink)
+        self._paint_export_button(cr, s, accent, secondary, glass_ink)
 
     KNOB_ROWS = (
         ("gain", "GAIN", 0.0, core.TRIM_MAX, core.DEFAULT_TRIM),
@@ -1771,6 +2017,81 @@ class LiquidMixer(GlassHost):
                 self._text(cr, value_box[0] + value_box[2] / 2, value_box[1], text,
                            8.8 * s, glass_ink, 0.85 if active else 0.45, anchor="middle")
 
+    def _paint_format_buttons(self, cr, s, accent, secondary, glass_ink) -> None:
+        """WAV/FLAC toggle and the fixed 24-Bit badge.
+
+        The format button follows the same theme hues as the rest of the panel,
+        so a theme change repaints it immediately.
+        """
+        fb = self.boxes["format_button"]
+        fmt = self.recorder.format
+        color = (250, 205, 90) if fmt == "FLAC" else accent
+        cr.set_source_rgba(*_rgba(color, 0.20))
+        self._rounded(cr, fb[0], fb[1], fb[2], fb[3], 7 * s)
+        cr.fill()
+        cr.set_source_rgba(*_rgba(color, 0.84))
+        cr.set_line_width(max(1.0, 1.1 * s))
+        self._rounded(cr, fb[0], fb[1], fb[2], fb[3], 7 * s)
+        cr.stroke()
+        self._text(cr, fb[0] + fb[2] / 2, fb[1] + 6 * s, fmt, 10.5 * s,
+                   glass_ink, 0.96, bold=True, anchor="middle")
+
+        bb = self.boxes["bitdepth_button"]
+        cr.set_source_rgba(*_rgba(secondary, 0.14))
+        self._rounded(cr, bb[0], bb[1], bb[2], bb[3], 7 * s)
+        cr.fill()
+        cr.set_source_rgba(*_rgba(secondary, 0.72))
+        cr.set_line_width(max(1.0, 1.1 * s))
+        self._rounded(cr, bb[0], bb[1], bb[2], bb[3], 7 * s)
+        cr.stroke()
+        self._text(cr, bb[0] + bb[2] / 2, bb[1] + 6 * s, "24-Bit", 10.5 * s,
+                   glass_ink, 0.92, bold=True, anchor="middle")
+
+    def _paint_credit_button(self, cr, s, accent, secondary, glass_ink) -> None:
+        box = self.boxes["credit_button"]
+        cr.set_source_rgba(*_rgba(secondary, 0.14))
+        self._rounded(cr, box[0], box[1], box[2], box[3], 8 * s)
+        cr.fill()
+        cr.set_source_rgba(*_rgba(accent, 0.58))
+        cr.set_line_width(max(1.0, 1.1 * s))
+        self._rounded(cr, box[0], box[1], box[2], box[3], 8 * s)
+        cr.stroke()
+        self._text(cr, box[0] + box[2] / 2, box[1] + 4 * s,
+                   "DREAMWORLDS PRODUCTIONS", 8.2 * s,
+                   glass_ink, 0.90, bold=True, anchor="middle",
+                   max_width=box[2] - 12 * s)
+        self._text(cr, box[0] + box[2] / 2, box[1] + 18 * s,
+                   "/ MPLANETARIAN", 8.2 * s,
+                   glass_ink, 0.78, bold=True, anchor="middle",
+                   max_width=box[2] - 12 * s)
+
+    def _paint_clock_button(self, cr, s, accent, secondary, glass_ink) -> None:
+        box = self.boxes["clock_button"]
+        cr.set_source_rgba(*_rgba(accent, 0.13))
+        self._rounded(cr, box[0], box[1], box[2], box[3], 8 * s)
+        cr.fill()
+        cr.set_source_rgba(*_rgba(accent, 0.62))
+        cr.set_line_width(max(1.0, 1.1 * s))
+        self._rounded(cr, box[0], box[1], box[2], box[3], 8 * s)
+        cr.stroke()
+        self._text(cr, box[0] + box[2] / 2, box[1] + 5 * s,
+                   self._clock_date, 8 * s, glass_ink, 0.60, anchor="middle")
+        self._text(cr, box[0] + box[2] / 2, box[1] + 17 * s,
+                   self._clock_text, 17 * s, glass_ink, 0.97, bold=True, anchor="middle")
+
+    def _paint_export_button(self, cr, s, accent, secondary, glass_ink) -> None:
+        box = self.boxes["export_button"]
+        color = _mix(accent, secondary, 0.5)
+        cr.set_source_rgba(*_rgba(color, 0.18))
+        self._rounded(cr, box[0], box[1], box[2], box[3], 8 * s)
+        cr.fill()
+        cr.set_source_rgba(*_rgba(color, 0.84))
+        cr.set_line_width(max(1.0, 1.2 * s))
+        self._rounded(cr, box[0], box[1], box[2], box[3], 8 * s)
+        cr.stroke()
+        self._text(cr, box[0] + box[2] / 2, box[1] + 8 * s,
+                   "EXPORT MIXES", 10 * s, glass_ink, 0.96, bold=True, anchor="middle")
+
     def _paint_record_button(self, cr, s, accent, secondary, glass_ink) -> None:
         box = self.boxes["record_button"]
         recording = self.recorder.is_recording
@@ -1796,7 +2117,7 @@ class LiquidMixer(GlassHost):
         cr.arc(box[0] + box[2] / 2 - label_width / 2 - 10 * s, box[1] + 21 * s, 4 * s, 0, 6.2832)
         cr.fill()
         self._text(cr, box[0] + box[2] / 2, box[1] + box[3] + 6 * s,
-                   "master output -> WAV" if not recording else self._short_recording_name(),
+                   f"master output -> {self.recorder.format}" if not recording else self._short_recording_name(),
                    7.6 * s, glass_ink, 0.50, anchor="middle")
 
     def _short_recording_name(self) -> str:
@@ -1966,6 +2287,8 @@ class LiquidMixer(GlassHost):
 
         hints = "C  THEME    V  VISUALIZER    X  MIX MODE    DBL-CLICK TOP / F11  ESC  QUIT"
         self._text(cr, box[0] + box[2] - 28 * s, box[1] + 5 * s, hints, 8.5 * s, glass_ink, 0.55, anchor="end")
+        launches = "M  MANAGER    Z  VISUALIZER    W  BLACK GLASS    L  LIQUID PLAYER    G  MP GUI"
+        self._text(cr, box[0] + box[2] - 28 * s, box[1] + 21 * s, launches, 7.6 * s, glass_ink, 0.44, anchor="end")
 
 
 def main(argv: Optional[list] = None) -> int:
@@ -1982,8 +2305,20 @@ def main(argv: Optional[list] = None) -> int:
         return 2
     lock = core.acquire_mixer_lock()
     if lock is None:
-        print("MP Liquid Mixer is already open. One mixer owns the deck engines.", file=sys.stderr)
-        return 1
+        # A shortcut pressed while the mixer is open should raise that window,
+        # not fail silently. The launch helper already knows how on each
+        # platform, and this path is reached from the shortcut as well.
+        try:
+            import liquid_mixer_launch
+            liquid_mixer_launch.focus_mixer()
+        except Exception:
+            pass
+        print("MP Liquid Mixer is already open. Raising its window.", file=sys.stderr)
+        return 0
+    # The lock is ours, so the deck engines are safe from a second window.
+    # The launch claim is dropped once the window is actually on screen (see
+    # LiquidMixer.run), so a press during the intro movie still reads
+    # "starting" instead of pointing at a window that is not up yet.
     mixer = LiquidMixer(
         theme=args.theme,
         fullscreen=not args.windowed,

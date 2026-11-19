@@ -16,7 +16,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 MIXER_DIR = PROJECT_ROOT / "MP_Liquid_Mixer"
@@ -923,6 +923,271 @@ class TestMixerModule(unittest.TestCase):
     def test_mixer_layout_uses_the_shared_theme_file(self):
         # The mixer and both decks must read the same source of truth.
         self.assertEqual(Path(mixer_core.THEME_PATH).name, "theme")
+
+
+class TestLoaderVideo(unittest.TestCase):
+    """Exit_MP_Video.mp4 brackets the mixer window: before it exists, and after."""
+
+    def setUp(self):
+        import MP_Liquid_Mixer as app
+        self.app = app
+        # These tests exercise the movie calls without writing the real
+        # ~/.config/mix-manager/liquid_mixer.log.
+        log_patcher = patch.object(app, "_log")
+        log_patcher.start()
+        self.addCleanup(log_patcher.stop)
+
+    def test_the_shared_loader_script_is_used_for_both_playbacks(self):
+        mixer = self.app.LiquidMixer()
+        with patch.object(self.app.subprocess, "run") as run:
+            mixer._play_loader_video("--intro-force")
+            mixer._play_loader_video("--exit-force")
+        self.assertEqual(run.call_count, 2)
+        calls = run.call_args_list
+        self.assertEqual(calls[0].args[0][:2], ["bash", str(self.app.SCRIPTS_DIR / "display_loader_video.sh")])
+        self.assertEqual(calls[0].args[0][2], "--intro-force")
+        self.assertEqual(calls[1].args[0][2], "--exit-force")
+        for call in calls:
+            self.assertEqual(call.kwargs["env"]["MP_EXIT_VIDEO_NO_TTY"], "1")
+            self.assertEqual(call.kwargs["stdin"], subprocess.DEVNULL)
+
+    def test_a_missing_movie_script_never_blocks_the_window(self):
+        mixer = self.app.LiquidMixer()
+        with patch.object(self.app, "SCRIPTS_DIR", Path("/nonexistent/mp-scripts")), \
+             patch.object(self.app.subprocess, "run") as run:
+            mixer._play_loader_video("--intro-force")
+        run.assert_not_called()
+
+    def test_run_plays_the_intro_before_the_window_and_the_exit_after(self):
+        class _Fake:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def __getattr__(self, name):
+                return _Fake()
+
+            def __call__(self, *args, **kwargs):
+                return _Fake()
+
+        class _FakeGtk(_Fake):
+            def main(self):
+                raise RuntimeError("the test stops the main loop")
+
+        mixer = self.app.LiquidMixer()
+        events = []
+        # run() imports Gdk itself after _import_gtk() has pinned the versions.
+        import gi
+        gi.require_version("Gdk", "3.0")
+        gi.require_version("Gtk", "3.0")
+
+        def record(flag):
+            events.append(flag)
+
+        with patch.object(mixer, "_play_loader_video", side_effect=record), \
+             patch.object(mixer, "_shutdown"), \
+             patch.object(mixer, "_destroy_window", side_effect=lambda: events.append("destroy")), \
+             patch.object(mixer, "_spawn_decks"), \
+             patch.object(mixer, "_start_s4"), \
+             patch.object(self.app, "_import_gtk", return_value=(_Fake(), _FakeGtk(), _Fake())):
+            with self.assertRaises(RuntimeError):
+                mixer.run()
+        # The intro ran before the window was built; the exit ran in finally,
+        # after the window was destroyed.
+        self.assertEqual(events, ["--intro-force", "destroy", "--exit-force"])
+
+    def test_a_second_launch_raises_the_open_mixer(self):
+        import liquid_mixer_launch
+        with patch.dict(os.environ, {"DISPLAY": ":0"}, clear=False), \
+             patch.object(mixer_core, "acquire_mixer_lock", return_value=None), \
+             patch.object(liquid_mixer_launch, "focus_mixer", return_value=True) as focus:
+            self.assertEqual(self.app.main([]), 0)
+        focus.assert_called_once()
+
+
+class TestMixerShortcut(unittest.TestCase):
+    def test_the_linux_shortcut_points_at_the_launcher(self):
+        from install_desktop_shortcuts import shortcut_targets
+        target = shortcut_targets(PROJECT_ROOT)["MP Liquid Mixer"]
+        launcher = PROJECT_ROOT / "scripts" / "launch_liquid_mixer.sh"
+        self.assertEqual(Path(target["script"]), launcher)
+        self.assertTrue(launcher.is_file())
+        self.assertTrue(os.access(launcher, os.X_OK))
+        self.assertFalse(target["terminal"])
+
+    def test_the_launcher_runs_the_mixer(self):
+        text = (PROJECT_ROOT / "scripts" / "launch_liquid_mixer.sh").read_text(encoding="utf-8")
+        self.assertIn('MP_Liquid_Mixer/run.sh', text)
+        self.assertIn("MP_PYTHON", text)
+        self.assertNotIn("--intro-force", text)
+
+
+class TestMixerChrome(unittest.TestCase):
+    def test_new_buttons_have_their_own_boxes(self):
+        boxes = mixer_core.layout()
+        for key in ("trance_button", "format_button", "bitdepth_button",
+                    "credit_button", "clock_button", "export_button"):
+            self.assertIn(key, boxes)
+        fmt, bits = boxes["format_button"], boxes["bitdepth_button"]
+        self.assertLessEqual(fmt[0] + fmt[2], bits[0])
+        self.assertGreaterEqual(boxes["clock_button"][1], boxes["credit_button"][1] + boxes["credit_button"][3])
+        self.assertLessEqual(boxes["clock_button"][1] + boxes["clock_button"][3],
+                             boxes["mixer"][1] + boxes["mixer"][3])
+        self.assertGreaterEqual(boxes["export_button"][1],
+                                boxes["clock_button"][1] + boxes["clock_button"][3])
+        self.assertLessEqual(boxes["export_button"][1] + boxes["export_button"][3],
+                             boxes["mixer"][1] + boxes["mixer"][3])
+
+    def test_the_format_button_toggles_wav_and_flac(self):
+        import MP_Liquid_Mixer as app
+        mixer = app.LiquidMixer()
+        mixer.area = MagicMock()
+        self.assertEqual(mixer.recorder.format, "WAV")
+        mixer._toggle_recording_format()
+        self.assertEqual(mixer.recorder.format, "FLAC")
+        mixer._toggle_recording_format()
+        self.assertEqual(mixer.recorder.format, "WAV")
+
+    def test_clicking_the_format_button_toggles_the_container(self):
+        from types import SimpleNamespace
+        import MP_Liquid_Mixer as app
+        mixer = app.LiquidMixer()
+        mixer.area = MagicMock()
+        mixer.window = MagicMock()
+        mixer.window.get_allocated_width.return_value = 1920
+        mixer.window.get_allocated_height.return_value = 1080
+        box = mixer.boxes["format_button"]
+        event = SimpleNamespace(x=box[0] + box[2] / 2, y=box[1] + box[3] / 2,
+                                x_root=0, state=0, type=0)
+        self.assertTrue(mixer._on_press(None, event))
+        self.assertEqual(mixer.recorder.format, "FLAC")
+        # The 24-Bit badge next to it is inert.
+        bits = mixer.boxes["bitdepth_button"]
+        event = SimpleNamespace(x=bits[0] + bits[2] / 2, y=bits[1] + bits[3] / 2,
+                                x_root=0, state=0, type=0)
+        self.assertTrue(mixer._on_press(None, event))
+        self.assertEqual(mixer.recorder.format, "FLAC")
+
+    def test_clicking_export_mixes_calls_the_export(self):
+        from types import SimpleNamespace
+        import MP_Liquid_Mixer as app
+        mixer = app.LiquidMixer()
+        mixer.area = MagicMock()
+        mixer.window = MagicMock()
+        mixer.window.get_allocated_width.return_value = 1920
+        mixer.window.get_allocated_height.return_value = 1080
+        box = mixer.boxes["export_button"]
+        event = SimpleNamespace(x=box[0] + box[2] / 2, y=box[1] + box[3] / 2,
+                                x_root=0, state=0, type=0)
+        with patch.object(mixer, "_export_mixes") as export:
+            self.assertTrue(mixer._on_press(None, event))
+        export.assert_called_once()
+
+    def test_export_is_refused_while_recording(self):
+        from unittest.mock import PropertyMock
+        import MP_Liquid_Mixer as app
+        mixer = app.LiquidMixer()
+        mixer.area = MagicMock()
+        with patch.object(type(mixer.recorder), "is_recording",
+                          new_callable=PropertyMock, return_value=True), \
+             patch.object(app.mixer_export, "notify", return_value=True) as notify, \
+             patch.object(app.mixer_export, "export_recordings") as export:
+            mixer._export_mixes()
+        export.assert_not_called()
+        self.assertIn("Stop the current recording", notify.call_args.args[1])
+
+    def test_export_uses_the_primary_archive_helper(self):
+        import MP_Liquid_Mixer as app
+        mixer = app.LiquidMixer()
+        mixer.area = MagicMock()
+        result = {"action": "moved", "archive": Path("/tmp/MIX_ARCHIVE"),
+                  "wav": 1, "flac": 0, "failed": []}
+        with patch.object(app.mixer_export, "export_recordings", return_value=result) as export, \
+             patch.object(app.mixer_export, "notify_export", return_value=True) as notify:
+            mixer._export_mixes()
+        export.assert_called_once_with(mixer.recorder.base)
+        notify.assert_called_once_with(result)
+
+    def test_export_moves_wav_and_flac_through_the_handler(self):
+        import MP_Liquid_Mixer as app
+        with tempfile.TemporaryDirectory() as tmp:
+            archive = Path(tmp) / "MIX_ARCHIVE"
+            archive.mkdir()
+            base = Path(tmp) / "app"
+            records = base / "MP_AUDIOWAV_REC_OUTPUT"
+            records.mkdir(parents=True)
+            config = Path(tmp) / "cfg"
+            config.mkdir()
+            (records / "mix.wav").write_bytes(b"wav")
+            (records / "mix.flac").write_bytes(b"flac")
+            mixer = app.LiquidMixer()
+            mixer.area = MagicMock()
+            mixer.recorder.base = base
+            with patch.dict(os.environ, {"MIX_ARCHIVE_DIR": str(archive)}, clear=False), \
+                 patch.object(app.mixer_export, "notify", return_value=True):
+                mixer._export_mixes()
+            self.assertTrue((archive / "mix.wav").is_file())
+            self.assertTrue((archive / "FLAC_CONVERTED_OUTPUTS" / "mix.flac").is_file())
+
+
+class TestLaunchKeys(unittest.TestCase):
+    KEYS = ("c", "v", "r", "x", "m", "z", "w", "l", "g", "F11", "Escape")
+
+    def _mixer(self):
+        import MP_Liquid_Mixer as app
+        mixer = app.LiquidMixer()
+        from types import SimpleNamespace
+        mixer.Gdk = SimpleNamespace(**{f"KEY_{key}": index for index, key in enumerate(self.KEYS, start=100)})
+        return mixer, SimpleNamespace
+
+    def _press(self, mixer, key, method):
+        from types import SimpleNamespace
+        with patch.object(mixer, method) as called:
+            event = SimpleNamespace(keyval=getattr(mixer.Gdk, f"KEY_{key}"), state=0)
+            self.assertTrue(mixer._on_key(None, event))
+        called.assert_called_once()
+
+    def test_m_opens_the_manager(self):
+        mixer, _ = self._mixer()
+        self._press(mixer, "m", "_open_manager")
+
+    def test_z_opens_the_visualizer(self):
+        mixer, _ = self._mixer()
+        self._press(mixer, "z", "_open_visualizer")
+
+    def test_w_opens_the_black_glass_window(self):
+        mixer, _ = self._mixer()
+        self._press(mixer, "w", "_open_black_glass")
+
+    def test_l_opens_the_liquid_player(self):
+        mixer, _ = self._mixer()
+        self._press(mixer, "l", "_open_liquid_player")
+
+    def test_g_opens_mp_gui(self):
+        mixer, _ = self._mixer()
+        self._press(mixer, "g", "_open_mp_gui")
+
+    def test_black_glass_is_the_into_darkness_liquid_player(self):
+        mixer, _ = self._mixer()
+        with patch.object(mixer, "_open_liquid_player") as player:
+            mixer._open_black_glass()
+        player.assert_called_once_with("into_darkness_void_out")
+    def test_launch_commands_point_at_the_real_launchers(self):
+        from types import SimpleNamespace
+        mixer, _ = self._mixer()
+        mixer.Gdk = SimpleNamespace(**{f"KEY_{key}": index for index, key in enumerate(self.KEYS, start=100)})
+        with patch.object(mixer, "_launch_detached", return_value=True) as launch:
+            mixer._open_manager()
+        argv = launch.call_args.args[0]
+        self.assertTrue(any(str(part).endswith("bin/launch-manager") for part in argv))
+        with patch.object(mixer, "_launch_detached", return_value=True) as launch:
+            mixer._open_visualizer()
+        argv = launch.call_args.args[0]
+        self.assertTrue(any(str(part).endswith("launch_liquid_visualizer.sh") for part in argv))
+        with patch.object(mixer, "_launch_detached", return_value=True) as launch:
+            mixer._open_mp_gui()
+        argv = launch.call_args.args[0]
+        self.assertIn("--keep-theme", argv)
+        self.assertTrue(any(str(part).endswith("MP_Gui.sh") for part in argv))
 
 
 if __name__ == "__main__":

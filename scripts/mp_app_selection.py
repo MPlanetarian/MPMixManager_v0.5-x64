@@ -13,6 +13,10 @@ Component ids are stable and short; the display names are the shortcut names:
     liquid      MP Liquid Player   (the Liquid Glass audio player)
     visualizer  MP Liquid Visualizer
 
+The Linux-only **MP Liquid Mixer** is not a fifth selectable app: it needs
+X11/XWayland, VTE and ALSA, so its shortcut is written beside these four by
+``scripts/install_desktop_shortcuts.py`` for any non-empty selection.
+
 Usage:
 
     python3 scripts/mp_app_selection.py                 # print "manager gui ..."

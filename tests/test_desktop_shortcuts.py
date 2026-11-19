@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""First install creates four named desktop shortcuts on every platform."""
+"""First install creates the named desktop shortcuts on every platform.
+
+Linux also gets the MP Liquid Mixer entry, which is deliberately absent on
+macOS and Windows.
+"""
 
 import os
 import subprocess
@@ -29,7 +33,7 @@ from install_desktop_shortcuts import (  # noqa: E402
 
 
 class TestDesktopShortcuts(unittest.TestCase):
-    def test_there_are_four_named_shortcuts(self):
+    def test_there_are_five_named_shortcuts(self):
         self.assertEqual(
             list(SHORTCUT_NAMES),
             [
@@ -37,10 +41,11 @@ class TestDesktopShortcuts(unittest.TestCase):
                 "MP Mix Manager",
                 "MP Gui",
                 "MP Liquid Visualizer",
+                "MP Liquid Mixer",
             ],
         )
 
-    def test_linux_install_writes_four_desktop_files(self):
+    def test_linux_install_writes_five_desktop_files(self):
         with tempfile.TemporaryDirectory() as tmp:
             desktop = Path(tmp) / "Desktop"
             apps = Path(tmp) / "applications"
@@ -79,6 +84,12 @@ class TestDesktopShortcuts(unittest.TestCase):
             self.assertIn("Name=MP Liquid Visualizer", visualizer)
             self.assertIn("launch_liquid_visualizer.sh", visualizer)
             self.assertIn("Terminal=false", visualizer)
+
+            mixer = (desktop / "MP Liquid Mixer.desktop").read_text(encoding="utf-8")
+            self.assertIn("Name=MP Liquid Mixer", mixer)
+            self.assertIn("launch_liquid_mixer.sh", mixer)
+            self.assertIn("Icon=mp_liquid_glass_icon", mixer)
+            self.assertIn("Terminal=false", mixer)
 
             for name in SHORTCUT_NAMES:
                 menu = apps / f"{name}.desktop"
@@ -321,7 +332,8 @@ class TestDesktopShortcuts(unittest.TestCase):
                 link_writer=writer,
             )
             desktop_links = [item for item in created if item[0].parent == desktop]
-            self.assertEqual([item[0].name for item in desktop_links], [f"{name}.lnk" for name in SHORTCUT_NAMES])
+            windows_names = [name for name in SHORTCUT_NAMES if name != "MP Liquid Mixer"]
+            self.assertEqual([item[0].name for item in desktop_links], [f"{name}.lnk" for name in windows_names])
             by_name = {item[0].name: item for item in desktop_links}
             self.assertEqual(by_name["MP Liquid Player.lnk"][1], "launch_liquid_glass.bat")
             self.assertTrue(all(item[4] == "mp_liquid_glass_icon.png" for item in created))

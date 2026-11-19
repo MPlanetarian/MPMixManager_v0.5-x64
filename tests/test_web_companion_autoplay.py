@@ -1245,7 +1245,27 @@ class EngageButtonTest(unittest.TestCase):
         self.assertIn("engageStreamFromServer(lastServerResume, { auto: true })", auto)
         # A running desk player is no longer a reason to stay silent here.
         self.assertNotIn("if (hostPlayerActive) {{", auto)
-        self.assertNotIn("hideStreamOverlay();\n                return;", auto)
+        # No branch may return without either starting audio or offering the
+        # tap. `streamAutoStarted` is what stops the 2 s poll re-entering, and a
+        # branch that skips it re-showed the gate over a mix that was already
+        # playing (the iPhone "page stays open from the start" report). The two
+        # leading guards are exempt: one is the spent-attempt check itself and
+        # the other only means there is no file to talk about yet.
+        body_only = auto.split("if (!activeAudioFile) return;", 1)[1]
+        for branch in body_only.split("return;")[:-1]:
+            self.assertTrue(
+                "streamAutoStarted = true" in branch
+                or "engageStreamFromServer" in branch
+                or "showStreamOverlay" in branch
+                or "autoElIsPlaying" in branch,
+                f"a branch returns without spending the attempt or explaining: {branch[-160:]}",
+            )
+        # The branch that dismisses the gate for audio that already plays must
+        # also spend the attempt, or the poll fights it forever.
+        guard = auto[auto.index("if (audioStreamEngaged || audioElIsPlaying())"):]
+        guard = guard[: guard.index("}")]
+        self.assertIn("streamAutoStarted = true", guard)
+        self.assertIn("hideStreamOverlay()", guard)
 
     def test_a_refused_automatic_start_arms_the_first_tap(self):
         """Autoplay refusal is a policy, not an error.

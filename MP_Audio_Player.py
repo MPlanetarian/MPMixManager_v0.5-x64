@@ -7335,6 +7335,57 @@ def _raise_windowed_mp_gui(base: Path) -> None:
         pass
 
 
+def _liquid_mixer_module():
+    """The shared X-key launcher, or None when the helper is missing."""
+    try:
+        import liquid_mixer_launch
+        return liquid_mixer_launch
+    except ImportError:
+        pass
+    try:
+        scripts = get_base_dir() / "scripts"
+        if str(scripts) not in sys.path:
+            sys.path.insert(0, str(scripts))
+        import liquid_mixer_launch
+        return liquid_mixer_launch
+    except Exception:
+        return None
+
+
+def _liquid_mixer_notice(result: str) -> str:
+    """One wording for every X press, shared by all three launchers."""
+    return {
+        "opened": "✦ Opened MP Liquid Mixer",
+        "already-open": "MP Liquid Mixer is already open",
+        "starting": "MP Liquid Mixer is already starting",
+        "unsupported": "MP Liquid Mixer needs a Linux desktop (X11)",
+        "missing": "MP Liquid Mixer was not found beside the player",
+    }.get(result, "MP Liquid Mixer could not be opened")
+
+
+def launch_liquid_mixer(base_dir: Optional[Path] = None) -> str:
+    """Open MP Liquid Mixer, or raise the one that is already open.
+
+    X is a launcher, not a second window: the mixer holds
+    ``liquid_mixer.lock`` for its whole life, because both of its decks live
+    in fixed IPC namespaces. The helper reads that lock, so a second X press
+    can only ever focus the window that owns it. Returns one of
+    ``opened`` / ``already-open`` / ``starting`` / ``unsupported`` /
+    ``missing``.
+    """
+    helper = _liquid_mixer_module()
+    if helper is None:
+        return "missing"
+    try:
+        return helper.launch_mixer(base_dir)
+    except Exception as exc:
+        try:
+            mp_log_error("MP_Audio_Player", f"Failed launching MP Liquid Mixer: {exc}", exc)
+        except Exception:
+            pass
+        return "missing"
+
+
 def launch_mp_gui(base_dir: Optional[Path] = None) -> bool:
     """Open MP Gui beside the player, or focus that window if it is already open.
 
@@ -10440,14 +10491,28 @@ class TerminalPlayerUI:
         elif data in (b"d", b"D", b"\x1b[3~") and not self.equalizer_hud_active and not self.inspector_hud_active:
             self._arm_playlist_clear()
         elif data in (b"x", b"X"):
-            # Stop, then leave. An exit key must always work: if the audio
-            # engine has already failed (or was shut down) the stop call can
-            # raise, and the user would be stuck in the player.
-            try:
-                self._send_cmd("stop")
-            except Exception:
-                pass
-            self.running = False
+            # X opens MP Liquid Mixer, matching MP Gui and the console manager.
+            # Esc, q and Ctrl+C remain the exit keys. A mixer that is already
+            # open is raised rather than duplicated: the mixer holds
+            # liquid_mixer.lock for its whole life, because its two decks live
+            # in fixed IPC namespaces.
+            if os.environ.get("MP_LIQUID_GLASS_MIXER") == "1":
+                # This player *is* one of the mixer's decks, so there is
+                # nothing to open, and certainly not a second window.
+                self._notify(_liquid_mixer_notice("already-open"), 3.5)
+                return
+            result = launch_liquid_mixer(getattr(self.scanner, "base_dir", None))
+            if result == "unsupported":
+                # A text console (TTY Audio Mode, or no X11) has nowhere to put
+                # the mixer, so X keeps its old stop-and-exit meaning there
+                # instead of leaving the player with a key that does nothing.
+                try:
+                    self._send_cmd("stop")
+                except Exception:
+                    pass
+                self.running = False
+                return
+            self._notify(_liquid_mixer_notice(result), 3.5)
 
     def _navigate_list(self, delta: int):
         if m := self._get_active_tracks(): self.selected_row = max(0, min(len(m) - 1, self.selected_row + delta))
@@ -10916,14 +10981,14 @@ class TerminalPlayerUI:
             g_bottom = f"[G] {g_key}  " if is_lg else ""
             lines.extend([
                 _fit_text_line([
-                    f"  {bold_s}{COLOR_TRAFFIC_GREEN}TRACK CONTROLS:{NC} {bold_s}{COLOR_ELECTRIC_CYAN}[3]{NC} {bold_s}Favorites{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[H]{NC} {bold_s}Mark Fav{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[1]{NC} {bold_s}Mix Archive{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[2]{NC} {bold_s}Music{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[D]{NC} {bold_s}Clear Playlist{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[Space]{NC} {bold_s}Play/Pause{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[R]{NC} {bold_s}Record WAV{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[M]{NC} {bold_s}Vertical{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[L]{NC} {bold_s}Liquid Glass{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[Z]{NC} {bold_s}MP Liquid Visualizer{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[Q]{NC} {bold_s}Queue{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[G]{NC} {bold_s}{g_key}{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[I]{NC} {bold_s}Track Inspector{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[E]{NC} {bold_s}Equalizer HUD{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[b]{NC} {bold_s}Bass Boost{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[/]{NC} {bold_s}Search{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[n/p]{NC} {bold_s}Skip{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[+/-]{NC} {bold_s}Pitch{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[v/V]{NC} {bold_s}Vol{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[u]{NC} {bold_s}Mute{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[Esc]{NC} {bold_s}Exit{NC}",
+                    f"  {bold_s}{COLOR_TRAFFIC_GREEN}TRACK CONTROLS:{NC} {bold_s}{COLOR_ELECTRIC_CYAN}[3]{NC} {bold_s}Favorites{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[H]{NC} {bold_s}Mark Fav{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[1]{NC} {bold_s}Mix Archive{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[2]{NC} {bold_s}Music{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[D]{NC} {bold_s}Clear Playlist{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[Space]{NC} {bold_s}Play/Pause{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[R]{NC} {bold_s}Record WAV{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[M]{NC} {bold_s}Vertical{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[L]{NC} {bold_s}Liquid Glass{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[Z]{NC} {bold_s}MP Liquid Visualizer{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[X]{NC} {bold_s}Liquid Mixer{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[Q]{NC} {bold_s}Queue{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[G]{NC} {bold_s}{g_key}{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[I]{NC} {bold_s}Track Inspector{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[E]{NC} {bold_s}Equalizer HUD{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[b]{NC} {bold_s}Bass Boost{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[/]{NC} {bold_s}Search{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[n/p]{NC} {bold_s}Skip{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[+/-]{NC} {bold_s}Pitch{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[v/V]{NC} {bold_s}Vol{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[u]{NC} {bold_s}Mute{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[Esc]{NC} {bold_s}Exit{NC}",
                     f"  {bold_s}{COLOR_TRAFFIC_GREEN}CONTROLS:{NC} {bold_s}[3] Favorites{NC}  {bold_s}[H] Mark{NC}  {bold_s}[1] Mix Archive{NC}  {bold_s}[2] Music{NC}  {bold_s}[D] Clear{NC}  {bold_s}[Space] Play{NC}  {bold_s}[R] Rec WAV{NC}  {bold_s}[M] Vertical{NC}  {bold_s}[L] Liquid{NC}  {bold_s}[Q] Queue{NC}  {bold_s}[G] {g_key}{NC}  {bold_s}[E] Equalizer{NC}  {bold_s}[b] Bass{NC}  {bold_s}[/] Search{NC}  {bold_s}[n/p] Skip{NC}  {bold_s}[u] Mute{NC}  {bold_s}[Esc] Exit{NC}",
-                    f"  {bold_s}[3] Fav  [H] Mark  [1] Mix  [2] Music  [D] Clear  Space Play  [Q] Queue  [G] {g_key}  [E] EQ  [b] Bass  [/] Search  n/p Skip  Esc Exit{NC}"
+                    f"  {bold_s}[3] Fav  [H] Mark  [1] Mix  [2] Music  [D] Clear  Space Play  [X] Mixer  [Q] Queue  [G] {g_key}  [E] EQ  [b] Bass  [/] Search  n/p Skip  Esc Exit{NC}"
                 ], max(20, w - 1)),
                 _fit_text_line([
-                    f"  {hint_col}{g_bottom}[0] Pitch Reset  [u] Mute  [s] Shuffle  [y] Repeat  [b] Bass Boost  [L] Liquid Glass  [Z] MP Liquid Visualizer  [E] Equalizer HUD  [e] Vis Style  [c] Color Theme  [a] Audio/BT  [O] Open  [F] Files{NC}",
-                    f"  {hint_col}{g_bottom}0 Reset  u Mute  s Shuf  y Rep  b Bass  L Glass  Z Liquid Vis  E Equalizer  e Vis  c Theme  a BT  O Open  F Files{NC}",
-                    f"  {hint_col}{g_bottom}0 Reset  u Mute  s Shuf  y Rep  b Bass  L Glass  Z Liquid Vis  E Equalizer  e Vis  c Theme  Esc Exit{NC}"
+                    f"  {hint_col}{g_bottom}[0] Pitch Reset  [u] Mute  [s] Shuffle  [y] Repeat  [b] Bass Boost  [L] Liquid Glass  [Z] MP Liquid Visualizer  [X] Liquid Mixer  [E] Equalizer HUD  [e] Vis Style  [c] Color Theme  [a] Audio/BT  [O] Open  [F] Files{NC}",
+                    f"  {hint_col}{g_bottom}0 Reset  u Mute  s Shuf  y Rep  b Bass  L Glass  Z Liquid Vis  X Mixer  E Equalizer  e Vis  c Theme  a BT  O Open  F Files{NC}",
+                    f"  {hint_col}{g_bottom}0 Reset  u Mute  s Shuf  y Rep  b Bass  L Glass  Z Vis  X Mixer  E EQ  e Vis  c Theme  Esc Exit{NC}"
                 ], max(20, w - 1))
             ])
         else:
@@ -10932,10 +10997,10 @@ class TerminalPlayerUI:
             # there rather than advertising a key that does nothing.
             export_hint = "  Export Tracks" if self.mode == "FAVORITES" else ""
             lines.append(_fit_text_line([
-                f"  {hint_col}[3] Favorites  [H] Mark Fav  [1] Mix Archive  [2] Music  [D] Clear Playlist{export_hint}  [Space] Play/Pause  [R] Record WAV  [M] Vertical  [L] Liquid Glass  [Z] MP Liquid Visualizer  [Q] Queue  [G] {g_key}  [+/-] Pitch ±1% (±20% max)  [0] Pitch Reset  [v/V] Vol  [u] Mute  [s] Shuffle  [y] Repeat  [n/p] Next/Prev  [a] Audio/BT  [O] Open  [T] Tracklist  [w] Export  [F] Files  [E] Equalizer HUD  [b] Bass Boost  [e] Vis  [Esc] Exit{NC}",
-                f"  {hint_col}[3] Favorites  [H] Mark  [1] Mix Archive  [2] Music  [D] Clear{export_hint}  Space Play  R Rec  M Vertical  L Glass  Q Queue  G {g_key}  +/- Pitch  0 Reset  v/V Vol  u Mute  s Shuf  y Rep  n/p Skip  O Open  T List  E EQ  b Bass  Esc Exit{NC}",
-                f"  {hint_col}[3] Fav  [H] Mark  [1] Mix  [2] Music  [D] Clear{export_hint}  Space Play  R Rec  M Vertical  Q Queue  G {g_key}  v/V Vol  u Mute  s Shuf  y Rep  n/p Skip  E EQ  b Bass  Esc Exit{NC}",
-                f"  {hint_col}Space Play  M Mini  E EQ  b Bass  c Theme  Esc Exit{NC}"
+                f"  {hint_col}[3] Favorites  [H] Mark Fav  [1] Mix Archive  [2] Music  [D] Clear Playlist{export_hint}  [Space] Play/Pause  [R] Record WAV  [M] Vertical  [L] Liquid Glass  [Z] MP Liquid Visualizer  [X] Liquid Mixer  [Q] Queue  [G] {g_key}  [+/-] Pitch ±1% (±20% max)  [0] Pitch Reset  [v/V] Vol  [u] Mute  [s] Shuffle  [y] Repeat  [n/p] Next/Prev  [a] Audio/BT  [O] Open  [T] Tracklist  [w] Export  [F] Files  [E] Equalizer HUD  [b] Bass Boost  [e] Vis  [Esc] Exit{NC}",
+                f"  {hint_col}[3] Favorites  [H] Mark  [1] Mix Archive  [2] Music  [D] Clear{export_hint}  Space Play  R Rec  M Vertical  L Glass  Z Vis  X Mixer  Q Queue  G {g_key}  +/- Pitch  0 Reset  v/V Vol  u Mute  s Shuf  y Rep  n/p Skip  O Open  T List  E EQ  b Bass  Esc Exit{NC}",
+                f"  {hint_col}[3] Fav  [H] Mark  [1] Mix  [2] Music  [D] Clear{export_hint}  Space Play  R Rec  M Vertical  X Mixer  Q Queue  G {g_key}  v/V Vol  u Mute  s Shuf  y Rep  n/p Skip  E EQ  b Bass  Esc Exit{NC}",
+                f"  {hint_col}Space Play  M Mini  X Mixer  E EQ  b Bass  c Theme  Esc Exit{NC}"
             ], max(20, w - 1)))
         # Drop the breathing rows rather than a control line if the frame runs
         # past the console height. The Bass Boost row made this reachable at
@@ -11023,7 +11088,7 @@ class TerminalPlayerUI:
             lines.append(f"  {self._notification_ansi(bold_s)}📂 {self.notification_msg}{NC}")
         else:
             g_early = f"\033[38;2;0;229;255m[G]{NC} {text_col}{g_key}{NC}  " if is_lg else ""
-            lines.append(f"  \033[38;2;0;229;255m[3]{NC} \033[38;2;255;196;0mFavorites{NC}  \033[38;2;0;229;255m[H]{NC} {text_col}Mark{NC}  \033[38;2;0;229;255m[1]{NC} {text_col}Mix{NC}  \033[38;2;0;229;255m[2]{NC} {text_col}Music{NC}  \033[38;2;0;229;255m[D]{NC} {text_col}Clear{NC}  {g_early}\033[38;2;0;229;255m[Space]{NC} {text_col}Play{NC}  \033[38;2;0;229;255m[Q]{NC} {text_col}Queue{NC}  \033[38;2;0;229;255m[R]{NC} {text_col}Rec{NC}  \033[38;2;0;229;255m[b]{NC} {text_col}Bass{NC}  \033[38;2;0;229;255m[n/p]{NC} {text_col}Skip{NC}  \033[38;2;255;215;0m[M]{NC} {text_col}Micro{NC}  \033[38;2;255;64;64mEsc{NC} {text_col}Close{NC}")
+            lines.append(f"  \033[38;2;0;229;255m[3]{NC} \033[38;2;255;196;0mFavorites{NC}  \033[38;2;0;229;255m[H]{NC} {text_col}Mark{NC}  \033[38;2;0;229;255m[X]{NC} {text_col}Mixer{NC}  \033[38;2;0;229;255m[1]{NC} {text_col}Mix{NC}  \033[38;2;0;229;255m[2]{NC} {text_col}Music{NC}  \033[38;2;0;229;255m[D]{NC} {text_col}Clear{NC}  {g_early}\033[38;2;0;229;255m[Space]{NC} {text_col}Play{NC}  \033[38;2;0;229;255m[Q]{NC} {text_col}Queue{NC}  \033[38;2;0;229;255m[R]{NC} {text_col}Rec{NC}  \033[38;2;0;229;255m[b]{NC} {text_col}Bass{NC}  \033[38;2;0;229;255m[n/p]{NC} {text_col}Skip{NC}  \033[38;2;255;215;0m[M]{NC} {text_col}Micro{NC}  \033[38;2;255;64;64mEsc{NC} {text_col}Close{NC}")
         if is_lg:
             lines = [_strip_bold_ansi(l) for l in lines]
         self._present(lines, w, h)
@@ -11125,9 +11190,9 @@ class TerminalPlayerUI:
             m_hint_short = "M Full" if is_lg else "M Vertical"
             g_micro = f"\033[1;38;2;0;229;255m[G]{NC} {text_col}{g_key}{NC}  " if is_lg else ""
             lines.append(_fit_text_line([
-                f"  \033[1;38;2;0;229;255m[D]{NC} {text_col}Clear{NC}  \033[1;38;2;0;229;255m[Space]{NC} {text_col}Play{NC}  \033[1;38;2;0;229;255m[Q]{NC} {text_col}Que{NC}  \033[1;38;2;0;229;255m[R]{NC} {text_col}Rec{NC}  \033[1;38;2;0;229;255m[G]{NC} {text_col}{g_key}{NC}  \033[1;38;2;0;229;255m[n/p]{NC} {text_col}Skip{NC}  \033[1;38;2;0;229;255m[v/V]{NC} {text_col}Vol{NC}  \033[1;38;2;0;229;255m[s]{NC} {text_col}Shuf{NC}  \033[1;38;2;0;229;255m[e]{NC} {text_col}EQ{NC}  \033[1;38;2;0;229;255m[b]{NC} {text_col}Bass{NC}  \033[1;38;2;0;229;255m[c]{NC} {text_col}Theme{NC}  \033[1;38;2;255;215;0m{m_hint}{NC}  \033[1;38;2;255;64;64mEsc{NC} {text_col}Close{NC}",
-                f"  \033[1;38;2;0;229;255m[D]{NC} {text_col}Clear{NC}  \033[1;38;2;0;229;255m[Space]{NC} {text_col}Play{NC}  \033[1;38;2;0;229;255m[Q]{NC} {text_col}Que{NC}  \033[1;38;2;0;229;255m[R]{NC} {text_col}Rec{NC}  \033[1;38;2;0;229;255m[n/p]{NC} {text_col}Skip{NC}  \033[1;38;2;0;229;255m[v/V]{NC} {text_col}Vol{NC}  \033[1;38;2;0;229;255m[s]{NC} {text_col}Shuf{NC}  \033[1;38;2;0;229;255m[e]{NC} {text_col}EQ{NC}  \033[1;38;2;0;229;255m[b]{NC} {text_col}Bass{NC}  \033[1;38;2;0;229;255m[c]{NC} {text_col}Theme{NC}  \033[1;38;2;255;215;0m{m_hint}{NC}  \033[1;38;2;255;64;64mEsc{NC} {text_col}Close{NC}",
-                f"  \033[1;38;2;0;229;255mD{NC} {text_col}Clear{NC}  \033[1;38;2;0;229;255mSpace{NC} {text_col}Play{NC}  \033[1;38;2;0;229;255mQ{NC} {text_col}Que{NC}  \033[1;38;2;0;229;255mR{NC} {text_col}Rec{NC}  {g_micro}\033[1;38;2;0;229;255mn/p{NC} {text_col}Skip{NC}  \033[1;38;2;0;229;255mv/V{NC} {text_col}Vol{NC}  \033[1;38;2;0;229;255ms{NC} {text_col}Shuf{NC}  \033[1;38;2;0;229;255me{NC} {text_col}EQ{NC}  \033[1;38;2;0;229;255mb{NC} {text_col}Bass{NC}  \033[1;38;2;0;229;255mc{NC} {text_col}Theme{NC}  \033[1;38;2;255;215;0m{m_hint_short}{NC}  \033[1;38;2;255;64;64mEsc{NC} {text_col}Close{NC}"
+                f"  \033[1;38;2;0;229;255m[D]{NC} {text_col}Clear{NC}  \033[1;38;2;0;229;255m[X]{NC} {text_col}Mixer{NC}  \033[1;38;2;0;229;255m[Space]{NC} {text_col}Play{NC}  \033[1;38;2;0;229;255m[Q]{NC} {text_col}Que{NC}  \033[1;38;2;0;229;255m[R]{NC} {text_col}Rec{NC}  \033[1;38;2;0;229;255m[G]{NC} {text_col}{g_key}{NC}  \033[1;38;2;0;229;255m[n/p]{NC} {text_col}Skip{NC}  \033[1;38;2;0;229;255m[v/V]{NC} {text_col}Vol{NC}  \033[1;38;2;0;229;255m[s]{NC} {text_col}Shuf{NC}  \033[1;38;2;0;229;255m[e]{NC} {text_col}EQ{NC}  \033[1;38;2;0;229;255m[b]{NC} {text_col}Bass{NC}  \033[1;38;2;0;229;255m[c]{NC} {text_col}Theme{NC}  \033[1;38;2;255;215;0m{m_hint}{NC}  \033[1;38;2;255;64;64mEsc{NC} {text_col}Close{NC}",
+                f"  \033[1;38;2;0;229;255m[D]{NC} {text_col}Clear{NC}  \033[1;38;2;0;229;255m[X]{NC} {text_col}Mixer{NC}  \033[1;38;2;0;229;255m[Space]{NC} {text_col}Play{NC}  \033[1;38;2;0;229;255m[Q]{NC} {text_col}Que{NC}  \033[1;38;2;0;229;255m[R]{NC} {text_col}Rec{NC}  \033[1;38;2;0;229;255m[n/p]{NC} {text_col}Skip{NC}  \033[1;38;2;0;229;255m[v/V]{NC} {text_col}Vol{NC}  \033[1;38;2;0;229;255m[s]{NC} {text_col}Shuf{NC}  \033[1;38;2;0;229;255m[e]{NC} {text_col}EQ{NC}  \033[1;38;2;0;229;255m[b]{NC} {text_col}Bass{NC}  \033[1;38;2;0;229;255m[c]{NC} {text_col}Theme{NC}  \033[1;38;2;255;215;0m{m_hint}{NC}  \033[1;38;2;255;64;64mEsc{NC} {text_col}Close{NC}",
+                f"  \033[1;38;2;0;229;255mD{NC} {text_col}Clear{NC}  \033[1;38;2;0;229;255mX{NC} {text_col}Mix{NC}  \033[1;38;2;0;229;255mSpace{NC} {text_col}Play{NC}  \033[1;38;2;0;229;255mQ{NC} {text_col}Que{NC}  \033[1;38;2;0;229;255mR{NC} {text_col}Rec{NC}  {g_micro}\033[1;38;2;0;229;255mn/p{NC} {text_col}Skip{NC}  \033[1;38;2;0;229;255mv/V{NC} {text_col}Vol{NC}  \033[1;38;2;0;229;255ms{NC} {text_col}Shuf{NC}  \033[1;38;2;0;229;255me{NC} {text_col}EQ{NC}  \033[1;38;2;0;229;255mb{NC} {text_col}Bass{NC}  \033[1;38;2;0;229;255mc{NC} {text_col}Theme{NC}  \033[1;38;2;255;215;0m{m_hint_short}{NC}  \033[1;38;2;255;64;64mEsc{NC} {text_col}Close{NC}"
             ], max(20, w - 1)))
         self._append_player_buttons(lines, max(20, w - 1))
         if is_lg:

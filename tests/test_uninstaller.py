@@ -301,7 +301,7 @@ class ExitVideoWhileUninstalling(unittest.TestCase):
         swift = (ROOT / "scripts" / "macos_borderless_loader.swift").read_text(encoding="utf-8")
         self.assertIn('args.contains("--loop")', swift)
         self.assertIn("avPlayer.seek(to: .zero)", swift)
-        self.assertEqual(len(SHORTCUT_NAMES), 4)
+        self.assertEqual(len(SHORTCUT_NAMES), 5)
 
 
 if __name__ == "__main__":

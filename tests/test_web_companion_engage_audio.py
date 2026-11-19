@@ -332,8 +332,14 @@ class AutoplayTest(unittest.TestCase):
             lead: (document.getElementById('streamOverlayLead') || {}).innerText,
             detail: (document.getElementById('streamOverlayDetail') || {}).innerText,
             button: (document.getElementById('btnPlayPause') || {}).innerText,
+            bodyPos: getComputedStyle(document.body).position,
+            autoStarted: typeof streamAutoStarted !== 'undefined' ? streamAutoStarted : null,
         });
     })()"""
+
+    IPHONE_UA = ("Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) "
+                 "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 "
+                 "Mobile/15E148 Safari/604.1")
 
     def _browser(self, policy: str) -> HeadlessBrowser:
         browser = HeadlessBrowser(policy)
@@ -417,6 +423,57 @@ class AutoplayTest(unittest.TestCase):
                          f"the tap did not start the mix: {playing}")
         self.assertFalse(playing.get("overlay"),
                          f"the gate stayed up over a playing mix: {playing}")
+
+    def test_an_iphone_tap_does_not_leave_the_gate_over_the_mix(self):
+        """The gate must not re-cover a mix the listener has started.
+
+        iOS takes the `needsPlaybackGesture()` branch of
+        `maybeAutoStartStream()`, and that branch used to return without
+        marking the automatic attempt as spent. Every 2 s status poll therefore
+        re-showed the engage gate, and `overlay-active` sets the body to
+        `position: fixed`, so the dashboard was pinned to the top of the screen
+        and unusable while the mix played underneath - the "keeps the page open
+        from the start" report.
+
+        This drives the real page as an iPhone: one touch tap starts the mix,
+        and the gate must then stay away across several polls.
+        """
+        browser = self._browser("user-gesture-required")
+        browser._new_target()
+        browser.send("Emulation.setDeviceMetricsOverride", width=430, height=932,
+                     deviceScaleFactor=3, mobile=True)
+        browser.send("Emulation.setTouchEmulationEnabled", enabled=True,
+                     maxTouchPoints=5)
+        browser.send("Emulation.setUserAgentOverride", userAgent=self.IPHONE_UA)
+        browser.send("Page.navigate", url=self.server.base + "/")
+
+        gated = self._wait_for(browser, lambda s: s.get("overlay") is True, timeout=40)
+        self.assertTrue(gated.get("overlay"),
+                        f"an iPhone must be offered the tap invitation: {gated}")
+        # The gesture branch must spend its one automatic attempt.
+        self.assertTrue(gated.get("autoStarted"),
+                        f"the poll will re-enter the gate forever: {gated}")
+
+        for kind in ("touchStart", "touchEnd"):
+            browser.send("Input.dispatchTouchEvent", type=kind,
+                         touchPoints=[{"x": 215, "y": 400, "radiusX": 8,
+                                       "radiusY": 8, "force": 1, "id": 1}])
+            time.sleep(0.06)
+
+        playing = self._wait_for(browser, lambda s: s.get("paused") is False, timeout=40)
+        self.assertFalse(playing.get("paused"),
+                         f"the tap did not start the mix: {playing}")
+
+        # Several status polls must not put the gate back over the playing mix.
+        for _ in range(4):
+            time.sleep(1.2)
+            state = json.loads(browser.evaluate(self.STATE_JS) or "{}")
+            self.assertFalse(state.get("overlay"),
+                             f"the gate came back over a playing mix: {state}")
+            self.assertEqual(state.get("bodyPos"), "static",
+                             f"the page is pinned to the top while playing: {state}")
+            self.assertFalse(state.get("paused"),
+                             f"the stream stopped while the gate fought it: {state}")
 
     def test_an_alternating_active_file_does_not_reload_the_player(self):
         """A flapping cursor restarted the player every poll. Guard it.

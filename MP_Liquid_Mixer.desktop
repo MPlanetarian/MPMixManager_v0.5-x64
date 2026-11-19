@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Name=MP Liquid Mixer
+GenericName=Liquid Glass Four-Channel Mixer
+Comment=Launch MP Liquid Mixer with two decks and four channels
+# The install tree is resolved at launch, so no user name or versioned path is
+# stored here. mp-desktop-exec lives in ~/.local/bin and follows the install.
+Exec=sh -c "exec \\"\\$HOME/.local/bin/mp-desktop-exec\\" scripts/launch_liquid_mixer.sh"
+Icon=mp_liquid_glass_icon
+Terminal=false
+Categories=AudioVideo;Audio;Player;
+StartupNotify=true
+StartupWMClass=MP_Liquid_Mixer
+X-KDE-GlobalAccel-CommandShortcut=true

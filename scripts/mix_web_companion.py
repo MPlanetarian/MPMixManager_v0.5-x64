@@ -4651,11 +4651,27 @@ def render_html_page(theme: Dict[str, Any]) -> str:
                 radial-gradient(circle at 22% 18%, hsl(var(--rainbow-hue) 90% 62% / 0.62), transparent 52%),
                 radial-gradient(circle at 78% 16%, hsl(calc(var(--rainbow-hue) + 140) 95% 58% / 0.48), transparent 50%),
                 radial-gradient(circle at 48% 92%, hsl(calc(var(--rainbow-hue) + 280) 90% 58% / 0.55), transparent 55%);
-            /* Opacity only. Do NOT rotate or transform this layer: a transform
-               animation forces the whole wash to be re-composited every frame,
-               and any `backdrop-filter` above it then re-blurs a backdrop that
-               never stops changing. That pair is what reloaded the iPhone. */
-            animation: dynamicRainbowBreath 6s ease-in-out infinite;
+            /* Opacity and a compositor-only hue rotation. Do NOT rotate or
+               transform this layer: a transform animation forces the whole wash
+               to be re-composited every frame, and any `backdrop-filter` above
+               it then re-blurs a backdrop that never stops changing. That pair
+               is what reloaded the iPhone.
+
+               The hue-rotate animation is what replaced the JavaScript timer
+               that used to step --rainbow-hue four times a second. That timer
+               was the other half of the reload: every write restyled the whole
+               document (27 custom properties derive from the variable), and
+               WebKit never released the result. Measured in WebKitGTK on a
+               430x932 viewport the old tick grew the WebContent process by
+               0.81 MB/s - about 49 MB a minute, 2.9 GB an hour - while iddling
+               at 4.8% of a core. The CSS animation below grows at 0.01 MB/s
+               and costs 0.4%, and the colour still turns once every 24 s. */
+            animation: dynamicRainbowBreath 6s ease-in-out infinite,
+                       dynamicRainbowSpin 24s linear infinite;
+        }
+        @keyframes dynamicRainbowSpin {
+            from { filter: hue-rotate(0deg); }
+            to { filter: hue-rotate(360deg); }
         }
         /* The cards stay translucent (--card-bg carries 0.72 alpha under this
            theme) but are not blurred. `backdrop-filter` over the animating wash
@@ -4669,7 +4685,7 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             box-shadow: 0 16px 50px rgba(0, 0, 0, 0.9),
                         0 0 30px hsl(var(--rainbow-hue) 85% 60% / 0.45);
         }
-        /* Hidden tab: stop the drift. The hue timer stops with it. */
+        /* Hidden tab: stop the drift. The wash animations pause with it. */
         body.dynamic-rainbow-glass-frozen #rainbowWash {
             animation-play-state: paused;
         }
@@ -7715,12 +7731,24 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             syncRainbowDrive();
         }}
 
-        // One hue for the whole theme, stepped 10 times a second. A CSS
-        // filter animation never became visible on iOS Safari: it lived on a
-        // ::before that paints under the opaque page background, and WebKit
-        // drops filter animations on that layer. Writing the variable updates
-        // the borders, buttons and wash that the phone actually draws.
-        // Hidden tabs stop the timer; a visible page never does.
+        // One hue for the whole theme. It used to be stepped from JavaScript
+        // four times a second, and that timer was the last cause of the page
+        // being reloaded on an iPhone.
+        //
+        // Why: every tick rewrote --rainbow-hue on the document element, and 27
+        // custom properties (borders, badges, buttons, the wash gradients) are
+        // derived from it, so each write was a whole-document style
+        // recalculation. WebKit did not reclaim what the restyle allocated.
+        // Measured in WebKitGTK at 430x932 the old 250 ms tick grew the
+        // WebContent process 0.81 MB/s and burned 4.8% of a core while idle;
+        // iOS ends a WebContent process that grows like that while it is also
+        // decoding FLAC, and Safari then silently reloads the page - the
+        // "snaps back to the top and restarts the mix" that was reported.
+        //
+        // The colour motion now comes from a CSS hue-rotate animation on the
+        // wash layer, which the compositor runs without touching style. Same
+        // 24 s turn, 0.01 MB/s, 0.4% of a core. The chrome keeps the violet
+        // palette below and stays steady, which is also easier on the eye.
         let rainbowTimer = 0;
 
         function rainbowShouldRun() {{
@@ -7730,19 +7758,17 @@ def render_html_page(theme: Dict[str, Any]) -> str:
         }}
 
         function tickRainbow() {{
-            if (!rainbowShouldRun()) {{
-                stopRainbowDrive();
-                return;
-            }}
-            // 272 is the theme's home violet, so the first frame does not
-            // jump to red. A full turn still takes 24s.
-            const hue = (272 + (performance.now() / 24000) * 360) % 360;
-            document.documentElement.style.setProperty('--rainbow-hue', hue.toFixed(1));
+            // Kept as the single place the theme's chrome colour is applied.
+            // It is deliberately not on a timer any more: one write per theme
+            // change is free, several per second is a leak.
+            if (currentThemeId !== 'dynamic_rainbow_liquid_glass') return;
+            document.documentElement.style.setProperty('--rainbow-hue', '272');
         }}
 
         function stopRainbowDrive() {{
-            if (!rainbowTimer) return;
-            clearInterval(rainbowTimer);
+            // The animation is CSS now, so there is no interval to clear. The
+            // callers (a hidden tab, a theme switch, Reduce Motion) still mean
+            // something: the body class they toggle is what pauses it.
             rainbowTimer = 0;
         }}
 
@@ -7751,17 +7777,12 @@ def render_html_page(theme: Dict[str, Any]) -> str:
                 'dynamic-rainbow-glass-active',
                 currentThemeId === 'dynamic_rainbow_liquid_glass'
             );
+            // No interval is started. The hue motion is the CSS animation on
+            // the wash (see dynamicRainbowSpin); this only has to make sure the
+            // chrome palette is applied once per theme change. See the note on
+            // rainbowTimer for the measurement that removed the timer.
             if (rainbowShouldRun()) {{
-                if (!rainbowTimer) {{
-                    tickRainbow();
-                    // 250 ms, not 100. Each tick rewrites --rainbow-hue, and 27
-                    // custom properties on the theme scope derive from it, so
-                    // every tick is a full style recalculation of the document.
-                    // At 10 Hz that was 10 recalcs a second on a phone that is
-                    // also decoding FLAC; at 4 Hz the 24 s cycle is still smooth
-                    // (1.7 degrees per step) and the phone stays responsive.
-                    rainbowTimer = setInterval(tickRainbow, 250);
-                }}
+                tickRainbow();
             }} else {{
                 stopRainbowDrive();
             }}
@@ -8534,6 +8555,19 @@ def render_html_page(theme: Dict[str, Any]) -> str:
         function renderStreamOverlay() {{
             const overlay = document.getElementById('streamOverlay');
             if (!overlay) return;
+            // Never cover a mix the listener is actually hearing. The gate
+            // exists to get audio started; while it is playing it can only be
+            // in the way, and `overlay-active` locks the page with
+            // body {{ position: fixed }}, which is what pinned the dashboard to
+            // the top of the screen on iPhone while the mix played behind it.
+            //
+            // Checking the element rather than `audioStreamEngaged` matters:
+            // that flag stays true across a pause or a dropped connection, and
+            // those are exactly the cases where the gate must still be able to
+            // say "tap anywhere to start it again".
+            if (streamOverlayWanted && audioElIsPlaying()) {{
+                streamOverlayWanted = false;
+            }}
             const visible = streamOverlayWanted && activeTab === 'player';
             overlay.classList.toggle('show', visible);
             // Lock the page behind the gate: a swipe would otherwise scroll the
@@ -8768,11 +8802,29 @@ def render_html_page(theme: Dict[str, Any]) -> str:
         function maybeAutoStartStream() {{
             if (streamAutoStarted) return;
             if (!activeAudioFile) return;
+            // Audible playback outranks every reason to raise the gate. This is
+            // the iPhone regression: the branch below returns without marking
+            // the automatic attempt as spent, so the 2 s status poll re-entered
+            // here and re-showed the gate *over* a mix the listener had already
+            // started. `overlay-active` sets body {{ position: fixed }}, so the
+            // page locked itself to the top of the screen with the dashboard
+            // unusable behind the gate - the "keeps the page open from the
+            // start" report - while the audio kept playing underneath it.
+            if (audioStreamEngaged || audioElIsPlaying()) {{
+                streamAutoStarted = true;
+                hideStreamOverlay();
+                return;
+            }}
             if (needsPlaybackGesture()) {{
                 // iOS refuses a play() outside a tap, and a rejected play()
                 // marks the element so the later Engage tap fails too. Leave
                 // the gate up and let the tap do the first load. Any tap will
                 // do: the retry listens on the whole document.
+                //
+                // The attempt is still spent: without this flag every later
+                // poll walked back in here and re-showed the gate, including
+                // after the listener's tap had started the mix.
+                streamAutoStarted = true;
                 armFirstGestureEngage();
                 setStreamOverlayLead(STREAM_LEAD_TAP);
                 showStreamOverlay(streamUnavailableReason);

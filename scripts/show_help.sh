@@ -219,6 +219,12 @@ ${BOLD}SYSTEM TRAY:${NC}
   Right-click it for ${CYAN}Launch MP Gui${NC}, ${CYAN}Launch MP Liquid Player${NC}, and ${CYAN}Launch MP Mix Manager${NC}.
   ${DIM}An install that set up only some of the apps shows only those launch entries; Close All and the Web entry always stay.${NC}
   ${CYAN}Start / Stop MP Audio Player (Web)${NC} starts or stops the phone companion without stopping the apps.
+  ${CYAN}Rescan Mix Archive Folders${NC} is Storage Management > 4. It refreshes every configured archive folder and its
+  inventory, then reports the folder, FLAC, converted WAV and missing-tracklist counts as a desktop notification.
+  ${CYAN}Rescan Music Folders${NC} is Option 2 > 3 > A. It rebuilds the MUSIC playlists for all configured folders and
+  reports the refreshed folders and total tracks in the same way.
+  ${CYAN}Mute MP Player Audio${NC} silences MP Audio Player. While it is muted the entry reads
+  ${CYAN}Unmute MP Player Audio${NC}, so the title always names what the click will do next.
   ${CYAN}Close MP Mix Manager (Closes everything)${NC} stops the console manager, MP Gui, MP Liquid Player, playback, and the visualizer.
   ${DIM}The exit movie plays first and the icon stays responsive while it runs. Every MP window is then closed, including one launched from the tray's own manager launcher.${NC}
 

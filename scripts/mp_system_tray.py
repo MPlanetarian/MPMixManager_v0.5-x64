@@ -10,10 +10,12 @@ launch focuses a window that is already open.
 
 from __future__ import annotations
 
+import json
 import os
 import plistlib
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import threading
@@ -50,12 +52,24 @@ MENU_CLOSE_ALL = "Close MP Mix Manager (Closes everything)"
 # serving, Start while it is not. Several dashboards may be connected, which is
 # why the label is re-read whenever the menu is opened.
 MENU_WEB_AUDIO = "Start / Stop MP Audio Player (Web)"
+# Rescans run the same code paths as the console manager's Storage menu, so the
+# tray and the console cannot drift apart. The labels carry the menu path they
+# mirror to keep the two discoverable from each other.
+MENU_RESCAN_ARCHIVE = "Rescan Mix Archive Folders"
+MENU_RESCAN_MUSIC = "Rescan Music Folders"
+# The mute entry flips between these two labels, read from the live player
+# state whenever the menu opens, so it always states what a click will do.
+MENU_MUTE_AUDIO = "Mute MP Player Audio"
+MENU_UNMUTE_AUDIO = "Unmute MP Player Audio"
 
 MENU_ENTRIES = (
     ("launch-gui", MENU_LAUNCH_GUI),
     ("launch-liquid", MENU_LAUNCH_LIQUID),
     ("launch-manager", MENU_LAUNCH_MANAGER),
     ("web-audio", MENU_WEB_AUDIO),
+    ("rescan-archive", MENU_RESCAN_ARCHIVE),
+    ("rescan-music", MENU_RESCAN_MUSIC),
+    ("mute-audio", MENU_MUTE_AUDIO),
     ("close-all", MENU_CLOSE_ALL),
 )
 
@@ -1267,6 +1281,352 @@ def toggle_web_audio() -> dict:
         return {"supported": True, "action": "error", "detail": str(exc)}
 
 
+# ------------------------------------------------------------------------------
+# Desktop notifications
+# ------------------------------------------------------------------------------
+def notify(title: str, message: str, icon: str = "audio-x-generic") -> bool:
+    """Post a desktop notification through the desktop's own service.
+
+    Linux and BSD go through `notify-send`, which is the freedesktop client for
+    the notification daemon the tray icon itself lives beside; the window
+    manager paints it as a normal popup. macOS uses Notification Center through
+    `osascript`. The call is best effort: a missing daemon must never fail the
+    rescan that just finished.
+    """
+    if sys.platform == "darwin":
+        def _quote(value: str) -> str:
+            return value.replace("\\", "\\\\").replace('"', '\\"')
+        script = (
+            f'display notification "{_quote(message)}" '
+            f'with title "{_quote(title)}"'
+        )
+        try:
+            subprocess.run(
+                ["osascript", "-e", script],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=8,
+                check=False,
+            )
+            return True
+        except (OSError, subprocess.SubprocessError):
+            return False
+    sender = _which("notify-send")
+    if not sender:
+        return False
+    argv = [sender, "-a", "MP Mix Manager", "-i", icon, title, message]
+    try:
+        subprocess.run(
+            argv,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=8,
+            check=False,
+        )
+        return True
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+# ------------------------------------------------------------------------------
+# MP Audio Player mute
+# ------------------------------------------------------------------------------
+# The player answers its own IPC socket, and the same socket the headset
+# buttons and the Web Companion use. The tray does not import the player (it
+# pulls in PortAudio and the whole engine) so it speaks that small JSON
+# protocol directly. Its runtime files live in the player's own config
+# directory, which is independent of MP_TRAY_CONFIG_DIR (that one only moves
+# the tray's lock and log).
+def player_config_dir() -> Path:
+    override = os.environ.get("MP_PLAYER_CONFIG_DIR", "").strip()
+    if override:
+        return Path(override)
+    return Path.home() / ".config" / "mix-manager"
+
+
+def _player_file(name: str) -> Path:
+    return player_config_dir() / name
+
+
+def player_state_file() -> Path:
+    return _player_file("mp_player_state.json")
+
+
+def player_state() -> dict:
+    try:
+        data = json.loads(player_state_file().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def player_muted() -> bool:
+    return bool(player_state().get("muted"))
+
+
+def mute_menu_label() -> str:
+    """Mute while audible, Unmute while muted: the label is the next action."""
+    return MENU_UNMUTE_AUDIO if player_muted() else MENU_MUTE_AUDIO
+
+
+def player_ipc(cmd: str, timeout: float = 2.0) -> dict | None:
+    """Send one command to the running player, or None when it is not there."""
+    payload = json.dumps({"cmd": cmd}).encode("utf-8")
+    sock_path = _player_file("mp_audio_player.sock")
+    port_file = _player_file("mp_audio_player.port")
+    attempts: list[tuple] = []
+    if hasattr(socket, "AF_UNIX") and sock_path.exists():
+        attempts.append((socket.AF_UNIX, str(sock_path)))
+    if port_file.exists():
+        try:
+            attempts.append((socket.AF_INET, ("127.0.0.1", int(port_file.read_text().strip()))))
+        except (OSError, ValueError):
+            pass
+    for family, address in attempts:
+        try:
+            with socket.socket(family, socket.SOCK_STREAM) as conn:
+                conn.settimeout(timeout)
+                conn.connect(address)
+                conn.sendall(payload)
+                raw = conn.recv(65536).decode("utf-8", "replace")
+        except (OSError, ValueError):
+            continue
+        if not raw:
+            continue
+        try:
+            answer = json.loads(raw)
+        except ValueError:
+            continue
+        if isinstance(answer, dict):
+            return answer
+    return None
+
+
+def toggle_player_mute() -> dict:
+    """Flip the player's mute, using live IPC and the state file as backup."""
+    was_muted = player_muted()
+    answer = player_ipc("mute")
+    if answer is None:
+        return {"supported": False, "running": False, "muted": was_muted}
+    muted = answer.get("muted")
+    return {
+        "supported": True,
+        "running": True,
+        "muted": was_muted if muted is None else bool(muted),
+    }
+
+
+# ------------------------------------------------------------------------------
+# Rescans
+# ------------------------------------------------------------------------------
+ARCHIVE_RESCAN_TIMEOUT = 1800
+MUSIC_RESCAN_TIMEOUT = 3600
+_ANSI_RE = None
+_NUMBER_RE = None
+
+
+def _strip_ansi(text: str) -> str:
+    global _ANSI_RE
+    if _ANSI_RE is None:
+        import re
+
+        _ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+    return _ANSI_RE.sub("", text)
+
+
+def _parse_count(value) -> int:
+    try:
+        return int(str(value).replace(",", "").strip())
+    except (TypeError, ValueError):
+        return 0
+
+
+def _rescan_env() -> dict:
+    env = os.environ.copy()
+    env.pop("MP_SYSTEM_TRAY_CHILD", None)
+    env.setdefault("PYTHONIOENCODING", "utf-8")
+    env.setdefault("PYTHONUTF8", "1")
+    return env
+
+
+def _run_capture(argv: list[str], base: Path, timeout: float, env: dict) -> tuple[int, str, str]:
+    try:
+        result = subprocess.run(
+            argv,
+            cwd=str(base),
+            env=env,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return 124, "", f"Timed out after {int(timeout)} seconds."
+    except OSError as exc:
+        return 1, "", str(exc)
+    return result.returncode, result.stdout or "", result.stderr or ""
+
+
+def rescan_archive(base: Path) -> dict:
+    """Rescan every configured Mix Archive folder.
+
+    This runs the manager's own `--rescan-archive`, which is the same code the
+    Storage Management menu's "Rescan Mix Archive Folders" entry uses, so the
+    tray cannot disagree with the console about what a rescan does.
+    """
+    script = Path(base) / "Mix_Archive_Manager.sh"
+    if not script.is_file():
+        return {"ok": False, "detail": f"{script.name} was not found in {base}."}
+    bash = _which("bash") or "/bin/bash"
+    code, stdout, stderr = _run_capture(
+        [bash, str(script), "--rescan-archive"],
+        Path(base),
+        ARCHIVE_RESCAN_TIMEOUT,
+        _rescan_env(),
+    )
+    fields: dict[str, str] = {}
+    for line in _strip_ansi(stdout).splitlines():
+        key, separator, value = line.strip().partition("=")
+        if separator and key.startswith("RESCAN_"):
+            fields[key[len("RESCAN_"):].lower()] = value.strip()
+    if fields.get("status") != "ok":
+        detail = fields.get("detail") or _last_line(stderr) or _last_line(stdout)
+        return {"ok": False, "detail": detail or f"Rescan exited with code {code}."}
+    return {
+        "ok": True,
+        "folders": _parse_count(fields.get("folders")),
+        "flacs": _parse_count(fields.get("flacs")),
+        "wavs": _parse_count(fields.get("wavs")),
+        "pending_wavs": _parse_count(fields.get("pending_wavs")),
+        "missing_tracklists": _parse_count(fields.get("missing_tracklists")),
+    }
+
+
+def _last_line(text: str) -> str:
+    lines = [line.strip() for line in _strip_ansi(text or "").splitlines() if line.strip()]
+    return lines[-1] if lines else ""
+
+
+def archive_rescan_message(result: dict) -> str:
+    if not result.get("ok"):
+        detail = result.get("detail") or "The archive rescan did not finish."
+        return f"Archive rescan failed. {detail}"
+    folders = int(result.get("folders") or 0)
+    flacs = int(result.get("flacs") or 0)
+    wavs = int(result.get("wavs") or 0)
+    pending = int(result.get("pending_wavs") or 0)
+    missing = int(result.get("missing_tracklists") or 0)
+    parts = [
+        f"{folders} archive folder{'s' if folders != 1 else ''} scanned",
+        f"{flacs:,} FLACs",
+        f"{wavs:,} converted WAVs",
+    ]
+    if pending:
+        parts.append(f"{pending:,} WAVs waiting for conversion")
+    if missing:
+        parts.append(f"{missing:,} missing tracklists")
+    return " · ".join(parts)
+
+
+def music_manager_script(base: Path) -> Path | None:
+    for candidate in (
+        Path(base) / "scripts" / "music_folders_manager.py",
+        Path(base) / "music_folders_manager.py",
+    ):
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def rescan_music_folders(base: Path) -> dict:
+    """Refresh the MUSIC folder playlists.
+
+    Option 2 > Option 3 > A in the manager calls the music manager's
+    `generate_advance_playlists(ALL)`; `--generate ALL` is that same call on
+    the command line, so the tray and the console rebuild one playlist set.
+    """
+    script = music_manager_script(base)
+    if script is None:
+        return {"ok": False, "detail": f"music_folders_manager.py was not found in {base}."}
+    python = sys.executable or _which("python3") or "python3"
+    code, stdout, stderr = _run_capture(
+        [python, str(script), "--generate", "ALL"],
+        Path(base),
+        MUSIC_RESCAN_TIMEOUT,
+        _rescan_env(),
+    )
+    text = _strip_ansi(stdout)
+    if "No music folders configured" in text:
+        return {"ok": False, "detail": "No music folders are configured."}
+    saved = len(_saved_playlist_lines(text))
+    total = 0
+    for line in text.splitlines():
+        marker = "Playlist Generation Complete ("
+        if marker in line:
+            number = line.split(marker, 1)[1].split(" total tracks", 1)[0]
+            total = _parse_count(number)
+            break
+    else:
+        detail = _last_line(stderr) or _last_line(text)
+        return {"ok": False, "detail": detail or f"Playlist refresh exited with code {code}."}
+    return {
+        "ok": True,
+        "folders": saved,
+        "tracks": total,
+        "failed": text.count("Could not list"),
+    }
+
+
+def _saved_playlist_lines(text: str) -> list[str]:
+    return [line for line in text.splitlines() if "Saved " in line and " Playlist:" in line]
+
+
+def music_rescan_message(result: dict) -> str:
+    if not result.get("ok"):
+        detail = result.get("detail") or "The music folder rescan did not finish."
+        return f"Music folder rescan failed. {detail}"
+    folders = int(result.get("folders") or 0)
+    tracks = int(result.get("tracks") or 0)
+    failed = int(result.get("failed") or 0)
+    parts = [
+        f"{folders} music folder{'s' if folders != 1 else ''} refreshed",
+        f"{tracks:,} tracks in ALL",
+    ]
+    if failed:
+        parts.append(f"{failed} folder{'s' if failed != 1 else ''} unreachable")
+    return " · ".join(parts)
+
+
+RESCAN_ACTIONS = ("rescan-archive", "rescan-music")
+RESCAN_BUSY_LABELS = {
+    "rescan-archive": "Rescanning Mix Archive Folders…",
+    "rescan-music": "Rescanning Music Folders…",
+}
+RESCAN_ICONS = {
+    "rescan-archive": "folder-music",
+    "rescan-music": "folder-music",
+}
+
+
+def run_rescan(action_id: str, base: Path) -> dict:
+    """Run one rescan and return its result dict. Never raises."""
+    try:
+        if action_id == "rescan-archive":
+            return rescan_archive(base)
+        if action_id == "rescan-music":
+            return rescan_music_folders(base)
+    except Exception as exc:  # a rescan must never take the icon down
+        return {"ok": False, "detail": str(exc)}
+    return {"ok": False, "detail": f"Unknown rescan action: {action_id}"}
+
+
+def rescan_message(action_id: str, result: dict) -> str:
+    if action_id == "rescan-archive":
+        return archive_rescan_message(result)
+    return music_rescan_message(result)
+
+
 def perform_menu_action(base: Path, action_id: str) -> int:
     if action_id not in _MENU_ACTIONS:
         return 2
@@ -1289,6 +1649,19 @@ def perform_menu_action(base: Path, action_id: str) -> int:
                 file=sys.stderr,
             )
         return 0 if result.get("supported") else 1
+    if action_id == "mute-audio":
+        result = toggle_player_mute()
+        if not result.get("supported"):
+            print("MP Audio Player is not running.", file=sys.stderr)
+            return 1
+        return 0
+    if action_id in RESCAN_ACTIONS:
+        result = run_rescan(action_id, base)
+        title = MENU_RESCAN_ARCHIVE if action_id == "rescan-archive" else MENU_RESCAN_MUSIC
+        notify(title, rescan_message(action_id, result), RESCAN_ICONS[action_id])
+        if not result.get("ok"):
+            print(rescan_message(action_id, result), file=sys.stderr)
+        return 0 if result.get("ok") else 1
     role = {
         "launch-gui": ROLE_GUI,
         "launch-liquid": ROLE_LIQUID,
@@ -1299,6 +1672,17 @@ def perform_menu_action(base: Path, action_id: str) -> int:
 
 def format_roles(roles: set[str]) -> str:
     return " ".join(sorted(roles))
+
+
+def action_label(action_id: str) -> str | None:
+    """The live title of a menu entry whose label follows the app state.
+
+    The macOS menu bar is its own process, so it asks the tray module for the
+    mute title instead of keeping a second copy of the "muted?" read.
+    """
+    if action_id == "mute-audio":
+        return mute_menu_label()
+    return None
 
 
 def macos_menu_arguments(base: Path, icon: Path, lock_path: Path, python: str, stay: bool) -> list[str]:
@@ -1806,9 +2190,72 @@ def run_tray(base: Path, config: Path, stay: bool = False) -> int:
             state_box["done"] = True
 
     close_state = {"done": False, "error": ""}
+    rescan_states: dict[str, dict] = {}
+
+    def _run_rescan(state_box: dict, action_id: str) -> None:
+        """Scan on a worker thread so the icon keeps answering while it runs.
+
+        A large archive or a slow SMB music share takes minutes. Running that
+        in the Qt slot froze the menu exactly the way the inline Close All used
+        to, so the scan runs here and the notice is posted from the main
+        thread once the result is in.
+        """
+        try:
+            state_box["result"] = run_rescan(action_id, base)
+        except Exception as exc:  # never leave the entry stuck on "Rescanning…"
+            state_box["result"] = {"ok": False, "detail": str(exc)}
+        finally:
+            state_box["done"] = True
+
+    def start_rescan(action_id: str) -> None:
+        if action_id in rescan_states and not rescan_states[action_id]["done"]:
+            return
+        box = {"done": False, "result": {}}
+        rescan_states[action_id] = box
+        action = rescan_actions.get(action_id)
+        if action is not None:
+            action.setEnabled(False)
+            action.setText(RESCAN_BUSY_LABELS.get(action_id, "Rescanning…"))
+        worker = threading.Thread(
+            target=_run_rescan,
+            args=(box, action_id),
+            name=f"mp-tray-{action_id}",
+            daemon=True,
+        )
+        worker.start()
+        watcher = QTimer()
+        watcher.setInterval(200)
+
+        def _check_finished() -> None:
+            if not box["done"]:
+                return
+            watcher.stop()
+            result = box.get("result") or {}
+            if action is not None:
+                action.setEnabled(True)
+                action.setText(
+                    MENU_RESCAN_ARCHIVE if action_id == "rescan-archive" else MENU_RESCAN_MUSIC
+                )
+            title = MENU_RESCAN_ARCHIVE if action_id == "rescan-archive" else MENU_RESCAN_MUSIC
+            notify(title, rescan_message(action_id, result), RESCAN_ICONS[action_id])
+            try:
+                with open(log_path, "a", encoding="utf-8") as log_file:
+                    log_file.write(
+                        f"{action_id}: "
+                        f"{'ok' if result.get('ok') else 'failed'} "
+                        f"{rescan_message(action_id, result)}\n"
+                    )
+            except OSError:
+                pass
+
+        watcher.timeout.connect(_check_finished)
+        watcher.start()
 
     def dispatch(action_id: str) -> None:
         if state["closing"] and action_id != "web-audio":
+            return
+        if action_id in RESCAN_ACTIONS:
+            start_rescan(action_id)
             return
         if action_id == "close-all":
             state["closing"] = True
@@ -1846,6 +2293,25 @@ def run_tray(base: Path, config: Path, stay: bool = False) -> int:
             # action the user just read.
             toggle_web_audio()
             return
+        if action_id == "mute-audio":
+            result = toggle_player_mute()
+            if mute_action is not None:
+                # The IPC answer is authoritative: the player writes its state
+                # file from its own thread, so a read right after the toggle
+                # could still return the previous value.
+                if result.get("supported"):
+                    mute_action.setText(
+                        MENU_UNMUTE_AUDIO if result.get("muted") else MENU_MUTE_AUDIO
+                    )
+                else:
+                    mute_action.setText(mute_menu_label())
+            if not result.get("supported"):
+                notify(
+                    MENU_MUTE_AUDIO,
+                    "MP Audio Player is not running, so there is no audio to mute.",
+                    "audio-volume-muted",
+                )
+            return
         role = {
             "launch-gui": ROLE_GUI,
             "launch-liquid": ROLE_LIQUID,
@@ -1865,6 +2331,8 @@ def run_tray(base: Path, config: Path, stay: bool = False) -> int:
 
     web_audio_action = None
     close_action = None
+    mute_action = None
+    rescan_actions: dict[str, object] = {}
     for action_id, label in menu_entries():
         if action_id == "close-all":
             menu.addSeparator()
@@ -1875,6 +2343,10 @@ def run_tray(base: Path, config: Path, stay: bool = False) -> int:
             web_audio_action = action
         elif action_id == "close-all":
             close_action = action
+        elif action_id == "mute-audio":
+            mute_action = action
+        elif action_id in RESCAN_ACTIONS:
+            rescan_actions[action_id] = action
 
     def refresh_web_audio_label() -> None:
         # Read the state when the menu opens, so "Stop" is shown only while the
@@ -1882,8 +2354,18 @@ def run_tray(base: Path, config: Path, stay: bool = False) -> int:
         if web_audio_action is not None:
             web_audio_action.setText(web_audio_label())
 
-    menu.aboutToShow.connect(refresh_web_audio_label)
-    refresh_web_audio_label()
+    def refresh_mute_label() -> None:
+        # The player may have been muted from the player window, a headset
+        # button, or the Web Companion since the menu was last shown.
+        if mute_action is not None:
+            mute_action.setText(mute_menu_label())
+
+    def refresh_menu_labels() -> None:
+        refresh_web_audio_label()
+        refresh_mute_label()
+
+    menu.aboutToShow.connect(refresh_menu_labels)
+    refresh_menu_labels()
 
     tray.setContextMenu(menu)
 
@@ -1942,6 +2424,14 @@ def main_darwin(args: list[str]) -> int:
         index = args.index("--action")
         action_id = args[index + 1] if index + 1 < len(args) else ""
         return perform_menu_action(base, action_id)
+    if "--action-label" in args:
+        index = args.index("--action-label")
+        action_id = args[index + 1] if index + 1 < len(args) else ""
+        label = action_label(action_id)
+        if label is None:
+            return 1
+        print(label)
+        return 0
     if "--install" in args:
         return install_macos_tray(base)
     if "--keepalive" in args:
@@ -1976,6 +2466,14 @@ def main(argv: list[str] | None = None) -> int:
         index = args.index("--action")
         action_id = args[index + 1] if index + 1 < len(args) else ""
         return perform_menu_action(default_base_dir(), action_id)
+    if "--action-label" in args:
+        index = args.index("--action-label")
+        action_id = args[index + 1] if index + 1 < len(args) else ""
+        label = action_label(action_id)
+        if label is None:
+            return 1
+        print(label)
+        return 0
     lock = TrayLock(lock_path)
     if not lock.acquire():
         return 0

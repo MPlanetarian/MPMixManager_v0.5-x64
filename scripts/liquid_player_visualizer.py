@@ -1160,6 +1160,17 @@ def vulkan_preset_spirv(preset_id: int, march_steps: Optional[int] = None) -> Op
     """
     steps = macos_visualizer_march_steps() if march_steps is None else int(march_steps)
     preset_id = int(preset_id)
+    # User presets are standalone modules and never fold the shipped scenes.
+    try:
+        try:
+            from mp_visualizer_user_presets import vulkan_spirv_for
+        except ImportError:
+            from scripts.mp_visualizer_user_presets import vulkan_spirv_for  # type: ignore
+        custom = vulkan_spirv_for(preset_id)
+        if custom:
+            return custom
+    except Exception:
+        pass
     try:
         source = (ROOT / "shaders" / "mp_liquid_visualizer.frag").read_text(encoding="utf-8")
     except OSError:
@@ -1447,10 +1458,27 @@ class PlayerVisualizerLayer:
         if cached is None:
             try:
                 vert_src = (ROOT / "shaders" / "liquid_glass_gl.vert").read_text(encoding="utf-8")
-                # Desktop defaults to the full 84 steps; macOS and a Pi use their
-                # reduced count. MP_VISUALIZER_GL_MARCH_STEPS applies everywhere.
-                steps = visualizer_march_steps()
-                frag_src = specialize_visualizer_source(opengl_visualizer_source(), preset_id, steps)
+                # A user-generated preset carries its own complete GLSL 330
+                # shader. It has no scenes to fold and no text guard, so it is
+                # compiled verbatim.
+                custom_source = None
+                if renderer is not None:
+                    try:
+                        try:
+                            from mp_visualizer_user_presets import opengl_source_for
+                        except ImportError:
+                            from scripts.mp_visualizer_user_presets import opengl_source_for  # type: ignore
+                        custom_source = opengl_source_for(getattr(renderer, "preset", None))
+                    except Exception:
+                        custom_source = None
+                if custom_source:
+                    frag_src = custom_source
+                else:
+                    # Desktop defaults to the full 84 steps; macOS and a Pi use
+                    # their reduced count. MP_VISUALIZER_GL_MARCH_STEPS applies
+                    # everywhere.
+                    steps = visualizer_march_steps()
+                    frag_src = specialize_visualizer_source(opengl_visualizer_source(), preset_id, steps)
                 prog, locs = self._link_program(GL, vert_src, frag_src, _UNIFORM_NAMES)
                 if _loc(locs, "u_res") < 0:
                     raise RuntimeError("MP Visualizer shader uniforms did not link")
