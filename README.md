@@ -3,9 +3,11 @@
 </p>
 
 > [!IMPORTANT]
-> ## 🎉 MP Mix Manager 0.5.4 Sensorium Update — Out Today
+> ## 🎉 MP Mix Manager 0.5.4 (Sensorium) Is Live
 >
-> Welcome to Dreamworlds Productions... I am delighted to announce that the MP Mix Manager 0.5.4 Sensorium Update is releasing today (18th of November 2026).
+> **MP Mix Manager 0.5.4 was released on the 19th of November 2026 by MPlanetarian / Dreamworlds Productions.**
+>
+> Welcome to **Sensorium**, the Next Generation of Audio Mixing and Mix Archive Management & Audio Workflow, with many new Features Added — including a brand new **MP Liquid Mixer** and new **3D Visualizations** for **OpenGL, Vulkan & Metal**. See the full list of new features added and fixes below.
 >
 > This is the follow-up to 0.5.3, and it is a release built from things you told me about — plus one big new window. Nothing here is a rewrite: every fix below is a real bug that was reproduced on a real machine, fixed at the cause, and then pinned by a test so it cannot come back. The console menu, controllers, the clickable deck and the intro movie all shipped in 0.5.3 and are described there, not here.
 >
@@ -27,13 +29,13 @@
 > Please see the rest of this page to discover even more — there are simply too many fixes to list for a short introduction.
 >
 > **- MPlanetarian (Dreamworlds Productions)**
-> **November 18th, 2026**
+> **November 19th, 2026**
 
 # MP Mix Manager 0.5.4 Stable (Sensorium) by Dreamworlds Productions (MPlanetarian)
 
-> 📅 **Last Updated:** November 18, 2026 • **Latest Release:** `v0.5.4 Stable (Sensorium)` — released **November 18, 2026**
+> 📅 **Last Updated:** November 19, 2026 • **Latest Release:** `v0.5.4 Stable (Sensorium)` — released **November 19, 2026**
 
-[![Last Updated](https://img.shields.io/badge/Last%20Updated-November%2018%2C%202026-brightgreen.svg)]()
+[![Last Updated](https://img.shields.io/badge/Last%20Updated-November%2019%2C%202026-brightgreen.svg)]()
 [![Version](https://img.shields.io/badge/Version-0.5.4%20Stable%20(Sensorium)-f72585.svg)](VERSION)
 [![Liquid Glass Player](https://img.shields.io/badge/Liquid%20Glass%20Player-OpenGL%20%7C%20Vulkan%20%7C%20Metal-00f0ff.svg)](MP_Audio_Player_Liquid_Glass_OpenGL.py)
 [![MP Liquid Visualizer](https://img.shields.io/badge/MP%20Liquid%20Visualizer-Vulkan%20%7C%20OpenGL%203D%20Audio--Reactive-ff007f.svg)](MP_Liquid_Visualizer.py)
@@ -95,7 +97,7 @@ It is one 1920×1080 (or 4K) window that inherits the entire Liquid Glass host: 
 
 > [!TIP]
 > ### 🌟 Welcome to MP Mix Manager v0.5.4 Stable (Sensorium)
-> **November 18, 2026. Welcome from MPlanetarian.** This is the 0.5.4 Sensorium release, the direct successor to **0.5.3 Stable (Sensorium)**. Thank you for running MP Mix Manager, MP Gui, the Liquid Transparent Audio Player and the new **MP Liquid Mixer**. The manager, the players, the mixer and the music library share one glass desktop, and the macOS build in this release is the one on this page.
+> **November 19, 2026. Welcome from MPlanetarian.** This is the 0.5.4 Sensorium release, the direct successor to **0.5.3 Stable (Sensorium)**. Thank you for running MP Mix Manager, MP Gui, the Liquid Transparent Audio Player and the new **MP Liquid Mixer**. The manager, the players, the mixer and the music library share one glass desktop, and the macOS build in this release is the one on this page.
 >
 > Sensorium 0.5.4 Release - Enjoy a Magical Journey through Music & Sound with the MP Visualizer (Included with MP Liquid Player) & the new MP Gui or you can use the MP Mix Manager CLI
 >
@@ -189,7 +191,7 @@ It is one 1920×1080 (or 4K) window that inherits the entire Liquid Glass host: 
 ## 🚀 What's New in v0.5.4 Stable (Sensorium)
 
 > [!IMPORTANT]
-> **MP Mix Manager v0.5.4 Stable (Sensorium) — released November 18, 2026.** Sensorium 0.5.4 carries every 0.5.3 feature forward. It is a **correctness release with a new window**: **MP Liquid Mixer** arrives as a two-deck, four-channel DJ mixer with native and MIDI-mode DJ control and 4 GiB WAV/FLAC recording, while almost every fix below was a reproducible fault on a real test bed, fixed at its cause rather than at its symptom and then pinned by a test. The visible wins are a **manager that starts in ~2.3 s instead of 13.5 s**, a **Web Companion that starts the mix when the page opens**, a **VISUALIZATION button that truly hides and shows**, **arrow keys that always seek**, a **readable now-playing title**, **`W` opening an MP Black Glass pane**, a **tray that can rescan and mute**, and a **first-launch intro that plays before the glass**. The rest of the release is depth: the mixer's decks mount Music Folders before they play, the Harmony agent no longer restart-loops, Music Folders survives an offline share, Ubuntu 20.04's Python 3.8 imports the tree, the header banner follows a theme switch, MP Reporter stops sending empty briefings, a full uninstall finally removes its OS integration, and a new **boot-death ledger** separates a power cut from a kernel panic.
+> **MP Mix Manager v0.5.4 Stable (Sensorium) — released November 19, 2026.** Sensorium 0.5.4 carries every 0.5.3 feature forward. It is a **correctness release with a new window**: **MP Liquid Mixer** arrives as a two-deck, four-channel DJ mixer with native and MIDI-mode DJ control and 4 GiB WAV/FLAC recording, while almost every fix below was a reproducible fault on a real test bed, fixed at its cause rather than at its symptom and then pinned by a test. The visible wins are a **manager that starts in ~2.3 s instead of 13.5 s**, a **Web Companion that starts the mix when the page opens**, a **VISUALIZATION button that truly hides and shows**, **arrow keys that always seek**, a **readable now-playing title**, **`W` opening an MP Black Glass pane**, a **tray that can rescan and mute**, and a **first-launch intro that plays before the glass**. The rest of the release is depth: the mixer's decks mount Music Folders before they play, the Harmony agent no longer restart-loops, Music Folders survives an offline share, Ubuntu 20.04's Python 3.8 imports the tree, the header banner follows a theme switch, MP Reporter stops sending empty briefings, a full uninstall finally removes its OS integration, and a new **boot-death ledger** separates a power cut from a kernel panic.
 
 ### 🆕 New in v0.5.4
 
