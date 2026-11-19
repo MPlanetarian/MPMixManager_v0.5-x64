@@ -20,6 +20,7 @@ behind the whole surface.
 | **4 channels + crossfader** | Faders A and B apply per-deck gain; the crossfader is equal-power (both decks at -3 dB in the centre). C and D are inactive placeholders. |
 | **Internal / External mixing** | Internal applies the software faders and crossfader. External hands both decks to the house mixer at unity and bypasses the software levels. |
 | **MP Visualizer behind** | A locked companion MP Liquid Visualizer runs behind the mixer at the mixer's exact rectangle in both full screen and windowed mode. It follows every move/resize, cannot be detached (Z/double-click are ignored on a locked companion), and is relaunched if it is closed or killed. The **VISUALIZER** button (or `V`) only hides/shows it. |
+| **Traktor MIDI auto-map** | A detected **Traktor Kontrol** mixer in MIDI mode is mapped automatically (Play A/B, Sync A/B, Shift, Browse, Load, Record, channel volume and deck pitch). A generic MIDI controller is never opened or mapped; only a device whose ALSA name contains `Traktor` is used. The native S4 evdev path remains available for hardware that is not in MIDI mode. |
 | **Exit_MP_Video.mp4 brackets the window** | On every launch the shared loader movie plays **before** the mixer window exists, and after the last window closes the same movie plays **after** the window is gone. Both use `scripts/display_loader_video.sh` (`--intro-force` / `--exit-force`), so the movie, player choice, borderless window and timeout are the ones every other MP window uses. Each launch path (desktop shortcut, `X` in another MP window, or `run.sh`) shares this one implementation, so the movie never plays twice. |
 | **Desktop shortcut** | `MP Liquid Mixer.desktop` on the Desktop and in the application menu on Linux, written by `scripts/install_desktop_shortcuts.py` in the same style as the other four MP entries. It points at `scripts/launch_liquid_mixer.sh` through `mp-desktop-exec`, so moving or renaming the install keeps it working. macOS and Windows do not get one: the mixer needs X11/XWayland, VTE and ALSA. |
 | **WAV / FLAC at 4 GiB** | The master output records as WAV (default) or FLAC at a fixed 4 GiB part ceiling. WAV sizes are unsigned 32-bit, so a part passes the old 2 GiB wall; at the ceiling the next file is `..._PART_2`, `..._PART_3`, and so on. |
@@ -75,7 +76,7 @@ finds Python itself; no install step.
 | `R` or **REC** | Start/stop master-output recording |
 | `M` | Open MP Mix Manager in a new Konsole window (`Mix_Archive_Manager.sh`) |
 | `Z` | Open an MP Liquid Visualizer window |
-| `W` | Open the MP Black Glass window (the Liquid Glass host on Into Darkness / Void Out) |
+| `W` | Open an MP Black Glass pane at the mixer's size |
 | `L` | Open MP Liquid Player |
 | `G` | Open MP Gui |
 | `F11` or **double-click the top bar** | Toggle full screen and a 1920x1080 centred window |
@@ -87,6 +88,25 @@ Inside a deck the player's own keys keep working: `Space` play/pause, arrows to
 seek, `1`/`2`/`3` libraries, `/` search, and the rest of the MP Audio Player
 key map. The mixer only takes `C`, `V`, `X`, `R`, `M`, `Z`, `W`, `L`, `G`,
 `F11` and `Esc`, and only when the deck is not the focused widget.
+
+### Traktor hardware
+
+The mixer looks for a Traktor Kontrol port at startup and keeps looking while
+it runs, so a device switched to MIDI mode or plugged in later is picked up.
+
+- Only ALSA rawmidi ports whose device name contains **Traktor** are opened.
+  The MPK mini and any other generic controller stay unopened and unmapped.
+- MIDI-mode buttons use the S4 note/CC map already used by
+  `scripts/traktor_s4_midi.py`: Play A/B, Sync A/B, Shift, Browse push/turn,
+  Load, Record, channel volume and deck pitch.
+- The listener prefers the ALSA **sequencer** (via `aseqdump`), which several
+  processes can share, so it works beside the standalone Traktor service. It
+  falls back to the rawmidi node when the sequencer is unavailable.
+- The map can be adjusted per control in
+  `~/.config/mix-manager/liquid_mixer_midi.json`, for example
+  `{"notes": {"0": "sync:A"}, "cc": {"8": "channel:B"}}`.
+- A native-mode S4 still uses the evdev path. If both paths see the same
+  button, duplicate presses within 80 ms are coalesced.
 
 ---
 

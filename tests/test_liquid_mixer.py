@@ -1166,11 +1166,14 @@ class TestLaunchKeys(unittest.TestCase):
         mixer, _ = self._mixer()
         self._press(mixer, "g", "_open_mp_gui")
 
-    def test_black_glass_is_the_into_darkness_liquid_player(self):
+    def test_w_opens_a_black_glass_pane_at_the_mixer_size(self):
         mixer, _ = self._mixer()
-        with patch.object(mixer, "_open_liquid_player") as player:
+        mixer.window = MagicMock()
+        with patch("black_glass_window.spawn_black_glass_for_window",
+                   return_value="opened") as spawn:
             mixer._open_black_glass()
-        player.assert_called_once_with("into_darkness_void_out")
+        spawn.assert_called_once_with(mixer.window, "MP Liquid Mixer")
+
     def test_launch_commands_point_at_the_real_launchers(self):
         from types import SimpleNamespace
         mixer, _ = self._mixer()

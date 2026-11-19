@@ -14,6 +14,7 @@ import hashlib
 import html
 import http.server
 import json
+import math
 import os
 import random
 import re
@@ -3366,13 +3367,31 @@ def get_eq_status(follow: str = "") -> Dict[str, Any]:
 
 def format_seconds(value: Any) -> str:
     try:
-        total = int(max(0.0, float(value)))
+        seconds = float(value)
+        if not math.isfinite(seconds):
+            raise ValueError
+        total = int(max(0.0, seconds))
     except (TypeError, ValueError):
         total = 0
     return f"{total // 3600:02d}:{(total % 3600) // 60:02d}:{total % 60:02d}"
 
 
 _duration_cache: Dict[str, Tuple[float, float, float]] = {}
+# A corrupt or absent length field must not reach the dashboard as a duration.
+# libsndfile reports 2**63-1 frames (about 2.9 million years) for a FLAC that
+# does not declare its total samples; the phone then shows that as the length
+# and computes a progress bar that can never move.
+MAX_PLAUSIBLE_AUDIO_SEC = 7 * 24 * 3600
+
+
+def _plausible_duration(seconds: Any) -> float:
+    try:
+        value = float(seconds)
+    except (TypeError, ValueError):
+        return 0.0
+    if not math.isfinite(value) or value <= 0.0 or value > MAX_PLAUSIBLE_AUDIO_SEC:
+        return 0.0
+    return value
 
 
 def probe_duration(path: str) -> float:
@@ -3387,7 +3406,7 @@ def probe_duration(path: str) -> float:
     duration = 0.0
     try:
         import soundfile  # header-only probe; no device, no decoding
-        duration = float(soundfile.info(path).duration or 0.0)
+        duration = _plausible_duration(soundfile.info(path).duration)
     except Exception:
         duration = 0.0
     if duration <= 0.0:
@@ -3396,6 +3415,7 @@ def probe_duration(path: str) -> float:
         # soundfile lives in the user site-packages, which a systemd start may
         # not resolve. ffprobe reads the same header and is package-managed.
         duration = _ffprobe_duration(path)
+    duration = _plausible_duration(duration)
     _duration_cache[path] = (st.st_mtime, st.st_size, duration)
     return duration
 
@@ -11157,6 +11177,18 @@ class CompanionHandler(http.server.BaseHTTPRequestHandler):
             if payload.get("action") in ("unsupported", "tty_mode"):
                 status = 501 if payload.get("action") == "unsupported" else 409
             self._send_json(status, payload)
+        elif url.path in ("/api/status", "/api/theme", "/api/eq", "/api/autoplay",
+                          "/api/themes", "/api/set_theme", "/api/playlist", "/api/mode",
+                          "/api/launchpad", "/api/play-random", "/api/stream",
+                          "/api/assistant/status", "/api/assistant/voices",
+                          "/healthz"):
+            # These are read-only (or deliberately GET-only, like set_theme).
+            # A POST to them is a method error, not a missing route: "404" made
+            # a client look like the endpoint had been removed.
+            self.send_response(405)
+            self.send_header("Allow", "GET, HEAD")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
         else:
             self.send_response(404)
             self.send_header("Content-Length", "0")

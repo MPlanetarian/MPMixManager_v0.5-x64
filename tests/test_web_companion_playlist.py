@@ -768,5 +768,38 @@ class TestQueueCache(CompanionTestBase):
         self.assertEqual(companion.build_stream_queue(), [str(track)])
 
 
+class TestDurationSanity(unittest.TestCase):
+    """A corrupt/absent length field must not reach the phone as a duration.
+
+    libsndfile returns ``SF_COUNT_MAX`` (2**63-1) frames for a FLAC whose
+    STREAMINFO does not declare a total. Dividing by the sample rate gives
+    about 2.9 million years, which used to be rendered verbatim as the track
+    length and made the progress bar meaningless.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.path = Path(self._tmp.name) / "no_total.flac"
+        self.path.write_bytes(b"fLaC" + b"\x00" * 128)
+        companion._duration_cache.clear()
+
+    def tearDown(self):
+        self._tmp.cleanup()
+        companion._duration_cache.clear()
+
+    def test_unknown_length_probes_as_zero(self):
+        sentinel = (1 << 63) - 1
+        info = type("Info", (), {"frames": sentinel,
+                                 "duration": sentinel / 44100.0})()
+        fake_soundfile = type("SF", (), {"info": staticmethod(lambda _p: info)})()
+        with patch.dict("sys.modules", {"soundfile": fake_soundfile}), \
+                patch.object(companion, "_ffprobe_duration", return_value=0.0):
+            self.assertEqual(companion.probe_duration(str(self.path)), 0.0)
+
+    def test_format_seconds_survives_infinity(self):
+        self.assertEqual(companion.format_seconds(float("inf")), "00:00:00")
+        self.assertEqual(companion.format_seconds(float("nan")), "00:00:00")
+
+
 if __name__ == "__main__":
     unittest.main()

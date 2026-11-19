@@ -87,6 +87,9 @@ GLFW_KEY_Q = 81
 GLFW_KEY_Z = 90
 GLFW_KEY_H = 72
 GLFW_KEY_R = 82
+# W opens an MP Black Glass pane at the window's own size, like every other
+# MP window. GLFW reports the same key code on every backend.
+GLFW_KEY_W = 87
 GLFW_KEY_1 = 49
 GLFW_KEY_9 = 57
 GLFW_KEY_EQUAL = 61
@@ -1353,6 +1356,26 @@ class LiquidVisualizerMetalRenderer(MonitorSpanMixin, RandomPresetMixin, PlayerB
             self._select_preset_slot(key - GLFW_KEY_1)
         elif key == GLFW_KEY_R:
             self.toggle_random_mode()
+        elif key == GLFW_KEY_W:
+            # W opens an MP Black Glass pane at exactly this window's size.
+            self._open_black_glass_pane()
+
+    def _open_black_glass_pane(self) -> bool:
+        """W: open a Black Glass pane at exactly this visualizer's size."""
+        try:
+            from black_glass_window import spawn_black_glass
+        except ImportError:
+            try:
+                from scripts.black_glass_window import spawn_black_glass
+            except ImportError:
+                return False
+        try:
+            width, height = self.window_size()
+            x, y = self.window_pos()
+        except Exception:
+            return False
+        return spawn_black_glass(int(width), int(height), int(x), int(y),
+                                 "MP Liquid Visualizer") == "opened"
 
     def _cycle_preset(self, direction: int) -> None:
         try:

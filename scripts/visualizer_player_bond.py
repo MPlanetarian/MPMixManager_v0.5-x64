@@ -29,9 +29,12 @@ try:
 except ImportError:
     from scripts.visualizer_monitor_span import ROLE_SPAWNED
 
-# Title prefixes of the two Liquid Glass hosts a companion can belong behind.
+# Title prefixes of the Liquid Glass hosts a companion can belong behind. The
+# Black Glass pane is the third: Z inside one of those panes attaches a
+# visualizer behind *that* pane, not behind whichever player is also open.
 PLAYER_TITLE = "MP Audio Player (Liquid Glass"
 GUI_TITLE = "MP Mix Manager (Liquid Glass"
+BLACK_GLASS_TITLE = "MP Black Glass"
 
 # How long a locked companion waits for the host it has *never* seen before
 # closing itself.
@@ -167,8 +170,20 @@ class PlayerBondMixin:
         except Exception:
             return False
 
+    def _bond_targets_black_glass(self) -> bool:
+        """True when this companion belongs behind an MP Black Glass pane.
+
+        A pane started with **W** attaches its own visualizer with
+        ``MP_VISUALIZER_MATCH_BLACK_GLASS=1`` and records the pane's pid in
+        ``MP_BLACK_GLASS_PID``. The pane publishes its own rectangle, so the
+        bond follows that pane and not the player behind it.
+        """
+        return os.environ.get("MP_VISUALIZER_MATCH_BLACK_GLASS") == "1"
+
     def _bond_host_title(self) -> str:
         """Title prefix of the window this bond must stack against."""
+        if self._bond_targets_black_glass():
+            return BLACK_GLASS_TITLE
         return GUI_TITLE if self._bond_targets_gui() else PLAYER_TITLE
 
     def _bond_host_running(self) -> Optional[bool]:
@@ -186,6 +201,15 @@ class PlayerBondMixin:
         another process there and returns None: an unverifiable host is never
         treated as a dead one, because that would close a working window.
         """
+        if self._bond_targets_black_glass():
+            try:
+                from black_glass_window import host_running
+            except ImportError:
+                from scripts.black_glass_window import host_running
+            try:
+                return host_running()
+            except Exception:
+                return None
         if not Path("/proc").is_dir():
             return None
         try:
@@ -365,6 +389,15 @@ class PlayerBondMixin:
 
     def _bond_read_geometry(self) -> Optional[tuple]:
         """Published (x, y, width, height) for the host this bond follows."""
+        if self._bond_targets_black_glass():
+            try:
+                from black_glass_window import read_geometry
+            except ImportError:
+                from scripts.black_glass_window import read_geometry
+            try:
+                return read_geometry()
+            except Exception:
+                return None
         try:
             from liquid_player_visualizer import (
                 read_published_gui_window_geometry,
@@ -381,6 +414,9 @@ class PlayerBondMixin:
 
     def _bond_read_size(self) -> Optional[tuple]:
         """Published (width, height) for the host this bond follows."""
+        if self._bond_targets_black_glass():
+            geometry = self._bond_read_geometry()
+            return (geometry[2], geometry[3]) if geometry else None
         try:
             from liquid_player_visualizer import (
                 read_published_gui_window_size,
@@ -397,6 +433,15 @@ class PlayerBondMixin:
 
     def _bond_read_host_window_id(self) -> int:
         """The host's own X11 window id, or 0 when it did not publish one."""
+        if self._bond_targets_black_glass():
+            try:
+                from black_glass_window import read_window_id
+            except ImportError:
+                from scripts.black_glass_window import read_window_id
+            try:
+                return int(read_window_id() or 0)
+            except Exception:
+                return 0
         try:
             from liquid_player_visualizer import (
                 read_published_gui_window_id,

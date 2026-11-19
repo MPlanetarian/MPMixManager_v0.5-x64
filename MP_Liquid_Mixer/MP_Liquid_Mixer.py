@@ -37,6 +37,7 @@ for path in (str(MIXER_DIR), str(PROJECT_ROOT), str(SCRIPTS_DIR)):
 import mixer_core as core  # noqa: E402
 import mixer_evdev as mixer_evdev  # noqa: E402
 import mixer_export as mixer_export  # noqa: E402
+import mixer_midi as mixer_midi  # noqa: E402
 import mixer_recording as mixer_recording  # noqa: E402
 
 # The host forces GDK_BACKEND=x11 and requires GdkX11 - the window needs an X11
@@ -51,8 +52,6 @@ from MP_Audio_Player_Liquid_Glass_OpenGL import (  # noqa: E402
 )
 
 CONFIG_DIR = core.CONFIG_DIR
-# "Into Darkness (Void Out)" is the opaque black-glass pane in this suite.
-BLACK_GLASS_THEME = "into_darkness_void_out"
 
 
 def _rgba(color: Tuple[int, int, int], alpha: float = 1.0) -> Tuple[float, float, float, float]:
@@ -204,6 +203,8 @@ class LiquidMixer(GlassHost):
         self._closing = False
         self._ui_scale = 1.0
         self.s4_listener = None
+        self.midi_listener = None
+        self._hw_last = {}
         self.browse_target = "A"
         self.sync_master = "A"
         self._shift = {"A": False, "B": False}
@@ -389,6 +390,7 @@ class LiquidMixer(GlassHost):
 
         self._spawn_decks(Vte, GLib)
         self._start_s4()
+        self._start_midi()
         if self.with_visualizer:
             GLib.timeout_add(500, self._start_visualizer)
         GLib.timeout_add(120, self._tick)
@@ -449,6 +451,8 @@ class LiquidMixer(GlassHost):
             self.recorder.stop()
         if self.s4_listener is not None:
             self.s4_listener.stop()
+        if self.midi_listener is not None:
+            self.midi_listener.stop()
         if self._viz_owned:
             self._stop_visualizer()
         if self._viz_proc is not None:
@@ -713,8 +717,17 @@ class LiquidMixer(GlassHost):
         self.s4_listener = mixer_evdev.S4AxisListener(on_change=self._on_s4_change)
         self.s4_listener.start()
 
+    def _start_midi(self) -> None:
+        """Map a detected Traktor Kontrol in MIDI mode, and nothing else.
+
+        The listener only opens an ALSA port whose name contains ``Traktor``.
+        A generic MIDI keyboard stays unopened and unmapped.
+        """
+        self.midi_listener = mixer_midi.TraktorMidiListener(on_change=self._on_s4_change)
+        self.midi_listener.start()
+
     def _on_s4_change(self, action: str, value: float) -> None:
-        # Called on the evdev thread; hand the value to the GTK loop.
+        # Called on the evdev/MIDI thread; hand the value to the GTK loop.
         try:
             from gi.repository import GLib as _GLib
             _GLib.idle_add(self._apply_s4, action, value)
@@ -722,6 +735,19 @@ class LiquidMixer(GlassHost):
             pass
 
     def _apply_s4(self, action: str, value: float) -> bool:
+        # A Traktor in MIDI mode may still expose some of the same keys through
+        # evdev. One physical press must not become two mixer actions.
+        if action.startswith(("play:", "sync:", "shift:", "record")) or action == "load":
+            key = (action, round(float(value)))
+            now = time.monotonic()
+            if now - self._hw_last.get(key, 0.0) < 0.08:
+                return False
+            self._hw_last[key] = now
+        if action == "record":
+            self._toggle_recording()
+            self._s4_last_seen = time.time()
+            self._s4_last_action = "REC"
+            return False
         if action.startswith("pitch:"):
             channel = action.split(":", 1)[1]
             self.model.set_pitch(channel, value)
@@ -932,9 +958,16 @@ class LiquidMixer(GlassHost):
         threading.Thread(target=worker, name=f"play-{channel}", daemon=True).start()
 
     def _s4_status(self) -> Tuple[str, Tuple[int, int, int]]:
+        midi = getattr(self, "midi_listener", None)
+        if midi is not None and midi.connected:
+            last = float(midi.last_event or 0.0)
+            name = midi.device_name or "Traktor"
+            if last and time.time() - last < 6.0:
+                return f"Traktor MIDI {name}  {midi.last_message}", (80, 230, 140)
+            return f"Traktor MIDI {name}  mapped", (80, 230, 140)
         listener = self.s4_listener
         if listener is None:
-            return "S4: off", (150, 160, 168)
+            return "MIDI: no Traktor hardware", (250, 205, 90)
         status = str(listener.status or "")
         if status.startswith("native"):
             last = float(listener.last_event or 0.0)
@@ -944,6 +977,10 @@ class LiquidMixer(GlassHost):
             if last:
                 return f"S4 {path}  idle", (250, 205, 90)
             return f"S4 {path}  ready", (250, 205, 90)
+        if midi is not None:
+            if "held" in str(midi.status):
+                return str(midi.status), (250, 205, 90)
+            return "MIDI: no Traktor hardware", (250, 205, 90)
         if "waiting" in status:
             return "S4: not found - check the USB cable", (250, 205, 90)
         return f"S4: {status}", (250, 205, 90)
@@ -1017,6 +1054,20 @@ class LiquidMixer(GlassHost):
             write_player_visualizer_state(False, self._visualizer_preset())
         except Exception:
             pass
+
+    def _open_black_glass(self) -> None:
+        """W: open a fixed-size Black Glass pane at this mixer window's size."""
+        try:
+            from black_glass_window import spawn_black_glass_for_window, spawn_message
+        except ImportError:
+            try:
+                from scripts.black_glass_window import spawn_black_glass_for_window, spawn_message
+            except ImportError:
+                _log("black glass helper is missing")
+                return
+        result = spawn_black_glass_for_window(self.window, "MP Liquid Mixer")
+        if result != "opened":
+            _log(f"black glass: {result}")
 
     def _toggle_visualizer(self) -> None:
         try:
@@ -1112,10 +1163,6 @@ class LiquidMixer(GlassHost):
             ["bash", PROJECT_ROOT / "MP_Gui.sh", "--keep-theme"], "MP Gui"
         )
 
-    def _open_black_glass(self) -> bool:
-        """The Liquid Glass host on its opaque black Into Darkness theme."""
-        return self._open_liquid_player(BLACK_GLASS_THEME)
-
     def _on_key(self, widget, event) -> bool:
         Gdk = self.Gdk
         key = event.keyval
@@ -1126,6 +1173,12 @@ class LiquidMixer(GlassHost):
         # handler covers the chrome and the background.
         if key == Gdk.KEY_c and not from_deck:
             self._cycle_theme()
+            return True
+        if key == Gdk.KEY_w and not from_deck:
+            # W opens an MP Black Glass pane at exactly this window's size.
+            # A deck's terminal keeps W as a letter: the player it is running
+            # has its own W.
+            self._open_black_glass()
             return True
         if key == Gdk.KEY_v and not from_deck:
             self._toggle_visualizer()
@@ -1147,9 +1200,6 @@ class LiquidMixer(GlassHost):
                 return True
             if key == Gdk.KEY_z:
                 self._open_visualizer()
-                return True
-            if key == Gdk.KEY_w:
-                self._open_black_glass()
                 return True
             if key == Gdk.KEY_l:
                 self._open_liquid_player()
@@ -2285,7 +2335,7 @@ class LiquidMixer(GlassHost):
                 cr.line_to(width - 4 * s, height - 8 * s - step * 6 * s)
                 cr.stroke()
 
-        hints = "C  THEME    V  VISUALIZER    X  MIX MODE    DBL-CLICK TOP / F11  ESC  QUIT"
+        hints = "C  THEME    V  VISUALIZER    W  BLACK GLASS    X  MIX MODE    DBL-CLICK TOP / F11  ESC  QUIT"
         self._text(cr, box[0] + box[2] - 28 * s, box[1] + 5 * s, hints, 8.5 * s, glass_ink, 0.55, anchor="end")
         launches = "M  MANAGER    Z  VISUALIZER    W  BLACK GLASS    L  LIQUID PLAYER    G  MP GUI"
         self._text(cr, box[0] + box[2] - 28 * s, box[1] + 21 * s, launches, 7.6 * s, glass_ink, 0.44, anchor="end")

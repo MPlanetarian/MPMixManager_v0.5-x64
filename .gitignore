@@ -172,6 +172,20 @@ test-evidence/
 # because they are shipped and user-facing; only the controller is internal.
 /MP_Auto_Tester_Flash.sh
 
+# MP Visualisation Generator is an INTERNAL DREAMWORLDS PRODUCTIONS DEV TOOL.
+# It builds private 3D presets from artwork and is not part of the public
+# MP Mix Manager distribution. Keep the files in the working tree; never
+# commit them. The visualizer backends load user presets optionally, so a
+# checkout without these files still runs normally.
+/MP_Visualization_Generator.py
+/MP_Visualization_Generator.sh
+/MP_Visualization_Generator.desktop
+/scripts/mp_visualizer_user_presets.py
+
+# Generated visualizer preset packages and any repo-local preset cache.
+*.mpvispreset
+/shaders/user_presets/
+
 # Scratch files that were tracked by accident. Named explicitly because the
 # numeric-only rules above missed them (all four are 7 bytes of "PNGDATA").
 /status

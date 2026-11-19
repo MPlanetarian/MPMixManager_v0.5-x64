@@ -724,6 +724,9 @@ GLFW_FOCUS_ON_SHOW, GLFW_PLATFORM, GLFW_PLATFORM_X11, GLFW_DONT_CARE = 0x0002000
 GLFW_KEY_ESCAPE, GLFW_KEY_Q, GLFW_KEY_Z, GLFW_KEY_SPACE = 256, 81, 90, 32
 # R toggles random mode: a new random preset every RANDOM_PRESET_INTERVAL secs.
 GLFW_KEY_H = 72
+# W opens an MP Black Glass pane at the window's own size, matching the other
+# three MP windows. It is the same GLFW key code in every backend.
+GLFW_KEY_W = 87
 GLFW_KEY_R = 82
 GLFW_KEY_1, GLFW_KEY_2, GLFW_KEY_3, GLFW_KEY_4, GLFW_KEY_5, GLFW_KEY_6, GLFW_KEY_7, GLFW_KEY_8, GLFW_KEY_9 = range(49, 58)
 # Preset cycle keys. GLFW reports the "=" key as 61 (shifted it produces "+"),
@@ -1537,6 +1540,11 @@ class LiquidVisualizerVulkanRenderer(MonitorSpanMixin, RandomPresetMixin, Player
             forward = self.toggle_random_mode()
             print(f"[LiquidVisualizer] Random mode {'on' if forward else 'off'}",
                   file=sys.stderr)
+        elif key == GLFW_KEY_W:
+            # W opens an MP Black Glass pane at exactly this window's size, so
+            # the visualizer offers the same W as the player, MP Gui and the
+            # mixer it sits behind.
+            self._open_black_glass_pane()
         elif key == 75 and (_mods & 1):
             if is_windows():
                 subprocess.run('taskkill /F /FI "WINDOWTITLE eq MP Audio Player*" >nul 2>&1', shell=True)
@@ -2466,6 +2474,23 @@ class LiquidVisualizerVulkanRenderer(MonitorSpanMixin, RandomPresetMixin, Player
         samp = U64()
         _check(self._vk.CreateSampler(self._device, _addr(si), None, byref(samp)), "cover sampler")
         self._tex_sampler = samp.value
+
+    def _open_black_glass_pane(self) -> bool:
+        """W: open a Black Glass pane at exactly this visualizer's size."""
+        try:
+            from black_glass_window import spawn_black_glass
+        except ImportError:
+            try:
+                from scripts.black_glass_window import spawn_black_glass
+            except ImportError:
+                return False
+        try:
+            width, height = self.window_size()
+            x, y = self.window_pos()
+        except Exception:
+            return False
+        return spawn_black_glass(int(width), int(height), int(x), int(y),
+                                 "MP Liquid Visualizer") == "opened"
 
     def switch_preset(self, preset: Dict[str, Any]):
         if preset.get("id") == self.preset.get("id"): return

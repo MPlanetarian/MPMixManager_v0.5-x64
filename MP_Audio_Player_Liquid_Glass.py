@@ -216,6 +216,9 @@ def _child_env(as_dict=False):
     env = {k: v for k, v in os.environ.items() if k != "GDK_BACKEND"}
     env.update(TERM="xterm-256color", COLORTERM="truecolor", MP_LIQUID_GLASS="1",
                MP_LIQUID_GLASS_BACKEND="vulkan", MP_LIQUID_GLASS_PLATFORM="win32" if IS_WIN else "linux")
+    # W opens an MP Black Glass pane at exactly this window's size; the child
+    # is told which published geometry record is the window it is drawn in.
+    env["MP_HOST_PID"] = str(os.getpid())
     return env if as_dict else [f"{k}={v}" for k, v in env.items()]
 
 

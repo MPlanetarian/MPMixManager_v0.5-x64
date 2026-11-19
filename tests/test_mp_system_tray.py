@@ -726,6 +726,29 @@ class TestTrayRescans(unittest.TestCase):
         self.assertIn("start_rescan(action_id)", slot)
         self.assertNotIn("run_rescan(action_id, base)", slot)
 
+    def test_the_rescan_timer_outlives_the_slot_that_started_it(self):
+        """A parentless QTimer is collected when the slot returns.
+
+        Then its timeout never fires again and a long scan leaves the entry on
+        "Rescanning…" forever. The timer and its worker must be held until the
+        result is collected.
+        """
+        text = (ROOT / "scripts" / "mp_system_tray.py").read_text(encoding="utf-8")
+        fn = text.split("def start_rescan(action_id: str) -> None:", 1)[1].split(
+            "\n    def dispatch", 1
+        )[0]
+        self.assertIn("rescan_timers[action_id] = (watcher, worker)", fn)
+        self.assertIn("rescan_timers.pop(action_id, None)", fn)
+
+    def test_a_running_scan_says_so_and_cannot_be_clicked_twice(self):
+        text = (ROOT / "scripts" / "mp_system_tray.py").read_text(encoding="utf-8")
+        self.assertIn("RESCAN_BUSY_LABELS", text)
+        fn = text.split("def start_rescan(action_id: str) -> None:", 1)[1].split(
+            "\n    def dispatch", 1
+        )[0]
+        self.assertIn("action.setEnabled(False)", fn)
+        self.assertIn("rescan_states[action_id][\"done\"]", fn)
+
     def test_the_archive_notice_wording_matches_the_scan(self):
         result = {
             "ok": True, "folders": 2, "flacs": 484, "wavs": 52,

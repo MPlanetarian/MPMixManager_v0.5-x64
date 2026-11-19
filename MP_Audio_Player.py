@@ -623,8 +623,46 @@ def parse_env_file(filepath: Path) -> Dict[str, str]:
         except Exception: pass
     return env
 
+# libsndfile's "length unknown" sentinel. A container that does not declare a
+# total sample count - a FLAC whose STREAMINFO total is 0, a piped or
+# half-written encode - makes soundfile report this instead of a real frame
+# count. It is a marker, not a length: divided by 44100 it is roughly 2.9
+# million years, and the feeder then waits for an EOF that never arrives.
+UNKNOWN_FRAME_COUNT = (1 << 63) - 1
+# Nothing in this player is a week long. Above this a duration is a corrupt
+# header, not a mix.
+MAX_PLAUSIBLE_AUDIO_SEC = 7 * 24 * 3600
+
+
+def sane_frame_count(frames: Any, samplerate: int = 0) -> int:
+    """A frame count worth trusting, or 0 meaning "unknown length".
+
+    libsndfile uses ``SF_COUNT_MAX`` (2**63-1) when it cannot know the length,
+    and a corrupt header can produce any large number. Both must be treated as
+    unknown instead of being shown as a duration and used as the EOF target;
+    with an impossible target the feeder reads past the data forever and the
+    track never ends.
+    """
+    try: frames = int(frames)
+    except (TypeError, ValueError): return 0
+    if frames <= 0 or frames >= UNKNOWN_FRAME_COUNT: return 0
+    try: rate = int(samplerate)
+    except (TypeError, ValueError): rate = 0
+    if rate > 0 and frames > rate * MAX_PLAUSIBLE_AUDIO_SEC: return 0
+    return frames
+
+
+def sane_duration(seconds: Any) -> float:
+    """A duration in seconds worth showing, or 0.0 for an unusable value."""
+    try: value = float(seconds)
+    except (TypeError, ValueError): return 0.0
+    if not math.isfinite(value) or value <= 0.0 or value > MAX_PLAUSIBLE_AUDIO_SEC:
+        return 0.0
+    return value
+
+
 def format_seconds(seconds: float) -> str:
-    if seconds < 0 or math.isnan(seconds): return "00:00"
+    if not math.isfinite(seconds) or seconds < 0: return "00:00"
     s = int(seconds)
     h, m, sec = s // 3600, (s % 3600) // 60, s % 60
     return f"{h:02d}:{m:02d}:{sec:02d}" if h > 0 else f"{m:02d}:{sec:02d}"
@@ -1762,7 +1800,13 @@ class SoundFileAudioSource(AudioSource):
         self._sf_lock = threading.RLock()
         self._closed = False
         if self.sf is None: self._open_with_retry(4)
-        self.samplerate, self.channels, self.frames = int(self.sf.samplerate), int(self.sf.channels), int(getattr(self.sf, "frames", 0))
+        self.samplerate, self.channels = int(self.sf.samplerate), int(self.sf.channels)
+        raw_frames = int(getattr(self.sf, "frames", 0))
+        # Remember that the decoder could not tell us the length. The engine
+        # then lets FFmpeg (which learns the end from the data) try first, and
+        # this source still works as a fallback with an unknown length.
+        self.length_unknown = raw_frames <= 0 or raw_frames >= UNKNOWN_FRAME_COUNT
+        self.frames = sane_frame_count(raw_frames, self.samplerate)
 
     def _open_with_retry(self, max_retries: int = 4, target_frame: int = 0):
         _ensure_audio_backends()
@@ -2053,9 +2097,29 @@ def open_audio_source(path: str) -> AudioSource:
         except Exception as exc: dsdiff_exc = exc
     order = (FFmpegAudioSource, SoundFileAudioSource) if prefers_ffmpeg(path) else (SoundFileAudioSource, FFmpegAudioSource)
     last_exc: Exception = RuntimeError(f"No audio backend could open {path}")
+    # A container that does not declare its length (FLAC STREAMINFO total = 0)
+    # opens fine in libsndfile but reports SF_COUNT_MAX and raises on the final
+    # partial read. Keep that source as a last resort, but prefer FFmpeg, which
+    # discovers the end from the data and ends the track cleanly.
+    fallback: Optional[AudioSource] = None
     for cls in order:
-        try: return cls(path)
-        except Exception as e: last_exc = e
+        try: src = cls(path)
+        except Exception as e:
+            last_exc = e
+            continue
+        if getattr(src, "length_unknown", False):
+            if fallback is None:
+                fallback = src
+            else:
+                try: src.close()
+                except Exception: pass
+            continue
+        if fallback is not None:
+            try: fallback.close()
+            except Exception: pass
+        return src
+    if fallback is not None:
+        return fallback
     if dsdiff_exc is not None:
         raise RuntimeError(f"No audio backend could open {path} (DSDIFF: {dsdiff_exc})") from dsdiff_exc
     raise last_exc
@@ -2082,6 +2146,11 @@ class AudioPrefetchBuffer:
         with self.lock: return float(self.available_frames) / float(self.sample_rate) if self.sample_rate > 0 else 0.0
 
     def _to_stereo(self, arr: np.ndarray) -> np.ndarray:
+        # The feeder can be the first thing to run in a process (a unit test
+        # constructs it directly), and numpy is imported lazily here. Without
+        # this the thread died with "'NoneType' has no attribute float32" and
+        # silently produced silence.
+        _ensure_numpy()
         if arr.ndim == 1: return np.column_stack((arr, arr)).astype(np.float32, copy=False)
         if arr.shape[1] == 1: return np.column_stack((arr[:, 0], arr[:, 0])).astype(np.float32, copy=False)
         return arr[:, :2].astype(np.float32, copy=False)
@@ -3180,7 +3249,12 @@ class AudioEngine:
                 self.state = "stopped"
                 return False
             self.audio_source, self.sample_rate, self.channels = src, src.samplerate, src.channels
-            self.duration_sec = float(src.total_frames()) / float(self.sample_rate) if self.sample_rate > 0 else 0.0
+            # total_frames() is 0 when the container does not declare a length
+            # (libsndfile's SF_COUNT_MAX sentinel). That is "unknown", not a
+            # 2.9-million-year duration, and using it as the EOF target made
+            # the feeder wait forever at the end of the file.
+            frames = sane_frame_count(src.total_frames(), self.sample_rate)
+            self.duration_sec = float(frames) / float(self.sample_rate) if frames else 0.0
             self.current_track.update(duration_sec=self.duration_sec, duration_fmt=format_seconds(self.duration_sec))
             self.position_sec = 0.0
             self.resampler.reset()
@@ -3318,7 +3392,10 @@ class AudioEngine:
         data = self.resampler.process(buf.read, frames, (float(self.sample_rate) / out_rate) * self.pitch_factor)
         rf = len(data)
         if self.feeder and self.sample_rate > 0:
-            self.position_sec = min(self.duration_sec, float(max(0, self.feeder.current_frame - buf.available_frames)) / float(self.sample_rate))
+            played = float(max(0, self.feeder.current_frame - buf.available_frames)) / float(self.sample_rate)
+            # With no declared length (duration 0) there is nothing to clamp
+            # to; let the clock follow the feeder instead of sitting at zero.
+            self.position_sec = min(self.duration_sec, played) if self.duration_sec > 0 else played
         else:
             self.position_sec += float(max(rf, 0) * self.pitch_factor) / out_rate
         if rf <= 0:
@@ -7738,9 +7815,10 @@ class TerminalPlayerUI:
                     if sf is not None and os.path.isfile(path):
                         if is_cloud_or_remote_path(path): time.sleep(0.12)
                         info = sf.info(path)
-                        dfmt = format_seconds(info.duration)
+                        duration = sane_duration(getattr(info, "duration", 0.0))
+                        dfmt = format_seconds(duration)
                         self._duration_cache[path] = dfmt
-                        if isinstance(m_ref, dict): m_ref.update(duration_fmt=dfmt, duration_sec=info.duration)
+                        if isinstance(m_ref, dict): m_ref.update(duration_fmt=dfmt, duration_sec=duration)
                         if time.time() - last_save > 5.0: self._save_duration_cache(); last_save = time.time()
                     else: self._duration_cache[path] = "00:00"
                 except Exception: self._duration_cache[path] = "00:00"
@@ -9751,6 +9829,29 @@ class TerminalPlayerUI:
                 pass
         self._notify(notice, 4.0)
 
+    def _open_black_glass(self):
+        """Open an MP Black Glass pane at exactly this window's size (W).
+
+        The pane is its own process, so the player keeps drawing normally. The
+        helper reads this window's published rectangle (through ``MP_HOST_PID``
+        in the child's environment), so the pane lands on the same size and
+        position as the player it was opened from - including Mini, Micro and
+        Vertical, which the host publishes as the window changes.
+        """
+        try:
+            from black_glass_window import spawn_black_glass_for_host, spawn_message
+        except ImportError:
+            try:
+                from scripts.black_glass_window import spawn_black_glass_for_host, spawn_message
+            except ImportError:
+                self._notify("MP Black Glass is unavailable in this install.", 3.0)
+                return
+        result = spawn_black_glass_for_host("MP Liquid Player")
+        if result == "opened":
+            self._notify("✦ Opened MP Black Glass — R rainbow, Esc/Q close", 3.5)
+            return
+        self._notify(spawn_message(result) or "MP Black Glass could not be opened.", 4.0)
+
     def _export_playlist(self):
         if not (mixes := self.scanner.get_mixes(self.search_query)): return self._notify("No mixes in playlist to export.", 3.0)
         chosen = choose_export_m3u_gui()
@@ -10480,6 +10581,11 @@ class TerminalPlayerUI:
             # Glass hosts have no decision-window UI for it.
             self._traktor_picker_open()
         elif data in (b"t", b"T"): self._view_selected_tracklist()
+        elif data == b"w" and os.environ.get("MP_LIQUID_GLASS") == "1":
+            # W opens an MP Black Glass pane at exactly this window's size.
+            # Shift+W keeps the playlist export on the same letter, so nothing
+            # is lost; outside the glass window W is still the export key.
+            self._open_black_glass()
         elif data in (b"w", b"W"): self._export_playlist()
         elif data == b"/": self.search_mode, self.search_query = True, ""
         elif data == b"f": self._open_selected_in_file_manager()
@@ -10986,8 +11092,8 @@ class TerminalPlayerUI:
                     f"  {bold_s}[3] Fav  [H] Mark  [1] Mix  [2] Music  [D] Clear  Space Play  [X] Mixer  [Q] Queue  [G] {g_key}  [E] EQ  [b] Bass  [/] Search  n/p Skip  Esc Exit{NC}"
                 ], max(20, w - 1)),
                 _fit_text_line([
-                    f"  {hint_col}{g_bottom}[0] Pitch Reset  [u] Mute  [s] Shuffle  [y] Repeat  [b] Bass Boost  [L] Liquid Glass  [Z] MP Liquid Visualizer  [X] Liquid Mixer  [E] Equalizer HUD  [e] Vis Style  [c] Color Theme  [a] Audio/BT  [O] Open  [F] Files{NC}",
-                    f"  {hint_col}{g_bottom}0 Reset  u Mute  s Shuf  y Rep  b Bass  L Glass  Z Liquid Vis  X Mixer  E Equalizer  e Vis  c Theme  a BT  O Open  F Files{NC}",
+                    f"  {hint_col}{g_bottom}[0] Pitch Reset  [u] Mute  [s] Shuffle  [y] Repeat  [b] Bass Boost  [L] Liquid Glass  [Z] MP Liquid Visualizer  [X] Liquid Mixer  [w] Glass  [E] Equalizer HUD  [e] Vis Style  [c] Color Theme  [a] Audio/BT  [O] Open  [F] Files{NC}",
+                    f"  {hint_col}{g_bottom}0 Reset  u Mute  s Shuf  y Rep  b Bass  L Glass  Z Liquid Vis  X Mixer  W Glass  E Equalizer  e Vis  c Theme  a BT  O Open  F Files{NC}",
                     f"  {hint_col}{g_bottom}0 Reset  u Mute  s Shuf  y Rep  b Bass  L Glass  Z Vis  X Mixer  E EQ  e Vis  c Theme  Esc Exit{NC}"
                 ], max(20, w - 1))
             ])
@@ -10997,9 +11103,9 @@ class TerminalPlayerUI:
             # there rather than advertising a key that does nothing.
             export_hint = "  Export Tracks" if self.mode == "FAVORITES" else ""
             lines.append(_fit_text_line([
-                f"  {hint_col}[3] Favorites  [H] Mark Fav  [1] Mix Archive  [2] Music  [D] Clear Playlist{export_hint}  [Space] Play/Pause  [R] Record WAV  [M] Vertical  [L] Liquid Glass  [Z] MP Liquid Visualizer  [X] Liquid Mixer  [Q] Queue  [G] {g_key}  [+/-] Pitch ±1% (±20% max)  [0] Pitch Reset  [v/V] Vol  [u] Mute  [s] Shuffle  [y] Repeat  [n/p] Next/Prev  [a] Audio/BT  [O] Open  [T] Tracklist  [w] Export  [F] Files  [E] Equalizer HUD  [b] Bass Boost  [e] Vis  [Esc] Exit{NC}",
-                f"  {hint_col}[3] Favorites  [H] Mark  [1] Mix Archive  [2] Music  [D] Clear{export_hint}  Space Play  R Rec  M Vertical  L Glass  Z Vis  X Mixer  Q Queue  G {g_key}  +/- Pitch  0 Reset  v/V Vol  u Mute  s Shuf  y Rep  n/p Skip  O Open  T List  E EQ  b Bass  Esc Exit{NC}",
-                f"  {hint_col}[3] Fav  [H] Mark  [1] Mix  [2] Music  [D] Clear{export_hint}  Space Play  R Rec  M Vertical  X Mixer  Q Queue  G {g_key}  v/V Vol  u Mute  s Shuf  y Rep  n/p Skip  E EQ  b Bass  Esc Exit{NC}",
+                f"  {hint_col}[3] Favorites  [H] Mark Fav  [1] Mix Archive  [2] Music  [D] Clear Playlist{export_hint}  [Space] Play/Pause  [R] Record WAV  [M] Vertical  [L] Liquid Glass  [Z] MP Liquid Visualizer  [X] Liquid Mixer  [w] Black Glass  [Q] Queue  [G] {g_key}  [+/-] Pitch ±1% (±20% max)  [0] Pitch Reset  [v/V] Vol  [u] Mute  [s] Shuffle  [y] Repeat  [n/p] Next/Prev  [a] Audio/BT  [O] Open  [T] Tracklist  [W] Export  [F] Files  [E] Equalizer HUD  [b] Bass Boost  [e] Vis  [Esc] Exit{NC}",
+                f"  {hint_col}[3] Favorites  [H] Mark  [1] Mix Archive  [2] Music  [D] Clear{export_hint}  Space Play  R Rec  M Vertical  L Glass  Z Vis  X Mixer  W Glass  Q Queue  G {g_key}  +/- Pitch  0 Reset  v/V Vol  u Mute  s Shuf  y Rep  n/p Skip  O Open  T List  E EQ  b Bass  Esc Exit{NC}",
+                f"  {hint_col}[3] Fav  [H] Mark  [1] Mix  [2] Music  [D] Clear{export_hint}  Space Play  R Rec  M Vertical  X Mixer  W Glass  Q Queue  G {g_key}  v/V Vol  u Mute  s Shuf  y Rep  n/p Skip  E EQ  b Bass  Esc Exit{NC}",
                 f"  {hint_col}Space Play  M Mini  X Mixer  E EQ  b Bass  c Theme  Esc Exit{NC}"
             ], max(20, w - 1)))
         # Drop the breathing rows rather than a control line if the frame runs
@@ -11941,7 +12047,7 @@ def main():
                 }), encoding="utf-8")
                 res_tmp.replace(RESUME_STATE_FILE)
         except Exception: pass
-        engine.stop_playback(reset_position=False)
+        engine.shutdown()
         for p in (PID_FILE, SOCKET_PATH, PORT_FILE): p.unlink(missing_ok=True)
         try: STATE_FILE.write_text(json.dumps({"running": False, "state": "stopped"}), encoding="utf-8")
         except OSError: pass

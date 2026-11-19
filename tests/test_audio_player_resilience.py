@@ -24,6 +24,13 @@ import soundfile as sf
 BASE_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BASE_DIR))
 
+# PortAudio can segfault the interpreter during teardown when a real output
+# stream is open (the production runner `tests/run_tests.py` already sets
+# this). A direct `pytest`/`unittest` run must be hermetic too, otherwise the
+# whole test file can abort *after* every test passed.
+os.environ.setdefault("MP_DISABLE_AUDIO_OUTPUT", "1")
+os.environ.setdefault("MP_DISABLE_BLUETOOTH_MONITOR", "1")
+
 import MP_Audio_Player
 from MP_Audio_Player import (
     AudioPrefetchBuffer,
@@ -32,6 +39,7 @@ from MP_Audio_Player import (
     SoundFileAudioSource,
     AudioEngine,
     is_player_daemon_running,
+    open_audio_source,
     _cleanup_stale_daemon_files,
     PID_FILE,
     SOCKET_PATH,
@@ -126,6 +134,11 @@ class TestAudioPlayerResilience(unittest.TestCase):
             {"name": "Mix 44k", "path": self.mix_44k_path, "size_mb": 1.0, "ext": "WAV"}
         ]
         engine = AudioEngine(playlist, auto_bluetooth=False)
+        # Close the stream no matter how the test ends. stop_playback() leaves
+        # the PortAudio stream open by design; only shutdown() closes it, and
+        # the interpreter teardown crashes inside libportaudio if it is still
+        # live when the process exits.
+        self.addCleanup(engine.shutdown)
 
         # Load first mix and start playback
         self.assertTrue(engine.load_track(0, start_playing=True))
@@ -298,6 +311,60 @@ class TestCloseDuringReadIsSafe(unittest.TestCase):
             source.close()
             self.assertEqual(close_spy.call_count, 1,
                              "the soundfile handle was closed more than once")
+
+
+class TestUnknownLengthAudio(unittest.TestCase):
+    """A container that does not declare its total samples.
+
+    libsndfile reports ``SF_COUNT_MAX`` (2**63-1) for these. Treated as a real
+    frame count it becomes a 2.9-million-year duration and an EOF target the
+    feeder can never reach, so the track plays a couple of seconds and then
+    sits silent in "playing" forever.
+    """
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.path = str(Path(self.temp_dir.name) / "no_total.flac")
+        sf.write(self.path, np.zeros((44100 * 2, 2), dtype=np.float32), 44100)
+        data = bytearray(Path(self.path).read_bytes())
+        # "fLaC" (4) + STREAMINFO block header (4) + 10 bytes of block fields.
+        # The 36-bit total-samples field is the low nibble of byte 13 of the
+        # block and the four bytes that follow it.
+        body = 8 + 10
+        data[body + 3] &= 0xF0
+        for i in range(4, 8):
+            data[body + i] = 0x00
+        Path(self.path).write_bytes(bytes(data))
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    def test_soundfile_reports_the_unknown_length_sentinel(self):
+        # Guard the fixture itself: if a future libsndfile version rescans the
+        # file and finds the length, this regression test no longer applies.
+        info = sf.info(self.path)
+        self.assertEqual(int(info.frames), (1 << 63) - 1)
+
+    def test_source_never_exposes_the_sentinel_as_a_length(self):
+        source = open_audio_source(self.path)
+        try:
+            self.assertLess(source.total_frames(), 1 << 40)
+            self.assertNotEqual(source.total_frames(), (1 << 63) - 1)
+        finally:
+            source.close()
+
+    def test_engine_reports_a_sane_duration_and_reaches_eof(self):
+        playlist = [{"name": "no_total.flac", "path": self.path,
+                     "size_mb": 0.1, "ext": "FLAC"}]
+        engine = AudioEngine(playlist, auto_bluetooth=False)
+        self.addCleanup(engine.shutdown)
+        self.assertTrue(engine.load_track(0, start_playing=False))
+        self.assertLess(engine.duration_sec, 7 * 24 * 3600)
+        deadline = time.time() + 8.0
+        while time.time() < deadline and not engine.audio_buffer.eof:
+            time.sleep(0.05)
+        self.assertTrue(engine.audio_buffer.eof,
+                        "the feeder never reached EOF on an unknown-length file")
 
 
 if __name__ == "__main__":

@@ -435,6 +435,22 @@ class LiveServerSecurityTest(unittest.TestCase):
         # refused by the CSRF gate.
         self.assertNotEqual(code, 403)
 
+    def test_get_only_route_answers_405_to_a_post(self):
+        """A POST to a read-only endpoint is a method error, not "not found"."""
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{self.port}/api/theme",
+            data=b"{}",
+            headers={sec.REQUIRED_HEADER: "1"},
+            method="POST",
+        )
+        try:
+            response = urllib.request.urlopen(request, timeout=5)
+            code, allow = response.status, response.headers.get("Allow", "")
+        except urllib.error.HTTPError as err:
+            code, allow = err.code, err.headers.get("Allow", "")
+        self.assertEqual(code, 405)
+        self.assertIn("GET", allow)
+
     def test_a_peer_outside_the_allowlist_is_refused(self):
         """The one access control: an explicit CIDR list."""
         mwc = self.mwc

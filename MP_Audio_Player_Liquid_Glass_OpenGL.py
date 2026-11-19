@@ -353,6 +353,12 @@ def _child_env(as_dict=False):
         "MP_LIQUID_GLASS": "1",
         "MP_LIQUID_GLASS_BACKEND": "opengl",
         "MP_LIQUID_GLASS_PLATFORM": "win32" if sys.platform == "win32" else "linux",
+        # W opens an MP Black Glass pane at exactly this window's size. The
+        # child cannot ask the host directly, so it is told which published
+        # geometry record belongs to the window it is drawn inside. Without
+        # this it would take the newest record and could size itself from a
+        # different open player.
+        "MP_HOST_PID": str(os.getpid()),
     })
     if sys.platform == "win32":
         # Default console color. The host punches this exact RGB out of the console window.

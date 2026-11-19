@@ -1462,15 +1462,15 @@ class PlayerVisualizerLayer:
                 # shader. It has no scenes to fold and no text guard, so it is
                 # compiled verbatim.
                 custom_source = None
-                if renderer is not None:
+                try:
                     try:
-                        try:
-                            from mp_visualizer_user_presets import opengl_source_for
-                        except ImportError:
-                            from scripts.mp_visualizer_user_presets import opengl_source_for  # type: ignore
-                        custom_source = opengl_source_for(getattr(renderer, "preset", None))
-                    except Exception:
-                        custom_source = None
+                        from mp_visualizer_user_presets import opengl_source_for
+                    except ImportError:
+                        from scripts.mp_visualizer_user_presets import opengl_source_for  # type: ignore
+                    preset_ref = getattr(renderer, "preset", None) if renderer is not None else None
+                    custom_source = opengl_source_for(preset_ref if preset_ref else preset_id)
+                except Exception:
+                    custom_source = None
                 if custom_source:
                     frag_src = custom_source
                 else:
@@ -2156,6 +2156,8 @@ class LiquidVisualizerOpenGLRenderer(MonitorSpanMixin, RandomPresetMixin, Player
                 pass
         elif key == 82:  # R: toggle random mode
             self.toggle_random_mode()
+        elif key == 87:  # W: open an MP Black Glass pane at this window's size
+            self._open_black_glass_pane()
         elif 49 <= key <= 57:  # 1..9
             from mp_liquid_visualizer_vulkan import presets_by_slot
             slots = presets_by_slot()
@@ -2529,6 +2531,23 @@ class LiquidVisualizerOpenGLRenderer(MonitorSpanMixin, RandomPresetMixin, Player
             g.glfwSetWindowSizeLimits(w, -1, -1, -1, -1)
         except Exception:
             pass
+
+    def _open_black_glass_pane(self) -> bool:
+        """W: open a Black Glass pane at exactly this visualizer's size."""
+        try:
+            from black_glass_window import spawn_black_glass
+        except ImportError:
+            try:
+                from scripts.black_glass_window import spawn_black_glass
+            except ImportError:
+                return False
+        try:
+            width, height = self.window_size()
+            x, y = self.window_pos()
+        except Exception:
+            return False
+        return spawn_black_glass(int(width), int(height), int(x), int(y),
+                                 "MP Liquid Visualizer") == "opened"
 
     def switch_preset(self, preset: Dict[str, Any]) -> None:
         previous = self.preset.get("key")

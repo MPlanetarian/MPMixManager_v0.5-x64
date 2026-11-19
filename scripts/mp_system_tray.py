@@ -2191,6 +2191,7 @@ def run_tray(base: Path, config: Path, stay: bool = False) -> int:
 
     close_state = {"done": False, "error": ""}
     rescan_states: dict[str, dict] = {}
+    rescan_timers: dict[str, tuple] = {}
 
     def _run_rescan(state_box: dict, action_id: str) -> None:
         """Scan on a worker thread so the icon keeps answering while it runs.
@@ -2225,11 +2226,17 @@ def run_tray(base: Path, config: Path, stay: bool = False) -> int:
         worker.start()
         watcher = QTimer()
         watcher.setInterval(200)
+        # A local QTimer with no parent is collected as soon as this slot
+        # returns, and its timeout never fires again: a long scan would then
+        # leave the entry stuck on "Rescanning…" with no notice. Hold the
+        # timer and the worker on the action until the result is in.
+        rescan_timers[action_id] = (watcher, worker)
 
         def _check_finished() -> None:
             if not box["done"]:
                 return
             watcher.stop()
+            rescan_timers.pop(action_id, None)
             result = box.get("result") or {}
             if action is not None:
                 action.setEnabled(True)
