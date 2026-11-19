@@ -6,14 +6,9 @@
 > ## 🎉 MP Mix Manager 0.5.4 (Sensorium) - [Dreamworlds Productions / MPlanetarian ] - Stable Release: Mac, Windows 10/11, Linux 7.x (Ubuntu, Fedora, Bazzite, SuSE, Arch), FreeBSD, Ras Pie
 >
 > **MP Mix Manager 0.5.4 was released on the 19th of November 2026 by MPlanetarian / Dreamworlds Productions.**
->  Download Packages Here: 
-   [![MP Mix Manager 0.5.4 Download](https://github.com/MPlanetarian/MPMixManager_v0.5-x64/releases/tag/v0.5.4)
-   [![MP Mix Manager 0.5.4 Download](https://github.com/MPlanetarian/MPMixManager_v0.5-x64/releases/tag/v0.5.4)
-   [![MP Mix Manager 0.5.4 Download](https://github.com/MPlanetarian/MPMixManager_v0.5-x64/releases/tag/v0.5.4)
-   [![MP Mix Manager 0.5.4 Download](https://github.com/MPlanetarian/MPMixManager_v0.5-x64/releases/tag/v0.5.4)
-   
+>  Download MP Mix Manager Installer Packages Here (Released on 19th of Nov - 0.5.4 (Sensorium):
+> [![MP Mix Manager 0.5.4 Download](https://github.com/MPlanetarian/MPMixManager_v0.5-x64/releases/tag/v0.5.4)
 >  
->
 > Welcome to **Sensorium**, the Next Generation of Audio Mixing and Mix Archive Management & Audio Workflow, with many new Features Added — including a brand new **MP Liquid Mixer** and new **3D Visualizations** for **OpenGL, Vulkan & Metal**. See the full list of new features added and fixes below.
 >
 > This is the follow-up to 0.5.3, and it is a release built from things you told me about — plus one big new window. Nothing here is a rewrite: every fix below is a real bug that was reproduced on a real machine, fixed at the cause, and then pinned by a test so it cannot come back. The console menu, controllers, the clickable deck and the intro movie all shipped in 0.5.3 and are described there, not here.
