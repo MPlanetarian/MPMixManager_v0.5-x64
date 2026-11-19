@@ -52,12 +52,16 @@ class TestDesktopShortcuts(unittest.TestCase):
             desktop.mkdir()
             (desktop / "MP_Liquid.desktop").write_text("old\n", encoding="utf-8")
             (desktop / "Mix Archive Manager.command").write_text("old\n", encoding="utf-8")
+            # install_desktop_shortcuts() writes only the selected apps, and
+            # the selection lives in the user's config. Pass all five
+            # explicitly so the result does not depend on this machine.
             paths = install_desktop_shortcuts(
                 ROOT,
                 platform_name="linux",
                 desktop_dir=desktop,
                 apps_dir=apps,
                 launcher_dir=Path(tmp) / "launchers",
+                components=["manager", "gui", "liquid", "visualizer"],
             )
             self.assertEqual([path.name for path in paths], [f"{name}.desktop" for name in SHORTCUT_NAMES])
             self.assertFalse((desktop / "MP_Liquid.desktop").exists())
@@ -111,6 +115,7 @@ class TestDesktopShortcuts(unittest.TestCase):
                 desktop_dir=desktop,
                 apps_dir=apps,
                 launcher_dir=Path(tmp) / "launchers",
+                components=["manager", "gui", "liquid", "visualizer"],
             )
             self.assertEqual(
                 [path.name for path in written],
@@ -330,6 +335,7 @@ class TestDesktopShortcuts(unittest.TestCase):
                 apps_dir=apps,
                 launcher_dir=launchers,
                 link_writer=writer,
+                components=["manager", "gui", "liquid", "visualizer"],
             )
             desktop_links = [item for item in created if item[0].parent == desktop]
             windows_names = [name for name in SHORTCUT_NAMES if name != "MP Liquid Mixer"]
