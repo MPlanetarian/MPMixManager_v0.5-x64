@@ -13,6 +13,7 @@ import os
 import pty
 import re
 import select
+import signal
 import struct
 import tempfile
 import termios
@@ -104,10 +105,28 @@ def run_viewer(tracklist: Path, rows: int = 35, columns: int = 95,
         os.close(master)
     except OSError:
         pass
-    try:
-        os.waitpid(pid, 0)
-    except ChildProcessError:
-        pass
+    # Never block the run on a child that did not quit: a busy machine can
+    # leave the viewer alive past the last drain, and an unbounded waitpid
+    # turns that into a suite timeout. Poll, then reap it by force.
+    deadline = time.monotonic() + max(5.0, timeout)
+    while True:
+        try:
+            done, _status = os.waitpid(pid, os.WNOHANG)
+        except ChildProcessError:
+            break
+        if done:
+            break
+        if time.monotonic() >= deadline:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except OSError:
+                pass
+            try:
+                os.waitpid(pid, 0)
+            except ChildProcessError:
+                pass
+            break
+        time.sleep(0.05)
     # The last frame is the one on screen; earlier ones were cleared.
     return out.decode("utf-8", "ignore").split("\x1b[3J")[-1]
 

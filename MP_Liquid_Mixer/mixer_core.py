@@ -37,15 +37,25 @@ THEME_PATH = CONFIG_DIR / "theme"
 
 VERSION = "0.0.1"
 
-# The two decks run real MP Audio Player engines. Each namespace gets its own
-# socket/pid/state (MP_Audio_Player._player_file), so deck A and deck B never
-# retire or silence each other while sharing the library and favorites.
-DECK_NAMESPACES = {"A": "mixerdeck_a", "B": "mixerdeck_b"}
+# Four decks, each a real MP Audio Player engine. Each namespace gets its own
+# socket/pid/state (MP_Audio_Player._player_file), so the decks never retire or
+# silence each other while sharing the library, favorites and theme.
+DECK_NAMESPACES = {
+    "A": "mixerdeck_a",
+    "B": "mixerdeck_b",
+    "C": "mixerdeck_c",
+    "D": "mixerdeck_d",
+}
 CHANNELS = ("A", "B", "C", "D")
-ACTIVE_CHANNELS = ("A", "B")
-# Channels the crossfader blends. C and D are wired into the surface but stay
-# inactive, which is the documented v0.0.1 limit.
+ACTIVE_CHANNELS = CHANNELS
+# Channels the crossfader blends. C and D are extra inputs that always play at
+# their own fader level, so a crossfade never mutes them.
 CROSSFADE_CHANNELS = ("A", "B")
+# A playlist window is one *side*. Each side can show one of two decks: the
+# left player switches A <-> C, the right player B <-> D, so the two windows
+# always reach all four channels without spawning more terminals.
+DECK_SIDES = {"L": ("A", "C"), "R": ("B", "D")}
+DEFAULT_SIDE_DECKS = {"L": "A", "R": "B"}
 MIX_MODES = ("INTERNAL", "EXTERNAL")
 DEFAULT_GAIN = 0.85
 DEFAULT_CROSSFADE = 0.5
@@ -55,6 +65,19 @@ EQ_MIN, EQ_MAX = -12.0, 12.0
 EQ_BANDS = ("low", "mid", "high")
 EQ_GROUPS = {"low": (0, 1, 2), "mid": (3, 4, 5, 6), "high": (7, 8, 9)}
 PITCH_MIN, PITCH_MAX = -20.0, 20.0
+# Per-channel multi-effect, driven by the extra FILTER knob below LOW. The
+# filter knob is the effect's depth; the effects button arms or bypasses the
+# whole insert for that channel.
+DEFAULT_FILTER = 0.0
+EFFECT_MODES = ("FLANGER", "DELAY", "REVERB", "GATER")
+DEFAULT_EFFECT = "FLANGER"
+DEFAULT_EFFECT_SLOTS = list(EFFECT_MODES)
+# Slot colours from the requirement: red, yellow, blue, orange.
+EFFECT_SLOT_COLORS = ((235, 64, 72), (250, 205, 90), (72, 149, 239), (255, 150, 40))
+DEFAULT_MASTER_VOLUME = 1.0
+DEFAULT_MONITOR_VOLUME = 0.85
+# The one theme the mixer always opens in, whatever the user selected last.
+FORCED_THEME = "into_darkness_void_out"
 
 try:  # The player's own slider constants, so both surfaces feel identical.
     from liquid_glass_slider import DEFAULT_OPACITY, MAX_OPACITY, MIN_OPACITY
@@ -176,7 +199,13 @@ class MixerModel:
                  opacity: float = DEFAULT_OPACITY,
                  trims: Optional[Dict[str, float]] = None,
                  eq: Optional[Dict[str, Dict[str, float]]] = None,
-                 headphones: Optional[Dict[str, bool]] = None) -> None:
+                 headphones: Optional[Dict[str, bool]] = None,
+                 side_decks: Optional[Dict[str, str]] = None,
+                 filters: Optional[Dict[str, float]] = None,
+                 effect_slots: Optional[Dict[str, str]] = None,
+                 effect_enabled: Optional[Dict[str, bool]] = None,
+                 master_volume: float = DEFAULT_MASTER_VOLUME,
+                 monitor_volume: float = DEFAULT_MONITOR_VOLUME) -> None:
         self.gains: Dict[str, float] = {ch: DEFAULT_GAIN for ch in CHANNELS}
         if gains:
             for ch, value in gains.items():
@@ -209,6 +238,35 @@ class MixerModel:
         self.crossfade = clamp01(crossfade)
         self.mode = mode.upper() if str(mode).upper() in MIX_MODES else "INTERNAL"
         self.opacity = min(MAX_OPACITY, max(MIN_OPACITY, float(opacity)))
+        # Which deck each playlist window is showing. A side is "L" (left
+        # player) or "R" (right player); the value is one of its two decks.
+        self.side_decks: Dict[str, str] = dict(DEFAULT_SIDE_DECKS)
+        if isinstance(side_decks, dict):
+            for side, channel in side_decks.items():
+                if side in DECK_SIDES and channel in DECK_SIDES[side]:
+                    self.side_decks[side] = channel
+        # Per-channel effect inserts. The filter knob is the effect depth and
+        # the numbered slot squares pick which effect that knob drives.
+        self.filters: Dict[str, float] = {ch: DEFAULT_FILTER for ch in CHANNELS}
+        if isinstance(filters, dict):
+            for ch, value in filters.items():
+                if ch in self.filters:
+                    try:
+                        self.filters[ch] = clamp01(value)
+                    except (TypeError, ValueError):
+                        pass
+        self.effect_slots: Dict[str, str] = {ch: DEFAULT_EFFECT for ch in CHANNELS}
+        self.effect_enabled: Dict[str, bool] = {ch: False for ch in CHANNELS}
+        for ch in CHANNELS:
+            slot = str((effect_slots or {}).get(ch) or "").strip().upper()
+            if slot in EFFECT_MODES:
+                self.effect_slots[ch] = slot
+        if isinstance(effect_enabled, dict):
+            for ch, value in effect_enabled.items():
+                if ch in self.effect_enabled:
+                    self.effect_enabled[ch] = bool(value)
+        self.master_volume = clamp01(master_volume)
+        self.monitor_volume = clamp01(monitor_volume)
 
     # -- channels ---------------------------------------------------------
     def channel_active(self, channel: str) -> bool:
@@ -300,6 +358,89 @@ class MixerModel:
                 bands[index] = gain
         return bands
 
+    # -- playlist windows / deck switching --------------------------------
+    def deck_for_side(self, side: str) -> str:
+        """The deck a playlist window is currently mapped to."""
+        return self.side_decks.get(side, DEFAULT_SIDE_DECKS.get(side, "A"))
+
+    def other_deck_for_side(self, side: str) -> str:
+        """The deck the window's switch button would move to."""
+        decks = DECK_SIDES.get(side, ())
+        current = self.deck_for_side(side)
+        for channel in decks:
+            if channel != current:
+                return channel
+        return current
+
+    def toggle_side_deck(self, side: str) -> str:
+        """Swap a playlist window to its other deck and return the new deck."""
+        if side not in DECK_SIDES:
+            return self.deck_for_side(side)
+        self.side_decks[side] = self.other_deck_for_side(side)
+        return self.side_decks[side]
+
+    def deck_of(self, channel: str) -> Optional[str]:
+        """The side whose playlist window is mapped to ``channel``, or None."""
+        for side, decks in DECK_SIDES.items():
+            if channel in decks and self.side_decks.get(side) == channel:
+                return side
+        return None
+
+    # -- filters and effects ----------------------------------------------
+    def filter_value(self, channel: str) -> float:
+        return self.filters.get(channel, DEFAULT_FILTER)
+
+    def set_filter(self, channel: str, value: float) -> bool:
+        if channel not in self.filters:
+            return False
+        try:
+            self.filters[channel] = clamp01(value)
+        except (TypeError, ValueError):
+            return False
+        return True
+
+    def effect_mode(self, channel: str) -> str:
+        return self.effect_slots.get(channel, DEFAULT_EFFECT)
+
+    def set_effect_mode(self, channel: str, mode: str) -> bool:
+        if channel not in self.effect_slots:
+            return False
+        name = str(mode or "").strip().upper()
+        if name not in EFFECT_MODES:
+            return False
+        self.effect_slots[channel] = name
+        return True
+
+    def effect_on(self, channel: str) -> bool:
+        return bool(self.effect_enabled.get(channel, False))
+
+    def set_effect_enabled(self, channel: str, enabled: bool) -> bool:
+        if channel not in self.effect_enabled:
+            return False
+        self.effect_enabled[channel] = bool(enabled)
+        return True
+
+    def toggle_effect(self, channel: str) -> bool:
+        if channel not in self.effect_enabled:
+            return False
+        self.effect_enabled[channel] = not self.effect_enabled[channel]
+        return self.effect_enabled[channel]
+
+    def effect_payload(self, channel: str) -> Dict[str, Any]:
+        """What the engine receives for one channel's insert."""
+        return {
+            "mode": self.effect_mode(channel).lower(),
+            "amount": round(self.filter_value(channel), 4),
+            "enabled": self.effect_on(channel),
+        }
+
+    # -- master and monitor levels ----------------------------------------
+    def set_master_volume(self, value: float) -> None:
+        self.master_volume = clamp01(value)
+
+    def set_monitor_volume(self, value: float) -> None:
+        self.monitor_volume = clamp01(value)
+
     # -- crossfader -------------------------------------------------------
     def set_crossfade(self, value: float) -> None:
         self.crossfade = clamp01(value)
@@ -332,7 +473,7 @@ class MixerModel:
         if channel in CROSSFADE_CHANNELS:
             gain_a, gain_b = self.crossfade_gains()
             gain *= gain_a if channel == "A" else gain_b
-        return max(0, min(100, int(round(100.0 * gain * trim))))
+        return max(0, min(100, int(round(100.0 * gain * trim * self.master_volume))))
 
     def channel_volumes(self) -> Dict[str, int]:
         return {ch: self.channel_volume(ch) for ch in CHANNELS}
@@ -355,6 +496,12 @@ class MixerModel:
             "crossfade": self.crossfade,
             "mode": self.mode,
             "opacity": self.opacity,
+            "side_decks": dict(self.side_decks),
+            "filters": dict(self.filters),
+            "effect_slots": dict(self.effect_slots),
+            "effect_enabled": dict(self.effect_enabled),
+            "master_volume": self.master_volume,
+            "monitor_volume": self.monitor_volume,
         }
 
     @classmethod
@@ -368,6 +515,14 @@ class MixerModel:
             opacity=data.get("opacity", DEFAULT_OPACITY),
             trims=data.get("trims") if isinstance(data.get("trims"), dict) else None,
             eq=data.get("eq") if isinstance(data.get("eq"), dict) else None,
+            side_decks=data.get("side_decks") if isinstance(data.get("side_decks"), dict) else None,
+            filters=data.get("filters") if isinstance(data.get("filters"), dict) else None,
+            effect_slots=(data.get("effect_slots") if isinstance(data.get("effect_slots"), dict)
+                          else None),
+            effect_enabled=(data.get("effect_enabled") if isinstance(data.get("effect_enabled"), dict)
+                            else None),
+            master_volume=data.get("master_volume", DEFAULT_MASTER_VOLUME),
+            monitor_volume=data.get("monitor_volume", DEFAULT_MONITOR_VOLUME),
         )
         pitches = data.get("pitches") if isinstance(data.get("pitches"), dict) else {}
         for ch, value in pitches.items():
@@ -1170,41 +1325,50 @@ def layout(width: int = DESIGN_W, height: int = DESIGN_H) -> Dict[str, Tuple[flo
         "deck_a_term": rect(36, 138, 762, 838),
         "deck_b_term": rect(1122, 138, 762, 838),
         "mixer": rect(842, 88, 236, 900),
-        "browse_button": rect(852, 686, 216, 28),
-        "mode_button": rect(852, 726, 216, 40),
-        "record_button": rect(852, 800, 216, 40),
-        "format_button": rect(852, 770, 104, 26),
-        "bitdepth_button": rect(964, 770, 104, 26),
-        "credit_button": rect(852, 862, 216, 34),
-        "clock_button": rect(852, 904, 216, 46),
-        "export_button": rect(852, 954, 216, 30),
-        # Verify sits in the free band between the channel fader values
-        # (which end at 594) and the crossfader (moved from 620 to 626). It
-        # belongs with the library operations, and this is the only gap in
-        # the mixer column that does not move a control the user knows.
-        "verify_button": rect(852, 596, 216, 24),
-        "xfader": rect(852, 626, 216, 52),
+        "browse_button": rect(852, 720, 216, 28),
+        "mode_button": rect(852, 756, 216, 40),
+        "record_button": rect(852, 830, 216, 40),
+        "format_button": rect(852, 800, 104, 26),
+        "bitdepth_button": rect(964, 800, 104, 26),
+        "credit_button": rect(852, 876, 216, 34),
+        "clock_button": rect(852, 914, 216, 46),
+        "export_button": rect(852, 964, 216, 30),
+        "verify_button": rect(852, 630, 216, 24),
+        "xfader": rect(852, 660, 216, 52),
         "pitch_a": rect(810, 150, 26, 420),
         "pitch_b": rect(1084, 150, 26, 420),
         "sync_a": rect(620, 94, 70, 28),
         "sync_b": rect(1706, 94, 70, 28),
+        # The deck-switch button in each player's header. Clicking flips that
+        # playlist window between its two decks (A <-> C, B <-> D).
+        "deck_switch_a": rect(24, 94, 160, 26),
+        "deck_switch_b": rect(1736, 94, 160, 26),
+        # Master and monitor trims at the top of the window.
+        "master_knob": rect(296, 12, 44, 44),
+        "monitor_knob": rect(348, 12, 44, 44),
         "opacity": rect(192, 1040, 1536, 24),
         "visualizer_button": rect(1600, 14, 196, 36),
         "trance_button": rect(540, 14, 300, 36),
         "settings_button": rect(1150, 14, 144, 36),
         "close_button": rect(1836, 14, 48, 36),
+        "profile_button": rect(1180, 60, 128, 26),
     }
     # Channel strips: the volume faders are a quarter of their old height.
-    strip_y, strip_h, strip_w, strip_gap = 430.0, 140.0, 48.0, 8.0
+    strip_y, strip_h, strip_w, strip_gap = 480.0, 120.0, 48.0, 8.0
     start_x = 842 + (236 - (4 * strip_w + 3 * strip_gap)) / 2.0
     for i, channel in enumerate(CHANNELS):
         x = start_x + i * (strip_w + strip_gap)
         boxes[f"strip_{channel}"] = rect(x, strip_y, strip_w, strip_h)
         boxes[f"strip_{channel}_label"] = rect(x, strip_y - 26, strip_w, 20)
         boxes[f"strip_{channel}_value"] = rect(x, strip_y + strip_h + 6, strip_w, 18)
+        # The headphone-cue button above each fader: presses route that one
+        # channel to the monitor output.
+        boxes[f"monitor_{channel}"] = rect(x + 2, strip_y - 48, strip_w - 4, 18)
 
-    # Four rows of four knobs: GAIN, TREBLE, MID, LOW, under INTERNAL.
-    row_centres = {"gain": 160.0, "high": 226.0, "mid": 292.0, "low": 358.0}
+    # Four rows of four knobs: GAIN, TREBLE, MID, LOW, plus the bigger FILTER
+    # knob below LOW. The EQ rows carry no left-hand legend any more, so the
+    # knob columns line up exactly with the channel faders below them.
+    row_centres = {"gain": 170.0, "high": 216.0, "mid": 262.0, "low": 308.0}
     knob_x, knob_w, knob_gap = 886.0, 40.0, 4.0
     for row in ("gain", "high", "mid", "low"):
         centre = row_centres[row]
@@ -1212,7 +1376,25 @@ def layout(width: int = DESIGN_W, height: int = DESIGN_H) -> Dict[str, Tuple[flo
             x = knob_x + i * (knob_w + knob_gap)
             boxes[f"knob_{row}_{channel}"] = rect(x, centre - knob_w / 2, knob_w, knob_w)
             boxes[f"knob_{row}_{channel}_value"] = rect(x - 4, centre + knob_w / 2 + 2, knob_w + 8, 14)
-        boxes[f"knob_{row}_label"] = rect(846, centre - 8, 36, 16)
+    # FILTER is 1.5x the EQ knobs and sits below LOW, clear of the faders.
+    filter_d = knob_w * 1.5
+    filter_centre = 362.0
+    for i, channel in enumerate(CHANNELS):
+        x = knob_x + i * (knob_w + knob_gap) + (knob_w - filter_d) / 2.0
+        boxes[f"knob_filter_{channel}"] = rect(x, filter_centre - filter_d / 2, filter_d, filter_d)
+        boxes[f"knob_filter_{channel}_value"] = rect(x - 4, filter_centre + filter_d / 2 + 1,
+                                                     filter_d + 8, 13)
+
+    # Effect controls, one column beneath the filter row: the four numbered
+    # slot squares and the enable/bypass button per channel.
+    effect_y, effect_w, effect_h = 398.0, 8.0, 8.0
+    for i, channel in enumerate(CHANNELS):
+        column_x = knob_x + i * (knob_w + knob_gap) + (knob_w - (4 * effect_w + 3 * 1.0)) / 2.0
+        for slot, _name in enumerate(EFFECT_MODES):
+            boxes[f"effect_slot_{slot + 1}_{channel}"] = rect(
+                column_x + slot * (effect_w + 1.0), effect_y, effect_w, effect_h)
+        boxes[f"effect_toggle_{channel}"] = rect(column_x - 2, effect_y + effect_h + 3,
+                                                 (4 * effect_w + 3.0) + 4, 11)
     return boxes
 
 
