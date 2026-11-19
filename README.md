@@ -7,6 +7,9 @@
 >
 > **MP Mix Manager 0.5.4 was released on the 19th of November 2026 by MPlanetarian / Dreamworlds Productions.**
 >
+> **📥 Download the MP Mix Manager Installer Packages — 0.5.4 (Sensorium), released 19 November 2026:**
+> [![Download MP Mix Manager 0.5.4](https://img.shields.io/badge/Download-v0.5.4%20(Sensorium)-brightgreen.svg)](https://github.com/MPlanetarian/MPMixManager_v0.5-x64/releases/tag/v0.5.4)
+>
 > Welcome to **Sensorium**, the Next Generation of Audio Mixing and Mix Archive Management & Audio Workflow, with many new features — including a brand new **MP Liquid Mixer** and **3D Visualizations** for **OpenGL, Vulkan & Metal**. See the full list of new features added and fixes below.
 >
 > This is the follow-up to 0.5.3, and it is a release built from things you told me about — plus one big new window. Nothing here is a rewrite: every fix below is a real bug that was reproduced on a real machine, fixed at the cause, and then pinned by a test so it cannot come back. The console menu, controllers, the clickable deck and the intro movie all shipped in 0.5.3 and are described there, not here.
@@ -84,7 +87,7 @@ An enterprise-grade workstation orchestration console and media management suite
 
 ![MP Liquid Mixer in a dark theme — DECK A and DECK D around the four-channel MIXER strip, with the visualizer running behind both player windows](005.png)
 
-## 🎛️ MP Liquid Mixer — The Next Generation (Sensorium Interface Enabled) - Four Decks (Mixing Tracks), Two MP Liquid Players (Fully Independent Playlists), One MP DJ Liquid Mixer — Glass Control Surface with 3D Visualization and over Ten Unique Themes including Into Darkness (Default)
+## 🎛️ MP Liquid Mixer — The Next Generation (Sensorium Interface Enabled) — Four Decks (Mixing Tracks), Two MP Liquid Players (Fully Independent Playlists), One MP DJ Liquid Mixer — Glass Control Surface with 3D Visualization and over Ten Unique Themes including Into Darkness (Default)
 
 **MP Liquid Mixer** is a full-screen, liquid-glass DJ mixer built on the **MP Liquid Player**. Four complete player engines feed four live channels, and the two playlist windows each switch between a deck pair — left A/C, right B/D — around a wide gap that holds the four-channel mixer and crossfader. The **MP Liquid Visualizer** can run behind the whole surface, bonded to the mixer's exact rectangle, so the decks float over a live 3D scene instead of a flat desktop.
 
@@ -159,7 +162,7 @@ It is one 1920×1080 (or 4K) window that inherits the entire Liquid Glass host: 
 
 ![MP Mix Manager 0.5.4 Screenshot (MP Audio CLI Player)](003.png)
 
-- [🎛️ MP Liquid Mixer — The Next Generation (Sensorium Interface Enabled) - Four Decks (Mixing Tracks), Two MP Liquid Players (Fully Independent Playlists), One MP DJ Liquid Mixer — Glass Control Surface with 3D Visualization and over Ten Unique Themes including Into Darkness (Default)](#-mp-liquid-mixer--the-next-generation-sensorium-interface-enabled---four-decks-mixing-tracks-two-mp-liquid-players-fully-independent-playlists-one-mp-dj-liquid-mixer--glass-control-surface-with-3d-visualization-and-over-ten-unique-themes-including-into-darkness-default)
+- [🎛️ MP Liquid Mixer — The Next Generation](#-mp-liquid-mixer--the-next-generation-sensorium-interface-enabled--four-decks-mixing-tracks-two-mp-liquid-players-fully-independent-playlists-one-mp-dj-liquid-mixer--glass-control-surface-with-3d-visualization-and-over-ten-unique-themes-including-into-darkness-default)
 - [🚀 What's New in v0.5.4 Stable (Sensorium)](#-whats-new-in-v054-stable-sensorium)
 - [🎚️ Spotlight: MP Liquid Mixer (Four Live Decks • Four Channels • DJ)](#-spotlight-mp-liquid-mixer-four-live-decks--four-channels--dj)
 - [🖥️ Player, Console and Visualizer](#-player-console-and-visualizer)
