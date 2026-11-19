@@ -274,7 +274,11 @@ COLOR_THEME_NOTICE = "\033[1;48;2;20;20;28;38;2;255;255;255m"
 # pale field cannot use. Every other theme, Retro Linux Memories included,
 # shares that pale field with the console manager.
 THEME_DARK_GLASS_INK = {
+    # The two themes whose glass is an opaque dark pane, so light ink wins.
+    # This set must equal the shader's theme_uses_dark_glass(): Into Darkness
+    # is the black void, Retro Linux Memories is the charcoal field #2d2d2d.
     "into_darkness_void_out": "\033[1;38;2;236;240;244m",
+    "retro_linux_memories": "\033[1;38;2;236;240;244m",
 }
 # Kept as an alias: the "Color Theme" notice was the first user of this mapping.
 THEME_NOTICE_DARK_GLASS = THEME_DARK_GLASS_INK

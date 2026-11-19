@@ -189,10 +189,14 @@ class ThemeNoticeColourTests(unittest.TestCase):
             )
 
     def test_playing_badge_uses_the_helper_at_every_render_site(self):
-        """Full, Vertical, mini and micro frames all colour the badge from the helper."""
+        """Every frame colours the badge from the helper.
+
+        Vertical is not a separate renderer since 9da4dc6: it draws through the
+        full-frame path, so three call sites cover four sizes.
+        """
         source = (BASE_DIR / "MP_Audio_Player.py").read_text(encoding="utf-8")
-        self.assertEqual(source.count("playing_badge_ink(self.visualizer.theme, is_lg)"), 4,
-                         "expected the badge in full, Vertical, mini and micro frames")
+        self.assertEqual(source.count("playing_badge_ink(self.visualizer.theme, is_lg)"), 3,
+                         "expected the badge in Full+Vertical, mini and micro frames")
         # The old green play inks must be gone.
         self.assertNotIn("{GREEN}\u25B6 PLAYING", source)
         self.assertNotIn("38;2;0;255;127m\u25B6 PLAY", source)

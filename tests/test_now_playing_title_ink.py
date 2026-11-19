@@ -281,12 +281,24 @@ class InkSurvivesThePostProcessorsTests(unittest.TestCase):
 
 class EveryRenderSiteUsesTheHelperTests(unittest.TestCase):
     def test_every_frame_resolves_through_one_helper(self):
-        """Full, Vertical, Mini and Micro all colour the title from the helper."""
+        """Every frame colours the title from the helper, none hard-codes one.
+
+        Vertical is not a separate renderer since 9da4dc6: it draws through the
+        full-frame path with a narrow grid, so there are three call sites for
+        four sizes (Full/Vertical share one, then Mini, then Micro).
+        """
         source = (ROOT / "MP_Audio_Player.py").read_text(encoding="utf-8")
         self.assertEqual(
-            source.count("now_playing_ink(self.visualizer.theme, is_lg)"), 4,
-            "full, Vertical, Mini and Micro must all use the shared helper",
+            source.count("now_playing_ink(self.visualizer.theme, is_lg)"), 3,
+            "Full+Vertical, Mini and Micro must all use the shared helper",
         )
+        # Every ♫ title glyph in the renderers comes from that helper.
+        for line_no, line in enumerate(source.splitlines(), 1):
+            if "♫" in line and "f\"" in line and line_no > 300:
+                self.assertTrue(
+                    "now_playing_ink" in line or "title_ink" in line,
+                    f"line {line_no} paints a ♫ title without the helper: {line[:90]}",
+                )
 
     def test_no_frame_hard_codes_a_theme_ink_for_the_title(self):
         source = (ROOT / "MP_Audio_Player.py").read_text(encoding="utf-8")
