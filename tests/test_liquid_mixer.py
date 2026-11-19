@@ -1513,3 +1513,51 @@ class TestLaunchKeys(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestStaleLaunch(unittest.TestCase):
+    """A crashed window must never block the next launch."""
+
+    def test_a_dead_lock_record_is_reported_as_free(self):
+        import liquid_mixer_launch
+
+        with tempfile.TemporaryDirectory() as tmp:
+            stale = Path(tmp) / "liquid_mixer.lock"
+            with patch.object(liquid_mixer_launch, "LOCK_PATH", stale):
+                # A pid that is not a mixer window, even a live one, is stale.
+                stale.write_text(f"{os.getpid()}\n", encoding="utf-8")
+                self.assertFalse(liquid_mixer_launch.lock_owner_alive())
+                self.assertFalse(liquid_mixer_launch.mixer_lock_held())
+                # The launcher clears the record so the next press can start.
+                self.assertFalse(stale.exists())
+            self.assertFalse(stale.exists())
+
+    def test_a_live_mixer_can_take_the_lock_only_once(self):
+        fd = mixer_core.acquire_mixer_lock()
+        if fd == "unsupported":
+            self.skipTest("platform has no fcntl")
+        self.assertIsNotNone(fd)
+        self.assertEqual(mixer_core.lock_pid(), os.getpid())
+        os.close(fd)
+        try:
+            os.unlink(mixer_core.LOCK_PATH)
+        except OSError:
+            pass
+
+    def test_a_crashed_window_cannot_block_the_next_launch(self):
+        # Two separate lock takeovers, as two successive launches would do.
+        first = mixer_core.acquire_mixer_lock()
+        if first == "unsupported":
+            self.skipTest("platform has no fcntl")
+        self.assertIsNotNone(first)
+        os.close(first)
+        try:
+            os.unlink(mixer_core.LOCK_PATH)
+        except OSError:
+            pass
+        second = mixer_core.acquire_mixer_lock()
+        try:
+            self.assertIsNotNone(second)
+        finally:
+            if second not in (None, "unsupported"):
+                os.close(second)

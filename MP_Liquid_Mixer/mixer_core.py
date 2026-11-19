@@ -1314,6 +1314,12 @@ def acquire_mixer_lock():
     A second window would spawn a second pair of engines into the same
     namespaces and the two would retire each other's daemons. Returns an open
     fd held for the process lifetime, "unsupported" without fcntl, or None.
+
+    A crash cannot block the next launch: flock is the only authority here,
+    and it is released by the kernel the moment the owning process dies, so a
+    refusing lock always means a live window rather than a stale file. The fd
+    is marked non-inheritable so a detached deck engine can never keep the
+    lock alive on the window's behalf.
     """
     try:
         import fcntl
@@ -1323,6 +1329,10 @@ def acquire_mixer_lock():
         fd = os.open(str(LOCK_PATH), os.O_RDWR | os.O_CREAT, 0o600)
     except OSError:
         return None
+    try:
+        os.set_inheritable(fd, False)
+    except Exception:
+        pass
     try:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
@@ -1334,6 +1344,45 @@ def acquire_mixer_lock():
     except OSError:
         pass
     return fd
+
+
+def lock_pid() -> int:
+    """The pid written into the lock file, or 0."""
+    try:
+        return int(LOCK_PATH.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return 0
+
+
+def mixer_process_alive() -> bool:
+    """True when the lock file's pid is a live mixer window process."""
+    pid = lock_pid()
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+        if stat.rsplit(")", 1)[1].split()[0] == "Z":
+            return False
+    except (OSError, IndexError):
+        pass
+    try:
+        with open(f"/proc/{pid}/cmdline", encoding="utf-8", errors="ignore") as handle:
+            return "MP_Liquid_Mixer.py" in handle.read()
+    except OSError:
+        return False
+
+
+def clear_stale_mixer_lock() -> None:
+    """Drop a lock record whose pid is gone, so the next launch can start."""
+    if lock_pid() and not mixer_process_alive():
+        try:
+            os.unlink(LOCK_PATH)
+        except OSError:
+            pass
 
 
 def stop_owned_visualizer() -> None:
@@ -1369,10 +1418,10 @@ def layout(width: int = DESIGN_W, height: int = DESIGN_H) -> Dict[str, Tuple[flo
         "deck_b": rect(1110, 88, 786, 900),
         "deck_c": rect(24, 88, 786, 900),
         "deck_d": rect(1110, 88, 786, 900),
-        "deck_a_header": rect(24, 88, 786, 40),
-        "deck_b_header": rect(1110, 88, 786, 40),
-        "deck_c_header": rect(24, 88, 786, 40),
-        "deck_d_header": rect(1110, 88, 786, 40),
+        "deck_a_header": rect(24, 88, 786, 48),
+        "deck_b_header": rect(1110, 88, 786, 48),
+        "deck_c_header": rect(24, 88, 786, 48),
+        "deck_d_header": rect(1110, 88, 786, 48),
         "deck_a_term": rect(36, 138, 762, 838),
         "deck_b_term": rect(1122, 138, 762, 838),
         "deck_c_term": rect(36, 138, 762, 838),
@@ -1388,14 +1437,16 @@ def layout(width: int = DESIGN_W, height: int = DESIGN_H) -> Dict[str, Tuple[flo
         "credit_button": rect(852, 880, 216, 24),
         "clock_button": rect(852, 910, 216, 34),
         "export_button": rect(852, 950, 216, 24),
-        "pitch_a": rect(796, 150, 26, 420),
-        "pitch_b": rect(1098, 150, 26, 420),
-        "sync_a": rect(620, 94, 70, 28),
-        "sync_b": rect(1706, 94, 70, 28),
+        # Tempo panels sit against the top of each player card and are centred
+        # in the narrow gap between that card and the mixer column.
+        "pitch_a": rect(813, 92, 26, 420),
+        "pitch_b": rect(1081, 92, 26, 420),
+        "sync_a": rect(660, 94, 70, 26),
+        "sync_b": rect(1746, 94, 70, 26),
         # The deck-switch button in each player's header. Clicking flips that
         # playlist window between its two decks (A <-> C, B <-> D).
-        "deck_switch_a": rect(24, 94, 160, 26),
-        "deck_switch_b": rect(1736, 94, 160, 26),
+        "deck_switch_a": rect(112, 94, 150, 26),
+        "deck_switch_b": rect(1198, 94, 150, 26),
         # Master and monitor trims at the top of the window.
         "master_knob": rect(296, 10, 44, 44),
         "monitor_knob": rect(348, 10, 44, 44),

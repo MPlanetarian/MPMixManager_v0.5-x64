@@ -61,13 +61,18 @@ _popen = subprocess.Popen
 # the lock: is a mixer window alive?
 # ------------------------------------------------------------------------------
 def mixer_lock_held() -> bool:
-    """True while a mixer owns ``liquid_mixer.lock``.
+    """True while a *live* mixer owns ``liquid_mixer.lock``.
 
     A non-blocking **shared** attempt is enough: the mixer holds the same file
     with ``LOCK_EX`` for its whole life, and a shared lock cannot be taken
     while an exclusive one is held. The probe opens read-only and never writes,
     so an open mixer's pid record stays intact; a lock left behind by a closed
     window is simply free.
+
+    A crash that leaves the file behind is the trap here: the flock it held is
+    gone with the process, but the pid record survives. Confirming the pid is
+    still a live mixer window before reporting "already open" is what stops a
+    hard-killed session from blocking every later launch.
     """
     if fcntl is None:
         return _mixer_process_running()
@@ -80,13 +85,50 @@ def mixer_lock_held() -> bool:
     try:
         fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
     except OSError as exc:
+        held = exc.errno in (errno.EACCES, errno.EAGAIN)
         os.close(fd)
-        return exc.errno in (errno.EACCES, errno.EAGAIN)
+        if held and not lock_owner_alive():
+            clear_stale_lock()
+            return False
+        return held
     try:
         fcntl.flock(fd, fcntl.LOCK_UN)
     finally:
         os.close(fd)
+    # The file exists and nobody holds it: a stale record from a crash.
+    if not lock_owner_alive():
+        clear_stale_lock()
     return False
+
+
+def lock_owner_alive() -> bool:
+    """True when the lock's pid is a running MP Liquid Mixer process."""
+    try:
+        pid = int(LOCK_PATH.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return False
+    if pid <= 0 or not _pid_alive(pid):
+        return False
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+        if stat.rsplit(")", 1)[1].split()[0] == "Z":
+            return False
+    except (OSError, IndexError):
+        pass
+    try:
+        with open(f"/proc/{pid}/cmdline", encoding="utf-8", errors="ignore") as handle:
+            return "MP_Liquid_Mixer.py" in handle.read()
+    except OSError:
+        return False
+
+
+def clear_stale_lock() -> None:
+    """Delete a lock record that no live mixer process owns."""
+    if not lock_owner_alive():
+        try:
+            LOCK_PATH.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def _mixer_process_running() -> bool:

@@ -3160,12 +3160,39 @@ class LiquidMixer(GlassHost):
         online = bool(self.decks.get(channel, {}).get("online"))
         playing = str(status.get("state") or "").lower() == "playing"
         led = (80, 230, 140) if playing else ((250, 205, 90) if online else (150, 160, 168))
-        cr.set_source_rgba(*_rgba(led, 0.95))
-        cr.arc(header[0] + 26 * s, header[1] + header[3] / 2, 5.5 * s, 0, 6.2832)
-        cr.fill()
-        self._text(cr, header[0] + 42 * s, header[1] + 11 * s, f"DECK {channel}", 14 * s, glass_ink, 0.95, bold=True)
+
+        # Row 1: LED, the deck letter, the switch button and SYNC. Each has its
+        # own box in the design grid, so none of them can overlap: the
+        # switch sits right of the letter and SYNC is pinned to the far right.
         sync_box = self.boxes[f"sync_{key}"]
-        title = status.get("name") or status.get("title") or ("Engine starting..." if online else "Waiting for engine...")
+        row_y = header[1] + header[3] / 2 - 15 * s
+        cr.set_source_rgba(*_rgba(led, 0.95))
+        cr.arc(header[0] + 26 * s, row_y + 11 * s, 5.5 * s, 0, 6.2832)
+        cr.fill()
+        self._text(cr, header[0] + 42 * s, row_y + 5 * s, f"DECK {channel}",
+                   13 * s, glass_ink, 0.96, bold=True)
+        right = "LIVE" if playing else ("READY" if online else "OFFLINE")
+        self._text(cr, sync_box[0] - 14 * s, row_y + 5 * s, right, 9.5 * s, led, 0.92,
+                   bold=True, anchor="end")
+
+        master = self.sync_master == channel
+        sync_color = hue
+        cr.set_source_rgba(*_rgba(sync_color, 0.34 if master else 0.10))
+        self._rounded(cr, sync_box[0], sync_box[1], sync_box[2], sync_box[3], 7 * s)
+        cr.fill()
+        cr.set_source_rgba(*_rgba(sync_color, 0.90 if master else 0.55))
+        cr.set_line_width(max(1.0, 1.1 * s))
+        self._rounded(cr, sync_box[0], sync_box[1], sync_box[2], sync_box[3], 7 * s)
+        cr.stroke()
+        self._text(cr, sync_box[0] + sync_box[2] / 2, sync_box[1] + 8 * s,
+                   "MASTER" if master else "SYNC", 9 * s, glass_ink,
+                   0.98 if master else 0.85, bold=True, anchor="middle")
+
+        # Row 2: the loaded track, always centred on the header's own axis so
+        # a long name is ellipsised from both sides instead of running off to
+        # the left or right.
+        title = status.get("name") or status.get("title") or (
+            "Engine starting..." if online else "Waiting for engine...")
         # When every music share is down the deck's list is empty and pressing
         # Enter cannot possibly play anything. Say that in the header instead
         # of leaving a deck that looks ready but silently does nothing. The
@@ -3175,16 +3202,11 @@ class LiquidMixer(GlassHost):
             title = f"Music library offline - {self._library_error}"
         elif not playing and str(status.get("last_load_error") or ""):
             title = str(status.get("last_load_error"))
-        switch_box = self.boxes[f"deck_switch_{key}"]
-        self._text(cr, switch_box[0] + switch_box[2] / 2, switch_box[1] + 6 * s,
-                   f"DECK {channel}  \u21c4  {self.model.other_deck_for_side(side)}",
-                   10 * s, glass_ink, 0.95, bold=True, anchor="middle")
-        self._text(cr, switch_box[0] + switch_box[2] / 2, switch_box[1] + switch_box[3] + 2 * s,
-                   str(title), 9.5 * s, glass_ink, 0.68, anchor="middle",
-                   max_width=max(40.0, header[2] - 340 * s))
-        right = "LIVE" if playing else ("READY" if online else "OFFLINE")
-        self._text(cr, header[0] + header[2] - 18 * s, header[1] + 12 * s, right, 10.5 * s, led, 0.92,
-                   bold=True, anchor="end")
+        self._text(cr, header[0] + header[2] / 2, header[1] + header[3] - 15 * s,
+                   str(title), 10 * s, glass_ink, 0.78, bold=True, anchor="middle",
+                   max_width=max(80.0, header[2] - 40 * s))
+
+        self._paint_deck_switch(cr, side, channel, s, hue, glass_ink)
 
         master = self.sync_master == channel
         sync_color = hue
@@ -3232,9 +3254,9 @@ class LiquidMixer(GlassHost):
         self._rounded(cr, box[0], box[1], box[2], box[3], 9 * s)
         cr.stroke()
         self._text(cr, box[0] + box[2] / 2, box[1] + 6 * s,
-                   f"DECK {channel}", 11 * s, glass_ink, 0.98, bold=True, anchor="middle")
+                   f"DECK {channel}", 10.5 * s, glass_ink, 0.98, bold=True, anchor="middle")
         self._text(cr, box[0] + box[2] / 2, box[1] + 16 * s,
-                   f"SWITCH TO {other}", 7.5 * s, hue, 0.95, bold=True, anchor="middle")
+                   f"SWITCH TO {other}", 7.2 * s, hue, 0.95, bold=True, anchor="middle")
 
     def _paint_mixer(self, cr, s, accent, secondary, tertiary, glass_ink, dark_ui) -> None:
         panel = self.boxes["mixer"]
