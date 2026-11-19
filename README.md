@@ -60,7 +60,7 @@ An enterprise-grade workstation orchestration console and media management suite
 
 ![MP Liquid Mixer 0.0.1 — DECK A and DECK D in a dark theme around the four-channel MIXER strip, with the visualizer running behind both decks](005.png)
 
-## 🎛️ MP Liquid Mixer — Two Decks, One Glass Surface
+## 🎛️ MP Liquid Mixer — The Next Generation (Sensorium Interface Enabled) — Four Decks (Mixing Tracks), Two MP Liquid Players (Fully Independent Playlists), One MP DJ Liquid Mixer — Glass Control Surface with 3D Visualization and over Ten Unique Themes including Into Darkness (Default)
 
 **MP Liquid Mixer** is a full-screen, liquid-glass DJ mixer built on the **MP Liquid Player**. Two complete player engines sit left and right with a wide gap between them, and that gap holds a four-channel mixer with a crossfader. The **MP Liquid Visualizer** can run behind the whole surface, bonded to the mixer's exact rectangle, so the decks float over a live 3D scene instead of a flat desktop.
 
@@ -138,7 +138,7 @@ It is one 1920×1080 (or 4K) window that inherits the entire Liquid Glass host: 
 > ### 🎨 Release Theme Track Cover — MP Mix Manager 0.5 (Sensorium)
 > ***MPlanetarian - The Orbits of Planets (Cosmic Dreamworlds Remake) - [Stream of Frequency Recordings]*** — the free release track cover, embedded in the FLAC as its **Cover (front)** and **Cover (back)**. The track is **27:27** long. It ships in [`MP_SAMPLES/`](MP_SAMPLES/) and is preloaded in the Liquid Transparent Audio Player at **0:00** on first launch.
 
-- [🎛️ MP Liquid Mixer — Two Decks, One Glass Surface](#-mp-liquid-mixer--two-decks-one-glass-surface)
+- [🎛️ MP Liquid Mixer — The Next Generation](#-mp-liquid-mixer--the-next-generation-sensorium-interface-enabled--four-decks-mixing-tracks-two-mp-liquid-players-fully-independent-playlists-one-mp-dj-liquid-mixer--glass-control-surface-with-3d-visualization-and-over-ten-unique-themes-including-into-darkness-default)
 - [🚀 What's New in v0.5.4 Stable (Sensorium)](#-whats-new-in-v054-stable-sensorium)
 - [🎚️ Spotlight: MP Liquid Mixer (Two Decks • Four Channels • DJ)](#-spotlight-mp-liquid-mixer-two-decks--four-channels--dj)
 - [🖥️ Player, Console and Visualizer](#-player-console-and-visualizer)
