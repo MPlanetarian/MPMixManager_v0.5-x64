@@ -58,7 +58,7 @@
 
 An enterprise-grade workstation orchestration console and media management suite designed for high-resolution audio production, multi-hour DJ mix archiving, automated 32-bit FLAC mastering, 31,000+ track SMB network streaming, DJ Pro playlist extraction, live tracklist tracking, **two-deck DJ mixing with native and MIDI-mode DJ control**, YouTube & AI Talking-Head video synthesis, automated multi-period intelligence reporting, system maintenance, and AI workflow control across **Linux (Bazzite / SteamOS / Fedora / Ubuntu)**, **macOS (Latest Golden Gate Release, Apple Silicon M1–M4 & Intel)**, **Microsoft Windows 10 & 11**, **FreeBSD (14.x / 15-CURRENT)**, and **Raspberry Pi (3 / 4 / 5 and Zero 2 W)**.
 
-![MP Liquid Mixer 0.0.1 — two liquid-glass decks around a four-channel mixer, with the visualizer running behind](005.png)
+![MP Liquid Mixer 0.0.1 — DECK A and DECK D in a dark theme around the four-channel MIXER strip, with the visualizer running behind both decks](005.png)
 
 ## 🎛️ MP Liquid Mixer — Two Decks, One Glass Surface
 
