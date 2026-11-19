@@ -7182,6 +7182,61 @@ class EqualizerVisualizer:
                 kp = cp if p == 0 else max(0, min(w - 1, cp + int(round((p / 20.0) * cp))))
         return pfx, _trk(w, kp, cp), sfx
 
+    def volume_bar_parts(self, volume: int, width: int = 36, max_cols: Optional[int] = None) -> Tuple[str, str, str]:
+        """The volume track split into (prefix, track, suffix).
+
+        Same shape as pitch_bar_parts, so the player can paint the three pieces
+        and turn a click back into a percentage from the span it actually drew.
+        The track is exactly ``width`` cells: a click at either end is 0 % and
+        100 %, and the knob sits on the level.
+
+        A narrow window shrinks the whole line to ``max_cols`` but never takes
+        the track below seven cells, which is the shortest bar a listener can
+        still aim at. The ink follows the theme, so C recolours it.
+        """
+        is_lg = bool(os.environ.get("MP_LIQUID_GLASS"))
+        bold_s = "" if is_lg else BOLD
+        ink = self.pitch_control_colors()
+        knob, fill, track = ink["knob"], ink["fill"], ink["track"]
+        vol = max(0, min(100, int(volume)))
+        w = max(7, int(width))
+        pfx = f"  {bold_s}{ink['label']}🔊 VOLUME:{NC} {DIM}0%{NC} ["
+        sfx = f"] {DIM}100%{NC}  {bold_s}{knob}{vol}%{NC}"
+        if max_cols:
+            # Drop the decorations first, then shrink the track. A narrow deck
+            # still needs a usable bar, so the track never goes below 7 cells
+            # and the labels give way instead.
+            chosen = None
+            for pfx_try, sfx_try in (
+                (f"  {bold_s}{ink['label']}🔊 VOLUME:{NC} {DIM}0%{NC} [",
+                 f"] {DIM}100%{NC}  {bold_s}{knob}{vol}%{NC}"),
+                (f"  {bold_s}{ink['label']}🔊 VOL:{NC} [", f"] {bold_s}{knob}{vol}%{NC}"),
+                ("  [", f"] {vol}%"),
+            ):
+                room = max_cols - _display_width(pfx_try) - _display_width(sfx_try)
+                if room >= 7:
+                    chosen = (pfx_try, sfx_try)
+                    w = min(w, room)
+                    break
+            if chosen is None:
+                chosen = ("  [", f"] {vol}%")
+                w = 7
+            pfx, sfx = chosen
+        k = int(round((vol / 100.0) * (w - 1))) if w > 1 else 0
+        k = max(0, min(w - 1, k))
+        cells = []
+        for i in range(w):
+            if i == k:
+                cells.append(f"{bold_s}{knob}●{NC}")
+            elif i < k:
+                cells.append(f"{fill}━{NC}")
+            else:
+                cells.append(f"{DIM}{track}─{NC}")
+        return pfx, "".join(cells), sfx
+
+    def render_volume_bar(self, volume: int, width: int = 36, max_cols: Optional[int] = None) -> str:
+        return "".join(self.volume_bar_parts(volume, width=width, max_cols=max_cols))
+
     def render_horizontal_pitch_bar(self, pitch_pct: int, width: int = 36, max_cols: Optional[int] = None) -> str:
         return "".join(self.pitch_bar_parts(pitch_pct, width=width, max_cols=max_cols))
 
@@ -8348,6 +8403,15 @@ class TerminalPlayerUI:
                 self._pending_pitch = None
             else:
                 st["pitch_percent"] = value
+        volume = getattr(self, "_pending_volume", None)
+        if volume is not None:
+            value, expires = volume
+            if now >= expires or int(st.get("volume", 0) or 0) == value:
+                self._pending_volume = None
+            else:
+                st["volume"] = value
+                # A drag up from MUTED has to be audible, not just painted.
+                st["muted"] = False
         seek = getattr(self, "_pending_seek", None)
         if seek is not None:
             position, expires = seek
@@ -8407,6 +8471,11 @@ class TerminalPlayerUI:
                 e.seek(float(kwargs.get("position", 0.0)), force=True)
                 if kwargs.get("resume") and e.state != "playing":
                     e.play()
+            elif cmd == "set_volume":
+                # The slider and --vol send an absolute level, which the local
+                # engine had no branch for: only the relative steps existed, so
+                # a click on the bar changed nothing on a non-remote player.
+                e.set_volume(int(kwargs.get("volume", 85)))
             elif cmd == "vol_up": e.change_volume(kwargs.get("step", 5))
             elif cmd == "vol_down": e.change_volume(-kwargs.get("step", 5))
             elif cmd == "pitch_up": e.change_pitch(kwargs.get("step", 1))
@@ -8659,6 +8728,11 @@ class TerminalPlayerUI:
         self._timeline_span = (0, 0)
         self._pitch_row = 0
         self._pitch_span = (0, 0)
+        # The volume slider is an absolute control, like the pitch track.
+        self._volume_row = 0
+        self._volume_span = (0, 0)
+        # (level, expires_at): the clicked level paints before the daemon echoes.
+        self._pending_volume = None
 
     def _remap_click_rows(self, plan: Optional[Tuple[int, int]], total: int):
         """Move recorded click rows into the frame `_fit_frame` actually paints.
@@ -8681,6 +8755,7 @@ class TerminalPlayerUI:
         self._export_tracks_row = _move(self._export_tracks_row)
         self._timeline_row = _move(self._timeline_row)
         self._pitch_row = _move(self._pitch_row)
+        self._volume_row = _move(self._volume_row)
         fr, fs, fe = self._fav_export_button
         if fr:
             nr = _move(fr)
@@ -9844,6 +9919,8 @@ class TerminalPlayerUI:
                 return self._seek_from_column(col)
             if active == "pitch" and self._pitch_row and self._pitch_span[0]:
                 return self._pitch_from_column(col)
+            if active == "volume" and self._volume_row and self._volume_span[0]:
+                return self._volume_from_column(col)
             return False
         timeline_row, (tl_start, tl_end) = self._timeline_row, self._timeline_span
         if timeline_row and row == timeline_row and tl_start and tl_start <= col <= tl_end:
@@ -9851,6 +9928,9 @@ class TerminalPlayerUI:
         pitch_row, (p_start, p_end) = self._pitch_row, self._pitch_span
         if pitch_row and row == pitch_row and p_start and p_start <= col <= p_end:
             return self._pitch_from_column(col)
+        vol_row, (v_start, v_end) = self._volume_row, self._volume_span
+        if vol_row and row == vol_row and v_start and v_start <= col <= v_end:
+            return self._volume_from_column(col)
         return False
 
     def _seek_from_column(self, col: int) -> bool:
@@ -9865,6 +9945,20 @@ class TerminalPlayerUI:
         fraction = (col - tl_start) / float(span) if span > 0 else 0.0
         self._transport_drag = "timeline"
         self._send_cmd("seek_to", position=fraction * duration, resume=True)
+        return True
+
+    def _volume_from_column(self, col: int) -> bool:
+        """Set the level to the percentage under ``col``, clamped to the track."""
+        v_start, v_end = self._volume_span
+        col = min(max(col, v_start), v_end)
+        span = v_end - v_start
+        fraction = (col - v_start) / float(span) if span > 0 else 0.0
+        level = int(round(fraction * 100.0))
+        level = max(0, min(100, level))
+        self._transport_drag = "volume"
+        # Paint the clicked level at once; the daemon's echo lands a beat later.
+        self._pending_volume = (level, time.monotonic() + 2.0)
+        self._send_cmd("set_volume", volume=level)
         return True
 
     def _pitch_from_column(self, col: int) -> bool:
@@ -10395,7 +10489,7 @@ class TerminalPlayerUI:
             try: termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
             except Exception: pass
         try:
-            sys.stdout.write("\033]111\007\033[49m\033[?1000l\033[?1006l\033[?7h\033[?25h\033[?1049l\033]0;MP Audio Player\007\n")
+            sys.stdout.write("\033]111\007\033[49m\033[?1002l\033[?1000l\033[?1006l\033[?7h\033[?25h\033[?1049l\033]0;MP Audio Player\007\n")
             sys.stdout.flush()
         except Exception: pass
         if hasattr(self, "_win_cstate"):
@@ -10432,7 +10526,7 @@ class TerminalPlayerUI:
             _set_terminal_title("MP Audio Player")
         self._publish_liquid_ui_size()
         apply_terminal_theme_background(self.visualizer.theme, force=True)
-        sys.stdout.write("\033[?1049h\033[?25l\033[?7l\033[?1000h\033[?1006h\033[2J\033[H"); sys.stdout.flush()
+        sys.stdout.write("\033[?1049h\033[?25l\033[?7l\033[?1000h\033[?1002h\033[?1006h\033[2J\033[H"); sys.stdout.flush()
         _win_hide_console_scrollbar()
         threading.Thread(target=self._input_loop, daemon=True).start()
         # Pace by deadline rather than sleeping a fixed time after each draw.
@@ -11304,17 +11398,51 @@ class TerminalPlayerUI:
         pitch_row = len(lines) + 1
         pitch_start = _display_width(pitch_pfx) + 1
         pitch_span = (pitch_start, pitch_start + _display_width(pitch_trk) - 1)
-        lines.extend([f"{pitch_pfx}{pitch_trk}{pitch_sfx}", ""])
+        lines.append(f"{pitch_pfx}{pitch_trk}{pitch_sfx}")
+        # The volume slider takes the blank separator row the pitch track used
+        # to leave. Reusing it means the bar costs the playlist nothing: on a
+        # 24-row console the same three tracks stay visible as before.
+        volume = int(st.get("volume", 85) or 0)
+        vol_label = "MUTED" if st.get("muted") else f"{volume}%"
+        vol_pfx, vol_trk, vol_sfx = self.visualizer.volume_bar_parts(
+            volume, width=bw, max_cols=max(20, w - 1))
+        self._volume_row = len(lines) + 1
+        self._volume_start = _display_width(vol_pfx) + 1
+        self._volume_span = (self._volume_start,
+                             self._volume_start + _display_width(vol_trk) - 1)
+        vol_line = f"{vol_pfx}{vol_trk}{vol_sfx}"
+        if st.get("muted"):
+            # Name the mute in the readout, not on the track: the bar keeps its
+            # painted level so releasing mute returns to it.
+            vol_line = vol_line.replace(f"{NC}", f"  {bold_s}{COLOR_TRAFFIC_RED}MUTED{NC}", 1)
+            vol_line += f"  {bold_s}{COLOR_TRAFFIC_RED}MUTED{NC}"
+        lines.append(vol_line)
         # A landscape window keeps its familiar 7/5/3 analyser so the playlist
         # below is untouched. The portrait column has height to spare, so there
         # the analyser takes what the fixed rows leave, with the playlist
         # keeping the larger share so it stays a playlist.
         if self.ui_size_mode == "VERTICAL":
-            spare = max(0, h - 17 - 9)
+            # The portrait deck is a fixed height, and the slider took the row
+            # the pitch track used to leave blank. Take that row back out of
+            # the analyser, which has the slack, so EQUALIZER and PLAYLIST both
+            # stay on the deck.
+            # Keep one more row than the panels need: _fit_frame trims from the
+            # middle, and an exact fit clipped the EQUALIZER header first.
+            spare = max(0, h - 17 - 10 - 1)
             analyser_h = max(3, min(20, 8 + spare // 3))
         else:
             analyser_h = 7 if h >= 34 else (5 if h >= 28 else 3)
-        lines.extend(self.visualizer.render(st, width=w, height=analyser_h) + [""])
+        # The volume slider now occupies the separator row that used to sit
+        # between the pitch track and the analyser, so the frame needs no
+        # second blank line here. Keeping it cost a 24-row console one playlist
+        # track, which is the row the slider was meant not to take.
+        if self.ui_size_mode == "VERTICAL":
+            # The portrait deck labels its analyser, so the panel reads as the
+            # equaliser it is rather than an unlabelled pair of meters.
+            lines.append(_boxed_rule("╭", "── ✦ EQUALIZER ──", "╮", iw, b_col, text_col))
+            lines.extend(self.visualizer.render(st, width=w, height=max(3, analyser_h - 1)))
+        else:
+            lines.extend(self.visualizer.render(st, width=w, height=analyser_h))
 
         active_tracks = self._get_active_tracks()
         prompt_line = self._favorites_prompt_line()
@@ -11325,9 +11453,13 @@ class TerminalPlayerUI:
         elif self.search_query: lines.append(f"  {bold_s}Search Filter: '{self.search_query}' (Press '/' to search)")
         elif time.time() < self.notification_time and self.notification_msg: lines.append(f"  {self._notification_ansi(bold_s)}📂 {self.notification_msg}{NC}")
 
+        volume_row, volume_span = self._volume_row, self._volume_span
         self._reset_click_targets()
         self._timeline_row, self._timeline_span = timeline_row, timeline_span
         self._pitch_row, self._pitch_span = pitch_row, pitch_span
+        # Recorded before the reset, restored after it: the slider is painted
+        # early in the frame but the target list is cleared mid-render.
+        self._volume_row, self._volume_span = volume_row, volume_span
         self._append_player_buttons(lines, max(20, w - 1))
 
         if self.inspector_hud_active: lines.extend(self._render_inspector_hud(st, iw))
