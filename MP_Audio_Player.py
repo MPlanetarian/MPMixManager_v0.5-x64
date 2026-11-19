@@ -10550,7 +10550,7 @@ class TerminalPlayerUI:
                     if c.isprintable(): self.eq_custom_name_input += c
                 except Exception: pass
                 return
-        if self.export_format_mode:
+        if getattr(self, "export_format_mode", False):
             if data == b"\x1b":
                 self.export_format_mode = False; self.export_tracks = None; self._notify("Export cancelled", 2.5)
                 return
@@ -10571,7 +10571,7 @@ class TerminalPlayerUI:
                 self.export_format_mode = False
                 self.export_mode = True
             return
-        if self.export_mode:
+        if getattr(self, "export_mode", False):
             if data in (b"\r", b"\n"):
                 self.export_mode = False
                 mixes = self.export_tracks if self.export_tracks is not None else self.scanner.get_mixes(self.search_query)
