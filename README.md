@@ -3,7 +3,7 @@
 </p>
 
 > [!IMPORTANT]
-> ## 🎉 MP Mix Manager 0.5.4 (Sensorium) Is Live
+> ## 🎉 MP Mix Manager 0.5.4 (Sensorium) - [Dreamworlds Productions / MPlanetarian ] - Stable Release: Mac, Windows 10/11, Linux 7.x (Ubuntu, Fedora, Bazzite, SuSE, Arch), FreeBSD, Ras Pie
 >
 > **MP Mix Manager 0.5.4 was released on the 19th of November 2026 by MPlanetarian / Dreamworlds Productions.**
 >
