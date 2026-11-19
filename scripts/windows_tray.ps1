@@ -263,26 +263,49 @@ function Get-MpMuteLabel {
 function Send-MpPlayerCommand {
     # Talk to the player's own IPC socket. The tray must not import the player
     # (that pulls in PortAudio and the whole engine), so it speaks the same
-    # small JSON protocol the headset buttons and Web Companion use. Windows
-    # has no AF_UNIX, so the player listens on the TCP port in the port file.
+    # small JSON protocol the headset buttons and Web Companion use.
+    #
+    # A modern Python on Windows exposes AF_UNIX, so the player may be
+    # listening on a Unix-domain socket instead of a TCP port, and Windows
+    # PowerShell 5.1 cannot open one. When the port path cannot reach it, fall
+    # back to the player's own `--cmd` entry point, which uses whatever
+    # transport the player actually started.
     param([string]$Command)
     $cfg = Join-Path $env:USERPROFILE ".config\mix-manager"
     $portFile = Join-Path $cfg "mp_audio_player.port"
-    if (-not (Test-Path -LiteralPath $portFile)) { return $false }
-    $payload = [System.Text.Encoding]::UTF8.GetBytes((@{ cmd = $Command } | ConvertTo-Json -Compress))
+    if (Test-Path -LiteralPath $portFile) {
+        $payload = [System.Text.Encoding]::UTF8.GetBytes((@{ cmd = $Command } | ConvertTo-Json -Compress))
+        try {
+            $port = [int]((Get-Content -LiteralPath $portFile -Raw).Trim())
+            $client = New-Object System.Net.Sockets.TcpClient
+            $client.Connect("127.0.0.1", $port)
+            $stream = $client.GetStream()
+            $stream.Write($payload, 0, $payload.Length)
+            $stream.Flush()
+            $buffer = New-Object byte[] 4096
+            $read = $stream.Read($buffer, 0, $buffer.Length)
+            $client.Close()
+            if ($read -gt 0) { return $true }
+        } catch {
+        }
+    }
+    $player = Join-Path $Root "MP_Audio_Player.py"
+    if (-not (Test-Path -LiteralPath $player)) { return $false }
+    $python = $null
+    foreach ($name in @("python.exe", "pythonw.exe")) {
+        $found = Get-Command $name -ErrorAction SilentlyContinue
+        if ($found -and ($found.Source -notlike "*WindowsApps*")) { $python = $found.Source; break }
+    }
+    if (-not $python) { return $false }
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
     try {
-        $port = [int]((Get-Content -LiteralPath $portFile -Raw).Trim())
-        $client = New-Object System.Net.Sockets.TcpClient
-        $client.Connect("127.0.0.1", $port)
-        $stream = $client.GetStream()
-        $stream.Write($payload, 0, $payload.Length)
-        $stream.Flush()
-        $buffer = New-Object byte[] 4096
-        $read = $stream.Read($buffer, 0, $buffer.Length)
-        $client.Close()
-        return ($read -gt 0)
+        $output = & $python $player --cmd $Command 2>&1
+        return ($LASTEXITCODE -eq 0)
     } catch {
         return $false
+    } finally {
+        $ErrorActionPreference = $previous
     }
 }
 

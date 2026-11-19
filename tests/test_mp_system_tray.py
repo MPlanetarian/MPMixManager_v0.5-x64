@@ -843,6 +843,36 @@ class TestTrayMute(unittest.TestCase):
         text = (ROOT / "scripts" / "mp_system_tray.py").read_text(encoding="utf-8")
         self.assertIn("MP Audio Player is not running", text)
 
+    def test_the_player_cmd_fallback_the_windows_tray_relies_on_exists(self):
+        """Windows PowerShell 5.1 cannot open AF_UNIX.
+
+        The player may be listening on a Unix-domain socket there, so the
+        PowerShell tray falls back to `MP_Audio_Player.py --cmd mute`. Pin that
+        entry point and its exit status, or the fallback silently stops working
+        and every mute click is reported as "player not running".
+        """
+        import subprocess
+
+        player = ROOT / "MP_Audio_Player.py"
+        source = player.read_text(encoding="utf-8")
+        self.assertIn('(("--cmd",), dict(type=str))', source)
+        self.assertIn('if res := send_ipc_command(args.cmd)', source)
+        # A namespace with no player behind it is the "not running" case: the
+        # tray reads this non-zero exit to show the notice instead of pretending
+        # the mute landed.
+        result = subprocess.run(
+            [sys.executable, str(player), "--cmd", "mute"],
+            capture_output=True,
+            text=True,
+            timeout=90,
+            env={**os.environ, "MP_PLAYER_NAMESPACE": "tray-test-absent"},
+        )
+        self.assertNotEqual(result.returncode, 0)
+        tray_source = (ROOT / "scripts" / "windows_tray.ps1").read_text(encoding="utf-8")
+        fn = tray_source.split("function Send-MpPlayerCommand", 1)[1].split("\nfunction ", 1)[0]
+        self.assertIn("--cmd $Command", fn)
+        self.assertIn("$LASTEXITCODE", fn)
+
 
 if __name__ == "__main__":
     unittest.main()

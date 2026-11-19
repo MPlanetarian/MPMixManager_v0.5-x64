@@ -61,6 +61,13 @@ APP_STATE = {
 SHARED_GLOBS = {
     "liquid_ui_size.*": ("gui", "liquid"),
     "audio_volume.cache*": ("liquid",),
+    # MP Black Glass panes and the visualizers they attach publish one small
+    # record per live process. They belong to no single app: any of the four
+    # windows can open a pane, so they go with the last one uninstalled.
+    "black_glass": ("gui", "liquid", "visualizer"),
+    "black_glass_window.*.json": ("gui", "liquid", "visualizer"),
+    "black_glass_visualizer.*.json": ("gui", "liquid", "visualizer"),
+    "black_glass_visualizer_state.*.json": ("gui", "liquid", "visualizer"),
 }
 
 # Removed from the config directory only when every app is uninstalled and the

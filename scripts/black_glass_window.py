@@ -63,7 +63,6 @@ SCRIPTS = Path(__file__).resolve().parent
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
-CONFIG_DIR = Path(os.environ.get("MP_BLACK_GLASS_CONFIG_DIR", "") or (Path.home() / ".config" / "mix-manager"))
 TITLE = "MP Black Glass"
 SCRIPT = Path(__file__).resolve()
 
@@ -100,6 +99,17 @@ CORNER_RADIUS = 30
 # ------------------------------------------------------------------------------
 # pure helpers — no GTK
 # ------------------------------------------------------------------------------
+
+def config_dir() -> Path:
+    """The suite's config directory, resolved when it is needed.
+
+    A module-level constant would freeze the location at import, which makes
+    the directory impossible to redirect for a test or an isolated launch.
+    """
+    override = os.environ.get("MP_BLACK_GLASS_CONFIG_DIR", "").strip()
+    return Path(override) if override else (Path.home() / ".config" / "mix-manager")
+
+
 def black_glass_supported() -> bool:
     """True when this machine can actually draw a Black Glass window.
 
@@ -225,7 +235,7 @@ def slider_colour(rainbow: bool, hue: float) -> Tuple[float, float, float]:
 # ------------------------------------------------------------------------------
 def state_dir() -> Path:
     override = os.environ.get("MP_BLACK_GLASS_STATE_DIR", "")
-    path = Path(override) if override else (CONFIG_DIR / "black_glass")
+    path = Path(override) if override else (config_dir() / "black_glass")
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -301,10 +311,10 @@ def live_slots() -> set:
 
 
 def live_count(exclude_pid: Optional[int] = None) -> int:
-    count = len(live_slots())
-    if exclude_pid and int(exclude_pid) in live_slots():
-        count -= 1
-    return max(0, count)
+    alive = live_slots()
+    if exclude_pid:
+        alive.discard(int(exclude_pid))
+    return len(alive)
 
 
 def claim_slot(pid: Optional[int] = None) -> bool:
@@ -341,8 +351,8 @@ def limit_message() -> str:
 # ------------------------------------------------------------------------------
 def _record_candidates() -> Tuple[Path, ...]:
     return (
-        CONFIG_DIR / "liquid_player_window.json",
-        CONFIG_DIR / "liquid_gui_window.json",
+        config_dir() / "liquid_player_window.json",
+        config_dir() / "liquid_gui_window.json",
     )
 
 
@@ -428,7 +438,7 @@ def parse_geometry(text: str) -> Optional[Tuple[int, int, int, int]]:
 # geometry publication for the attached visualizer
 # ------------------------------------------------------------------------------
 def record_path(pid: int) -> Path:
-    return CONFIG_DIR / f"black_glass_window.{int(pid)}.json"
+    return config_dir() / f"black_glass_window.{int(pid)}.json"
 
 
 def publish_geometry(x: int, y: int, width: int, height: int,
@@ -498,7 +508,7 @@ def host_running(pid: Optional[int] = None) -> Optional[bool]:
 
 
 def visualizer_pid_path(pid: int) -> Path:
-    return CONFIG_DIR / f"black_glass_visualizer.{int(pid)}.json"
+    return config_dir() / f"black_glass_visualizer.{int(pid)}.json"
 
 
 def attached_visualizer_pid(pid: Optional[int] = None) -> int:
@@ -519,20 +529,36 @@ def _visualizer_state_path(pid: int) -> Path:
     visualizer at the player's file would let the player's Visualization
     button unmap a window it does not own, so each pane gets its own.
     """
-    return CONFIG_DIR / f"black_glass_visualizer_state.{int(pid)}.json"
+    return config_dir() / f"black_glass_visualizer_state.{int(pid)}.json"
 
 
 def _write_visualizer_state(pid: int) -> None:
     path = _visualizer_state_path(pid)
+    preset = {"id": 0, "key": "cosmic_dreamworlds_liquid",
+              "name": "Cosmic Dreamworlds (Liquid)"}
+    try:
+        from mp_liquid_visualizer_vulkan import get_active_preset
+    except ImportError:
+        try:
+            from scripts.mp_liquid_visualizer_vulkan import get_active_preset
+        except ImportError:
+            get_active_preset = None
+    if get_active_preset is not None:
+        try:
+            chosen = get_active_preset()
+            if isinstance(chosen, dict) and chosen.get("key"):
+                preset = chosen
+        except Exception:
+            pass
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps({
             "active": True,
             "visible": True,
             "gui_visible": True,
-            "preset_id": 0,
-            "preset_key": "cosmic_dreamworlds_liquid",
-            "preset_name": "Cosmic Dreamworlds (Liquid)",
+            "preset_id": int(preset.get("id") or 0),
+            "preset_key": str(preset.get("key") or "cosmic_dreamworlds_liquid"),
+            "preset_name": str(preset.get("name") or "Cosmic Dreamworlds (Liquid)"),
         }), encoding="utf-8")
     except OSError:
         pass
@@ -584,7 +610,7 @@ def attach_visualizer(pid: Optional[int] = None) -> int:
     _write_visualizer_state(owner)
     kwargs = {"creationflags": 0x00000208} if sys.platform == "win32" else {"start_new_session": True}
     try:
-        log_dir = CONFIG_DIR
+        log_dir = config_dir()
         log_dir.mkdir(parents=True, exist_ok=True)
         with (log_dir / "liquid_visualizer.log").open("a", encoding="utf-8") as log:
             proc = subprocess.Popen(
@@ -595,7 +621,9 @@ def attach_visualizer(pid: Optional[int] = None) -> int:
     except Exception:
         return 0
     try:
-        visualizer_pid_path(owner).write_text(json.dumps({"pid": int(proc.pid)}) + "\n", encoding="utf-8")
+        path = visualizer_pid_path(owner)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"pid": int(proc.pid)}) + "\n", encoding="utf-8")
     except OSError:
         pass
     return int(proc.pid)
@@ -1001,7 +1029,7 @@ class BlackGlassWindow:
             self.transparency = transparency_from_x(x, self.width)
             self._apply_opacity()
             self._dirty = True
-            self._area.queue_draw()
+            self._request_redraw()
             return True
         if x >= float(self.width) - RESIZE_GRIP and y >= float(self.height) - RESIZE_GRIP:
             self._drag = "resize"
@@ -1018,7 +1046,7 @@ class BlackGlassWindow:
             self.transparency = transparency_from_x(x, self.width)
             self._apply_opacity()
             self._dirty = True
-            self._area.queue_draw()
+            self._request_redraw()
             return True
         if self._drag == "resize":
             width = max(MIN_WIDTH, int(self._press_size[0] + (x - self._press[0])))
@@ -1058,7 +1086,7 @@ class BlackGlassWindow:
             self._started = time.monotonic()
             self.hue = hue_at(0.0)
             self._dirty = True
-            self._area.queue_draw()
+            self._request_redraw()
             return True
         if key in (Gdk.KEY_z, Gdk.KEY_Z):
             if attached_visualizer_pid(os.getpid()):
@@ -1066,7 +1094,7 @@ class BlackGlassWindow:
             else:
                 attach_visualizer(os.getpid())
             self._dirty = True
-            self._area.queue_draw()
+            self._request_redraw()
             return True
         if key in (Gdk.KEY_g, Gdk.KEY_G):
             launch_mp_gui()
@@ -1108,8 +1136,23 @@ class BlackGlassWindow:
 
         if self._dirty:
             self._dirty = False
-            self._area.queue_draw()
+            self._request_redraw()
         return True
+
+    def _request_redraw(self) -> None:
+        """Ask for a repaint, tolerating a pane that is being torn down.
+
+        The 16 ms timer can fire once after the window is destroyed (a queued
+        frame, or a test that drives ``_tick`` directly), and the drawing area
+        is gone by then. Repainting is best effort, never fatal.
+        """
+        area = self._area
+        if area is None:
+            return
+        try:
+            area.queue_draw()
+        except Exception:
+            pass
 
     # -- drawing ----------------------------------------------------------
     def _rounded_path(self, cr, width: float, height: float, radius: float) -> None:
