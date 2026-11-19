@@ -472,6 +472,14 @@ class LiquidMixer(GlassHost):
         # -- deck output and equaliser ----------------------------------
         self._route_decks_to_master(updated)
         self._apply_default_eq(updated)
+        # The MIDI DJ Mixer Profile may have been changed from Settings.
+        if str(updated.midi_profile or self.profile).upper() != self.profile:
+            self.profile = mixer_midi.normalize_profile(updated.midi_profile)
+            if self.midi_listener is not None:
+                try:
+                    self.midi_listener.set_profile(self.profile)
+                except Exception as exc:
+                    _log(f"profile switch failed: {exc!r}")
 
         _log(
             "settings saved: format=%s part=%sGiB visualizer=%s startup_video=%s "
@@ -507,6 +515,11 @@ class LiquidMixer(GlassHost):
                 namespace, sink, settings_api.child_audio_env(settings))
             if moved:
                 _log(f"settings: moved deck {channel} stream(s) to {sink}")
+        # A configured monitor output is a second interface: cued decks go
+        # there, everything else stays on the master. With no monitor output
+        # set this is a no-op and the master routing above is the whole path.
+        self._monitor_sink = str(settings.monitor_output_device or "").strip()
+        self._monitor_dirty = bool(self._monitor_sink)
 
     def _apply_default_eq(self, settings: "settings_api.Settings") -> None:
         """Set each deck's equaliser to the chosen default preset.
@@ -1404,12 +1417,16 @@ class LiquidMixer(GlassHost):
         self.s4_listener.start()
 
     def _start_midi(self) -> None:
-        """Map a detected Traktor Kontrol in MIDI mode, and nothing else.
+        """Open the MIDI DJ Mixer Profile's controller, and nothing else.
 
-        The listener only opens an ALSA port whose name contains ``Traktor``.
-        A generic MIDI keyboard stays unopened and unmapped.
+        Profile A binds the Kontrol S4 and profile B the Kontrol S3; a generic
+        MIDI keyboard stays unopened and unmapped. The profile is remembered
+        in liquid_mixer_midi.json and can be switched live from the top bar.
         """
-        self.midi_listener = mixer_midi.TraktorMidiListener(on_change=self._on_s4_change)
+        profile = self.settings.midi_profile or self.profile
+        self.profile = mixer_midi.normalize_profile(profile)
+        self.midi_listener = mixer_midi.MixerMidiListener(on_change=self._on_s4_change,
+                                                          profile=self.profile)
         self.midi_listener.start()
 
     def _on_s4_change(self, action: str, value: float) -> None:
@@ -1442,6 +1459,39 @@ class LiquidMixer(GlassHost):
             self._s4_last_action = f"PITCH {channel} {value:+.1f}%"
             if self.area is not None:
                 self.area.queue_draw()
+            return False
+        if action.startswith("filter:"):
+            channel = action.split(":", 1)[1]
+            self.model.set_filter(channel, value)
+            self._effect_dirty = True
+            self._s4_last_seen = time.time()
+            self._s4_last_action = f"FILTER {channel} {int(round(value * 100))}%"
+            if self.area is not None:
+                self.area.queue_draw()
+            return False
+        if action == "master_volume":
+            self.model.set_master_volume(value)
+            self._vol_dirty = True
+            self._s4_last_seen = time.time()
+            self._s4_last_action = f"MASTER {int(round(value * 100))}%"
+            if self.area is not None:
+                self.area.queue_draw()
+            return False
+        if action == "monitor_volume":
+            self.model.set_monitor_volume(value)
+            self._monitor_dirty = True
+            self._s4_last_seen = time.time()
+            self._s4_last_action = f"MONITOR {int(round(value * 100))}%"
+            if self.area is not None:
+                self.area.queue_draw()
+            return False
+        if action.startswith("monitor:"):
+            self._toggle_monitor_cue(action.split(":", 1)[1])
+            self._s4_last_seen = time.time()
+            return False
+        if action.startswith("effect:"):
+            self._toggle_channel_effect(action.split(":", 1)[1])
+            self._s4_last_seen = time.time()
             return False
         if action.startswith("shift:"):
             channel = action.split(":", 1)[1]
@@ -1488,7 +1538,7 @@ class LiquidMixer(GlassHost):
         return False
 
     def _set_master(self, channel: str) -> None:
-        if channel not in ("A", "B") or channel == self.sync_master:
+        if channel not in core.CHANNELS or channel == self.sync_master:
             return
         self.sync_master = channel
         _log(f"sync master -> {channel}")
@@ -1497,7 +1547,7 @@ class LiquidMixer(GlassHost):
 
     def _sync_deck(self, channel: str, manual: bool = False) -> None:
         """Match this deck's tempo to the master, or make it master with Shift."""
-        if channel not in ("A", "B"):
+        if channel not in core.CHANNELS:
             return
         if manual:
             self._set_master(channel)
@@ -1644,32 +1694,30 @@ class LiquidMixer(GlassHost):
         threading.Thread(target=worker, name=f"play-{channel}", daemon=True).start()
 
     def _s4_status(self) -> Tuple[str, Tuple[int, int, int]]:
+        label = mixer_midi.PROFILE_LABELS.get(self.profile, "MIDI")
         midi = getattr(self, "midi_listener", None)
         if midi is not None and midi.connected:
             last = float(midi.last_event or 0.0)
-            name = midi.device_name or "Traktor"
+            name = midi.device_name or label
             if last and time.time() - last < 6.0:
-                return f"Traktor MIDI {name}  {midi.last_message}", (80, 230, 140)
-            return f"Traktor MIDI {name}  mapped", (80, 230, 140)
+                return f"DJ MIXER {label}  {midi.last_message}", (80, 230, 140)
+            return f"DJ MIXER {label}  {name} mapped", (80, 230, 140)
         listener = self.s4_listener
-        if listener is None:
-            return "MIDI: no Traktor hardware", (250, 205, 90)
-        status = str(listener.status or "")
+        status = str((listener.status if listener is not None else "") or "")
         if status.startswith("native"):
-            last = float(listener.last_event or 0.0)
+            last = float(getattr(listener, "last_event", 0.0) or 0.0)
             path = status.split(" ", 1)[1] if " " in status else ""
             if last and time.time() - last < 6.0:
-                return f"S4 {path}  {getattr(self, '_s4_last_action', '')}", (80, 230, 140)
+                return f"DJ MIXER {path}  {getattr(self, '_s4_last_action', '')}", (80, 230, 140)
             if last:
-                return f"S4 {path}  idle", (250, 205, 90)
-            return f"S4 {path}  ready", (250, 205, 90)
+                return f"DJ MIXER {path}  idle", (250, 205, 90)
+            return f"DJ MIXER {path}  ready", (250, 205, 90)
         if midi is not None:
             if "held" in str(midi.status):
                 return str(midi.status), (250, 205, 90)
-            return "MIDI: no Traktor hardware", (250, 205, 90)
-        if "waiting" in status:
-            return "S4: not found - check the USB cable", (250, 205, 90)
-        return f"S4: {status}", (250, 205, 90)
+            if "switching" in str(midi.status):
+                return str(midi.status), (250, 205, 90)
+        return f"DJ MIXER {label}: not found - check the USB cable", (250, 205, 90)
 
     # ------------------------------------------------------------------
     # visualizer
@@ -1906,6 +1954,16 @@ class LiquidMixer(GlassHost):
             self.model.save()
             self.area.queue_draw()
             return True
+        # 1-9 pick the MP Visualizer presets on the window behind the mixer.
+        # The mixer owns the keys so the decks' own number keys (library
+        # switching) do not steal them: a number pressed over the chrome goes
+        # to the background visualizer, exactly as the standalone window does.
+        # getattr keeps a stubbed Gdk (tests build one from a short key list)
+        # from raising on a key constant it does not define.
+        _k1, _k9 = getattr(Gdk, "KEY_1", None), getattr(Gdk, "KEY_9", None)
+        if not from_deck and _k1 is not None and _k9 is not None and _k1 <= key <= _k9:
+            self._select_visualizer_slot(key - _k1 + 1)
+            return True
         if not from_deck:
             # Quick launch of the other MP windows. The deck terminals keep
             # these keys for their own search/mode handling.
@@ -1925,9 +1983,40 @@ class LiquidMixer(GlassHost):
             self._toggle_fullscreen()
             return True
         if key == Gdk.KEY_Escape:
+            # Esc closes the mixer from anywhere, including a focused deck, so
+            # the window can always be dismissed with one key.
             self.quit()
             return True
         return False
+
+    def _select_visualizer_slot(self, slot: int) -> None:
+        """Choose preset number ``slot`` (1-9) for the companion visualizer.
+
+        The companion and the standalone window share one preset state file,
+        so writing the slot here changes the picture behind the mixer on its
+        next poll without restarting anything.
+        """
+        try:
+            try:
+                from liquid_player_visualizer import write_player_visualizer_state
+                from mp_liquid_visualizer_vulkan import presets_by_slot
+            except ImportError:
+                from scripts.liquid_player_visualizer import write_player_visualizer_state
+                from scripts.mp_liquid_visualizer_vulkan import presets_by_slot
+            presets = presets_by_slot()
+            if not presets:
+                return
+            index = (int(slot) - 1) % len(presets)
+            preset = presets[index]
+            write_player_visualizer_state(True, preset)
+            try:
+                from mp_liquid_visualizer_vulkan import save_active_preset
+            except ImportError:
+                from scripts.mp_liquid_visualizer_vulkan import save_active_preset
+            save_active_preset(preset.get("key", ""))
+            _log(f"visualizer preset {slot}: {preset.get('name')}")
+        except Exception as exc:
+            _log(f"visualizer preset {slot} failed: {exc!r}")
 
     def _toggle_fullscreen(self) -> None:
         self._toggle_window_mode()
@@ -2508,7 +2597,10 @@ class LiquidMixer(GlassHost):
         self.area.queue_draw()
 
     def _drag_pitch(self, channel: str, y: float) -> None:
-        box = self.boxes[f"pitch_{channel.lower()}"]
+        # The slider is drawn beside a playlist window; the channel names the
+        # deck it currently drives (A<->C on the left, B<->D on the right).
+        side = "a" if channel in ("A", "C") else "b"
+        box = self.boxes[f"pitch_{side}"]
         top = box[1] + 32 * self._ui_scale
         bottom = box[1] + box[3] - 32 * self._ui_scale
         t = (float(y) - top) / max(1.0, bottom - top)
@@ -2606,9 +2698,12 @@ class LiquidMixer(GlassHost):
                     self._vol_dirty = True
                     self._eq_dirty = True
                     self._pitch_dirty = True
-                other = "B" if channel == "A" else "A"
+                others = {name: (self._deck_status.get(name) or {})
+                          for name in core.CHANNELS if name != channel}
                 new_master = master_after_status(self.sync_master, channel, previous,
-                                                 status, self._deck_status.get(other) or {})
+                                                 status, self._deck_status.get(
+                                                     core.CHANNELS[(core.CHANNELS.index(channel) + 1) % len(core.CHANNELS)]) or {},
+                                                 others=others)
                 if new_master != self.sync_master:
                     self._set_master(new_master)
                 # Self-heal: a deck restarted by its own UI comes back at the
@@ -3018,9 +3113,17 @@ class LiquidMixer(GlassHost):
     )
 
     def _knob_value(self, group: str, channel: str) -> float:
+        if group == "master":
+            return self.model.master_volume
+        if group == "monitor":
+            return self.model.monitor_volume
+        if group == "filter":
+            return self.model.filter_value(channel)
         return self.model.trim(channel) if group == "gain" else self.model.eq_value(channel, group)
 
     def _knob_range(self, group: str):
+        if group in ("master", "monitor", "filter"):
+            return 0.0, 1.0
         for key, _label, low, high, _default in self.KNOB_ROWS:
             if key == group:
                 return low, high

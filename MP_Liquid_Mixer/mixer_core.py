@@ -47,7 +47,11 @@ DECK_NAMESPACES = {
     "D": "mixerdeck_d",
 }
 CHANNELS = ("A", "B", "C", "D")
-ACTIVE_CHANNELS = CHANNELS
+# A and B are the two decks that are mixed. C and D exist in the four-channel
+# model (the S4 has the faders) but nothing drives them yet: the mixer opens
+# with two decks, and channel_active() must say so or the window tries to spawn
+# two players that have no playlist and no window.
+ACTIVE_CHANNELS = ("A", "B")
 # Channels the crossfader blends. C and D are extra inputs that always play at
 # their own fader level, so a crossfade never mutes them.
 CROSSFADE_CHANNELS = ("A", "B")

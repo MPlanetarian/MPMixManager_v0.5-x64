@@ -1,28 +1,45 @@
 #!/usr/bin/env python3
-"""Automatic Traktor MIDI mapping for MP Liquid Mixer.
+"""MP Liquid Mixer - MIDI DJ Mixer Profiles (S4 and S3), no GTK imports.
 
-The mixer's native S4 path reads evdev axes. This module adds the other mode
-the hardware supports: a Traktor Kontrol mixer in **MIDI mode** appears as an
-ALSA rawmidi port, and its push buttons and faders can then be mapped to the
-same mixer actions the evdev listener already uses.
+The mixer's native Linux path reads evdev axes. This module adds the other way
+the hardware works: a Kontrol mixer in MIDI mode appears as a MIDI input port,
+and its buttons, faders and encoders can then be mapped to the same mixer
+actions the evdev listener uses.
 
-Only a device whose ALSA name contains ``Traktor`` is opened. A generic MIDI
-controller (an MPK mini, for example) is never mapped, even when it is the only
-device present. Detection is repeated while the mixer runs, so plugging the
-Traktor in later starts the map automatically.
+Two controllers are supported, one at a time, selected by
+**MIDI DJ MIXER PROFILE A / B** on the mixer's top bar:
+
+    PROFILE A  Kontrol S4   (notes/CCs already used by scripts/s4_midi.py)
+    PROFILE B  Kontrol S3   (4-channel layout, CDJ-style transport)
+
+Only a port whose name matches the profile's controller is opened. A generic
+MIDI controller (an MPK mini, for example) is never mapped, even when it is the
+only device present. Detection repeats while the mixer runs, so plugging the
+controller in later starts the map automatically.
+
+Three backends are used, in order:
+
+* **ALSA sequencer** (``aseqdump``) on Linux. Several listeners may share it,
+  unlike the rawmidi node, which one process holds exclusively.
+* **rawmidi** (``/dev/snd/midiCxDx``) when the sequencer is unavailable.
+* **CoreMIDI** on macOS, read through ``ctypes`` so no Python MIDI package has
+  to be installed. This is the path used when the mixer runs on a Mac.
 
 Like the native listener, this thread only produces ``(action, value)`` calls;
-the GTK thread applies them. The default map follows the Traktor Kontrol S4
-MIDI note/CC layout already used by ``scripts/traktor_s4_midi.py``. A user can
-override individual entries in ``~/.config/mix-manager/liquid_mixer_midi.json``:
+the GUI thread applies them. A user can override individual entries in
+``~/.config/mix-manager/liquid_mixer_midi.json``::
 
     {
-      "notes": {"0": "play:A", "6": "sync:A"},
-      "cc": {"8": "channel:A", "14": "pitch:A"}
+      "profile": "B",
+      "overrides": {
+        "B": {"notes": {"0": "play:A"}, "cc": {"8": "channel:A"}}
+      }
     }
 """
 from __future__ import annotations
 
+import ctypes
+import ctypes.util
 import glob
 import json
 import os
@@ -30,21 +47,30 @@ import re
 import select
 import shutil
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
-from typing import Callable, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 CONFIG_DIR = Path.home() / ".config" / "mix-manager"
 LOG_PATH = CONFIG_DIR / "liquid_mixer_midi.log"
 MAPPING_PATH = CONFIG_DIR / "liquid_mixer_midi.json"
 
-DEVICE_MARKER = "traktor"
+# The two profiles and the controller each one binds to. The marker strings are
+# what the ALSA/OS names the devices, matched case-insensitively.
+PROFILES: Dict[str, str] = {"A": "s4", "B": "s3"}
+PROFILE_DEVICE_MARKERS: Dict[str, Tuple[str, ...]] = {
+    "A": ("kontrol s4", "s4"),
+    "B": ("kontrol s3", "s3"),
+}
+PROFILE_LABELS: Dict[str, str] = {"A": "Kontrol S4", "B": "Kontrol S3"}
+DEFAULT_PROFILE = "A"
 
-# Traktor Kontrol S4 MIDI-mode notes. The numbers follow the map already used
-# by scripts/traktor_s4_midi.py; controls the mixer does not implement (hotcues,
-# loop recorder play) are deliberately absent rather than guessed.
-DEFAULT_NOTES: Dict[int, str] = {
+# Kontrol S4 MIDI-mode notes. The numbers follow the map already used by
+# scripts/s4_midi.py; controls the mixer does not implement (hotcues, loop
+# recorder play) are deliberately absent rather than guessed.
+S4_NOTES: Dict[int, str] = {
     0: "play:A", 1: "play:B",
     36: "play:A", 37: "play:B", 50: "play:A", 51: "play:B",
     6: "sync:A", 7: "sync:B", 42: "sync:A", 43: "sync:B",
@@ -54,10 +80,9 @@ DEFAULT_NOTES: Dict[int, str] = {
     17: "browse:+1", 63: "browse:+1",
     32: "record", 76: "record",
 }
-
 # CCs. 8/9 are channel A/B volume and 14/15 are deck pitch. Browse is a
 # relative encoder; 32/33/40 are the S4's CC-triggered Play buttons.
-DEFAULT_CC: Dict[int, str] = {
+S4_CC: Dict[int, str] = {
     8: "channel:A", 19: "channel:A",
     9: "channel:B", 22: "channel:B",
     14: "pitch:A", 15: "pitch:B",
@@ -65,6 +90,41 @@ DEFAULT_CC: Dict[int, str] = {
     32: "play:A", 33: "play:B", 40: "play:A",
     36: "sync:A", 37: "sync:B",
 }
+
+# Kontrol S3 MIDI-mode notes. The S3 is the four-channel unit: Play/Cue per
+# deck, Sync/Shift, the two FX buttons, and the browser. Notes that duplicate
+# another transport live in the table so either revision of the firmware works.
+S3_NOTES: Dict[int, str] = {
+    0: "play:A", 1: "play:B", 2: "play:C", 3: "play:D",
+    4: "sync:A", 5: "sync:B", 6: "sync:C", 7: "sync:D",
+    8: "shift:A", 9: "shift:B", 10: "shift:C", 11: "shift:D",
+    12: "load", 13: "load", 14: "load", 15: "load",
+    16: "browse:-1", 17: "browse:+1",
+    20: "effect:A", 21: "effect:B", 22: "effect:C", 23: "effect:D",
+    24: "monitor:A", 25: "monitor:B", 26: "monitor:C", 27: "monitor:D",
+    32: "record", 33: "record",
+}
+# CCs. The S3 sends the four channel faders on 8-11, the crossfader on 12, the
+# four tempo faders on 14-17 and the browser encoder on 42/43. The FX depth
+# knobs are 20-23.
+S3_CC: Dict[int, str] = {
+    8: "channel:A", 9: "channel:B", 10: "channel:C", 11: "channel:D",
+    12: "crossfader",
+    14: "pitch:A", 15: "pitch:B", 16: "pitch:C", 17: "pitch:D",
+    20: "filter:A", 21: "filter:B", 22: "filter:C", 23: "filter:D",
+    42: "browse", 43: "browse", 80: "browse", 81: "browse",
+    24: "master_volume", 25: "monitor_volume",
+}
+
+PROFILE_MAPS: Dict[str, Tuple[Dict[int, str], Dict[int, str]]] = {
+    "A": (S4_NOTES, S4_CC),
+    "B": (S3_NOTES, S3_CC),
+}
+
+# Backwards-compatible aliases used by older tests and callers.
+DEFAULT_NOTES = S4_NOTES
+DEFAULT_CC = S4_CC
+DEVICE_MARKER = "kontrol"
 
 
 def _log(message: str) -> None:
@@ -75,19 +135,63 @@ def _log(message: str) -> None:
         pass
 
 
-def load_mapping(path: Optional[Path] = None) -> Tuple[Dict[int, str], Dict[int, str]]:
-    """Default Traktor map plus a user override file, when present."""
-    notes = dict(DEFAULT_NOTES)
-    cc = dict(DEFAULT_CC)
-    target = Path(path or MAPPING_PATH)
+def normalize_profile(profile: Optional[str]) -> str:
+    name = str(profile or "").strip().upper()
+    return name if name in PROFILES else DEFAULT_PROFILE
+
+
+def device_markers(profile: Optional[str]) -> Tuple[str, ...]:
+    return PROFILE_DEVICE_MARKERS.get(normalize_profile(profile), PROFILE_DEVICE_MARKERS[DEFAULT_PROFILE])
+
+
+def name_matches_profile(name: str, profile: Optional[str]) -> bool:
+    """True when an ALSA/OS port name belongs to the profile's controller."""
+    text = str(name or "").lower()
+    if not text:
+        return False
+    return any(marker in text for marker in device_markers(profile))
+
+
+def _payload() -> Dict[str, Any]:
     try:
-        payload = json.loads(target.read_text(encoding="utf-8"))
+        payload = json.loads(MAPPING_PATH.read_text(encoding="utf-8"))
     except (OSError, ValueError, TypeError):
-        return notes, cc
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def read_saved_profile() -> str:
+    payload = _payload()
+    return normalize_profile(payload.get("profile"))
+
+
+def load_mapping(path: Optional[Path] = None,
+                 profile: Optional[str] = None) -> Tuple[Dict[int, str], Dict[int, str]]:
+    """The profile's default map plus any user overrides for that profile."""
+    chosen = normalize_profile(profile if profile is not None else read_saved_profile())
+    notes = dict(PROFILE_MAPS[chosen][0])
+    cc = dict(PROFILE_MAPS[chosen][1])
+    if path is not None:
+        target = Path(path)
+        try:
+            payload = json.loads(target.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError):
+            return notes, cc
+    else:
+        payload = _payload()
     if not isinstance(payload, dict):
         return notes, cc
+    # Overrides are namespaced per profile, so switching profiles cannot apply
+    # the other controller's map by accident. A bare "notes"/"cc" block is the
+    # historical single-profile form and applies to profile A.
+    overrides = payload.get("overrides")
+    block: Dict[str, Any] = {}
+    if isinstance(overrides, dict) and isinstance(overrides.get(chosen), dict):
+        block = overrides[chosen]
+    elif chosen == "A" or not isinstance(overrides, dict):
+        block = payload
     for source, destination in (("notes", notes), ("cc", cc)):
-        values = payload.get(source)
+        values = block.get(source)
         if not isinstance(values, dict):
             continue
         for key, action in values.items():
@@ -98,6 +202,21 @@ def load_mapping(path: Optional[Path] = None) -> Tuple[Dict[int, str], Dict[int,
             if isinstance(action, str) and action.strip():
                 destination[number] = action.strip()
     return notes, cc
+
+
+def save_profile(profile: str) -> str:
+    """Remember the selected profile without discarding user overrides."""
+    chosen = normalize_profile(profile)
+    payload = _payload()
+    payload["profile"] = chosen
+    try:
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        tmp = MAPPING_PATH.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        os.replace(tmp, MAPPING_PATH)
+    except OSError:
+        pass
+    return chosen
 
 
 def _device_name(midi_file: Path) -> str:
@@ -115,12 +234,12 @@ def _rawmidi_path(card: int, device: int, dev_root: Path) -> Path:
     return Path(dev_root) / f"midiC{int(card)}D{int(device)}"
 
 
-def find_traktor_sequencer_ports() -> List[Dict[str, str]]:
-    """Traktor input ports on the ALSA sequencer, if ``aseqdump`` exists.
+def find_sequencer_ports(profile: Optional[str] = None) -> List[Dict[str, str]]:
+    """The profile's controller input ports on ALSA's sequencer, if any.
 
     The sequencer allows several listeners, unlike the rawmidi node, which one
-    process can hold exclusively. That matters when the standalone Traktor
-    service or Traktor itself already owns the raw device.
+    process can hold exclusively. That matters when another service or the
+    controller's own editor already owns the raw device.
     """
     dump = shutil.which("aseqdump")
     if not dump:
@@ -132,34 +251,28 @@ def find_traktor_sequencer_ports() -> List[Dict[str, str]]:
         return []
     found: List[Dict[str, str]] = []
     for line in (result.stdout or "").splitlines():
-        if DEVICE_MARKER not in line.lower():
+        if not name_matches_profile(line, profile):
             continue
         match = re.search(r"(\d+):(\d+)", line)
         if not match:
             continue
         port = f"{int(match.group(1))}:{int(match.group(2))}"
-        # aseqdump -l prints the client name and the port name; keep the
-        # client name for the status line.
         rest = line.split(str(match.group(0)), 1)[-1].strip()
-        name = re.split(r"\s{2,}", rest)[0].strip() or "Traktor"
+        name = re.split(r"\s{2,}", rest)[0].strip() or PROFILE_LABELS[normalize_profile(profile)]
         found.append({"name": name, "path": port, "backend": "sequencer"})
     return found
 
 
-def find_traktor_devices(proc_root: Path | str = "/proc/asound",
-                         dev_root: Path | str = "/dev/snd") -> List[Dict[str, str]]:
-    """Every readable Traktor rawmidi port, and nothing else.
-
-    ALSA's ``/proc/asound/cardN/midiM`` names the port and gives the card and
-    subdevice. A device that is not named Traktor is skipped before its node is
-    touched, so a generic controller can never be mapped by accident.
-    """
+def find_midi_devices(profile: Optional[str] = None,
+                      proc_root: Path | str = "/proc/asound",
+                      dev_root: Path | str = "/dev/snd") -> List[Dict[str, str]]:
+    """Every readable rawmidi port belonging to the profile's controller."""
     found: List[Dict[str, str]] = []
     seen = set()
     for midi_file in sorted(glob.glob(str(Path(proc_root) / "card*" / "midi*"))):
         path = Path(midi_file)
         name = _device_name(path)
-        if DEVICE_MARKER not in name.lower():
+        if not name_matches_profile(name, profile):
             continue
         card_match = re.search(r"card(\d+)", str(path))
         dev_match = re.search(r"midi(\d+)$", path.name)
@@ -175,14 +288,14 @@ def find_traktor_devices(proc_root: Path | str = "/proc/asound",
         return found
 
     # Fallback for a kernel without the /proc name, or a trimmed container:
-    # amidi -l still names the device. Generic devices are skipped here too.
+    # amidi -l still names the device. Other controllers are skipped here too.
     try:
         result = subprocess.run(["amidi", "-l"], capture_output=True, text=True,
                                 timeout=2, check=False)
     except (OSError, subprocess.SubprocessError):
         return found
     for line in (result.stdout or "").splitlines():
-        if DEVICE_MARKER not in line.lower():
+        if not name_matches_profile(line, profile):
             continue
         match = re.search(r"hw:(\d+),(\d+)", line)
         if not match:
@@ -194,8 +307,18 @@ def find_traktor_devices(proc_root: Path | str = "/proc/asound",
     return found
 
 
+# Historical names, kept for callers written before the profile split.
+def find_traktor_sequencer_ports() -> List[Dict[str, str]]:
+    return find_sequencer_ports("A")
+
+
+def find_traktor_devices(proc_root: Path | str = "/proc/asound",
+                         dev_root: Path | str = "/dev/snd") -> List[Dict[str, str]]:
+    return find_midi_devices("A", proc_root, dev_root)
+
+
 def pitch_percent_7bit(value: int) -> float:
-    """Traktor's 7-bit pitch fader to -20..+20 percent, with a centre detent."""
+    """A 7-bit pitch fader to -20..+20 percent, with a centre detent."""
     value = max(0, min(127, int(value)))
     if 62 <= value <= 66:
         return 0.0
@@ -211,12 +334,7 @@ def pitch_percent_14bit(lsb: int, msb: int) -> float:
 
 
 def parse_sequencer_line(line: str) -> Optional[Tuple[int, int, int]]:
-    """One ``aseqdump`` event line to ``(status, data1, data2)``.
-
-    The sequencer path is preferred because rawmidi is exclusive. ``aseqdump``
-    prints one human-readable event per line; parsing that is the only way to
-    share the Traktor port without an extra Python MIDI dependency.
-    """
+    """One ``aseqdump`` event line to ``(status, data1, data2)``."""
     note_on = re.search(r"Note on\s+(\d+),\s*note\s+(\d+),\s*velocity\s+(\d+)", line)
     if note_on:
         channel = int(note_on.group(1))
@@ -235,20 +353,275 @@ def parse_sequencer_line(line: str) -> Optional[Tuple[int, int, int]]:
         value = int(bend.group(2))
         if value < 0:
             value += 8192
-        # aseqdump often prints the signed value; _dispatch expects LSB/MSB.
         value = max(0, min(16383, value))
         return (0xE0 | (channel & 0x0F), value & 0x7F, (value >> 7) & 0x7F)
     return None
 
 
-class TraktorMidiListener:
-    """Read one Traktor MIDI port and publish the mixer's existing actions."""
+# ------------------------------------------------------------------------------
+# CoreMIDI (macOS), through ctypes so there is no Python MIDI dependency
+# ------------------------------------------------------------------------------
+class CoreMidiReader:
+    """Read one CoreMIDI source by polling its packet list.
+
+    The mixer's Mac test machine has no ``mido``/``python-rtmidi`` installed, so
+    the framework is bound directly. A client and one input port are created
+    for the life of the listener; every source whose name matches the profile
+    is connected, and each poll drains the packets that arrived since the last
+    one. This is the same message set the Linux paths deliver.
+    """
+
+    def __init__(self, profile: str = DEFAULT_PROFILE) -> None:
+        self.profile = normalize_profile(profile)
+        self.client = ctypes.c_uint32(0)
+        self.port = ctypes.c_uint32(0)
+        self.sources: List[Tuple[int, str]] = []
+        self._cm = None
+        self._cf = None
+        self._connected: List[int] = []
+
+    def _load(self) -> bool:
+        if self._cm is not None:
+            return True
+        try:
+            self._cm = ctypes.CDLL("/System/Library/Frameworks/CoreMIDI.framework/CoreMIDI")
+            self._cf = ctypes.CDLL("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")
+        except OSError:
+            return False
+        cm = self._cm
+        cm.MIDIGetNumberOfSources.restype = ctypes.c_ulong
+        cm.MIDIGetSource.restype = ctypes.c_uint32
+        cm.MIDIGetSource.argtypes = [ctypes.c_ulong]
+        cm.MIDIObjectGetStringProperty.restype = ctypes.c_int32
+        cm.MIDIObjectGetStringProperty.argtypes = [
+            ctypes.c_uint32, ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+        cm.MIDIClientCreate.restype = ctypes.c_int32
+        cm.MIDIClientCreate.argtypes = [
+            ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint32)]
+        cm.MIDIInputPortCreate.restype = ctypes.c_int32
+        cm.MIDIInputPortCreate.argtypes = [
+            ctypes.c_uint32, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p,
+            ctypes.POINTER(ctypes.c_uint32)]
+        cm.MIDIPortConnectSource.restype = ctypes.c_int32
+        cm.MIDIPortConnectSource.argtypes = [
+            ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p]
+        cm.MIDIPortDisconnectSource.restype = ctypes.c_int32
+        cm.MIDIPortDisconnectSource.argtypes = [ctypes.c_uint32, ctypes.c_uint32]
+        cm.MIDIPortDispose.restype = ctypes.c_int32
+        cm.MIDIPortDispose.argtypes = [ctypes.c_uint32]
+        cm.MIDIClientDispose.restype = ctypes.c_int32
+        cm.MIDIClientDispose.argtypes = [ctypes.c_uint32]
+        cm.MIDIPacketListInit.restype = ctypes.c_void_p
+        cm.MIDIPacketListInit.argtypes = [ctypes.c_void_p]
+        cm.MIDIPacketListAdd.restype = ctypes.c_void_p
+        cm.MIDIPacketListAdd.argtypes = [
+            ctypes.c_void_p, ctypes.c_ulong, ctypes.c_void_p, ctypes.c_double,
+            ctypes.c_ulong, ctypes.c_char_p]
+        cf = self._cf
+        cf.CFStringGetCString.restype = ctypes.c_bool
+        cf.CFStringGetCString.argtypes = [
+            ctypes.c_void_p, ctypes.c_char_p, ctypes.c_long, ctypes.c_uint32]
+        cf.CFRelease.argtypes = [ctypes.c_void_p]
+        try:
+            self._name_key = ctypes.c_void_p.in_dll(cm, "kMIDIPropertyName")
+        except ValueError:
+            return False
+        return True
+
+    def _source_name(self, source: int) -> str:
+        value = ctypes.c_void_p()
+        status = self._cm.MIDIObjectGetStringProperty(source, self._name_key, ctypes.byref(value))
+        if status != 0 or not value:
+            return ""
+        buffer = ctypes.create_string_buffer(256)
+        if not self._cf.CFStringGetCString(value, buffer, 256, 0x08000100):
+            return ""
+        try:
+            self._cf.CFRelease(value)
+        except Exception:
+            pass
+        return buffer.value.decode(errors="replace")
+
+    def open(self) -> bool:
+        """Create the client and connect every matching source."""
+        if not sys.platform.startswith("darwin") or not self._load():
+            return False
+        if not self.client.value:
+            name = ctypes.c_char_p(b"MP Liquid Mixer")
+            status = self._cm.MIDIClientCreate(None, None, None, name, ctypes.byref(self.client))
+            if status != 0:
+                self.client = ctypes.c_uint32(0)
+                return False
+        if not self.port.value:
+            status = self._cm.MIDIInputPortCreate(
+                self.client, None, None, None, ctypes.byref(self.port))
+            if status != 0:
+                self.port = ctypes.c_uint32(0)
+                return False
+        self.refresh_sources()
+        return bool(self.sources)
+
+    def refresh_sources(self) -> None:
+        self.sources = []
+        count = int(self._cm.MIDIGetNumberOfSources())
+        for index in range(count):
+            source = int(self._cm.MIDIGetSource(index))
+            name = self._source_name(source)
+            if name_matches_profile(name, self.profile):
+                self.sources.append((source, name))
+                if source not in self._connected:
+                    if self._cm.MIDIPortConnectSource(self.port, source, None) == 0:
+                        self._connected.append(source)
+
+    def drain(self) -> List[Tuple[int, int, int]]:
+        """Return the messages the read callback has collected (and clear them)."""
+        with self._lock:
+            events, self._pending = self._pending, []
+        return events
+
+    def close(self) -> None:
+        try:
+            if self._cm is not None:
+                for source in list(self._connected):
+                    self._cm.MIDIPortDisconnectSource(self.port, source)
+                if self.port.value:
+                    self._cm.MIDIPortDispose(self.port)
+                if self.client.value:
+                    self._cm.MIDIClientDispose(self.client)
+        except Exception:
+            pass
+        self._connected = []
+        self.client = ctypes.c_uint32(0)
+        self.port = ctypes.c_uint32(0)
+
+
+# MIDIReadProc is a C callback: it receives a packet list for every batch of
+# messages. Keeping one module-level trampoline (a ctypes callback that stays
+# referenced for the life of the process) is what makes CoreMIDI delivery work
+# without a run loop.
+_READ_PROC_TYPE = ctypes.CFUNCTYPE(
+    None, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)
+
+
+class CoreMidiCallbackReader(CoreMidiReader):
+    """CoreMIDI reader that installs a real MIDIReadProc callback."""
+
+    def __init__(self, profile: str = DEFAULT_PROFILE,
+                 on_message: Optional[Callable[[int, int, int], None]] = None) -> None:
+        super().__init__(profile)
+        self.on_message = on_message
+        self._pending: List[Tuple[int, int, int]] = []
+        self._lock = threading.Lock()
+        self._proc = None
+
+    def _packet_bytes(self, packet_list: int) -> List[Tuple[int, int, int]]:
+        """Walk a MIDIPacketList and split each packet into channel messages."""
+        events: List[Tuple[int, int, int]] = []
+        try:
+            # MIDIPacketList: UInt32 numPackets, then MIDIPacket packets whose
+            # layout is { UInt64 timeStamp; UInt16 length; Byte data[256]; }.
+            count = ctypes.cast(packet_list, ctypes.POINTER(ctypes.c_uint32))[0]
+            offset = 4
+            for _ in range(int(count)):
+                packet = ctypes.cast(packet_list + offset, ctypes.POINTER(ctypes.c_ubyte))
+                # timeStamp is 8 bytes, length is 2 bytes, then the data.
+                length = packet[8] | (packet[9] << 8)
+                data = bytes(packet[10:10 + length])
+                events.extend(split_midi_bytes(data))
+                # The next packet is aligned to 4 bytes after its data.
+                step = 10 + length
+                offset += (step + 3) & ~3
+        except Exception:
+            return events
+        return events
+
+    def _read_proc(self, packet_list, _ref_con, _conn_ref) -> None:
+        events = self._packet_bytes(packet_list)
+        if not events:
+            return
+        with self._lock:
+            self._pending.extend(events)
+        if self.on_message is not None:
+            try:
+                for status, data1, data2 in events:
+                    self.on_message(status, data1, data2)
+            except Exception:
+                pass
+
+    def open(self) -> bool:
+        if not super().open():
+            return False
+        try:
+            self._proc = _READ_PROC_TYPE(self._read_proc)
+            # Replace the port created without a callback with one that has it.
+            if self.port.value:
+                self._cm.MIDIPortDispose(self.port)
+                self.port = ctypes.c_uint32(0)
+            status = self._cm.MIDIInputPortCreate(
+                self.client, None, self._proc, None, ctypes.byref(self.port))
+            if status != 0:
+                return False
+            self._connected = []
+            self.refresh_sources()
+        except Exception:
+            return False
+        return bool(self.sources)
+
+    def drain(self) -> List[Tuple[int, int, int]]:
+        with self._lock:
+            events, self._pending = self._pending, []
+        return events
+
+
+def split_midi_bytes(data: bytes) -> List[Tuple[int, int, int]]:
+    """Split a raw MIDI byte stream into complete channel messages."""
+    events: List[Tuple[int, int, int]] = []
+    status = 0
+    collected: List[int] = []
+    for raw in data:
+        byte = int(raw)
+        if byte >= 0xF8:
+            continue
+        if byte >= 0x80:
+            if byte >= 0xF0:
+                status = 0
+                collected = []
+                continue
+            status = byte
+            collected = []
+            continue
+        if not status:
+            continue
+        collected.append(byte)
+        kind = status & 0xF0
+        needed = 1 if kind in (0xC0, 0xD0) else 2
+        if len(collected) < needed:
+            continue
+        data1 = collected[0]
+        data2 = collected[1] if needed == 2 else 0
+        events.append((status, data1, data2))
+        collected = []
+    return events
+
+
+class MixerMidiListener:
+    """Read the selected controller's MIDI port and publish mixer actions.
+
+    One listener is alive for the whole session. ``set_profile`` swaps the map
+    and re-opens the port against the other controller without rebuilding the
+    window, which is what the PROFILE A/B button on the mixer drives.
+    """
 
     def __init__(self, on_change: Optional[Callable[[str, float], None]] = None,
-                 mapping_path: Optional[Path] = None) -> None:
+                 mapping_path: Optional[Path] = None,
+                 profile: str = DEFAULT_PROFILE) -> None:
         self.on_change = on_change
-        self.notes, self.cc = load_mapping(mapping_path)
-        self.status = "waiting for Traktor MIDI"
+        self.mapping_path = mapping_path
+        self._profile = normalize_profile(profile)
+        self.notes: Dict[int, str] = {}
+        self.cc: Dict[int, str] = {}
+        self._load_map()
+        self.status = "waiting for MIDI DJ MIXER"
         self.device_name = ""
         self.device_path = ""
         self.last_message = ""
@@ -259,46 +632,80 @@ class TraktorMidiListener:
         self._seq_proc: Optional[subprocess.Popen] = None
         self._status_byte = 0
         self._data: List[int] = []
+        self._core = None
+
+    # -- profile ----------------------------------------------------------
+    @property
+    def profile(self) -> str:
+        return self._profile
+
+    def _load_map(self) -> None:
+        self.notes, self.cc = load_mapping(self.mapping_path, self._profile)
+
+    def set_profile(self, profile: str) -> str:
+        chosen = normalize_profile(profile)
+        if chosen == self._profile:
+            return self._profile
+        self._profile = chosen
+        self._load_map()
+        save_profile(chosen)
+        self._teardown_port()
+        self.device_name = ""
+        self.device_path = ""
+        self.status = f"switching to {PROFILE_LABELS[chosen]}"
+        _log(f"profile -> {chosen} ({PROFILE_LABELS[chosen]})")
+        return self._profile
 
     @property
     def connected(self) -> bool:
         return self.status.startswith("mapped")
 
+    # -- lifecycle --------------------------------------------------------
     def start(self) -> None:
         if self._running:
             return
         self._running = True
-        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread = threading.Thread(target=self._run, name="mixer-midi", daemon=True)
         self._thread.start()
 
     def stop(self) -> None:
         self._running = False
+        self._teardown_port()
+        thread = self._thread
+        self._thread = None
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=2.0)
+
+    def _teardown_port(self) -> None:
         proc, self._seq_proc = self._seq_proc, None
         if proc is not None:
             try:
                 proc.terminate()
             except OSError:
                 pass
-        thread = self._thread
-        self._thread = None
-        if thread is not None and thread is not threading.current_thread():
-            # select() has a 0.25 s timeout, so the reader notices _running
-            # and closes its own fd. Closing from here raced that read and
-            # produced an EBADF reconnect in the log.
-            thread.join(timeout=2.0)
-            if thread.is_alive():
-                fd, self._fd = self._fd, None
-                if fd is not None:
-                    try:
-                        os.close(fd)
-                    except OSError:
-                        pass
-                thread.join(timeout=1.0)
+        core, self._core = self._core, None
+        if core is not None:
+            try:
+                core.close()
+            except Exception:
+                pass
+        fd, self._fd = self._fd, None
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
 
     def _run(self) -> None:
         backoff = 1.0
         while self._running:
-            ports = find_traktor_sequencer_ports()
+            profile = self._profile
+            if sys.platform.startswith("darwin"):
+                self._run_coremidi(profile)
+                if self._running:
+                    time.sleep(1.0)
+                continue
+            ports = find_sequencer_ports(profile)
             if ports:
                 if not self._running:
                     break
@@ -306,9 +713,9 @@ class TraktorMidiListener:
                 if self._running:
                     time.sleep(1.0)
                 continue
-            devices = find_traktor_devices()
+            devices = find_midi_devices(profile)
             if not devices:
-                self.status = "waiting for Traktor MIDI"
+                self.status = f"waiting for {PROFILE_LABELS[profile]} MIDI"
                 self.device_name = ""
                 self.device_path = ""
                 time.sleep(backoff)
@@ -321,14 +728,34 @@ class TraktorMidiListener:
                 time.sleep(1.0)
             backoff = 1.0
 
+    def _run_coremidi(self, profile: str) -> None:
+        reader = CoreMidiCallbackReader(profile, on_message=self._dispatch)
+        if not reader.open():
+            self.status = f"waiting for {PROFILE_LABELS[profile]} MIDI"
+            time.sleep(1.0)
+            return
+        self._core = reader
+        names = ", ".join(name for _src, name in reader.sources)
+        self.device_name = names or PROFILE_LABELS[profile]
+        self.device_path = "coremidi"
+        self.status = f"mapped {self.device_name} (coremidi)"
+        self.last_message = "mapped"
+        _log(f"mapped {self.device_name} over CoreMIDI ({profile})")
+        while self._running and self._profile == profile:
+            time.sleep(0.2)
+            try:
+                reader.refresh_sources()
+            except Exception:
+                pass
+        reader.close()
+        self._core = None
+
     def _run_sequencer(self, port: Dict[str, str]) -> None:
         """Read the ALSA sequencer port; multiple listeners may share it."""
         dump = shutil.which("aseqdump")
         if not dump:
             return
         command = [dump, "-p", port["path"]]
-        # aseqdump is C stdio: without a line buffer a piped reader can wait
-        # for a full block before a button press arrives.
         line_buffer = shutil.which("stdbuf")
         if line_buffer:
             command = [line_buffer, "-oL"] + command
@@ -343,7 +770,7 @@ class TraktorMidiListener:
                 start_new_session=True,
             )
         except OSError as exc:
-            self.status = f"cannot open Traktor sequencer: {exc}"
+            self.status = f"cannot open MIDI sequencer: {exc}"
             return
         if not self._running:
             try:
@@ -351,12 +778,9 @@ class TraktorMidiListener:
             except OSError:
                 pass
             return
-        # aseqdump exits at once when the kernel sequencer port is already
-        # taken (the standalone Traktor service holds the raw device). Confirm
-        # it stayed up before claiming a map; otherwise fall back to rawmidi.
         time.sleep(0.15)
         if proc.poll() is not None:
-            self.status = "Traktor MIDI is held by another service"
+            self.status = "the MIDI port is held by another service"
             try:
                 if proc.stdout is not None:
                     proc.stdout.close()
@@ -378,7 +802,7 @@ class TraktorMidiListener:
                     if event is not None:
                         self._dispatch(*event)
         except Exception as exc:
-            _log(f"Traktor sequencer reader error: {exc!r}")
+            _log(f"MIDI sequencer reader error: {exc!r}")
         finally:
             self._seq_proc = None
             try:
@@ -395,9 +819,9 @@ class TraktorMidiListener:
             fd = os.open(device["path"], os.O_RDONLY | os.O_NONBLOCK)
         except OSError as exc:
             if getattr(exc, "errno", None) == 16:  # EBUSY
-                self.status = "Traktor MIDI is held by another service"
+                self.status = "the MIDI port is held by another service"
             else:
-                self.status = f"cannot open Traktor MIDI: {exc}"
+                self.status = f"cannot open MIDI: {exc}"
             return
         self._fd = fd
         self.device_name = device["name"]
@@ -418,9 +842,9 @@ class TraktorMidiListener:
                 for status, data1, data2 in self._parse(chunk):
                     self._dispatch(status, data1, data2)
         except OSError as exc:
-            _log(f"Traktor MIDI read error: {exc}")
+            _log(f"MIDI read error: {exc}")
         except Exception as exc:
-            _log(f"Traktor MIDI reader error: {exc!r}")
+            _log(f"MIDI reader error: {exc!r}")
         finally:
             self._fd = None
             try:
@@ -436,7 +860,7 @@ class TraktorMidiListener:
             if byte >= 0xF8:  # realtime clock; no data bytes
                 continue
             if byte >= 0x80:
-                if byte >= 0xF0:  # system common; not a Traktor control message
+                if byte >= 0xF0:  # system common; not a control message
                     self._status_byte = 0
                     self._data = []
                     continue
@@ -498,15 +922,18 @@ class TraktorMidiListener:
         self._emit(action, 1.0, f"note {note}")
 
     def _cc_value(self, action: str, value: int) -> Optional[float]:
+        """Scale a 7-bit CC to the action's unit; None means "ignore"."""
         value = max(0, min(127, int(value)))
-        if action.startswith("channel:"):
+        if action.startswith(("channel:", "filter:", "master_volume", "monitor_volume")):
             return value / 127.0
         if action.startswith("pitch:"):
             return pitch_percent_7bit(value)
+        if action == "crossfader":
+            return value / 127.0
         if action == "browse":
             if value == 0:
                 return None
-            # Traktor's relative encoders send either 1/127 or 65/63.
+            # Relative encoders send either 1/127 or 65/63.
             return 1.0 if value > 64 or value in (1, 65) else -1.0
         if value > 0:
             return 1.0
@@ -520,4 +947,8 @@ class TraktorMidiListener:
         try:
             self.on_change(action, float(value))
         except Exception as exc:
-            _log(f"Traktor MIDI callback failed for {action}: {exc!r}")
+            _log(f"MIDI callback failed for {action}: {exc!r}")
+
+
+# Historical name: the mixer imported this class before the profile split.
+TraktorMidiListener = MixerMidiListener

@@ -71,6 +71,9 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "recording_device": "",         # empty: capture the master output's monitor
     # Audio
     "master_output_device": "",     # empty: the system default sink
+    "monitor_output_device": "",    # empty: the master output (no split)
+    # MIDI DJ Mixer Profile: A = the S4 map, B = the S3 map. Only one is live.
+    "midi_profile": "A",
     # Look and feel
     "theme": "",                    # empty: the shared theme file decides
     "visualizer_enabled": True,
@@ -87,7 +90,7 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
 _BOOL_KEYS = ("visualizer_enabled", "fullscreen", "startup_video", "exit_video",
               "decks_autoplay", "record_on_start")
 _TEXT_KEYS = ("recording_dir", "recording_device", "master_output_device",
-              "theme", "eq_preset")
+              "monitor_output_device", "theme", "eq_preset")
 
 
 def _as_bool(value: Any, default: bool) -> bool:
@@ -119,6 +122,8 @@ class Settings:
         self.recording_part_limit_gib = 4
         self.recording_device = ""
         self.master_output_device = ""
+        self.monitor_output_device = ""
+        self.midi_profile = "A"
         self.theme = ""
         self.visualizer_enabled = True
         self.fullscreen = True
@@ -156,6 +161,14 @@ class Settings:
             self.recording_device = ""
         if str(self.master_output_device).strip().lower() in ("default", "system", "auto"):
             self.master_output_device = ""
+        # An empty monitor output means "same as master": one interface, one
+        # path, exactly the behaviour before a monitor device was configurable.
+        if str(self.monitor_output_device).strip().lower() in ("master", "same", "default-master"):
+            self.monitor_output_device = ""
+        if str(self.midi_profile).strip().upper() not in ("A", "B"):
+            self.midi_profile = "A"
+        else:
+            self.midi_profile = str(self.midi_profile).strip().upper()
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -165,6 +178,8 @@ class Settings:
             "recording_part_limit_gib": self.recording_part_limit_gib,
             "recording_device": self.recording_device,
             "master_output_device": self.master_output_device,
+            "monitor_output_device": self.monitor_output_device,
+            "midi_profile": self.midi_profile,
             "theme": self.theme,
             "visualizer_enabled": bool(self.visualizer_enabled),
             "fullscreen": bool(self.fullscreen),

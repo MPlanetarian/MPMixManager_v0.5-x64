@@ -203,6 +203,27 @@ def show_settings_dialog(parent: Any, settings: "mixer_settings.Settings",
                        "here and both decks play through it.", dim=True), 1, row, 1, 1)
     row += 1
 
+    # A second interface for cueing: any channel's headphone button sends that
+    # deck here while every other deck stays on the master output.
+    monitor_options: List[Tuple[str, str]] = [("", "Same as master (no split)")]
+    for sink in sinks:
+        monitor_options.append((str(sink.get("name")), mixer_settings.sink_label(sink)))
+    if settings.monitor_output_device and not any(
+            value == settings.monitor_output_device for value, _text in monitor_options):
+        monitor_options.append((settings.monitor_output_device,
+                                f"{settings.monitor_output_device}  (not currently connected)"))
+    monitor_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+    monitor_combo, monitor_value = _combo(monitor_options, settings.monitor_output_device)
+    monitor_row.pack_start(monitor_combo, True, True, 0)
+    grid.attach(_label("Monitor output"), 0, row, 1, 1)
+    grid.attach(monitor_row, 1, row, 1, 1)
+    row += 1
+    grid.attach(_label("The headphone-cue interface. Each channel's DJ headphones "
+                       "button routes that deck here, leaving the rest on the master "
+                       "output. Leave it on Same as master when there is one interface.",
+                       dim=True), 1, row, 1, 1)
+    row += 1
+
     def _refresh_devices(_button=None) -> None:
         fresh = mixer_settings.list_audio_sinks(force=True)
         labels = [(str(item.get("name")), mixer_settings.sink_label(item)) for item in fresh]
@@ -287,6 +308,7 @@ def show_settings_dialog(parent: Any, settings: "mixer_settings.Settings",
         result.recording_device = capture_value()
         result.record_on_start = bool(record_start.check.get_active())
         result.master_output_device = master_value()
+        result.monitor_output_device = monitor_value()
         result.theme = theme_value()
         result.visualizer_enabled = not bool(visualizer_check.check.get_active())
         result.fullscreen = bool(fullscreen_check.check.get_active())
