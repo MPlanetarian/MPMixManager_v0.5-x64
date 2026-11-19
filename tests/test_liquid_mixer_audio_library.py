@@ -314,6 +314,25 @@ class TestEngineReport(unittest.TestCase):
             finally:
                 engine.shutdown()
 
+    def test_a_zero_byte_file_is_refused_not_played_silently(self):
+        """A 0-byte file passes isfile() and "opens" as 44100 Hz / 0 frames.
+
+        That made load_track return True and the deck report "playing" at
+        00:00 forever, which is indistinguishable from the reported symptom.
+        """
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=".mp3") as handle:
+            engine = self.player.AudioEngine(
+                [{"name": os.path.basename(handle.name), "path": handle.name}],
+                auto_bluetooth=False, mode="MUSIC")
+            try:
+                self.assertFalse(engine.load_track(0, True))
+                self.assertEqual(engine.state, "stopped")
+                self.assertIn("empty", engine.last_load_error.lower())
+                self.assertIn("0 bytes", engine.last_load_error)
+            finally:
+                engine.shutdown()
+
 
 class TestMixerMountWiring(unittest.TestCase):
     """The mixer must mount the library and recover the decks' rows."""

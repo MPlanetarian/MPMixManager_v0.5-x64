@@ -3428,6 +3428,22 @@ class AudioEngine:
             try: mp_log_error("MP_Audio_Player", f"Cannot open track (file missing or unreadable): {target_path}")
             except Exception: pass
             return False
+        # A zero-byte file passes isfile() but has no audio at all. libsndfile
+        # and FFmpeg both "open" it and report a plausible rate with zero
+        # frames, so load_track used to return True and the player showed
+        # "playing" at 00:00 forever, then silently chained through the next
+        # dead rows. Treat it as unreadable so the deck says so instead.
+        try:
+            if os.path.getsize(target_path) <= 0:
+                self.last_load_error = (f"Cannot play {os.path.basename(target_path)}: "
+                                        f"the file is empty (0 bytes) and holds no audio.")
+                try: mp_log_error("MP_Audio_Player", f"Unplayable audio (empty file, 0 bytes): {target_path}")
+                except Exception: pass
+                self.state = "stopped"
+                return False
+        except OSError:
+            self.last_load_error = unavailable_media_hint(target_path)
+            return False
         self.last_load_error = ""
         self.current_index, self.current_track = index, self.playlist[index]
         self._stop_feeder()
