@@ -6,8 +6,10 @@
 > ## 🎉 MP Mix Manager 0.5.4 (Sensorium) - [Dreamworlds Productions / MPlanetarian ] - Stable Release: Mac, Windows 10/11, Linux 7.x (Ubuntu, Fedora, Bazzite, SuSE, Arch), FreeBSD, Ras Pie
 >
 > **MP Mix Manager 0.5.4 was released on the 19th of November 2026 by MPlanetarian / Dreamworlds Productions.**
->  Download MP Mix Manager Installer Packages Here (Released on 19th of Nov - 0.5.4 (Sensorium):
-> [![MP Mix Manager 0.5.4 Download](https://github.com/MPlanetarian/MPMixManager_v0.5-x64/releases/tag/v0.5.4)
+> 
+> Download the MP Mix Manager Installer Packages from here (Released on 19th of Nov - 0.5.4 (Sensorium):
+>
+> [![MP Mix Manager 0.5.4 Sensorium Download](https://github.com/MPlanetarian/MPMixManager_v0.5-x64/releases/tag/v0.5.4)
 >  
 > Welcome to **Sensorium**, the Next Generation of Audio Mixing and Mix Archive Management & Audio Workflow, with many new Features Added — including a brand new **MP Liquid Mixer** and new **3D Visualizations** for **OpenGL, Vulkan & Metal**. See the full list of new features added and fixes below.
 >
