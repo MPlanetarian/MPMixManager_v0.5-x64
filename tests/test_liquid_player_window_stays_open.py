@@ -109,6 +109,11 @@ def _child():
             result["ui_mode"] = kwargs.get("ui_size_mode")
             result["keep_library"] = kwargs.get("keep_library")
             result["mode"] = kwargs.get("mode")
+            # TerminalPlayerUI pins the library when the launch named one, so a
+            # stale daemon cannot drag the window into the other library. The
+            # fake has to do the same or it cannot observe that contract.
+            _m = str(kwargs.get("mode") or "").upper()
+            self._user_library_mode = _m if _m in ("MIX_ARCHIVE", "MUSIC") else None
 
         def run(self):
             result["ui"] = True

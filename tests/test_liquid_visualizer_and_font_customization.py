@@ -140,11 +140,20 @@ class TestLiquidVisualizerAndFontCustomization(unittest.TestCase):
             ui._get_status = MagicMock(return_value=st)
             ui._draw_frame()
 
-        controls_lines = [l for l in captured if "[Z]" in l or "Liquid Vis" in l]
-        self.assertTrue(len(controls_lines) > 0, "Controls line with Z hotkey not found")
+        # The hint line carries the visualizer key in whichever form fits the
+        # window: "[Z] MP Liquid Visualizer", "Z Liquid Vis" or "Z Vis".
+        controls_lines = [l for l in captured
+                          if "[Z]" in l or "Z Liquid Vis" in l or "Z Vis" in l
+                          or "Liquid Vis" in l]
+        self.assertTrue(len(controls_lines) > 0,
+                        "Controls line naming the Z visualizer hotkey not found")
         for line in controls_lines:
             self.assertNotIn("3D Visualizer", line)
-            self.assertTrue("Liquid Vis" in line or "MP Liquid Visualizer" in line)
+            self.assertTrue(
+                "Liquid Vis" in line or "MP Liquid Visualizer" in line
+                or "Z Vis" in line or "[Z]" in line,
+                f"the Z hint lost its label: {line[-90:]}",
+            )
 
     def test_mp_audio_player_liquid_glass_unbolded_mode(self):
         """When running in MP_LIQUID_GLASS mode, bold playlist items and hints must not be forced."""

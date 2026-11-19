@@ -216,7 +216,9 @@ class LiquidPlayerVisualizerModeTests(unittest.TestCase):
                 self.assertIn(title, drawn)
                 self.assertIn("VISUALIZATION", drawn)
                 self.assertIn("FAVORITES", drawn)
-                self.assertIn("38;2;255;196;0", drawn)
+                # Every chip on this row is theme-derived, so there is no fixed
+                # gold label or gold block left behind when C changes theme.
+                self.assertNotIn("38;2;255;196;0", drawn)
                 self.assertNotIn("48;2;255;196;0", drawn)
                 # The chips follow the selected theme, so they must not be the
                 # old fixed near-blacks (16;28;52 / 0;48;72) any more.

@@ -181,6 +181,58 @@ class TestCliResolution(unittest.TestCase):
         self.assertIn("kaleidoscope", result.stdout)
 
 
+class TestGeneratorWindowLayout(unittest.TestCase):
+    """The window builder must stay a straight line of live statements.
+
+    ``_auto_preview_now`` was once pasted into the middle of ``_build_ui``,
+    which left everything after its ``return`` -- the Generate button, the
+    status label, the preset library and the whole live preview panel -- as
+    unreachable code. The window then opened with an empty preview area.
+    """
+
+    def test_build_ui_has_no_dead_code(self):
+        import ast
+
+        source = (ROOT / "MP_Visualization_Generator.py").read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        window = next(
+            node for node in ast.walk(tree)
+            if isinstance(node, ast.ClassDef) and node.name == "GeneratorWindow"
+        )
+        methods = {
+            item.name: item for item in window.body if isinstance(item, ast.FunctionDef)
+        }
+        self.assertIn("_build_ui", methods)
+        self.assertIn("_auto_preview_now", methods)
+
+        build_ui = methods["_build_ui"]
+        dead = []
+        for parent in ast.walk(build_ui):
+            for field in ("body", "orelse", "finalbody"):
+                block = getattr(parent, field, None)
+                if not isinstance(block, list):
+                    continue
+                for index, stmt in enumerate(block[:-1]):
+                    if isinstance(stmt, (ast.Return, ast.Raise)):
+                        dead.append(block[index + 1].lineno)
+        self.assertEqual(dead, [], f"_build_ui has unreachable code at lines {dead}")
+
+        names = {node.id for node in ast.walk(build_ui) if isinstance(node, ast.Name)}
+        attrs = {
+            node.attr for node in ast.walk(build_ui)
+            if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name)
+            and node.value.id == "self"
+        }
+        for widget in ("ShaderPreview", "generate_button", "status_label", "installed_combo"):
+            self.assertIn(widget, names | attrs, f"_build_ui no longer builds {widget}")
+
+    def test_preview_widgets_are_created(self):
+        """The live preview panel must be built, not skipped."""
+        source = (ROOT / "MP_Visualization_Generator.py").read_text(encoding="utf-8")
+        self.assertIn("self.preview = ShaderPreview(Gtk, self.GLib)", source)
+        self.assertIn("self.preview_badge = Gtk.Label", source)
+
+
 class TestPresetRoundTrip(unittest.TestCase):
     def test_generated_preset_keeps_generative_metadata(self):
         import mp_visualizer_user_presets as registry

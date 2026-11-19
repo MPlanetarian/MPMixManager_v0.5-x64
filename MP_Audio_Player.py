@@ -7928,7 +7928,10 @@ class TerminalPlayerUI:
         self.keep_library = bool(keep_library)
         # Set when the user presses [1] or [2]. Stale daemon status must not
         # put the other library back until that daemon has caught up.
-        self._user_library_mode = None
+        # A launch that named its library (--mix-archive-mode or --music-mode)
+        # pins it from the start: a daemon still playing the other library must
+        # not drag the window across on the first status poll.
+        self._user_library_mode = str(self.mode) if str(self.mode).upper() in ("MIX_ARCHIVE", "MUSIC") else None
         self.visualizer = EqualizerVisualizer(default_style=default_style, default_theme=default_theme)
         self.eq_manager = getattr(engine, "eq_manager", None) or EqualizerManager()
         self.bass_manager = getattr(engine, "bass_manager", None) or BassBoostManager()
@@ -9375,7 +9378,9 @@ class TerminalPlayerUI:
         """
         store = self._favorites_store()
         face = f"  {favorite_glyph(True)} FAVORITES  "
-        button = f"\033[1;38;2;255;196;0m{face}\033[0m"
+        # The favourites label takes the active theme as well, so a C press
+        # recolours this row on the compact frames too.
+        button = theme_chip(self.visualizer.theme, face, lift=0.32)
         count = len(store)
         mode = self._bass_mode()
         # The CLI row is text-only (see bass_mode_label): no filled block.
@@ -9575,11 +9580,12 @@ class TerminalPlayerUI:
         export_face = " EXPORT TRACKS "
         bass_mode = self._bass_mode()
         bass_face = f" BASS BOOST: {bass_mode.upper()} "
-        # Gold text only. A filled 48;2 bar paints yellow blocks on the row above the playlist header.
-        fav_btn = f"\033[1;38;2;255;196;0m{fav_face}\033[0m"
         # Each filled chip takes the selected theme's hue, so the button row
         # belongs to the palette instead of reading as three black blocks.
         lift = 0.9 if on else 0.0
+        # FAVORITES follows the same rule as VISUALIZATION and the bass chip,
+        # so C recolours the whole row instead of leaving one fixed gold label.
+        fav_btn = theme_chip(theme_name, fav_face, lift=lift)
         vis_btn = theme_chip(theme_name, vis_face, lift=lift)
         vis_btn_short = theme_chip(theme_name, vis_face_short, lift=lift)
         vis_btn_min = theme_chip(theme_name, vis_face_min, lift=lift)
@@ -11398,7 +11404,9 @@ class TerminalPlayerUI:
                 f"  {hint_col}[3] Favorites  [H] Mark Fav  [1] Mix Archive  [2] Music  [D] Clear Playlist{export_hint}  [Space] Play/Pause  [R] Record WAV  [M] Vertical  [L] Liquid Glass  [Z] MP Liquid Visualizer  [X] Liquid Mixer  [w] Black Glass  [Q] Queue  [G] {g_key}  [+/-] Pitch ±1% (±20% max)  [0] Pitch Reset  [v/V] Vol  [u] Mute  [s] Shuffle  [y] Repeat  [n/p] Next/Prev  [a] Audio/BT  [O] Open  [T] Tracklist  [W] Export  [F] Files  [E] Equalizer HUD  [b] Bass Boost  [e] Vis  [Esc] Exit{NC}",
                 f"  {hint_col}[3] Favorites  [H] Mark  [1] Mix Archive  [2] Music  [D] Clear{export_hint}  Space Play  R Rec  M Vertical  L Glass  Z Vis  X Mixer  W Glass  Q Queue  G {g_key}  +/- Pitch  0 Reset  v/V Vol  u Mute  s Shuf  y Rep  n/p Skip  O Open  T List  E EQ  b Bass  Esc Exit{NC}",
                 f"  {hint_col}[3] Fav  [H] Mark  [1] Mix  [2] Music  [D] Clear{export_hint}  Space Play  R Rec  M Vertical  X Mixer  W Glass  Q Queue  G {g_key}  v/V Vol  u Mute  s Shuf  y Rep  n/p Skip  E EQ  b Bass  Esc Exit{NC}",
-                f"  {hint_col}Space Play  M Mini  X Mixer  E EQ  b Bass  c Theme  Esc Exit{NC}"
+                # The narrowest form still has to name the keys a user needs
+                # to reach the other windows, so G stays.
+                f"  {hint_col}Space Play  M Mini  G {g_key}  E EQ  b Bass  c Theme  Esc Exit{NC}"
             ], max(20, w - 1)))
         # Drop the breathing rows rather than a control line if the frame runs
         # past the console height. The Bass Boost row made this reachable at
@@ -11486,7 +11494,14 @@ class TerminalPlayerUI:
             lines.append(f"  {self._notification_ansi(bold_s)}📂 {self.notification_msg}{NC}")
         else:
             g_early = f"\033[38;2;0;229;255m[G]{NC} {text_col}{g_key}{NC}  " if is_lg else ""
-            lines.append(f"  \033[38;2;0;229;255m[3]{NC} \033[38;2;255;196;0mFavorites{NC}  \033[38;2;0;229;255m[H]{NC} {text_col}Mark{NC}  \033[38;2;0;229;255m[X]{NC} {text_col}Mixer{NC}  \033[38;2;0;229;255m[1]{NC} {text_col}Mix{NC}  \033[38;2;0;229;255m[2]{NC} {text_col}Music{NC}  \033[38;2;0;229;255m[D]{NC} {text_col}Clear{NC}  {g_early}\033[38;2;0;229;255m[Space]{NC} {text_col}Play{NC}  \033[38;2;0;229;255m[Q]{NC} {text_col}Queue{NC}  \033[38;2;0;229;255m[R]{NC} {text_col}Rec{NC}  \033[38;2;0;229;255m[b]{NC} {text_col}Bass{NC}  \033[38;2;0;229;255m[n/p]{NC} {text_col}Skip{NC}  \033[38;2;255;215;0m[M]{NC} {text_col}Micro{NC}  \033[38;2;255;64;64mEsc{NC} {text_col}Close{NC}")
+            _mini_hints = [
+                f"  \033[38;2;0;229;255m[3]{NC} {self.visualizer.get_theme_palette().get('accent', '')}Favorites{NC}  \033[38;2;0;229;255m[H]{NC} {text_col}Mark{NC}  \033[38;2;0;229;255m[X]{NC} {text_col}Mixer{NC}  \033[38;2;0;229;255m[1]{NC} {text_col}Mix{NC}  \033[38;2;0;229;255m[2]{NC} {text_col}Music{NC}  \033[38;2;0;229;255m[D]{NC} {text_col}Clear{NC}  {g_early}\033[38;2;0;229;255m[Space]{NC} {text_col}Play{NC}  \033[38;2;0;229;255m[Q]{NC} {text_col}Queue{NC}  \033[38;2;0;229;255m[R]{NC} {text_col}Rec{NC}  \033[38;2;0;229;255m[b]{NC} {text_col}Bass{NC}  \033[38;2;0;229;255m[n/p]{NC} {text_col}Skip{NC}  \033[38;2;255;215;0m[M]{NC} {text_col}Micro{NC}  \033[38;2;255;64;64mEsc{NC} {text_col}Close{NC}",
+                # A 74-column Mini window cannot hold the full list; keep the
+                # controls a listener reaches for, including G for MP Gui.
+                f"  [3] Fav  [H] Mark  [X] Mixer  Space Play  {g_early}\033[38;2;0;229;255m[b]{NC} Bass  [M] Micro  Esc Close",
+                f"  Space Play  {g_early}[X] Mixer  [b] Bass  [M] Micro  Esc Close",
+            ]
+            lines.append(_fit_text_line(_mini_hints, max(20, w - 1)))
         if is_lg:
             lines = [_strip_bold_ansi(l) for l in lines]
         self._present(lines, w, h)
@@ -12157,9 +12172,19 @@ def main():
                 try:
                     res_data = json.loads(RESUME_STATE_FILE.read_text(encoding="utf-8"))
                     if res_data and res_data.get("path") and os.path.isfile(res_data["path"]):
-                        resume_f = res_data["path"]
-                        resume_pos = float(res_data.get("position_sec", 0.0) or 0.0)
-                        if not args.music_mode and not args.mix_archive_mode:
+                        # An explicit --mix-archive-mode or --music-mode launch
+                        # must not be dragged back into the other library by a
+                        # saved session: only a launch that named neither flag
+                        # adopts the saved mode and file.
+                        explicit_mode = bool(args.music_mode or args.mix_archive_mode)
+                        saved_mode = str(res_data.get("mode") or "MIX_ARCHIVE").upper()
+                        wants_music = bool(args.music_mode)
+                        if explicit_mode and saved_mode != ("MUSIC" if wants_music else "MIX_ARCHIVE"):
+                            resume_f, resume_pos = None, 0.0
+                        else:
+                            resume_f = res_data["path"]
+                            resume_pos = float(res_data.get("position_sec", 0.0) or 0.0)
+                        if not explicit_mode:
                             if res_data.get("mode") == "MUSIC":
                                 current_mode = "MUSIC"
                                 is_music = True
@@ -12236,6 +12261,15 @@ def main():
                 pass
             elif requested_music and str(d_data.get("mode") or "").upper() != "MUSIC":
                 send_ipc_command("load_playlist", mode="MUSIC", folder_name=folder_target, playlist_path=args.playlist, play=True)
+            elif (not requested_music and args.mix_archive_mode
+                  and str(d_data.get("mode") or "").upper() != "MIX_ARCHIVE"):
+                # The mirror of the Music case: a --mix-archive-mode launch must
+                # take the window back to the mix archive when the daemon is
+                # still playing a music library, instead of leaving it showing
+                # the other library's playlist.
+                send_ipc_command("load_playlist", mode="MIX_ARCHIVE", play=False)
+                if latest := scanner.get_latest_mix():
+                    send_ipc_command("play", file=latest["path"])
             elif d_state == "stopped" or not d_data.get("path"):
                 resume_f, resume_pos = None, 0.0
                 if RESUME_STATE_FILE.is_file():
