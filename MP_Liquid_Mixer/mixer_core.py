@@ -1320,23 +1320,29 @@ def layout(width: int = DESIGN_W, height: int = DESIGN_H) -> Dict[str, Tuple[flo
         "bottom_bar": rect(0, 1016, DESIGN_W, 64),
         "deck_a": rect(24, 88, 786, 900),
         "deck_b": rect(1110, 88, 786, 900),
+        "deck_c": rect(24, 88, 786, 900),
+        "deck_d": rect(1110, 88, 786, 900),
         "deck_a_header": rect(24, 88, 786, 40),
         "deck_b_header": rect(1110, 88, 786, 40),
+        "deck_c_header": rect(24, 88, 786, 40),
+        "deck_d_header": rect(1110, 88, 786, 40),
         "deck_a_term": rect(36, 138, 762, 838),
         "deck_b_term": rect(1122, 138, 762, 838),
+        "deck_c_term": rect(36, 138, 762, 838),
+        "deck_d_term": rect(1122, 138, 762, 838),
         "mixer": rect(842, 88, 236, 900),
-        "browse_button": rect(852, 720, 216, 28),
-        "mode_button": rect(852, 756, 216, 40),
-        "record_button": rect(852, 830, 216, 40),
-        "format_button": rect(852, 800, 104, 26),
-        "bitdepth_button": rect(964, 800, 104, 26),
-        "credit_button": rect(852, 876, 216, 34),
-        "clock_button": rect(852, 914, 216, 46),
-        "export_button": rect(852, 964, 216, 30),
-        "verify_button": rect(852, 630, 216, 24),
-        "xfader": rect(852, 660, 216, 52),
-        "pitch_a": rect(810, 150, 26, 420),
-        "pitch_b": rect(1084, 150, 26, 420),
+        "browse_button": rect(852, 760, 216, 28),
+        "mode_button": rect(852, 794, 216, 40),
+        "record_button": rect(852, 856, 216, 40),
+        "format_button": rect(852, 830, 104, 26),
+        "bitdepth_button": rect(964, 830, 104, 26),
+        "credit_button": rect(852, 900, 216, 30),
+        "clock_button": rect(852, 934, 216, 40),
+        "export_button": rect(852, 976, 216, 26),
+        "verify_button": rect(852, 686, 216, 22),
+        "xfader": rect(852, 710, 216, 46),
+        "pitch_a": rect(796, 150, 26, 420),
+        "pitch_b": rect(1098, 150, 26, 420),
         "sync_a": rect(620, 94, 70, 28),
         "sync_b": rect(1706, 94, 70, 28),
         # The deck-switch button in each player's header. Clicking flips that
@@ -1344,50 +1350,51 @@ def layout(width: int = DESIGN_W, height: int = DESIGN_H) -> Dict[str, Tuple[flo
         "deck_switch_a": rect(24, 94, 160, 26),
         "deck_switch_b": rect(1736, 94, 160, 26),
         # Master and monitor trims at the top of the window.
-        "master_knob": rect(296, 12, 44, 44),
-        "monitor_knob": rect(348, 12, 44, 44),
+        "master_knob": rect(296, 10, 44, 44),
+        "monitor_knob": rect(348, 10, 44, 44),
         "opacity": rect(192, 1040, 1536, 24),
         "visualizer_button": rect(1600, 14, 196, 36),
         "trance_button": rect(540, 14, 300, 36),
         "settings_button": rect(1150, 14, 144, 36),
         "close_button": rect(1836, 14, 48, 36),
-        "profile_button": rect(1180, 60, 128, 26),
+        "profile_button": rect(852, 64, 216, 26),
     }
-    # Channel strips: the volume faders are a quarter of their old height.
-    strip_y, strip_h, strip_w, strip_gap = 480.0, 120.0, 48.0, 8.0
+    # Channel strips. The FILTER knob is 1.5x an EQ knob, so the fader column
+    # sits below it with room for the cue button and the channel letter.
+    strip_y, strip_h, strip_w, strip_gap = 512.0, 110.0, 48.0, 8.0
     start_x = 842 + (236 - (4 * strip_w + 3 * strip_gap)) / 2.0
     for i, channel in enumerate(CHANNELS):
         x = start_x + i * (strip_w + strip_gap)
         boxes[f"strip_{channel}"] = rect(x, strip_y, strip_w, strip_h)
-        boxes[f"strip_{channel}_label"] = rect(x, strip_y - 26, strip_w, 20)
-        boxes[f"strip_{channel}_value"] = rect(x, strip_y + strip_h + 6, strip_w, 18)
+        boxes[f"strip_{channel}_label"] = rect(x, strip_y - 24, strip_w, 18)
+        boxes[f"strip_{channel}_value"] = rect(x, strip_y + strip_h + 4, strip_w, 16)
         # The headphone-cue button above each fader: presses route that one
         # channel to the monitor output.
-        boxes[f"monitor_{channel}"] = rect(x + 2, strip_y - 48, strip_w - 4, 18)
+        boxes[f"monitor_{channel}"] = rect(x + 2, strip_y - 46, strip_w - 4, 18)
 
     # Four rows of four knobs: GAIN, TREBLE, MID, LOW, plus the bigger FILTER
     # knob below LOW. The EQ rows carry no left-hand legend any more, so the
     # knob columns line up exactly with the channel faders below them.
-    row_centres = {"gain": 170.0, "high": 216.0, "mid": 262.0, "low": 308.0}
+    row_centres = {"gain": 178.0, "high": 222.0, "mid": 266.0, "low": 310.0}
     knob_x, knob_w, knob_gap = 886.0, 40.0, 4.0
     for row in ("gain", "high", "mid", "low"):
         centre = row_centres[row]
         for i, channel in enumerate(CHANNELS):
             x = knob_x + i * (knob_w + knob_gap)
             boxes[f"knob_{row}_{channel}"] = rect(x, centre - knob_w / 2, knob_w, knob_w)
-            boxes[f"knob_{row}_{channel}_value"] = rect(x - 4, centre + knob_w / 2 + 2, knob_w + 8, 14)
+            boxes[f"knob_{row}_{channel}_value"] = rect(x - 4, centre + knob_w / 2 + 2, knob_w + 8, 12)
     # FILTER is 1.5x the EQ knobs and sits below LOW, clear of the faders.
     filter_d = knob_w * 1.5
-    filter_centre = 362.0
+    filter_centre = 366.0
     for i, channel in enumerate(CHANNELS):
         x = knob_x + i * (knob_w + knob_gap) + (knob_w - filter_d) / 2.0
         boxes[f"knob_filter_{channel}"] = rect(x, filter_centre - filter_d / 2, filter_d, filter_d)
-        boxes[f"knob_filter_{channel}_value"] = rect(x - 4, filter_centre + filter_d / 2 + 1,
-                                                     filter_d + 8, 13)
+        boxes[f"knob_filter_{channel}_value"] = rect(x - 4, filter_centre + filter_d / 2,
+                                                     filter_d + 8, 12)
 
     # Effect controls, one column beneath the filter row: the four numbered
     # slot squares and the enable/bypass button per channel.
-    effect_y, effect_w, effect_h = 398.0, 8.0, 8.0
+    effect_y, effect_w, effect_h = 406.0, 8.0, 8.0
     for i, channel in enumerate(CHANNELS):
         column_x = knob_x + i * (knob_w + knob_gap) + (knob_w - (4 * effect_w + 3 * 1.0)) / 2.0
         for slot, _name in enumerate(EFFECT_MODES):

@@ -87,28 +87,36 @@ def sync_pitch(master_pitch: float, master_bpm: float = 0.0, target_bpm: float =
 
 
 def master_after_status(current: str, channel: str, previous: Dict[str, Any],
-                        status: Dict[str, Any], other_status: Dict[str, Any]) -> str:
+                        status: Dict[str, Any], other_status: Dict[str, Any],
+                        others: Optional[Dict[str, Dict[str, Any]]] = None) -> str:
     """Which deck should own the sync master after one status poll.
 
     A deck that starts playing takes the master (the newly mixed-in track).
-    When the master's track changes or it leaves "playing" while the other deck
-    is playing, the other deck becomes master.
+    When the master's track changes or it leaves "playing" while another deck
+    is playing, that other deck becomes master. The other decks are passed as
+    ``others`` so a four-deck mixer does not need a hard-coded A/B pair.
     """
     prev_state = str((previous or {}).get("state") or "").lower()
     new_state = str((status or {}).get("state") or "").lower()
-    other_state = str((other_status or {}).get("state") or "").lower()
     if new_state == "playing" and prev_state != "playing":
         return channel
     if channel != current:
         return current
-    other = "B" if channel == "A" else "A"
-    if other_state == "playing":
+    pool = dict(others or {})
+    if not pool:
+        other = "B" if channel == "A" else "A"
+        pool = {other: other_status or {}}
+    for candidate, candidate_status in pool.items():
+        if candidate == channel:
+            continue
+        if str((candidate_status or {}).get("state") or "").lower() != "playing":
+            continue
         prev_path = (previous or {}).get("path")
         new_path = (status or {}).get("path")
         if prev_path and new_path and prev_path != new_path:
-            return other
+            return candidate
         if prev_state == "playing" and new_state != "playing":
-            return other
+            return candidate
     return current
 
 
@@ -197,17 +205,13 @@ class LiquidMixer(GlassHost):
         # the live window by _apply_settings.
         self.settings = settings_api.load_settings()
         self.model = core.MixerModel.load()
-        # The launch theme: an explicit flag wins, then the saved default, then
-        # whatever the shared theme file says. A chosen theme is published to
-        # the shared file, otherwise the 1s poll would revert the window to the
-        # old theme a second after it opened.
-        explicit_theme = str(theme or self.settings.theme or "").strip()
-        if explicit_theme:
-            self.theme = explicit_theme
-            core.write_theme(self.theme)
-            self.theme = core.read_theme()
-        else:
-            self.theme = core.read_theme()
+        # The mixer always opens in Into Darkness (Void Out), whatever theme
+        # was saved or last used. The requirement is a fixed house look for the
+        # mixer, so the shared theme file is rewritten on every launch: the
+        # decks read the same file and therefore start in the same theme.
+        self.theme = core.FORCED_THEME
+        core.write_theme(self.theme)
+        self.theme = core.read_theme()
         # An explicit flag wins for this launch (`None` means "not given"), and
         # the saved preference is the default otherwise.
         self.start_fullscreen = (self.settings.fullscreen if fullscreen is None
@@ -233,11 +237,26 @@ class LiquidMixer(GlassHost):
         self._hw_last = {}
         self.browse_target = "A"
         self.sync_master = "A"
-        self._shift = {"A": False, "B": False}
+        self._shift = {ch: False for ch in core.CHANNELS}
         self._pitch_sent: Dict[str, int] = {}
         self._pitch_dirty = True
+        self._effect_sent: Dict[str, Dict[str, Any]] = {}
+        self._effect_dirty = True
+        self._monitor_dirty = False
         self._bpm_cache: Dict[str, float] = {}
-        self._browse_dirty = {"A": False, "B": False}
+        self._browse_dirty = {ch: False for ch in core.CHANNELS}
+        # Animation clocks for the two things that flash: a deck switch makes
+        # the target playlist row pulse its theme colours, and the deck-switch
+        # buttons breathe like neon. Both are read only while they run, so an
+        # idle mixer costs nothing.
+        self._switch_flash: Dict[str, float] = {}
+        self._switch_until = 0.0
+        self._next_anim_tick = 0.0
+        self.profile = str(getattr(self.settings, "midi_profile", "S4") or "S4").upper()
+        self._profile_flash_until = 0.0
+        # The monitor output is a second sink, independent of the master.
+        self._monitor_sink = str(getattr(self.settings, "monitor_output_device", "") or "")
+        self._monitor_cued: set = set()
         # A first launch straight from the mixer shortcut has no library yet.
         # Both decks then open the bundled theme track, paused and ready, so
         # the window is usable without a trip through setup first. Once a
@@ -605,10 +624,12 @@ class LiquidMixer(GlassHost):
             Gdk.EventMask.BUTTON_PRESS_MASK
             | Gdk.EventMask.BUTTON_RELEASE_MASK
             | Gdk.EventMask.POINTER_MOTION_MASK
+            | Gdk.EventMask.SCROLL_MASK
         )
         window.connect("button-press-event", self._on_press)
         window.connect("button-release-event", self._on_release)
         window.connect("motion-notify-event", self._on_motion)
+        window.connect("scroll-event", self._on_scroll)
         window.set_opacity(self.model.opacity)
 
         self.window = window
@@ -617,12 +638,14 @@ class LiquidMixer(GlassHost):
             Gdk.EventMask.BUTTON_PRESS_MASK
             | Gdk.EventMask.BUTTON_RELEASE_MASK
             | Gdk.EventMask.POINTER_MOTION_MASK
+            | Gdk.EventMask.SCROLL_MASK
         )
         self.area.set_can_focus(True)
         self.area.connect("draw", self._on_draw)
         self.area.connect("button-press-event", self._on_press)
         self.area.connect("button-release-event", self._on_release)
         self.area.connect("motion-notify-event", self._on_motion)
+        self.area.connect("scroll-event", self._on_scroll)
 
         self.fixed = Gtk.Fixed()
         self.fixed.put(self.area, 0, 0)
@@ -632,10 +655,12 @@ class LiquidMixer(GlassHost):
             Gdk.EventMask.BUTTON_PRESS_MASK
             | Gdk.EventMask.BUTTON_RELEASE_MASK
             | Gdk.EventMask.POINTER_MOTION_MASK
+            | Gdk.EventMask.SCROLL_MASK
         )
         self.fixed.connect("button-press-event", self._on_press)
         self.fixed.connect("button-release-event", self._on_release)
         self.fixed.connect("motion-notify-event", self._on_motion)
+        self.fixed.connect("scroll-event", self._on_scroll)
         window.add(self.fixed)
         window.show_all()
 
@@ -989,7 +1014,7 @@ class LiquidMixer(GlassHost):
         from gi.repository import Gdk as Gdk, Pango
         Gtk = self.Gtk
         window = self.window
-        for channel in ("A", "B"):
+        for channel in core.CHANNELS:
             namespace = core.DECK_NAMESPACES[channel]
             term = Vte.Terminal()
             term.set_audible_bell(False)
@@ -1062,7 +1087,7 @@ class LiquidMixer(GlassHost):
         return False
 
     def _set_browse_target(self, channel: str) -> None:
-        if channel in ("A", "B") and channel != self.browse_target:
+        if channel in core.CHANNELS and channel != self.browse_target:
             self.browse_target = channel
             if self.area is not None:
                 self.area.queue_draw()
@@ -1074,19 +1099,143 @@ class LiquidMixer(GlassHost):
         if self.area is not None and not self._closing:
             self.area.queue_draw()
 
+    # -- playlist window <-> deck switching -------------------------------
+    def _toggle_side(self, side: str) -> str:
+        """Flip one playlist window to its other deck (A<->C, B<->D).
+
+        The two engines never restart: the window shows the other deck's
+        terminal, its tempo slider is re-pointed at that deck, and the
+        playlist highlights the track that deck has loaded.
+        """
+        if side not in core.DECK_SIDES:
+            return ""
+        previous = self.model.deck_for_side(side)
+        channel = self.model.toggle_side_deck(side)
+        self.model.save()
+        if channel == previous:
+            return channel
+        # The switch button glows, and the playlist window flashes the theme
+        # colours so the user sees which deck the window now controls.
+        now = time.monotonic()
+        self._switch_flash[side] = now
+        self._switch_until = now + 1.6
+        self.browse_target = channel
+        self._pitch_dirty = True
+        self._effect_dirty = True
+        self._vol_dirty = True
+        self._place_decks()
+        self._highlight_deck_track(channel)
+        _log(f"deck switch: side {side} -> {channel}")
+        if self.area is not None:
+            self.area.queue_draw()
+        return channel
+
+    def _highlight_deck_track(self, channel: str) -> None:
+        """Move a deck's playlist selection to the track it has loaded.
+
+        The player feeds Up/Down to its list, so the mixer walks that deck's
+        player to the row matching the status path and then to the top of the
+        visible list. Only a deck that already has a path is touched, so an
+        empty deck keeps the selection the user left behind.
+        """
+        deck = self.decks.get(channel) or {}
+        term = deck.get("vte")
+        namespace = deck.get("namespace")
+        status = self._deck_status.get(channel) or {}
+        if term is None or not namespace or not status.get("path"):
+            return
+        target = str(status.get("path"))
+        self._browse_dirty[channel] = False
+
+        def worker():
+            reply = core.send_ipc(namespace, "get_playlist", timeout=0.5) or {}
+            rows = reply.get("playlist") if isinstance(reply.get("playlist"), list) else []
+            index = next((int(row.get("index", i)) for i, row in enumerate(rows)
+                          if isinstance(row, dict) and str(row.get("path")) == target), -1)
+            if index < 0:
+                return
+            try:
+                from gi.repository import GLib as _GLib
+                _GLib.idle_add(self._walk_playlist_to, channel, index)
+            except Exception:
+                pass
+
+        threading.Thread(target=worker, name=f"highlight-{channel}", daemon=True).start()
+
+    def _walk_playlist_to(self, channel: str, index: int) -> bool:
+        """Feed the minimum arrow presses that lands the list on ``index``."""
+        deck = self.decks.get(channel) or {}
+        term = deck.get("vte")
+        if term is None:
+            return False
+        # The player's own selection is not published by status, so the walk is
+        # anchored by sending Home first and then the row offset. Home is the
+        # player's "top of list" key and is idempotent.
+        self._feed_deck(term, b"\x1b[H")
+        if index > 0:
+            for _step in range(min(index, 500)):
+                self._feed_deck(term, b"\x1b[B")
+        return False
+
+    def _pulse_active(self, now: Optional[float] = None) -> bool:
+        return (now if now is not None else time.monotonic()) < self._switch_until
+
+    def _flash_colour(self, side: str, accent, secondary, now: float):
+        """The colour a switching window's highlight is currently using."""
+        start = self._switch_flash.get(side, 0.0)
+        if not start or now - start > 1.6:
+            return accent
+        t = (now - start) / 1.6
+        # Three fast colour steps then a fade back to the theme accent.
+        step = int(t * 6.0) % 2
+        return secondary if step else accent
+
     # The player's own layout caps its content at 74 columns
     # (MP_Audio_Player: iw = max(24, min(w - 4, 74))). The deck font is chosen
     # so those 74 columns still fit across the card.
     DECK_COLS = 74
 
     def _deck_term_rect(self, channel: str) -> Tuple[float, float, float, float]:
-        return self.boxes[f"deck_{channel.lower()}_term"]
+        # Decks C and D render in the same physical windows as A and B; only
+        # one of each pair is visible at a time.
+        side_key = "a" if channel in ("A", "C") else "b"
+        return self.boxes[f"deck_{side_key}_term"]
+
+    def _visible_decks(self) -> Dict[str, str]:
+        """``{side: channel}`` for the two player windows.
+
+        The window keeps four deck engines and four terminals, but only the two
+        that the playlist windows are currently mapped to are shown. The
+        hidden pair keeps running: switching a side only moves the visible
+        terminal, it never restarts or silences an engine.
+        """
+        return {side: self.model.deck_for_side(side) for side in core.DECK_SIDES}
+
+    def _side_for_channel(self, channel: str) -> Optional[str]:
+        for side, visible in self._visible_decks().items():
+            if visible == channel:
+                return side
+        return None
 
     def _place_decks(self) -> None:
+        visible = self._visible_decks()
+        shown = set(visible.values())
         for channel, deck in self.decks.items():
             term = deck.get("vte")
             if term is None:
                 continue
+            if channel not in shown:
+                # A hidden engine keeps playing, but its terminal must not sit
+                # over the one the user is watching.
+                try:
+                    term.set_visible(False)
+                except Exception:
+                    pass
+                continue
+            try:
+                term.set_visible(True)
+            except Exception:
+                pass
             box = self._deck_term_rect(channel)
             width, height = max(32, int(box[2])), max(32, int(box[3]))
             term.set_size_request(width, height)
@@ -1100,7 +1249,15 @@ class LiquidMixer(GlassHost):
                     term.size_allocate(rect)
                 except Exception:
                     pass
-
+            try:
+                term.grab_focus()
+            except Exception:
+                pass
+            if channel == visible.get("R"):
+                try:
+                    term.grab_focus()
+                except Exception:
+                    pass
     def _fit_deck_fonts(self) -> bool:
         """Fit a 74-column player grid into each card at the largest size."""
         from gi.repository import Pango
@@ -1917,12 +2074,23 @@ class LiquidMixer(GlassHost):
             if core.inside(x, y, self.boxes["settings_button"]):
                 self._open_settings()
                 return True
+            if core.inside(x, y, self.boxes["profile_button"]):
+                self._toggle_profile()
+                return True
             if core.inside(x, y, self.boxes["visualizer_button"]):
                 self._toggle_visualizer()
                 self.area.queue_draw()
                 return True
             if core.inside(x, y, self.boxes["close_button"]):
                 self.quit()
+                return True
+            if core.inside(x, y, self.boxes["master_knob"]):
+                self._knob_drag = ("master", "", y, self.model.master_volume, 0.0, 1.0)
+                self.drag = ("knob", "master:")
+                return True
+            if core.inside(x, y, self.boxes["monitor_knob"]):
+                self._knob_drag = ("monitor", "", y, self.model.monitor_volume, 0.0, 1.0)
+                self.drag = ("knob", "monitor:")
                 return True
             if event.type == self.Gdk.EventType._2BUTTON_PRESS:
                 self._window_drag = None
@@ -1935,16 +2103,41 @@ class LiquidMixer(GlassHost):
                 except Exception:
                     self._window_drag = None
             return True
-        for channel in ("A", "B"):
-            if core.inside(x, y, self.boxes[f"pitch_{channel.lower()}"]):
+        for side in core.DECK_SIDES:
+            box = self.boxes[f"deck_switch_{side.lower()}"]
+            if core.inside(x, y, box):
+                self._toggle_side(side)
+                return True
+        # The two tempo sliders sit beside a playlist window, so each drives
+        # whichever deck that window is currently showing.
+        visible = self._visible_decks()
+        for side in ("L", "R"):
+            channel = visible.get(side, core.DEFAULT_SIDE_DECKS[side])
+            if core.inside(x, y, self.boxes[f"pitch_{side.lower()}"]):
                 self.drag = ("pitch", channel)
                 self._drag_pitch(channel, y)
                 return True
-            if core.inside(x, y, self.boxes[f"sync_{channel.lower()}"]):
+            if core.inside(x, y, self.boxes[f"sync_{side.lower()}"]):
                 manual = bool(int(getattr(event, "state", 0)) & int(self.Gdk.ModifierType.SHIFT_MASK))
                 self._sync_deck(channel, manual=manual)
                 self._s4_last_seen = time.time()
                 self.area.queue_draw()
+                return True
+        for channel in core.CHANNELS:
+            if core.inside(x, y, self.boxes[f"monitor_{channel}"]):
+                self._toggle_monitor_cue(channel)
+                return True
+            for slot in (1, 2, 3, 4):
+                if core.inside(x, y, self.boxes[f"effect_slot_{slot}_{channel}"]):
+                    self._select_effect_slot(channel, slot)
+                    return True
+            if core.inside(x, y, self.boxes[f"effect_toggle_{channel}"]):
+                self._toggle_channel_effect(channel)
+                return True
+        for channel in core.CHANNELS:
+            if core.inside(x, y, self.boxes[f"knob_filter_{channel}"]):
+                self._knob_drag = ("filter", channel, y, self.model.filter_value(channel), 0.0, 1.0)
+                self.drag = ("knob", f"filter:{channel}")
                 return True
         for group in ("gain", "high", "mid", "low"):
             for channel in core.CHANNELS:
@@ -1975,7 +2168,7 @@ class LiquidMixer(GlassHost):
             self._drag_opacity(x)
             return True
         if core.inside(x, y, self.boxes["browse_button"]):
-            self.browse_target = "B" if self.browse_target == "A" else "A"
+            self._cycle_browse_target()
             self.area.queue_draw()
             return True
         if core.inside(x, y, self.boxes["mode_button"]):
@@ -2063,6 +2256,10 @@ class LiquidMixer(GlassHost):
                 group = value.split(":", 1)[0]
                 if group == "gain":
                     self._vol_dirty = True
+                elif group in ("filter", "effect"):
+                    self._effect_dirty = True
+                elif group in ("master", "monitor"):
+                    self._vol_dirty = True
                 else:
                     self._eq_dirty = True
                 self.area.queue_draw()
@@ -2074,20 +2271,191 @@ class LiquidMixer(GlassHost):
         return False
 
     def _set_knob(self, group: str, channel: str, value: float) -> None:
-        if group == "gain":
+        if group == "master":
+            self.model.set_master_volume(value)
+            self._vol_dirty = True
+        elif group == "monitor":
+            self.model.set_monitor_volume(value)
+            self._monitor_dirty = True
+        elif group == "filter":
+            if self.model.set_filter(channel, value):
+                self._effect_dirty = True
+        elif group == "gain":
             if self.model.set_trim(channel, value):
                 self._vol_dirty = True
         else:
             if self.model.set_eq(channel, group, value):
                 self._eq_dirty = True
-        self.area.queue_draw()
+        if self.area is not None:
+            self.area.queue_draw()
 
     def _reset_knob(self, group: str, channel: str) -> None:
+        if group == "master":
+            self._set_knob("master", "", core.DEFAULT_MASTER_VOLUME)
+            self.model.save()
+            return
+        if group == "monitor":
+            self._set_knob("monitor", "", core.DEFAULT_MONITOR_VOLUME)
+            self.model.save()
+            return
+        if group == "filter":
+            self._set_knob("filter", channel, core.DEFAULT_FILTER)
+            self.model.save()
+            return
         for key, _label, _low, _high, default in self.KNOB_ROWS:
             if key == group:
                 self._set_knob(group, channel, default)
                 self.model.save()
                 return
+
+    # -- browse target, effects and monitoring ---------------------------
+    def _cycle_browse_target(self) -> None:
+        """Step the browse knob through all four decks."""
+        order = list(core.CHANNELS)
+        try:
+            index = order.index(self.browse_target)
+        except ValueError:
+            index = 0
+        self.browse_target = order[(index + 1) % len(order)]
+
+    def _select_effect_slot(self, channel: str, slot: int) -> None:
+        modes = core.EFFECT_MODES
+        if not (1 <= int(slot) <= len(modes)):
+            return
+        if self.model.set_effect_mode(channel, modes[int(slot) - 1]):
+            self._effect_dirty = True
+            self.model.save()
+            if self.area is not None:
+                self.area.queue_draw()
+            _log(f"effect {channel}: slot {slot} -> {modes[int(slot) - 1]}")
+
+    def _toggle_channel_effect(self, channel: str) -> None:
+        state = self.model.toggle_effect(channel)
+        self._effect_dirty = True
+        self.model.save()
+        if self.area is not None:
+            self.area.queue_draw()
+        _log(f"effect {channel}: {'on' if state else 'off'}")
+
+    def _toggle_monitor_cue(self, channel: str) -> None:
+        """Route one channel to the monitor output, or take it back."""
+        state = self.model.toggle_headphone(channel)
+        if state:
+            self._monitor_cued.add(channel)
+        else:
+            self._monitor_cued.discard(channel)
+        self.model.save()
+        self._apply_monitor_routing()
+        if self.area is not None:
+            self.area.queue_draw()
+        _log(f"monitor cue {channel}: {'on' if state else 'off'}")
+
+    def _apply_monitor_routing(self) -> None:
+        """Send cued decks to the monitor interface and the rest to master.
+
+        Two audio interfaces is the documented setup: the master output feeds
+        the room and the monitor output feeds the headphones. A deck whose cue
+        is on is moved to the monitor sink; every other deck stays on the
+        master sink. Nothing is moved while the monitor output is unset, so a
+        single-interface machine keeps its normal master routing.
+        """
+        monitor = str(getattr(self.settings, "monitor_output_device", "") or "").strip()
+        if not monitor:
+            monitor = self._monitor_sink
+        master = str(getattr(self.settings, "master_output_device", "") or "").strip()
+        if not monitor:
+            return
+        for channel, deck in self.decks.items():
+            namespace = deck.get("namespace")
+            if not namespace:
+                continue
+            target = monitor if self.model.headphone(channel) else (master or "")
+            if not target:
+                continue
+            moved = settings_api.move_process_streams(namespace, target)
+            if moved:
+                _log(f"monitor: deck {channel} streams -> {target}")
+
+    # -- mouse wheel ------------------------------------------------------
+    # GTK delivers a wheel detent as a scroll event. The mixer treats one
+    # detent as one small step so a channel fader, tempo slider or knob can be
+    # trimmed without grabbing it, and the last wheel target keeps working
+    # even when the pointer drifts a pixel off the control.
+    WHEEL_STEP = 0.02
+    WHEEL_PITCH_STEP = 0.5
+
+    def _wheel_direction(self, event) -> int:
+        direction = getattr(event, "direction", None)
+        gdk = getattr(self, "Gdk", None)
+        scroll = getattr(gdk, "ScrollDirection", None) if gdk is not None else None
+        if scroll is not None:
+            if direction in (getattr(scroll, "UP", object()), getattr(scroll, "LEFT", object())):
+                return 1
+            if direction in (getattr(scroll, "DOWN", object()), getattr(scroll, "RIGHT", object())):
+                return -1
+        # Fall back to the delta fields a smooth-scroll event carries.
+        delta_y = float(getattr(event, "delta_y", 0.0) or 0.0)
+        if delta_y:
+            return 1 if delta_y > 0 else -1
+        return 0
+
+    def _on_scroll(self, _widget, event) -> bool:
+        step = self._wheel_direction(event)
+        if not step:
+            return False
+        x, y = float(getattr(event, "x", 0.0)), float(getattr(event, "y", 0.0))
+        if self._verify_prompt:
+            return True
+        for side in ("L", "R"):
+            if core.inside(x, y, self.boxes[f"pitch_{side.lower()}"]):
+                channel = self._visible_decks().get(side, core.DEFAULT_SIDE_DECKS[side])
+                self._nudge_pitch(channel, step * self.WHEEL_PITCH_STEP)
+                return True
+        for channel in core.CHANNELS:
+            if core.inside(x, y, self.boxes[f"strip_{channel}"]):
+                self._nudge_channel(channel, step * self.WHEEL_STEP)
+                return True
+            if core.inside(x, y, self.boxes[f"knob_filter_{channel}"]):
+                self._set_knob("filter", channel,
+                               self.model.filter_value(channel) + step * self.WHEEL_STEP * 2.0)
+                self.model.save()
+                return True
+            for group in ("gain", "high", "mid", "low"):
+                if core.inside(x, y, self.boxes[f"knob_{group}_{channel}"]):
+                    low, high = self._knob_range(group)
+                    delta = step * (high - low) * 0.04
+                    if group == "gain":
+                        delta = step * self.WHEEL_STEP
+                    self._set_knob(group, channel, self._knob_value(group, channel) + delta)
+                    return True
+        if core.inside(x, y, self.boxes["master_knob"]):
+            self._set_knob("master", "", self.model.master_volume + step * self.WHEEL_STEP)
+            return True
+        if core.inside(x, y, self.boxes["monitor_knob"]):
+            self._set_knob("monitor", "", self.model.monitor_volume + step * self.WHEEL_STEP)
+            return True
+        if core.inside(x, y, self.boxes["xfader"]):
+            self.model.set_crossfade(self.model.crossfade + step * self.WHEEL_STEP)
+            self._vol_dirty = True
+            self.area.queue_draw()
+            return True
+        return False
+
+    def _nudge_channel(self, channel: str, delta: float) -> None:
+        value = max(0.0, min(1.0, self.model.channel_gain(channel) + delta))
+        if self.model.set_channel(channel, value):
+            self._vol_dirty = True
+            self.model.save()
+            self.area.queue_draw()
+
+    def _nudge_pitch(self, channel: str, delta: float) -> None:
+        value = max(core.PITCH_MIN, min(core.PITCH_MAX, self.model.pitch(channel) + delta))
+        if abs(value) < 0.25:
+            value = 0.0
+        if self.model.set_pitch(channel, value):
+            self._pitch_dirty = True
+            self.model.save()
+            self.area.queue_draw()
 
     def _toggle_recording(self) -> None:
         if self.recorder.is_recording:
@@ -2270,6 +2638,14 @@ class LiquidMixer(GlassHost):
             self._apply_eq()
         if self._pitch_dirty:
             self._apply_pitch()
+        if self._effect_dirty:
+            self._apply_effects()
+        # While a switch flash or a neon pulse is running the window needs a
+        # steady frame clock; once it settles the mixer goes back to drawing
+        # only on real changes.
+        if now >= self._next_anim_tick and (self._pulse_active(now) or now < self._switch_until + 0.5):
+            self._next_anim_tick = now + 1.0 / 30.0
+            self.area.queue_draw()
         return True
 
     def _apply_volumes(self) -> None:
@@ -2320,6 +2696,26 @@ class LiquidMixer(GlassHost):
             else:
                 self._eq_sent[channel] = bands
         self._eq_dirty = pending
+
+    def _apply_effects(self) -> None:
+        """Push each channel's filter knob and effect slot to its engine."""
+        pending = False
+        for channel, namespace in core.DECK_NAMESPACES.items():
+            payload = self.model.effect_payload(channel)
+            if self._effect_sent.get(channel) == payload:
+                continue
+            if not core.player_socket(namespace).exists():
+                pending = True
+                continue
+            res = core.send_ipc(namespace, "set_effect", timeout=0.25, **payload)
+            if res is None:
+                pending = True
+            else:
+                self._effect_sent[channel] = payload
+        self._effect_dirty = pending
+        if self._monitor_dirty:
+            self._monitor_dirty = False
+            self._apply_monitor_routing()
 
     # ------------------------------------------------------------------
     # painting
@@ -2391,8 +2787,9 @@ class LiquidMixer(GlassHost):
             pass
 
         self._paint_top_bar(cr, s, accent, secondary, ink, glass_ink)
-        self._paint_deck(cr, "A", s, accent, glass_ink, dark_ui)
-        self._paint_deck(cr, "B", s, secondary, glass_ink, dark_ui)
+        visible = self._visible_decks()
+        self._paint_deck(cr, visible.get("L", "A"), "L", s, accent, secondary, glass_ink, dark_ui)
+        self._paint_deck(cr, visible.get("R", "B"), "R", s, accent, secondary, glass_ink, dark_ui)
         self._paint_pitch(cr, s, accent, secondary, glass_ink)
         self._paint_mixer(cr, s, accent, secondary, tertiary, glass_ink, dark_ui)
         self._paint_bottom_bar(cr, s, accent, ink, glass_ink, dark_ui)
@@ -2431,9 +2828,12 @@ class LiquidMixer(GlassHost):
         cr.set_line_width(max(1.0, 1.2 * s))
         self._rounded(cr, tb[0], tb[1], tb[2], tb[3], 9 * s)
         cr.stroke()
-        self._text(cr, tb[0] + tb[2] / 2, tb[1] + 10 * s,
+        self._text(cr, tb[0] + tb[2] / 2 - 5 * s, tb[1] + 10 * s,
                    "Trance Connection Enabled", 11 * s, glass_ink, 0.95,
                    bold=True, anchor="middle", max_width=tb[2] - 16 * s)
+
+        # MIDI DJ Mixer Profile: the A/B switch keeps the S4 and S3 maps apart.
+        self._paint_profile_button(cr, s, accent, secondary, glass_ink)
 
         # S4 fader status sits just left of the visualizer button.
         s4_text, s4_color = self._s4_status()
@@ -2479,10 +2879,11 @@ class LiquidMixer(GlassHost):
         cr.line_to(cx[0] + pad, cx[1] + cx[3] - pad)
         cr.stroke()
 
-    def _paint_deck(self, cr, channel: str, s, accent, glass_ink, dark_ui) -> None:
-        key = channel.lower()
+    def _paint_deck(self, cr, channel: str, side: str, s, accent, secondary, glass_ink, dark_ui) -> None:
+        key = side.lower()
         card = self.boxes[f"deck_{key}"]
         header = self.boxes[f"deck_{key}_header"]
+        hue = accent if side == "L" else secondary
         panel = _light(_darken(core.theme_field(self.theme), 0.25), (255, 255, 255), 0.08) if dark_ui else _light(core.theme_field(self.theme), (255, 255, 255), 0.45)
         cr.set_source_rgba(*_rgba(panel, 0.38))
         self._rounded(cr, card[0], card[1], card[2], card[3], 18 * s)
@@ -2515,15 +2916,19 @@ class LiquidMixer(GlassHost):
             title = f"Music library offline - {self._library_error}"
         elif not playing and str(status.get("last_load_error") or ""):
             title = str(status.get("last_load_error"))
-        self._text(cr, header[0] + 140 * s, header[1] + 12 * s, str(title), 11.5 * s, glass_ink, 0.72,
-                   max_width=max(40.0, sync_box[0] - (header[0] + 140 * s) - 10 * s))
+        switch_box = self.boxes[f"deck_switch_{key}"]
+        self._text(cr, switch_box[0] + switch_box[2] / 2, switch_box[1] + 6 * s,
+                   f"DECK {channel}  \u21c4  {self.model.other_deck_for_side(side)}",
+                   10 * s, glass_ink, 0.95, bold=True, anchor="middle")
+        self._text(cr, switch_box[0] + switch_box[2] / 2, switch_box[1] + switch_box[3] + 2 * s,
+                   str(title), 9.5 * s, glass_ink, 0.68, anchor="middle",
+                   max_width=max(40.0, header[2] - 340 * s))
         right = "LIVE" if playing else ("READY" if online else "OFFLINE")
         self._text(cr, header[0] + header[2] - 18 * s, header[1] + 12 * s, right, 10.5 * s, led, 0.92,
                    bold=True, anchor="end")
 
         master = self.sync_master == channel
-        # Deck B is drawn with its secondary hue passed as `accent`.
-        sync_color = accent
+        sync_color = hue
         cr.set_source_rgba(*_rgba(sync_color, 0.34 if master else 0.10))
         self._rounded(cr, sync_box[0], sync_box[1], sync_box[2], sync_box[3], 7 * s)
         cr.fill()
@@ -2534,6 +2939,43 @@ class LiquidMixer(GlassHost):
         self._text(cr, sync_box[0] + sync_box[2] / 2, sync_box[1] + 8 * s,
                    "MASTER" if master else "SYNC", 9 * s, glass_ink,
                    0.98 if master else 0.85, bold=True, anchor="middle")
+
+        self._paint_deck_switch(cr, side, channel, s, hue, glass_ink)
+
+    def _paint_deck_switch(self, cr, side: str, channel: str, s, hue, glass_ink) -> None:
+        """The playlist window's deck button: neon glow, flashing on a switch."""
+        import math as _math
+        box = self.boxes[f"deck_switch_{side.lower()}"]
+        now = time.monotonic()
+        pulsing = self._pulse_active(now)
+        # A slow neon breath while idle, a hard flash for ~1.6 s after a press.
+        breathe = 0.62 + 0.38 * (0.5 + 0.5 * _math.sin(now * 2.4))
+        if pulsing:
+            start = self._switch_flash.get(side, now)
+            t = max(0.0, min(1.0, (now - start) / 1.6))
+            glow = 1.0 - t
+        else:
+            glow = breathe
+        other = self.model.other_deck_for_side(side)
+        # Outer halo: three rings of decreasing alpha make the neon read as
+        # light rather than a flat border.
+        for ring, alpha in ((8.0, 0.10), (5.0, 0.16), (2.5, 0.24)):
+            cr.set_source_rgba(*_rgba(hue, alpha * glow))
+            cr.set_line_width(max(1.0, ring * s))
+            self._rounded(cr, box[0] - ring * s, box[1] - ring * s,
+                          box[2] + 2 * ring * s, box[3] + 2 * ring * s, (9 + ring) * s)
+            cr.stroke()
+        cr.set_source_rgba(*_rgba(hue, 0.14 + 0.16 * glow))
+        self._rounded(cr, box[0], box[1], box[2], box[3], 9 * s)
+        cr.fill()
+        cr.set_source_rgba(*_rgba(hue, 0.65 + 0.35 * glow))
+        cr.set_line_width(max(1.2, 1.8 * s))
+        self._rounded(cr, box[0], box[1], box[2], box[3], 9 * s)
+        cr.stroke()
+        self._text(cr, box[0] + box[2] / 2, box[1] + 6 * s,
+                   f"DECK {channel}", 11 * s, glass_ink, 0.98, bold=True, anchor="middle")
+        self._text(cr, box[0] + box[2] / 2, box[1] + 16 * s,
+                   f"SWITCH TO {other}", 7.5 * s, hue, 0.95, bold=True, anchor="middle")
 
     def _paint_mixer(self, cr, s, accent, secondary, tertiary, glass_ink, dark_ui) -> None:
         panel = self.boxes["mixer"]
@@ -2551,6 +2993,9 @@ class LiquidMixer(GlassHost):
                    accent if not self.model.external else (250, 205, 90), 0.95, bold=True, anchor="middle")
 
         self._paint_knobs(cr, s, accent, secondary, glass_ink)
+        self._paint_filters(cr, s, accent, secondary, glass_ink)
+        self._paint_effects(cr, s, accent, secondary, glass_ink)
+        self._paint_master_monitor(cr, s, accent, secondary, glass_ink)
         self._paint_strip(cr, "A", s, accent, secondary, glass_ink)
         self._paint_strip(cr, "B", s, accent, secondary, glass_ink)
         self._paint_strip(cr, "C", s, accent, secondary, glass_ink)
@@ -2582,10 +3027,13 @@ class LiquidMixer(GlassHost):
         return 0.0, 1.0
 
     def _paint_pitch(self, cr, s, accent, secondary, glass_ink) -> None:
-        import math as _math
-        for channel in ("A", "B"):
-            box = self.boxes[f"pitch_{channel.lower()}"]
-            hue = accent if channel == "A" else secondary
+        # The two tempo sliders sit beside the playlist windows and drive
+        # whichever deck each window is showing.
+        visible = self._visible_decks()
+        for side in ("L", "R"):
+            channel = visible.get(side, core.DEFAULT_SIDE_DECKS[side])
+            box = self.boxes[f"pitch_{side.lower()}"]
+            hue = accent if side == "L" else secondary
             cr.set_source_rgba(*_rgba(_darken(core.theme_field(self.theme), 0.58), 0.55))
             self._rounded(cr, box[0], box[1], box[2], box[3], 10 * s)
             cr.fill()
@@ -2627,49 +3075,151 @@ class LiquidMixer(GlassHost):
                        hue, 0.90, bold=True, anchor="middle")
 
     def _paint_knobs(self, cr, s, accent, secondary, glass_ink) -> None:
-        import math as _math
-        for group, label, low, high, _default in self.KNOB_ROWS:
-            label_box = self.boxes[f"knob_{group}_label"]
-            self._text(cr, label_box[0] + label_box[2], label_box[1] + 3 * s, label,
-                       8.6 * s, glass_ink, 0.75, bold=True, anchor="end")
+        # The knob grid carries no left-hand legends: the four columns line up
+        # with the four channel faders below them.
+        for group, _label, low, high, _default in self.KNOB_ROWS:
             for channel in core.CHANNELS:
                 box = self.boxes[f"knob_{group}_{channel}"]
                 cx, cy = box[0] + box[2] / 2, box[1] + box[3] / 2
                 radius = max(11.0, 16.0 * s)
                 hue = accent if channel == "A" else (secondary if channel == "B" else (140, 148, 156))
-                active = channel in ("A", "B")
+                active = True
                 value = self._knob_value(group, channel)
-                t = (value - low) / max(1e-6, high - low)
-                t = 0.0 if t < 0.0 else (1.0 if t > 1.0 else t)
-                start = _math.radians(135.0)
-                end = start + _math.radians(270.0) * t
-                cr.set_line_cap(1)
-                cr.set_line_width(max(3.0, 3.2 * s))
-                cr.set_source_rgba(*_rgba(glass_ink, 0.16))
-                cr.arc(cx, cy, radius, _math.radians(135.0), _math.radians(405.0))
-                cr.stroke()
-                cr.set_source_rgba(*_rgba(hue, 0.92 if active else 0.35))
-                cr.arc(cx, cy, radius, start, end)
-                cr.stroke()
-                cr.set_source_rgba(*_rgba(_darken(core.theme_field(self.theme), 0.45), 0.58))
-                cr.arc(cx, cy, radius * 0.60, 0, 2 * _math.pi)
+                self._paint_knob_dial(cr, group, channel, cx, cy, radius, hue, active,
+                                      value, low, high, s, glass_ink)
+
+    def _paint_knob_dial(self, cr, group, channel, cx, cy, radius, hue, active,
+                         value, low, high, s, glass_ink) -> None:
+        import math as _math
+        t = (value - low) / max(1e-6, high - low)
+        t = 0.0 if t < 0.0 else (1.0 if t > 1.0 else t)
+        start = _math.radians(135.0)
+        end = start + _math.radians(270.0) * t
+        cr.set_line_cap(1)
+        cr.set_line_width(max(3.0, 3.2 * s))
+        cr.set_source_rgba(*_rgba(glass_ink, 0.16))
+        cr.arc(cx, cy, radius, _math.radians(135.0), _math.radians(405.0))
+        cr.stroke()
+        cr.set_source_rgba(*_rgba(hue, 0.92 if active else 0.35))
+        cr.arc(cx, cy, radius, start, end)
+        cr.stroke()
+        cr.set_source_rgba(*_rgba(_darken(core.theme_field(self.theme), 0.45), 0.58))
+        cr.arc(cx, cy, radius * 0.60, 0, 2 * _math.pi)
+        cr.fill()
+        cr.set_source_rgba(*_rgba(glass_ink, 0.35))
+        cr.set_line_width(max(0.8, s))
+        cr.arc(cx, cy, radius * 0.60, 0, 2 * _math.pi)
+        cr.stroke()
+        cr.set_source_rgba(*_rgba(hue, 0.95 if active else 0.40))
+        cr.set_line_width(max(1.4, 1.6 * s))
+        cr.move_to(cx, cy)
+        cr.line_to(cx + _math.cos(end) * radius * 0.55, cy + _math.sin(end) * radius * 0.55)
+        cr.stroke()
+        key = "knob_filter_%s_value" % channel if group == "filter" else f"knob_{group}_{channel}_value"
+        value_box = self.boxes.get(key)
+        if group == "gain":
+            text = f"{int(round(value * 100))}"
+        elif group == "filter":
+            text = f"{int(round(value * 100))}"
+        else:
+            text = f"{value:+.0f}" if abs(value) >= 0.5 else "0"
+        if value_box is not None:
+            self._text(cr, value_box[0] + value_box[2] / 2, value_box[1], text,
+                       8.8 * s, glass_ink, 0.85 if active else 0.45, anchor="middle")
+
+    def _paint_filters(self, cr, s, accent, secondary, glass_ink) -> None:
+        """The four FILTER knobs below LOW, 1.5x the EQ size."""
+        for channel in core.CHANNELS:
+            box = self.boxes[f"knob_filter_{channel}"]
+            cx, cy = box[0] + box[2] / 2, box[1] + box[3] / 2
+            radius = max(14.0, 24.0 * s)
+            hue = accent if channel == "A" else (secondary if channel == "B" else (140, 148, 156))
+            self._paint_knob_dial(cr, "filter", channel, cx, cy, radius, hue, True,
+                                  self.model.filter_value(channel), 0.0, 1.0, s, glass_ink)
+
+    def _paint_effects(self, cr, s, accent, secondary, glass_ink) -> None:
+        """Four numbered slot squares and the per-channel enable button."""
+        for channel in core.CHANNELS:
+            chosen = self.model.effect_mode(channel)
+            enabled = self.model.effect_on(channel)
+            for slot, mode in enumerate(core.EFFECT_MODES):
+                box = self.boxes[f"effect_slot_{slot + 1}_{channel}"]
+                color = core.EFFECT_SLOT_COLORS[slot]
+                selected = (mode == chosen)
+                cr.set_source_rgba(*_rgba(color, 0.92 if selected else 0.30))
+                self._rounded(cr, box[0], box[1], box[2], box[3], 1.5 * s)
                 cr.fill()
-                cr.set_source_rgba(*_rgba(glass_ink, 0.35))
-                cr.set_line_width(max(0.8, s))
-                cr.arc(cx, cy, radius * 0.60, 0, 2 * _math.pi)
-                cr.stroke()
-                cr.set_source_rgba(*_rgba(hue, 0.95 if active else 0.40))
-                cr.set_line_width(max(1.4, 1.6 * s))
-                cr.move_to(cx, cy)
-                cr.line_to(cx + _math.cos(end) * radius * 0.55, cy + _math.sin(end) * radius * 0.55)
-                cr.stroke()
-                value_box = self.boxes[f"knob_{group}_{channel}_value"]
-                if group == "gain":
-                    text = f"{int(round(value * 100))}"
-                else:
-                    text = f"{value:+.0f}" if abs(value) >= 0.5 else "0"
-                self._text(cr, value_box[0] + value_box[2] / 2, value_box[1], text,
-                           8.8 * s, glass_ink, 0.85 if active else 0.45, anchor="middle")
+                if selected:
+                    cr.set_source_rgba(*_rgba(_light(color, (255, 255, 255), 0.6), 0.98))
+                    cr.set_line_width(max(0.8, s))
+                    self._rounded(cr, box[0], box[1], box[2], box[3], 1.5 * s)
+                    cr.stroke()
+            toggle = self.boxes[f"effect_toggle_{channel}"]
+            color = _light(core.EFFECT_SLOT_COLORS[core.EFFECT_MODES.index(chosen)], (255, 255, 255), 0.25)
+            cr.set_source_rgba(*_rgba(color, 0.55 if enabled else 0.12))
+            self._rounded(cr, toggle[0], toggle[1], toggle[2], toggle[3], 2.5 * s)
+            cr.fill()
+            cr.set_source_rgba(*_rgba(color, 0.95 if enabled else 0.35))
+            cr.set_line_width(max(0.8, s))
+            self._rounded(cr, toggle[0], toggle[1], toggle[2], toggle[3], 2.5 * s)
+            cr.stroke()
+            self._text(cr, toggle[0] + toggle[2] / 2, toggle[1] - 0.5 * s,
+                       "FX" if enabled else "OFF", 6.4 * s, glass_ink, 0.95 if enabled else 0.45,
+                       bold=True, anchor="middle")
+
+    def _paint_master_monitor(self, cr, s, accent, secondary, glass_ink) -> None:
+        """MASTER and MONITOR trims in the top bar."""
+        for key, hue, value, label in (
+            ("master_knob", accent, self.model.master_volume, "MASTER"),
+            ("monitor_knob", secondary, self.model.monitor_volume, "MON"),
+        ):
+            box = self.boxes[key]
+            cx, cy = box[0] + box[2] / 2, box[1] + box[3] / 2 - 2 * s
+            radius = max(10.0, 15.0 * s)
+            self._paint_knob_dial(cr, key, "", cx, cy, radius, hue, True, value, 0.0, 1.0,
+                                  s, glass_ink)
+            self._text(cr, cx, box[1] + box[3] + 2 * s,
+                       f"{label} {int(round(value * 100))}%", 6.8 * s, glass_ink, 0.72,
+                       bold=True, anchor="middle")
+
+    def _toggle_profile(self) -> None:
+        """Switch the MIDI DJ Mixer Profile between A (S4) and B (S3).
+
+        The two controllers have different note/CC layouts, so only one map is
+        live at a time. Switching restarts the MIDI listener with the other
+        profile's map and saves the choice, so the next launch starts on the
+        same controller the user left it on.
+        """
+        self.profile = "B" if self.profile != "B" else "A"
+        self.settings.midi_profile = self.profile
+        self.settings.save()
+        self._profile_flash_until = time.monotonic() + 1.2
+        if self.midi_listener is not None:
+            try:
+                self.midi_listener.set_profile(self.profile)
+            except Exception as exc:
+                _log(f"profile switch failed: {exc!r}")
+        _log(f"profile: MIDI DJ Mixer Profile {self.profile}")
+        if self.area is not None:
+            self.area.queue_draw()
+
+    def _paint_profile_button(self, cr, s, accent, secondary, glass_ink) -> None:
+        box = self.boxes["profile_button"]
+        now = time.monotonic()
+        flash = now < self._profile_flash_until
+        hue = accent if self.profile == "A" else secondary
+        cr.set_source_rgba(*_rgba(hue, 0.30 if flash else 0.14))
+        self._rounded(cr, box[0], box[1], box[2], box[3], 7 * s)
+        cr.fill()
+        cr.set_source_rgba(*_rgba(hue, 0.95))
+        cr.set_line_width(max(1.0, 1.3 * s))
+        self._rounded(cr, box[0], box[1], box[2], box[3], 7 * s)
+        cr.stroke()
+        self._text(cr, box[0] + 8 * s, box[1] + 5 * s, "MIDI DJ MIXER PROFILE", 6.8 * s,
+                   glass_ink, 0.75, bold=True)
+        self._text(cr, box[0] + box[2] / 2, box[1] + 14 * s,
+                   f"PROFILE {self.profile}  ({'KONTROL S4' if self.profile == 'A' else 'KONTROL S3'})",
+                   7.4 * s, hue, 0.98, bold=True, anchor="middle")
 
     def _paint_format_buttons(self, cr, s, accent, secondary, glass_ink) -> None:
         """WAV/FLAC toggle and the fixed 24-Bit badge.
@@ -2920,6 +3470,7 @@ class LiquidMixer(GlassHost):
         label_box = self.boxes[f"strip_{channel}_label"]
         value_box = self.boxes[f"strip_{channel}_value"]
 
+        self._paint_monitor_button(cr, channel, s, hue, glass_ink)
         self._text(cr, label_box[0] + label_box[2] / 2, label_box[1], channel, 20 * s,
                    hue if active else (120, 128, 136), 0.98 if active else 0.55, bold=True, anchor="middle")
 
@@ -2960,14 +3511,35 @@ class LiquidMixer(GlassHost):
             cr.stroke()
             self._text(cr, value_box[0] + value_box[2] / 2, value_box[1], f"{int(round(gain * 100))}%",
                        10.5 * s, glass_ink, 0.78, anchor="middle")
-        else:
-            cr.set_source_rgba(*_rgba(glass_ink, 0.28))
-            cr.set_line_width(track_w)
-            cr.move_to(cx, box[1] + 18 * s)
-            cr.line_to(cx, box[1] + box[3] - 18 * s)
-            cr.stroke()
-            self._text(cr, value_box[0] + value_box[2] / 2, value_box[1], "SOON",
-                       9.5 * s, (150, 158, 166), 0.75, bold=True, anchor="middle")
+
+    def _paint_monitor_button(self, cr, channel: str, s, hue, glass_ink) -> None:
+        """Headphone-cue button above one channel fader.
+
+        Pressed (cued) is a filled, lit headphone icon; released is a quiet
+        outline, so the on/off state reads at a glance from across the room.
+        """
+        import math as _math
+        box = self.boxes[f"monitor_{channel}"]
+        cued = self.model.headphone(channel)
+        active_color = (80, 230, 140) if cued else hue
+        cr.set_source_rgba(*_rgba(active_color, 0.30 if cued else 0.08))
+        self._rounded(cr, box[0], box[1], box[2], box[3], 4 * s)
+        cr.fill()
+        cr.set_source_rgba(*_rgba(active_color, 0.95 if cued else 0.40))
+        cr.set_line_width(max(0.9, 1.1 * s))
+        self._rounded(cr, box[0], box[1], box[2], box[3], 4 * s)
+        cr.stroke()
+        # Headphone glyph: an arc band over two ear cups.
+        cx, cy = box[0] + box[2] / 2, box[1] + box[3] / 2 - 1 * s
+        r = max(3.4, 5.0 * s)
+        cr.set_source_rgba(*_rgba(active_color if cued else glass_ink, 0.98 if cued else 0.55))
+        cr.set_line_width(max(1.1, 1.5 * s))
+        cr.arc(cx, cy + 1.5 * s, r, _math.radians(200), _math.radians(340))
+        cr.stroke()
+        for dx in (-r, r):
+            cr.set_source_rgba(*_rgba(active_color if cued else glass_ink, 0.98 if cued else 0.55))
+            self._rounded(cr, cx + dx - 1.3 * s, cy + 0.2 * s, 2.6 * s, 4.6 * s, 1.1 * s)
+            cr.fill()
 
     def _paint_xfader(self, cr, s, accent, secondary, glass_ink) -> None:
         box = self.boxes["xfader"]
@@ -2977,6 +3549,19 @@ class LiquidMixer(GlassHost):
         cr.set_line_cap(1)
         cr.move_to(box[0] + 18 * s, cy)
         cr.line_to(box[0] + box[2] - 18 * s, cy)
+        cr.stroke()
+        # Centre detent: a vertical rule through the middle of the track, drawn
+        # under the gradient and the thumb, so the user can align the fader.
+        centre_x = box[0] + box[2] / 2.0
+        cr.set_source_rgba(*_rgba(glass_ink, 0.55))
+        cr.set_line_width(max(1.0, 1.3 * s))
+        cr.move_to(centre_x, box[1] + 6 * s)
+        cr.line_to(centre_x, box[1] + box[3] - 6 * s)
+        cr.stroke()
+        cr.set_source_rgba(*_rgba(glass_ink, 0.30))
+        cr.set_line_width(max(1.0, s))
+        cr.move_to(centre_x, cy - 14 * s)
+        cr.line_to(centre_x, cy + 14 * s)
         cr.stroke()
         try:
             import cairo as _cairo

@@ -135,13 +135,24 @@ class TestHarnessContract(unittest.TestCase):
         self.assertIn("wait", res.stdout.lower())
 
     @needs_harness
-    def test_all_five_systems_are_known(self):
+    def test_every_test_system_is_known_and_macos_is_retired(self):
+        """macOS is deliberately not a target: .138 is a production machine.
+
+        The host variable and the label survive so an old config.env still
+        parses, but no run list may include it and --only mac must refuse.
+        """
         text = HARNESS.read_text(encoding="utf-8")
-        for token in ("local", "fedora", "mac", "windows", "freebsd"):
+        for token in ("local", "fedora", "windows", "freebsd", "ubuntu"):
             self.assertIn(token, text)
         self.assertIn("MP_MAC_HOST", text)
         self.assertIn("MP_FEDORA_HOST", text)
         self.assertIn("MP_FREEBSD_HOST", text)
+        for line in text.splitlines():
+            if line.startswith("SYSTEMS=(") and "local" in line:
+                self.assertNotIn('"mac"', line, "macOS returned to a run list")
+            if line.startswith("            all|"):
+                self.assertNotIn('"mac"', line, "macOS returned to the all set")
+        self.assertIn("macOS is no longer a test target", text)
 
     @needs_harness
     def test_screenshot_archive_name_and_shortcut(self):

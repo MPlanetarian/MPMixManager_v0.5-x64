@@ -376,6 +376,30 @@ RED, GREEN, YELLOW, MAGENTA, CYAN = COLOR_TRAFFIC_RED, COLOR_TRAFFIC_GREEN, COLO
 CONFIG_DIR = Path.home() / ".config" / "mix-manager"
 CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 
+
+def _mixer_effect_module():
+    """The mixer's insert-effects DSP, loaded from the sibling package.
+
+    The engine, the console player and the mixer all ship together, so the
+    effect code lives in ``MP_Liquid_Mixer/mixer_effects.py`` and is imported by
+    path. A tree without the mixer simply has no insert effects; playback is
+    unaffected.
+    """
+    try:
+        import mixer_effects  # type: ignore
+        return mixer_effects
+    except ImportError:
+        pass
+    try:
+        import sys as _sys
+        _pkg = Path(__file__).resolve().parent / "MP_Liquid_Mixer"
+        if _pkg.is_dir() and str(_pkg) not in _sys.path:
+            _sys.path.insert(0, str(_pkg))
+        import mixer_effects  # type: ignore
+        return mixer_effects
+    except Exception:
+        return None
+
 # A mixer deck runs its own engine, so it needs its own socket, pid, state and
 # resume record while still sharing the library, favorites and theme with the
 # other deck. MP_Liquid_Mixer sets MP_PLAYER_NAMESPACE per deck; every normal
@@ -3226,6 +3250,12 @@ class AudioEngine:
         self.bass_manager = BassBoostManager()
         self.bass_filter = BassBoostFilter()
         self.bass_filter.set_mode(self.bass_manager.mode, self.sample_rate)
+        # The mixer's per-channel insert effect. It is always constructed so a
+        # later `set_effect` IPC command has a place to land; with no command
+        # it is bypassed and the audio path is exactly as before.
+        effects = _mixer_effect_module()
+        self.insert_effect = (effects.ChannelEffect(sample_rate=self.sample_rate)
+                              if effects is not None else None)
         # Bluetooth routing runs a heartbeat thread that shells out to `wpctl`
         # every 1.2 s and a `pactl subscribe` child. It is only useful when
         # automatic Bluetooth switching was actually requested, and starting it
@@ -3759,6 +3789,8 @@ class AudioEngine:
             sd_arr = self.eq_filter.process(sd_arr)
         if self.bass_filter.is_active:
             sd_arr = self.bass_filter.process(sd_arr)
+        if self.insert_effect is not None and self.insert_effect.active:
+            sd_arr = self.insert_effect.process(sd_arr)
         mono = (sd_arr[:, 0] + sd_arr[:, 1]) * 0.5
         if eff_vol != 1.0: sd_arr = np.ascontiguousarray(sd_arr * np.float32(eff_vol))
         ncopy = min(rf, frames, len(sd_arr))
@@ -4087,6 +4119,7 @@ class AudioEngine:
             "bass_modes": list(BASS_BOOST_MODES),
             "bass_peak_db": self.bass_manager.peak_db(),
             "bass_percent": int(round(self.bass_manager.fraction() * 100)),
+            "effect": self.effect_status(),
         }
 
     def set_bass_mode(self, mode: str) -> bool:
@@ -4119,6 +4152,21 @@ class AudioEngine:
         self.eq_filter.set_gains(self.eq_manager.get_current_bands(), self.sample_rate)
         self._sync_state_file()
         return ok
+
+    def set_effect(self, mode: Optional[str] = None, amount: Any = None,
+                   enabled: Optional[bool] = None) -> bool:
+        """Apply the mixer's per-channel insert (flanger/delay/reverb/gater)."""
+        if self.insert_effect is None:
+            return False
+        self.insert_effect.configure(mode=mode, amount=amount, enabled=enabled,
+                                     sample_rate=self.sample_rate)
+        self._sync_state_file()
+        return True
+
+    def effect_status(self) -> Dict[str, Any]:
+        if self.insert_effect is None:
+            return {"mode": "flanger", "amount": 0.0, "enabled": False}
+        return self.insert_effect.to_dict()
 
     def save_eq_preset(self, name: str, gains: Optional[Sequence[float]] = None) -> bool:
         ok = self.eq_manager.save_custom_preset(name, gains)
@@ -4284,6 +4332,10 @@ class PlayerIPCServer:
             elif cmd == "set_eq_bands":
                 ok = e.set_eq_bands(req.get("bands", []))
                 res.update(success=ok, preset=e.eq_manager.active_preset, bands=e.eq_manager.get_current_bands())
+            elif cmd in ("set_effect", "set_insert_effect"):
+                ok = e.set_effect(mode=req.get("mode"), amount=req.get("amount"),
+                                  enabled=req.get("enabled"))
+                res.update(success=ok, effect=e.effect_status())
             elif cmd == "save_eq_preset":
                 ok = e.save_eq_preset(req.get("name", "Custom"), req.get("bands"))
                 res.update(success=ok, preset=e.eq_manager.active_preset, presets=e.eq_manager.get_all_preset_names())
@@ -8318,6 +8370,12 @@ class TerminalPlayerUI:
         self.traktor_playlist_name = ""
         self.traktor_history_id = ""
         self.favorites = FavoritesStore()
+        # The library mode the Favorites button came from, so pressing it a
+        # second time returns the user to the playlist they were browsing
+        # (Music Folders or the Mix Archive) instead of stranding them in
+        # Favorites. Cleared whenever any other library is opened.
+        self._favorites_return_mode = ""
+        self._favorites_return_folder = ""
         self.mp_visualizer_on = False
         self.mp_visualizer_preset_id = 0
         if os.environ.get("MP_LIQUID_GLASS") == "1":
@@ -8487,6 +8545,10 @@ class TerminalPlayerUI:
         self.scanner = scanner
         self.keep_library = target == "MUSIC"
         self._user_library_mode = target
+        # Any deliberate library switch ends a pending "back from Favorites"
+        # trip; otherwise a stale target would be used on some later press.
+        self._favorites_return_mode = ""
+        self._favorites_return_folder = ""
         self.search_mode = False
         self.search_query = ""
         self.selected_row = 0
@@ -9774,8 +9836,38 @@ class TerminalPlayerUI:
 
 
     def _load_favorites(self):
-        """Open the Favorites playlist. Playback of the current track continues."""
+        """Open the Favorites playlist, or return to the library it came from.
+
+        Pressing Favorites while Favorites is already open is a toggle: the
+        user goes back to the Music Folders or Mix Archive playlist they were
+        browsing before. The return target is remembered as a mode id and the
+        Music Folders folder name, so a window opened directly on Favorites
+        simply opens Favorites rather than guessing.
+        """
+        if str(self.mode).upper() == "FAVORITES" and self._favorites_return_mode:
+            mode = self._favorites_return_mode
+            folder = self._favorites_return_folder
+            self._favorites_return_mode = ""
+            self._favorites_return_folder = ""
+            if mode == "MUSIC" and folder:
+                self.folder_name = folder
+            self.keep_library = mode == "MUSIC"
+            self._user_library_mode = None
+            self._switch_library_mode(mode)
+            if str(self.mode).upper() == mode:
+                self.keep_library = mode == "MUSIC"
+                self._user_library_mode = mode
+                self.search_mode = False
+                self.search_query = ""
+                self.selected_row = 0
+                self.scroll_offset = 0
+                self._notify(f"Back to {self._library_label(mode)}", 3.0)
+            return
         self._favorites_store().load()
+        previous = str(self.mode).upper()
+        if previous in ("MUSIC", "MIX_ARCHIVE"):
+            self._favorites_return_mode = previous
+            self._favorites_return_folder = self.folder_name if previous == "MUSIC" else ""
         self.mode = "FAVORITES"
         self.keep_library = True
         self._user_library_mode = "FAVORITES"
@@ -9791,6 +9883,11 @@ class TerminalPlayerUI:
             self._notify(f"Loaded Favorites playlist — {count} saved", 3.5)
         else:
             self._notify("Favorites playlist is empty. Select a mix or track and press [H] to add it.", 4.5)
+
+    @staticmethod
+    def _library_label(mode: str) -> str:
+        return {"MUSIC": "Music Folders", "MIX_ARCHIVE": "Mix Archive"}.get(
+            str(mode or "").upper(), "the playlist")
 
     def _append_favorites_button(self, lines: List[str], max_cols: int, whole_row: bool = False):
         """Favorites and Bass Boost on one row above the playlist.
