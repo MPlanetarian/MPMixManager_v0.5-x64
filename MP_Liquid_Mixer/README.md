@@ -157,6 +157,24 @@ The decks deliberately **do not autoplay**. Each starts in **Music mode** with t
 Music Folders playlist loaded and its first track paused; `Space` or the player's
 Play button starts it.
 
+### The first launch loads the theme track
+
+If the mixer is the very first MP app a user opens from the desktop shortcuts,
+no Music Folders and no Mix Archive have been configured yet, so both decks
+would otherwise show empty libraries and there would be nothing to mix. In that
+one case each deck opens the bundled release theme track
+(`MP_SAMPLES/MPlanetarian - The Orbits of Planets (Cosmic Dreamworlds Remake).flac`)
+loaded, paused at 0:00 and ready — press `Space` and mix.
+
+That preload is deliberately one-way: as soon as a Music Folders configuration
+(`~/.config/mix-manager/music_folders.json`, or a legacy `MUSIC_SMB_HOST` /
+`MUSIC_SMB_SHARES`) or a Mix Archive configuration (`MIX_ARCHIVE_DIR`,
+`EXTRA_MIX_ARCHIVE_DIRS`, or `MIX_ARCHIVE_CONFIGURED="true"`) exists, the decks
+open the real library and the theme track is never pushed in front of it. The
+deck is handed a generated one-row playlist
+(`~/.config/mix-manager/first_run_mix_playlist.m3u8`) rather than an extra audio
+file argument, so its UI list and its engine agree on what is loaded.
+
 ### The Music Folders library must be mounted
 
 The decks browse the **Music Folders** library rather than the mix archive, and

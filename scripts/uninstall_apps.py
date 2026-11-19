@@ -99,6 +99,9 @@ SHARED_GLOBS = {
     # The mixer is a Linux-only extra, but its lock, state and logs are written
     # by the same suite and belong to no single one of the four apps.
     "liquid_mixer*": ("manager", "gui", "liquid", "visualizer"),
+    # The one-row playlist a first-run mixer deck opens with. Derived state:
+    # it is written again only while no library is configured.
+    "first_run_mix_playlist.m3u8": ("manager", "gui", "liquid", "visualizer"),
     # MP Black Glass panes and the visualizers they attach publish one small
     # record per live process. They belong to no single app: any of the four
     # windows can open a pane, so they go with the last one uninstalled.

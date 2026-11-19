@@ -12,12 +12,14 @@ from __future__ import annotations
 import json
 import math
 import os
+import shutil
 import socket
+import subprocess
 import sys
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 MIXER_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = MIXER_DIR.parent
@@ -41,6 +43,9 @@ VERSION = "0.0.1"
 DECK_NAMESPACES = {"A": "mixerdeck_a", "B": "mixerdeck_b"}
 CHANNELS = ("A", "B", "C", "D")
 ACTIVE_CHANNELS = ("A", "B")
+# Channels the crossfader blends. C and D are wired into the surface but stay
+# inactive, which is the documented v0.0.1 limit.
+CROSSFADE_CHANNELS = ("A", "B")
 MIX_MODES = ("INTERNAL", "EXTERNAL")
 DEFAULT_GAIN = 0.85
 DEFAULT_CROSSFADE = 0.5
@@ -156,11 +161,13 @@ def deck_status(namespace: str) -> Dict[str, Any]:
 
 
 class MixerModel:
-    """Four channels, one crossfader, two live decks.
+    """Four channels, one crossfader, four live decks and four headphone cues.
 
-    A and B own the two MP Liquid Player engines. C and D are wired into the
-    surface (their strips and state exist) but are intentionally inactive:
-    they are not sent anywhere yet, which is the documented v0.0.1 limit.
+    A, B, C and D each own an MP Liquid Player engine. A and B are blended by
+    the crossfader; C and D are extra inputs that always play at their fader
+    level. Each strip also has a headphone cue: pressing it moves that one
+    engine's stream to the Bluetooth sink, leaving the other channels (and the
+    system default) on the audio interface.
     """
 
     def __init__(self, gains: Optional[Dict[str, float]] = None,
@@ -168,7 +175,8 @@ class MixerModel:
                  mode: str = "INTERNAL",
                  opacity: float = DEFAULT_OPACITY,
                  trims: Optional[Dict[str, float]] = None,
-                 eq: Optional[Dict[str, Dict[str, float]]] = None) -> None:
+                 eq: Optional[Dict[str, Dict[str, float]]] = None,
+                 headphones: Optional[Dict[str, bool]] = None) -> None:
         self.gains: Dict[str, float] = {ch: DEFAULT_GAIN for ch in CHANNELS}
         if gains:
             for ch, value in gains.items():
@@ -190,6 +198,14 @@ class MixerModel:
                     except (TypeError, ValueError):
                         pass
         self.pitches: Dict[str, float] = {ch: 0.0 for ch in CHANNELS}
+        # Which channels the user asked to hear in the Bluetooth headphones.
+        # The model records the intent; the app verifies the headphones are
+        # actually connected before it routes anything.
+        self.headphones: Dict[str, bool] = {ch: False for ch in CHANNELS}
+        if isinstance(headphones, dict):
+            for ch, value in headphones.items():
+                if ch in self.headphones:
+                    self.headphones[ch] = bool(value)
         self.crossfade = clamp01(crossfade)
         self.mode = mode.upper() if str(mode).upper() in MIX_MODES else "INTERNAL"
         self.opacity = min(MAX_OPACITY, max(MIN_OPACITY, float(opacity)))
@@ -202,11 +218,39 @@ class MixerModel:
         return self.gains.get(channel, DEFAULT_GAIN)
 
     def set_channel(self, channel: str, value: float) -> bool:
-        """Set one channel fader. Inactive channels keep their stored value."""
+        """Set one channel fader."""
         if channel not in self.gains or not self.channel_active(channel):
             return False
         self.gains[channel] = clamp01(value)
         return True
+
+    # -- headphone cue ----------------------------------------------------
+    def headphone(self, channel: str) -> bool:
+        return bool(self.headphones.get(channel, False))
+
+    def set_headphone(self, channel: str, enabled: bool) -> bool:
+        """Remember that this channel should be heard in the headphones.
+
+        Returns False for an unknown channel. It does not touch the audio
+        path: routing needs a confirmed Bluetooth sink, which only the app can
+        check, so this stays a pure model write.
+        """
+        if channel not in self.headphones:
+            return False
+        self.headphones[channel] = bool(enabled)
+        return True
+
+    def toggle_headphone(self, channel: str) -> bool:
+        """Flip one channel's cue and return the new state."""
+        if channel not in self.headphones:
+            return False
+        state = not self.headphones[channel]
+        self.headphones[channel] = state
+        return state
+
+    def headphone_channels(self) -> Tuple[str, ...]:
+        """Channels currently cued to the headphones, in strip order."""
+        return tuple(ch for ch in CHANNELS if self.headphones.get(ch))
 
     # -- pitch ------------------------------------------------------------
     def pitch(self, channel: str) -> float:
@@ -273,23 +317,32 @@ class MixerModel:
         return self.mode
 
     # -- what the decks should hear --------------------------------------
-    def deck_volumes(self) -> Tuple[int, int]:
-        """(A, B) volume percentages for the two engines.
+    def channel_volume(self, channel: str) -> int:
+        """One channel's engine volume percentage.
 
-        INTERNAL applies channel gain x equal-power crossfade. EXTERNAL hands
-        both decks to the house mixer at unity, so the software faders and the
+        INTERNAL applies channel gain x trim; A and B are additionally scaled
+        by the equal-power crossfader, C and D are not. EXTERNAL hands every
+        deck to the house mixer at unity, so the software faders and the
         crossfader are bypassed (and drawn dimmed) instead of fighting it.
         """
         if self.external:
-            return 100, 100
-        gain_a, gain_b = self.crossfade_gains()
-        vol_a = int(round(100.0 * self.gains["A"] * self.trims["A"] * gain_a))
-        vol_b = int(round(100.0 * self.gains["B"] * self.trims["B"] * gain_b))
-        return max(0, min(100, vol_a)), max(0, min(100, vol_b))
+            return 100
+        gain = clamp01(self.gains.get(channel, DEFAULT_GAIN))
+        trim = max(0.0, float(self.trims.get(channel, DEFAULT_TRIM)))
+        if channel in CROSSFADE_CHANNELS:
+            gain_a, gain_b = self.crossfade_gains()
+            gain *= gain_a if channel == "A" else gain_b
+        return max(0, min(100, int(round(100.0 * gain * trim))))
+
+    def channel_volumes(self) -> Dict[str, int]:
+        return {ch: self.channel_volume(ch) for ch in CHANNELS}
+
+    def deck_volumes(self) -> Tuple[int, int]:
+        """(A, B) volume percentages for the two crossfaded engines."""
+        return self.channel_volume("A"), self.channel_volume("B")
 
     def volume_for(self, channel: str) -> int:
-        vol_a, vol_b = self.deck_volumes()
-        return vol_a if channel == "A" else vol_b
+        return self.channel_volume(channel)
 
     # -- persistence ------------------------------------------------------
     def to_dict(self) -> Dict[str, Any]:
@@ -450,6 +503,442 @@ def library_available(path: Optional[str]) -> bool:
         return os.path.isfile(str(path))
     except OSError:
         return False
+
+
+# -- first run -----------------------------------------------------------
+# A user whose very first MP launch is the mixer shortcut has configured no
+# library at all, so both decks open on an empty Music Folders list and there
+# is nothing to mix. The bundled release theme track is loaded into each deck
+# (paused) in that one case, so the mixer is usable the moment it opens. As
+# soon as either library has been configured the decks are left alone: those
+# users have real tracks and must not have the theme track pushed in front of
+# them on every launch.
+THEME_TRACK_NAME = "MPlanetarian - The Orbits of Planets (Cosmic Dreamworlds Remake).flac"
+CONFIG_ENV_PATHS = (PROJECT_ROOT / "config.env", CONFIG_DIR / "config.env")
+_ARCHIVE_CONFIG_KEYS = ("MIX_ARCHIVE_CONFIGURED", "MIX_ARCHIVE_DIR",
+                        "EXTRA_MIX_ARCHIVE_DIRS", "MIX_ARCHIVE_DIRS")
+
+
+def _parse_env_file(path: Path) -> Dict[str, str]:
+    """Read KEY="value" lines without importing the player module."""
+    values: Dict[str, str] = {}
+    try:
+        text = Path(path).read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return values
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        values[key.strip()] = value.strip().strip('"\'')
+    return values
+
+
+def config_values(paths: Optional[Tuple[Path, ...]] = None) -> Dict[str, str]:
+    """Merged ``config.env`` values, with the process environment winning."""
+    merged: Dict[str, str] = {}
+    for path in (paths or CONFIG_ENV_PATHS):
+        merged.update(_parse_env_file(path))
+    for key in _ARCHIVE_CONFIG_KEYS + ("MUSIC_SMB_HOST", "MUSIC_SMB_SHARES"):
+        value = os.environ.get(key)
+        if value:
+            merged[key] = value
+    return merged
+
+
+def music_folders_configured(values: Optional[Dict[str, str]] = None) -> bool:
+    """True when at least one Music Folder has been set up on this machine."""
+    try:
+        module = _music_folders_module()
+        if module is not None:
+            folders = module.load_folders(module.load_music_config())
+            if folders:
+                return True
+    except Exception:
+        pass
+    values = values if values is not None else config_values()
+    # Pre-music_folders.json installs kept the SMB login in config.env.
+    if str(values.get("MUSIC_SMB_HOST") or "").strip() and \
+            str(values.get("MUSIC_SMB_SHARES") or "").strip():
+        return True
+    # A playlist that already names real tracks is a working library even if
+    # the configuration file has since been moved; the decks must keep using
+    # it rather than having the theme track pushed in front of it.
+    if _generated_music_playlist_has_tracks():
+        return True
+    return False
+
+
+def _generated_music_playlist_has_tracks() -> bool:
+    """True when the generated ALL Music Folders playlist holds a real row."""
+    playlists = (PROJECT_ROOT / "PLAYLISTS_GENERATED",
+                 CONFIG_DIR / "PLAYLISTS_GENERATED")
+    for folder in playlists:
+        for name in ("DJ_Tracks_ALL_MUSIC_FOLDERS.json", "DJ_Tracks_ALL_MUSIC_FOLDERS.m3u8"):
+            path = folder / name
+            if not path.is_file():
+                continue
+            try:
+                if name.endswith(".json"):
+                    rows = json.loads(path.read_text(encoding="utf-8", errors="ignore"))
+                    if isinstance(rows, list) and any(
+                            isinstance(row, dict) and str(row.get("path") or "").strip() for row in rows):
+                        return True
+                else:
+                    for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+                        line = line.strip()
+                        if line and not line.startswith("#"):
+                            return True
+            except (OSError, ValueError):
+                continue
+    return False
+
+
+def mix_archive_configured(values: Optional[Dict[str, str]] = None) -> bool:
+    """True when a Mix Archive folder has been set up on this machine."""
+    values = values if values is not None else config_values()
+    if str(values.get("MIX_ARCHIVE_DIR") or "").strip():
+        return True
+    if str(values.get("EXTRA_MIX_ARCHIVE_DIRS") or values.get("MIX_ARCHIVE_DIRS") or "").strip():
+        return True
+    flag = str(values.get("MIX_ARCHIVE_CONFIGURED") or "").strip().lower()
+    return flag in ("1", "true", "yes", "on")
+
+
+def library_configured(values: Optional[Dict[str, str]] = None) -> bool:
+    """True when either library has ever been configured for this user."""
+    values = values if values is not None else config_values()
+    return music_folders_configured(values) or mix_archive_configured(values)
+
+
+def theme_track_path() -> Path:
+    """The bundled release theme track, resolved from the shared constant."""
+    try:
+        from liquid_glass_reward import SAMPLE_TRACK_FILE
+        return Path(SAMPLE_TRACK_FILE)
+    except ImportError:
+        pass
+    try:
+        from scripts.liquid_glass_reward import SAMPLE_TRACK_FILE
+        return Path(SAMPLE_TRACK_FILE)
+    except ImportError:
+        return PROJECT_ROOT / "MP_SAMPLES" / THEME_TRACK_NAME
+
+
+def first_run_preload_track(configured: Optional[bool] = None) -> Optional[str]:
+    """The track a first-run deck should open with, or None.
+
+    Only a user with neither a Music Folders nor a Mix Archive configuration
+    gets the theme track. The decks still open paused; the point is that the
+    mixer is playable immediately instead of showing two empty libraries.
+    """
+    is_configured = library_configured() if configured is None else bool(configured)
+    if is_configured:
+        return None
+    track = theme_track_path()
+    try:
+        if track.is_file() and track.stat().st_size > 0:
+            return str(track.resolve())
+    except OSError:
+        pass
+    return None
+
+
+def write_first_run_playlist(track: Optional[str] = None) -> Optional[Path]:
+    """Write the one-row playlist a first-run deck opens with.
+
+    A deck's library comes from a playlist file, and with no Music Folders
+    configured the generated ``ALL`` playlist is empty or missing. Handing the
+    deck a real playlist that holds the bundled theme track makes the UI list
+    and the engine agree, so the deck shows the track ready to play instead of
+    "No audio tracks found in the Music playlist."
+
+    Returns None when the user has a configured library or the track is
+    missing, so a normal launch never touches the file. A file left by an
+    earlier first run is removed then, because the decks read the real library.
+    """
+    target = CONFIG_DIR / "first_run_mix_playlist.m3u8"
+    if track is None:
+        track = first_run_preload_track()
+    if not track:
+        try:
+            target.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return None
+    try:
+        duration = 0.0
+        try:
+            from liquid_glass_reward import SAMPLE_TRACK_DURATION_SEC
+            duration = float(SAMPLE_TRACK_DURATION_SEC)
+        except (ImportError, TypeError, ValueError):
+            try:
+                from scripts.liquid_glass_reward import SAMPLE_TRACK_DURATION_SEC
+                duration = float(SAMPLE_TRACK_DURATION_SEC)
+            except (ImportError, TypeError, ValueError):
+                duration = 0.0
+        title = Path(track).stem
+        lines = ["#EXTM3U"]
+        lines.append(f"#EXTINF:{int(duration) if duration > 0 else -1},{title}")
+        lines.append(str(track))
+        tmp = target.with_suffix(".m3u8.tmp")
+        tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        os.replace(tmp, target)
+        return target
+    except OSError:
+        return None
+
+
+# -- audio verification --------------------------------------------------
+# "Verify Audio Files" exists because a library can look complete and still
+# contain rows that cannot play: an SMB share that is offline, a file that was
+# never copied (0 bytes, as a failed bulk copy leaves), or a container the
+# decoders reject. Any of those turns into a deck that "does nothing" mid-set.
+#
+# The check is deliberately the same test playback uses: the file has to exist,
+# be non-empty, and offer a decodable audio stream. Probing tens of thousands
+# of files is slow over SMB, so the work runs in a thread pool and reports
+# progress through a callback the UI can draw.
+VERIFY_REASONS = {
+    "missing": "file is missing (share offline or path changed)",
+    "empty": "file is empty (0 bytes - copy never finished)",
+    "unreadable": "file cannot be decoded (corrupt or unsupported)",
+}
+
+
+class AudioVerdict:
+    """One row's verification result."""
+
+    __slots__ = ("path", "title", "ok", "reason", "detail")
+
+    def __init__(self, path: str, title: str, ok: bool,
+                 reason: str = "", detail: str = "") -> None:
+        self.path = path
+        self.title = title
+        self.ok = ok
+        self.reason = reason
+        self.detail = detail
+
+    def as_dict(self) -> Dict[str, Any]:
+        return {"path": self.path, "title": self.title, "ok": self.ok,
+                "reason": self.reason, "detail": self.detail}
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        state = "ok" if self.ok else f"bad:{self.reason}"
+        return f"<AudioVerdict {state} {self.title!r}>"
+
+
+def verify_audio_path(path: Optional[str], timeout: float = 45.0) -> AudioVerdict:
+    """Check one library row the way the engine will when it is played.
+
+    Order matters for speed on a network share: a missing file is decided by a
+    single stat, and an empty one by its size, without starting ffprobe. Only a
+    file that passes both is worth the decode probe.
+    """
+    name = os.path.basename(str(path or "")) or "(no path)"
+    if not path:
+        return AudioVerdict(str(path or ""), name, False, "missing", "no path recorded")
+    try:
+        stat = os.stat(str(path))
+    except OSError as exc:
+        return AudioVerdict(str(path), name, False, "missing", str(exc))
+    if stat.st_size <= 0:
+        return AudioVerdict(str(path), name, False, "empty", "0 bytes")
+    probe = shutil.which("ffprobe")
+    if not probe:
+        # Without ffprobe the size check is all that is available; reporting a
+        # file as bad would remove playable tracks, so trust the container.
+        return AudioVerdict(str(path), name, True)
+    try:
+        # Asking for a codec name is not enough: ffprobe trusts the container
+        # extension and reports "flac" for a file of random bytes. Counting the
+        # audio packets actually read is what distinguishes a decodable file
+        # from a plausible-looking corpse. It is still a header-level scan, not
+        # a full decode, so it stays cheap over SMB.
+        result = subprocess.run(
+            [probe, "-v", "error", "-count_packets", "-select_streams", "a:0",
+             "-show_entries", "stream=nb_read_packets", "-of", "csv=p=0", str(path)],
+            capture_output=True, text=True, timeout=float(timeout),
+        )
+    except subprocess.TimeoutExpired:
+        return AudioVerdict(str(path), name, False, "unreadable", "probe timed out")
+    except Exception as exc:  # a broken ffprobe must not condemn the library
+        return AudioVerdict(str(path), name, True, detail=f"probe failed: {exc}")
+    packets = (result.stdout or "").strip().splitlines()
+    first = packets[0].strip() if packets else ""
+    if result.returncode != 0 or first in ("", "N/A", "0"):
+        detail = (result.stderr or "").strip().splitlines()
+        return AudioVerdict(str(path), name, False, "unreadable",
+                            detail[0] if detail else "no audio packets could be read")
+    return AudioVerdict(str(path), name, True)
+
+
+def verify_audio_library(rows: List[Dict[str, Any]], workers: int = 12,
+                         progress: Optional[Any] = None,
+                         cancel: Optional[Any] = None) -> List[AudioVerdict]:
+    """Verify every row, in parallel, reporting progress as it goes.
+
+    ``progress(done, total, verdict)`` is called once per finished row from
+    whichever worker finished it, so a UI callback must marshal to its own
+    loop. ``cancel()`` returning True stops early and returns what it has.
+    Results keep the playlist order, which is what the caller rewrites.
+    """
+    total = len(rows)
+    verdicts: List[Optional[AudioVerdict]] = [None] * total
+    if not total:
+        return []
+    done = 0
+    lock = threading.Lock()
+    should_stop = threading.Event()
+
+    def work(index: int) -> None:
+        nonlocal done
+        if should_stop.is_set():
+            return
+        if cancel is not None:
+            try:
+                if cancel():
+                    should_stop.set()
+                    return
+            except Exception:
+                pass
+        row = rows[index]
+        verdict = verify_audio_path(row.get("path"))
+        verdicts[index] = verdict
+        with lock:
+            done += 1
+            if progress is not None:
+                try:
+                    progress(done, total, verdict)
+                except Exception:
+                    pass
+
+    worker_count = max(1, min(int(workers or 1), total))
+    threads = []
+    # A plain thread pool keeps this dependency-free; concurrent.futures is
+    # available too but the number of rows here can exceed its queue comfort.
+    next_index = 0
+    index_lock = threading.Lock()
+
+    def run() -> None:
+        nonlocal next_index
+        while True:
+            if should_stop.is_set():
+                return
+            with index_lock:
+                if next_index >= total:
+                    return
+                i = next_index
+                next_index += 1
+            work(i)
+
+    for n in range(worker_count):
+        thread = threading.Thread(target=run, name=f"verify-{n}", daemon=True)
+        thread.start()
+        threads.append(thread)
+    for thread in threads:
+        thread.join()
+    return [v for v in verdicts if v is not None]
+
+
+def verify_summary(verdicts: List[AudioVerdict]) -> Dict[str, Any]:
+    """Counts for the confirm dialog and the log line."""
+    bad = [v for v in verdicts if not v.ok]
+    by_reason: Dict[str, int] = {}
+    for verdict in bad:
+        by_reason[verdict.reason] = by_reason.get(verdict.reason, 0) + 1
+    return {"total": len(verdicts), "ok": len(verdicts) - len(bad),
+            "bad": len(bad), "by_reason": by_reason}
+
+
+def music_playlist_json_path() -> Optional[Path]:
+    """The ALL Music Folders playlist JSON the decks read, or None."""
+    module = _music_folders_module()
+    if module is None:
+        return None
+    try:
+        config = module.load_music_config()
+        _m3u, json_path = module.get_playlist_paths("ALL", config)
+        return Path(json_path)
+    except Exception:
+        return None
+
+
+def read_playlist_rows(path: Optional[Path] = None) -> List[Dict[str, Any]]:
+    """Rows from a generated playlist JSON file."""
+    target = Path(path) if path is not None else music_playlist_json_path()
+    if target is None:
+        return []
+    try:
+        data = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeError):
+        return []
+    rows = data if isinstance(data, list) else (data.get("tracks") or [])
+    return [row for row in rows if isinstance(row, dict) and row.get("path")]
+
+
+def remove_rows_from_playlist(paths: Any, path: Optional[Path] = None) -> int:
+    """Drop the given rows from a playlist, rewriting both files beside it.
+
+    Returns how many rows were removed. An explicit ``path`` is written in
+    place (the JSON plus an m3u8 beside it); only the real generated playlist
+    goes through ``save_playlist_files``, which also refreshes the player's
+    fast sidecar cache. A failure leaves the playlist untouched and reports 0,
+    so a bad write cannot destroy a good library.
+    """
+    drop = {str(p) for p in (paths or [])}
+    if not drop:
+        return 0
+    explicit = path is not None
+    target = Path(path) if explicit else music_playlist_json_path()
+    if target is None:
+        return 0
+    rows = read_playlist_rows(target)
+    if not rows:
+        return 0
+    kept = [row for row in rows if str(row.get("path")) not in drop]
+    removed = len(rows) - len(kept)
+    if removed <= 0:
+        return 0
+
+    if explicit:
+        # A caller-supplied file must never touch the live library.
+        try:
+            tmp = target.with_suffix(target.suffix + ".tmp")
+            tmp.write_text(json.dumps(kept, indent=2, ensure_ascii=False), encoding="utf-8")
+            os.replace(tmp, target)
+            m3u = target.with_suffix(".m3u8")
+            lines = ["#EXTM3U", "#PLAYLIST:MP DJ Tracks Database - ALL MUSIC FOLDERS"]
+            for row in kept:
+                lines.append(f"#EXTINF:-1,{row.get('title') or row.get('name') or ''}")
+                lines.append(str(row.get("path")))
+            tmp_m3u = m3u.with_suffix(".m3u8.tmp")
+            tmp_m3u.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            os.replace(tmp_m3u, m3u)
+            return removed
+        except OSError:
+            return 0
+
+    module = _music_folders_module()
+    try:
+        if module is not None:
+            config = module.load_music_config()
+            # save_playlist_files writes the m3u8, the JSON and the player's
+            # fast sidecar cache, which is exactly the set the readers use.
+            module.save_playlist_files(kept, "ALL", config, title="ALL MUSIC FOLDERS")
+            return removed
+    except Exception:
+        pass
+    # No helper module (a stripped tree): rewrite the JSON atomically and let
+    # the next playlist generation rebuild the m3u8.
+    try:
+        tmp = target.with_suffix(target.suffix + ".tmp")
+        tmp.write_text(json.dumps(kept, indent=2, ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp, target)
+        return removed
+    except OSError:
+        return 0
 
 
 # -- theme ---------------------------------------------------------------
@@ -689,7 +1178,12 @@ def layout(width: int = DESIGN_W, height: int = DESIGN_H) -> Dict[str, Tuple[flo
         "credit_button": rect(852, 862, 216, 34),
         "clock_button": rect(852, 904, 216, 46),
         "export_button": rect(852, 954, 216, 30),
-        "xfader": rect(852, 620, 216, 52),
+        # Verify sits in the free band between the channel fader values
+        # (which end at 594) and the crossfader (moved from 620 to 626). It
+        # belongs with the library operations, and this is the only gap in
+        # the mixer column that does not move a control the user knows.
+        "verify_button": rect(852, 596, 216, 24),
+        "xfader": rect(852, 626, 216, 52),
         "pitch_a": rect(810, 150, 26, 420),
         "pitch_b": rect(1084, 150, 26, 420),
         "sync_a": rect(620, 94, 70, 28),

@@ -700,6 +700,125 @@ class TestDeckArgs(unittest.TestCase):
         # No audio file is passed: the deck opens a library, not a mix.
         self.assertFalse(any(arg.endswith((".flac", ".wav", ".mp3")) for arg in argv))
 
+    def test_a_first_run_deck_is_handed_the_theme_playlist(self):
+        import MP_Liquid_Mixer as app
+        argv = app.deck_argv("sensorium", "/tmp/first_run_mix_playlist.m3u8")
+        self.assertIn("--playlist", argv)
+        playlist = argv.index("--playlist")
+        self.assertEqual(argv[playlist + 1], "/tmp/first_run_mix_playlist.m3u8")
+        # Still paused: the track is ready, the DJ starts it.
+        self.assertIn("--no-autoplay", argv)
+
+    def test_a_normal_deck_has_no_playlist_override(self):
+        import MP_Liquid_Mixer as app
+        self.assertNotIn("--playlist", app.deck_argv("sensorium"))
+
+
+class TestFirstRunThemeTrack(unittest.TestCase):
+    """A first launch with no library opens the bundled theme track."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.config = Path(self._tmp.name)
+        self.project = Path(self._tmp.name) / "install"
+        self.project.mkdir()
+
+    def _patched(self, configured=False):
+        return (
+            patch.object(mixer_core, "CONFIG_DIR", self.config),
+            patch.object(mixer_core, "CONFIG_ENV_PATHS",
+                         (self.project / "config.env", self.config / "config.env")),
+            patch.object(mixer_core, "library_configured", return_value=configured),
+            patch.object(mixer_core, "theme_track_path",
+                         side_effect=lambda: Path(self._track())),
+        )
+
+    def _track(self):
+        track = self.project / "MP_SAMPLES" / mixer_core.THEME_TRACK_NAME
+        track.parent.mkdir(parents=True, exist_ok=True)
+        if not track.is_file():
+            track.write_bytes(b"fLaC")
+        return str(track)
+
+    def test_no_music_or_archive_configuration_is_a_first_run(self):
+        (self.project / "config.env").write_text(
+            'MIX_ARCHIVE_CONFIGURED="false"\nMIX_ARCHIVE_DIR=""\n'
+            'EXTRA_MIX_ARCHIVE_DIRS=""\n', encoding="utf-8")
+        values = mixer_core.config_values((self.project / "config.env",))
+        with patch.object(mixer_core, "music_folders_configured", return_value=False):
+            self.assertFalse(mixer_core.music_folders_configured(values))
+        self.assertFalse(mixer_core.mix_archive_configured(values))
+
+    def test_a_configured_archive_is_not_a_first_run(self):
+        cfg = self.project / "config.env"
+        cfg.write_text('MIX_ARCHIVE_CONFIGURED="true"\n'
+                       'MIX_ARCHIVE_DIR="/mnt/archive/MIX_ARCHIVE"\n', encoding="utf-8")
+        values = mixer_core.config_values((cfg,))
+        self.assertTrue(mixer_core.mix_archive_configured(values))
+
+    def test_extra_archive_dirs_also_count_as_configured(self):
+        cfg = self.project / "config.env"
+        cfg.write_text('EXTRA_MIX_ARCHIVE_DIRS="/mnt/extra/MIX_ARCHIVE"\n', encoding="utf-8")
+        self.assertTrue(mixer_core.mix_archive_configured(mixer_core.config_values((cfg,))))
+
+    def test_a_generated_music_playlist_counts_as_configured(self):
+        folder = self.project / "PLAYLISTS_GENERATED"
+        folder.mkdir(parents=True)
+        (folder / "DJ_Tracks_ALL_MUSIC_FOLDERS.m3u8").write_text(
+            "#EXTM3U\n#EXTINF:300,Darkstar\n/music/01-darkstar.flac\n", encoding="utf-8")
+        with patch.object(mixer_core, "PROJECT_ROOT", self.project), \
+             patch.object(mixer_core, "_music_folders_module", return_value=None):
+            self.assertTrue(mixer_core.music_folders_configured({}))
+
+    def test_an_empty_playlist_is_not_a_configured_library(self):
+        folder = self.project / "PLAYLISTS_GENERATED"
+        folder.mkdir(parents=True)
+        (folder / "DJ_Tracks_ALL_MUSIC_FOLDERS.m3u8").write_text("#EXTM3U\n", encoding="utf-8")
+        with patch.object(mixer_core, "PROJECT_ROOT", self.project), \
+             patch.object(mixer_core, "_music_folders_module", return_value=None):
+            self.assertFalse(mixer_core.music_folders_configured({}))
+
+    def test_theme_playlist_holds_the_track_ready_to_play(self):
+        track = self._track()
+        patchers = self._patched(configured=False)
+        for patcher in patchers:
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        target = mixer_core.write_first_run_playlist(track)
+        self.assertIsNotNone(target)
+        text = Path(target).read_text(encoding="utf-8")
+        self.assertTrue(text.startswith("#EXTM3U"))
+        self.assertIn(track, text)
+        self.assertIn(Path(track).stem, text)
+
+    def test_a_configured_library_never_writes_the_playlist(self):
+        target = self.config / "first_run_mix_playlist.m3u8"
+        target.write_text("stale\n", encoding="utf-8")
+        patchers = self._patched(configured=True)
+        for patcher in patchers:
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.assertIsNone(mixer_core.write_first_run_playlist())
+        self.assertFalse(target.exists())
+
+    def test_the_mixer_loads_the_theme_track_only_on_a_first_run(self):
+        import MP_Liquid_Mixer as app
+        track = self._track()
+        playlist = self.config / "first_run_mix_playlist.m3u8"
+
+        with patch.object(mixer_core, "first_run_preload_track", return_value=track), \
+             patch.object(mixer_core, "write_first_run_playlist", return_value=playlist):
+            mixer = app.LiquidMixer()
+        self.assertEqual(mixer._first_run_track, track)
+        self.assertEqual(mixer._first_run_playlist, playlist)
+
+        with patch.object(mixer_core, "first_run_preload_track", return_value=None), \
+             patch.object(mixer_core, "write_first_run_playlist", return_value=None):
+            normal = app.LiquidMixer()
+        self.assertIsNone(normal._first_run_track)
+        self.assertIsNone(normal._first_run_playlist)
+
 
 class TestDeckTheme(unittest.TestCase):
     def test_console_background_follows_the_theme(self):

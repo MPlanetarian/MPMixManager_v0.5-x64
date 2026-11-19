@@ -264,6 +264,50 @@ try:
 except Exception:
     pass
 
+
+def _apply_builtin_overrides() -> None:
+    """Swap in a generator preset over any built-in it replaced.
+
+    An override keeps the built-in's id, key, album and place in the library,
+    so the number keys, the saved active preset and ``--preset N`` keep
+    working. Only the artwork, the display name and the shader source change.
+    The shader lookup itself goes through ``vulkan_spirv_for`` and friends,
+    which know about overrides independently of this list.
+    """
+    try:
+        from mp_visualizer_user_presets import load_overrides
+    except ImportError:  # imported as scripts.mp_liquid_visualizer_vulkan
+        try:
+            from scripts.mp_visualizer_user_presets import load_overrides  # type: ignore
+        except Exception:
+            return
+    try:
+        overrides = load_overrides()
+    except Exception:
+        return
+    if not overrides:
+        return
+    for index, preset in enumerate(VISUALIZER_PRESETS):
+        try:
+            target_id = int(preset.get("id", -1))
+        except (TypeError, ValueError):
+            continue
+        override = overrides.get(target_id)
+        if override is None:
+            continue
+        merged = dict(preset)
+        merged["name"] = str(override.get("name") or preset.get("name") or "")
+        merged["album"] = str(override.get("album") or preset.get("album") or "")
+        cover_paths = [p for p in override.get("cover_paths") or [] if Path(p).is_file()]
+        if cover_paths:
+            merged["cover_paths"] = cover_paths
+        merged["user_override"] = True
+        merged["override_key"] = override.get("key")
+        VISUALIZER_PRESETS[index] = merged
+
+
+_apply_builtin_overrides()
+
 _SYS = platform.system().lower()
 _IS_WIN = sys.platform == "win32" or _SYS == "windows"
 _IS_MAC = sys.platform == "darwin" or _SYS == "darwin"

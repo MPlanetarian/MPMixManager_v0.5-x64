@@ -233,6 +233,148 @@ class TestGeneratorWindowLayout(unittest.TestCase):
         self.assertIn("self.preview_badge = Gtk.Label", source)
 
 
+class TestBuiltinPresetLibrary(unittest.TestCase):
+    """The library dropdown must list the visualizer's own presets.
+
+    The generator originally listed only its own ``user_*`` presets, so the
+    thirteen hand-authored scenes could not be seen, loaded or replaced.
+    """
+
+    def test_shipped_presets_are_discoverable(self):
+        sys.path.insert(0, str(ROOT / "scripts"))
+        import mp_liquid_visualizer_vulkan as vulkan_visualizer
+
+        shipped = [
+            preset for preset in vulkan_visualizer.VISUALIZER_PRESETS
+            if int(preset.get("id", -1)) < generator.user_presets.BASE_ID
+        ]
+        self.assertEqual(len(shipped), 13)
+        self.assertEqual(shipped[0]["key"], "cosmic_dreamworlds_liquid")
+        self.assertEqual(shipped[-1]["id"], 12)
+
+    def test_library_lists_both_kinds(self):
+        sys.path.insert(0, str(ROOT / "scripts"))
+        import mp_liquid_visualizer_vulkan as vulkan_visualizer
+
+        builtin = [
+            preset for preset in vulkan_visualizer.VISUALIZER_PRESETS
+            if int(preset.get("id", -1)) < generator.user_presets.BASE_ID
+        ]
+        self.assertGreaterEqual(len(builtin), 13)
+        self.assertTrue(all(preset.get("key") for preset in builtin))
+
+    def test_library_buttons_exist(self):
+        source = (ROOT / "MP_Visualization_Generator.py").read_text(encoding="utf-8")
+        for label in (
+            'Gtk.Button(label="Update Preset")',
+            'Gtk.Button(label="Rename Preset")',
+            'Gtk.Button(label="Load in Generator")',
+            'Gtk.Button(label="Restore Built-in Preset")',
+        ):
+            self.assertIn(label, source)
+
+
+class TestPresetOverrideRoundTrip(unittest.TestCase):
+    """Replacing a built-in preset must not renumber the library.
+
+    A built-in keeps its id, key and album, so the saved active preset, the
+    number keys and ``--preset N`` keep pointing at the same slot. All three
+    backends resolve the replacement through the shared lookup helpers.
+    """
+
+    def setUp(self):
+        sys.path.insert(0, str(ROOT / "scripts"))
+        import mp_visualizer_user_presets as presets
+
+        self.presets = presets
+        self.temp = tempfile.TemporaryDirectory(prefix="mpvis-override-")
+        root = Path(self.temp.name)
+        self._saved = (
+            presets.CONFIG_DIR, presets.USER_PRESET_ROOT,
+            presets.REGISTRY_FILE, presets.OVERRIDE_FILE,
+        )
+        presets.CONFIG_DIR = root / "config"
+        presets.USER_PRESET_ROOT = presets.CONFIG_DIR / "visualizer-presets"
+        presets.REGISTRY_FILE = presets.USER_PRESET_ROOT / "registry.json"
+        presets.OVERRIDE_FILE = presets.USER_PRESET_ROOT / "overrides.json"
+
+    def tearDown(self):
+        (
+            self.presets.CONFIG_DIR, self.presets.USER_PRESET_ROOT,
+            self.presets.REGISTRY_FILE, self.presets.OVERRIDE_FILE,
+        ) = self._saved
+        self.temp.cleanup()
+
+    def _generated_scene(self, key: str = "user_test_scene") -> Path:
+        directory = self.presets.preset_directory(key)
+        directory.mkdir(parents=True, exist_ok=True)
+        for name in ("preset.frag", "preset.opengl.frag", "preset.metal",
+                     "cover.png", "preview.png"):
+            (directory / name).write_text("// scene\n", encoding="utf-8")
+        (directory / "preset.frag.spv").write_bytes(b"\x03\x02\x23\x07" + b"\0" * 32)
+        return directory
+
+    def test_override_serves_all_three_backends(self):
+        source = self._generated_scene()
+        self.presets.set_override(source, 5, {"name": "Stream of Frequency"})
+        self.assertIsNotNone(self.presets.opengl_source_for(5))
+        self.assertIsNotNone(self.presets.vulkan_spirv_for(5))
+        self.assertIsNotNone(self.presets.metal_source_for(5))
+        # A renderer passes the built-in dict, which must also resolve.
+        self.assertIsNotNone(
+            self.presets.opengl_source_for({"id": 5, "key": "stream_of_frequency"})
+        )
+
+    def test_override_keeps_the_builtin_number(self):
+        source = self._generated_scene()
+        self.presets.set_override(source, 7, {"name": "Particle Accelerator"})
+        overrides = self.presets.load_overrides()
+        self.assertEqual(list(overrides), [7])
+        self.assertEqual(overrides[7]["id"], 7)
+        self.assertEqual(overrides[7]["key"], "builtin-7")
+
+    def test_override_does_not_touch_the_user_library(self):
+        source = self._generated_scene()
+        self.presets.set_override(source, 3, {"name": "Infinite Complexity"})
+        self.assertEqual(self.presets.load_user_presets(), [])
+
+    def test_rename_keeps_number_and_key(self):
+        source = self._generated_scene()
+        self.presets.set_override(source, 5, {"name": "Stream of Frequency"})
+        self.presets.rename_override(5, "My Waves")
+        override = self.presets.load_overrides()[5]
+        self.assertEqual(override["name"], "My Waves")
+        self.assertEqual(override["id"], 5)
+        self.assertEqual(override["key"], "builtin-5")
+
+    def test_restore_returns_the_hand_authored_preset(self):
+        source = self._generated_scene()
+        self.presets.set_override(source, 5, {"name": "Stream of Frequency"})
+        self.assertTrue(self.presets.clear_override(5))
+        self.assertEqual(self.presets.load_overrides(), {})
+        self.assertIsNone(self.presets.opengl_source_for(5))
+        self.assertFalse(self.presets.override_dir(5).exists())
+
+    def test_override_is_exportable(self):
+        source = self._generated_scene()
+        self.presets.set_override(source, 5, {"name": "Stream of Frequency"})
+        package = self.presets.export_package("builtin-5", Path(self.temp.name) / "out.mpvispreset")
+        self.assertTrue(package.is_file())
+        import zipfile
+        with zipfile.ZipFile(package) as archive:
+            self.assertIn("preset.opengl.frag", archive.namelist())
+
+    def test_user_preset_rename_keeps_id(self):
+        source = self._generated_scene("user_keepme")
+        self.presets.register_preset(source, {"key": "user_keepme", "name": "Keep Me"})
+        before = self.presets.find_user_preset("user_keepme")
+        self.presets.rename_preset("user_keepme", "Renamed Scene")
+        after = self.presets.find_user_preset("user_keepme")
+        self.assertEqual(after["id"], before["id"])
+        self.assertEqual(after["key"], before["key"])
+        self.assertEqual(after["name"], "Renamed Scene")
+
+
 class TestPresetRoundTrip(unittest.TestCase):
     def test_generated_preset_keeps_generative_metadata(self):
         import mp_visualizer_user_presets as registry

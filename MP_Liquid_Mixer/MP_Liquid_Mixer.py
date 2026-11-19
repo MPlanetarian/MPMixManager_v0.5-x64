@@ -25,7 +25,7 @@ import threading
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 MIXER_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = MIXER_DIR.parent
@@ -126,7 +126,7 @@ def browse_action(status: Dict[str, Any], dirty: bool) -> str:
     return "play"
 
 
-def deck_argv(theme: str) -> list:
+def deck_argv(theme: str, playlist_path: Optional[str] = None) -> list:
     """The player command for one mixer deck.
 
     Decks are for mixing *tracks*, so they open the Music Folders library
@@ -134,17 +134,25 @@ def deck_argv(theme: str) -> list:
     the UI and, via the UI, to the engine it spawns. --no-autoplay keeps the
     first track paused until the DJ starts it.
 
+    ``playlist_path`` is only set on a first run with no configured library,
+    where it names the generated one-row playlist holding the bundled theme
+    track. A normal launch leaves it out and the deck reads the Music Folders
+    playlist the same way every other MP window does.
+
     The theme is mapped through ``core.deck_theme`` because the player's
     --theme table is smaller than the mixer's cycle; an id it cannot parse
     makes argparse exit and the deck never starts.
     """
-    return player_argv("NORMAL", extra_args=[
+    extra = [
         "--music-mode",
         "--music-folder", "ALL",
         "--no-autoplay",
         "--no-bluetooth-auto",
         "--theme", core.deck_theme(theme),
-    ])
+    ]
+    if playlist_path:
+        extra.extend(["--playlist", str(playlist_path)])
+    return player_argv("NORMAL", extra_args=extra)
 
 
 def _luma(color: Tuple[int, int, int]) -> float:
@@ -212,6 +220,13 @@ class LiquidMixer(GlassHost):
         self._pitch_dirty = True
         self._bpm_cache: Dict[str, float] = {}
         self._browse_dirty = {"A": False, "B": False}
+        # A first launch straight from the mixer shortcut has no library yet.
+        # Both decks then open the bundled theme track, paused and ready, so
+        # the window is usable without a trip through setup first. Once a
+        # Music Folders or Mix Archive configuration exists this stays None
+        # and any playlist an earlier first run left behind is removed.
+        self._first_run_track: Optional[str] = core.first_run_preload_track()
+        self._first_run_playlist: Optional[Path] = core.write_first_run_playlist(self._first_run_track)
         self.recorder = mixer_recording.MasterRecorder()
         self._eq_sent: Dict[str, list] = {}
         self._eq_dirty = True
@@ -233,6 +248,19 @@ class LiquidMixer(GlassHost):
         # bar can say "library offline" instead of leaving a silent empty deck.
         self._library_status: Dict[str, Any] = {}
         self._library_error = ""
+        # "Verify Audio Files": the check runs on workers, the loader movie
+        # loops behind it, and a failed pass parks a confirm prompt until the
+        # user says whether the dead rows should leave the playlist.
+        self._verify_running = False
+        self._verify_done = 0
+        self._verify_total = 0
+        self._verify_bad: List[Dict[str, Any]] = []
+        self._verify_started_at = 0.0
+        self._verify_finished_at = 0.0
+        self._verify_prompt = False
+        self._verify_message = ""
+        self._verify_movie_pid = 0
+        self._verify_cancel = threading.Event()
         # The wall clock is read from the system when the window is constructed
         # and then once a second in _tick, so it ticks even when nothing else
         # in the mixer changes.
@@ -445,6 +473,11 @@ class LiquidMixer(GlassHost):
             pass
 
     def _shutdown(self) -> None:
+        # A verification pass may still be running; stop its loop and workers
+        # before the window goes away, so no movie outlives the mixer.
+        if self._verify_running:
+            self._verify_cancel.set()
+        self._stop_verify_movie()
         # The decks spawn detached engines. Without this they keep playing with
         # no window attached, so both are asked to stop before the host exits.
         for channel, deck in self.decks.items():
@@ -522,6 +555,208 @@ class LiquidMixer(GlassHost):
                 self.area.queue_draw()
         return False
 
+    # ------------------------------------------------------------------
+    # Verify Audio Files
+    # ------------------------------------------------------------------
+    def _verify_button_label(self) -> str:
+        if self._verify_running:
+            pct = int(round(100.0 * self._verify_done / max(1, self._verify_total)))
+            return f"VERIFYING  {self._verify_done:,}/{self._verify_total:,}  {pct}%"
+        if self._verify_message:
+            return self._verify_message
+        return "VERIFY AUDIO FILES"
+
+    def _start_verify_audio(self) -> None:
+        """Check every playlist row, then offer to drop the unplayable ones."""
+        if self._verify_running:
+            return
+        rows = core.read_playlist_rows()
+        if not rows:
+            self._verify_message = "NO PLAYLIST TO VERIFY"
+            self._verify_finished_at = time.monotonic()
+            _log("verify: no playlist rows to check")
+            if self.area is not None:
+                self.area.queue_draw()
+            return
+
+        self._verify_running = True
+        self._verify_prompt = False
+        self._verify_done = 0
+        self._verify_total = len(rows)
+        self._verify_bad = []
+        self._verify_started_at = time.monotonic()
+        self._verify_finished_at = 0.0
+        self._verify_message = ""
+        self._verify_cancel = threading.Event()
+        _log(f"verify: starting, {len(rows)} rows")
+        self._start_verify_movie()
+        if self.area is not None:
+            self.area.queue_draw()
+
+        def progress(done: int, total: int, verdict) -> None:
+            # Called from a verification worker; the GTK loop owns the state.
+            try:
+                from gi.repository import GLib as _GLib
+                _GLib.idle_add(self._on_verify_progress, done, total, verdict)
+            except Exception:
+                pass
+
+        def worker() -> None:
+            try:
+                verdicts = core.verify_audio_library(
+                    rows, progress=progress, cancel=self._verify_cancel.is_set)
+                summary = core.verify_summary(verdicts)
+                bad = [v.as_dict() for v in verdicts if not v.ok]
+            except Exception as exc:  # never leave the button stuck on "verifying"
+                summary = {"total": len(rows), "ok": 0, "bad": 0, "by_reason": {}}
+                bad = []
+                _log(f"verify failed: {exc}")
+            try:
+                from gi.repository import GLib as _GLib
+                _GLib.idle_add(self._finish_verify_audio, summary, bad)
+            except Exception:
+                pass
+
+        threading.Thread(target=worker, name="verify-audio", daemon=True).start()
+
+    def _on_verify_progress(self, done: int, total: int, _verdict=None) -> bool:
+        self._verify_done = int(done)
+        self._verify_total = int(total)
+        if self.area is not None:
+            self.area.queue_draw()
+        return False
+
+    def _finish_verify_audio(self, summary: Dict[str, Any], bad: List[Dict[str, Any]]) -> bool:
+        self._stop_verify_movie()
+        self._verify_running = False
+        self._verify_finished_at = time.monotonic()
+        self._verify_done = int(summary.get("total") or 0)
+        self._verify_total = int(summary.get("total") or 0)
+        self._verify_bad = list(bad)
+        total = int(summary.get("total") or 0)
+        count = len(bad)
+        elapsed = max(0.0, self._verify_finished_at - self._verify_started_at)
+        if count:
+            self._verify_prompt = True
+            self._verify_message = f"{count:,} UNPLAYABLE - REMOVE?"
+            _log(f"verify: {count}/{total} unplayable in {elapsed:.1f}s; asking")
+        else:
+            self._verify_prompt = False
+            self._verify_message = f"ALL {total:,} PLAYABLE"
+            _log(f"verify: all {total} playable in {elapsed:.1f}s")
+        if self.area is not None:
+            self.area.queue_draw()
+        return False
+
+    def _verify_remove_bad(self) -> None:
+        """Drop the failed rows from the playlist and reload both decks."""
+        bad = [row.get("path") for row in self._verify_bad if row.get("path")]
+        removed = core.remove_rows_from_playlist(bad)
+        self._verify_prompt = False
+        self._verify_bad = []
+        self._verify_message = f"REMOVED {removed:,}" if removed else "NOTHING REMOVED"
+        self._verify_finished_at = time.monotonic()
+        _log(f"verify: removed {removed} unplayable rows from the playlist")
+        if removed:
+            for _channel, deck in self.decks.items():
+                namespace = deck.get("namespace")
+                if namespace:
+                    core.send_ipc(namespace, "load_playlist", timeout=0.6,
+                                  mode="MUSIC", folder_name="ALL", play=False)
+        if self.area is not None:
+            self.area.queue_draw()
+
+    def _verify_keep_bad(self) -> None:
+        self._verify_prompt = False
+        self._verify_message = "KEPT - NOT REMOVED"
+        self._verify_finished_at = time.monotonic()
+        _log("verify: user kept the unplayable rows")
+        if self.area is not None:
+            self.area.queue_draw()
+
+    def _cancel_verify_audio(self) -> None:
+        """Esc during a pass stops it and takes the movie down."""
+        self._verify_cancel.set()
+        self._verify_running = False
+        self._verify_prompt = False
+        self._verify_message = "CANCELLED"
+        self._verify_finished_at = time.monotonic()
+        self._stop_verify_movie()
+        _log("verify: cancelled by the user")
+        if self.area is not None:
+            self.area.queue_draw()
+
+    # -- the looping movie ------------------------------------------------
+    def _start_verify_movie(self) -> None:
+        """Loop Exit_MP_Video.mp4 until the verification finishes.
+
+        The movie lives in its own process, so a long pass never blocks the
+        window and the picture can be closed only by this host. ``--loop-start``
+        prints the player pid; the supervisor below re-launches it if the user
+        closes the window early, exactly as the uninstaller does.
+        """
+        script = SCRIPTS_DIR / "display_loader_video.sh"
+        if not script.is_file():
+            _log("verify: loader video script missing")
+            return
+        env = dict(os.environ)
+        env["MP_EXIT_VIDEO_NO_TTY"] = "1"
+        env.pop("MP_PLAYER_INTRO_DONE", None)
+        try:
+            proc = subprocess.run(
+                ["bash", str(script), "--loop-start"],
+                cwd=str(PROJECT_ROOT), stdin=subprocess.DEVNULL,
+                capture_output=True, text=True, timeout=30, env=env,
+            )
+            pid = (proc.stdout or "").strip().splitlines()
+            self._verify_movie_pid = int(pid[-1]) if pid and pid[-1].isdigit() else 0
+            _log(f"verify: looping exit movie pid={self._verify_movie_pid}")
+        except Exception as exc:
+            _log(f"verify: could not start the looping movie: {exc}")
+            self._verify_movie_pid = 0
+
+    def _supervise_verify_movie(self) -> None:
+        """Keep the picture alive while the pass runs."""
+        if not (self._verify_running and self._verify_movie_pid):
+            return
+        if not self._pid_alive(self._verify_movie_pid):
+            _log("verify: movie window closed; relaunching")
+            self._verify_movie_pid = 0
+            self._start_verify_movie()
+
+    @staticmethod
+    def _pid_alive(pid: int) -> bool:
+        try:
+            os.kill(int(pid), 0)
+            return True
+        except (OSError, ValueError):
+            return False
+
+    def _stop_verify_movie(self) -> None:
+        pid, self._verify_movie_pid = self._verify_movie_pid, 0
+        if not pid:
+            return
+        script = SCRIPTS_DIR / "display_loader_video.sh"
+        try:
+            if script.is_file():
+                subprocess.run(
+                    ["bash", str(script), "--loop-stop", str(pid)],
+                    cwd=str(PROJECT_ROOT), stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    timeout=15, env={**os.environ, "MP_EXIT_VIDEO_NO_TTY": "1"},
+                )
+                return
+        except Exception as exc:
+            _log(f"verify: loop-stop failed: {exc}")
+        # Fallback: make sure the window is gone even if the script could not.
+        for kill in (lambda: os.kill(pid, 15), lambda: os.kill(pid, 9),
+                     lambda: os.killpg(pid, 15), lambda: os.killpg(pid, 9)):
+            try:
+                kill()
+                return
+            except OSError:
+                continue
+
     def _spawn_decks(self, Vte, GLib) -> None:
         from gi.repository import Gdk as Gdk, Pango
         Gtk = self.Gtk
@@ -568,7 +803,10 @@ class LiquidMixer(GlassHost):
 
         for channel, deck in self.decks.items():
             term = deck["vte"]
-            argv = deck_argv(self.theme)
+            # On a first run this names the one-row theme playlist; otherwise
+            # the deck reads the generated Music Folders playlist as before.
+            argv = deck_argv(self.theme,
+                             str(self._first_run_playlist) if self._first_run_playlist else None)
             env = _child_env(as_dict=True)
             env["MP_PLAYER_NAMESPACE"] = deck["namespace"]
             env["MP_LIQUID_GLASS_MIXER"] = "1"
@@ -1224,6 +1462,21 @@ class LiquidMixer(GlassHost):
         Gdk = self.Gdk
         key = event.keyval
         from_deck = self._event_from_deck(widget)
+        # A confirm prompt is modal: it takes the decision keys before any
+        # deck or chrome shortcut can see them.
+        if self._verify_prompt:
+            if key in (Gdk.KEY_y, Gdk.KEY_Y, Gdk.KEY_Return, Gdk.KEY_KP_Enter):
+                self._verify_remove_bad()
+                return True
+            if key in (Gdk.KEY_n, Gdk.KEY_N, Gdk.KEY_Escape):
+                self._verify_keep_bad()
+                return True
+            return True
+        # Esc during a pass stops it rather than closing the mixer, which is
+        # what a user reaching for the exit key during a long job expects.
+        if key == Gdk.KEY_Escape and self._verify_running:
+            self._cancel_verify_audio()
+            return True
         # A deck's player already cycles themes on C and writes the shared
         # theme file, so C is left alone there: search can still type "c" and
         # the mixer picks the new theme up within a second. The mixer's own
@@ -1398,6 +1651,10 @@ class LiquidMixer(GlassHost):
         # while a click inside a deck hands the keyboard to that player.
         self.area.grab_focus()
         x, y = float(event.x), float(event.y)
+        # A confirm prompt is modal and must be answered before anything
+        # underneath it (faders, knobs, transport) sees the click.
+        if self._verify_prompt:
+            return self._inside_verify_dialog(x, y)
         try:
             window_w = self.window.get_allocated_width()
             window_h = self.window.get_allocated_height()
@@ -1490,6 +1747,9 @@ class LiquidMixer(GlassHost):
             return True
         if core.inside(x, y, self.boxes["export_button"]):
             self._export_mixes()
+            return True
+        if core.inside(x, y, self.boxes["verify_button"]):
+            self._start_verify_audio()
             return True
         if core.inside(x, y, self.boxes["visualizer_button"]):
             self._toggle_visualizer()
@@ -1684,6 +1944,13 @@ class LiquidMixer(GlassHost):
             self.area.queue_draw()
         was_recording = self.recorder.is_recording
         self.recorder.tick()
+        # The verification picture is a separate process; keep it alive while
+        # the pass runs and let a finished result fade back to the button.
+        if self._verify_running:
+            self._supervise_verify_movie()
+        elif self._verify_message and time.monotonic() - self._verify_finished_at > 8.0:
+            self._verify_message = ""
+            self.area.queue_draw()
         if self.recorder.is_recording:
             second = int(self.recorder.elapsed())
             if second != self._rec_second:
@@ -1873,6 +2140,8 @@ class LiquidMixer(GlassHost):
         self._paint_pitch(cr, s, accent, secondary, glass_ink)
         self._paint_mixer(cr, s, accent, secondary, tertiary, glass_ink, dark_ui)
         self._paint_bottom_bar(cr, s, accent, ink, glass_ink, dark_ui)
+        # The confirm prompt is modal, so it is painted over everything else.
+        self._paint_verify_dialog(cr, s, accent, secondary, glass_ink, dark_ui)
 
     def _rounded(self, cr, x, y, w, h, r):
         import math as _math
@@ -2025,6 +2294,7 @@ class LiquidMixer(GlassHost):
         self._paint_record_button(cr, s, accent, secondary, glass_ink)
         self._paint_credit_button(cr, s, accent, secondary, glass_ink)
         self._paint_clock_button(cr, s, accent, secondary, glass_ink)
+        self._paint_verify_button(cr, s, accent, secondary, glass_ink)
         self._paint_export_button(cr, s, accent, secondary, glass_ink)
 
     KNOB_ROWS = (
@@ -2194,6 +2464,140 @@ class LiquidMixer(GlassHost):
                    self._clock_date, 8 * s, glass_ink, 0.60, anchor="middle")
         self._text(cr, box[0] + box[2] / 2, box[1] + 17 * s,
                    self._clock_text, 17 * s, glass_ink, 0.97, bold=True, anchor="middle")
+
+    def _paint_verify_button(self, cr, s, accent, secondary, glass_ink) -> None:
+        """Verify Audio Files: progress while it runs, result after it ends."""
+        box = self.boxes["verify_button"]
+        running = self._verify_running
+        # Red once a failed pass is waiting for an answer, green for a clean
+        # one, accent while working, and a quiet outline when idle.
+        if self._verify_prompt:
+            color = (235, 64, 72)
+        elif self._verify_message.startswith("ALL"):
+            color = (80, 230, 140)
+        elif not running and self._verify_message:
+            color = (250, 205, 90)
+        else:
+            color = _mix(accent, secondary, 0.5)
+        cr.set_source_rgba(*_rgba(color, 0.22 if running else 0.16))
+        self._rounded(cr, box[0], box[1], box[2], box[3], 7 * s)
+        cr.fill()
+        cr.set_source_rgba(*_rgba(color, 0.88))
+        cr.set_line_width(max(1.0, 1.2 * s))
+        self._rounded(cr, box[0], box[1], box[2], box[3], 7 * s)
+        cr.stroke()
+        self._text(cr, box[0] + box[2] / 2, box[1] + 6 * s,
+                   self._verify_button_label(), 9 * s, glass_ink, 0.95,
+                   bold=True, anchor="middle", max_width=box[2] - 12 * s)
+        if running and self._verify_total:
+            # A thin progress rule under the label, so a long pass visibly
+            # moves even when the movie has the user's attention.
+            frac = max(0.0, min(1.0, self._verify_done / max(1, self._verify_total)))
+            cr.set_source_rgba(*_rgba(glass_ink, 0.20))
+            cr.rectangle(box[0] + 8 * s, box[1] + box[3] - 4 * s,
+                         (box[2] - 16 * s), max(1.5, 2.0 * s))
+            cr.fill()
+            cr.set_source_rgba(*_rgba(color, 0.95))
+            cr.rectangle(box[0] + 8 * s, box[1] + box[3] - 4 * s,
+                         (box[2] - 16 * s) * frac, max(1.5, 2.0 * s))
+            cr.fill()
+
+    # -- modal confirm ----------------------------------------------------
+    def _verify_dialog_boxes(self):
+        """Panel and button rectangles in design-grid space, scaled like the rest.
+
+        Kept on the design grid so the dialog lands in the same place at every
+        window size, the way the top bar and mixer column do.
+        """
+        scale = self._ui_scale
+        width = core.DESIGN_W * scale
+        height = core.DESIGN_H * scale
+        box_w, box_h = 760 * scale, 300 * scale
+        x = (width - box_w) / 2.0
+        y = (height - box_h) / 2.0
+        pad = 40 * scale
+        button_h = 54 * scale
+        button_y = y + box_h - pad - button_h
+        button_w = (box_w - pad * 2 - 24 * scale) / 2.0
+        remove = (x + pad, button_y, button_w, button_h)
+        keep = (x + pad + button_w + 24 * scale, button_y, button_w, button_h)
+        return (x, y, box_w, box_h), remove, keep
+
+    def _inside_verify_dialog(self, x: float, y: float) -> bool:
+        """Consume a click and answer the prompt when the dialog is up.
+
+        While a prompt is open it is modal: a click anywhere resolves it
+        instead of reaching the faders underneath, so a stray click can never
+        change a mix while the user is deciding about the library.
+        """
+        if not self._verify_prompt:
+            return False
+        _panel, remove, keep = self._verify_dialog_boxes()
+        if core.inside(x, y, remove):
+            self._verify_remove_bad()
+        elif core.inside(x, y, keep):
+            self._verify_keep_bad()
+        else:
+            # Any other click dismisses the prompt as "keep" rather than
+            # falling through to a fader. Removing a library is the
+            # destructive choice, so it must be the deliberate one.
+            self._verify_keep_bad()
+        return True
+
+    def _paint_verify_dialog(self, cr, s, accent, secondary, glass_ink, dark_ui) -> None:
+        if not self._verify_prompt:
+            return
+        panel, remove, keep = self._verify_dialog_boxes()
+        # Dim the mixer so the decision is obviously in front of it.
+        cr.set_source_rgba(0, 0, 0, 0.55)
+        cr.paint()
+        base = _darken(core.theme_field(self.theme), 0.62) if dark_ui else (26, 30, 36)
+        cr.set_source_rgba(*_rgba(base, 0.98))
+        self._rounded(cr, panel[0], panel[1], panel[2], panel[3], 18 * s)
+        cr.fill()
+        cr.set_source_rgba(*_rgba((235, 64, 72), 0.92))
+        cr.set_line_width(max(1.4, 1.8 * s))
+        self._rounded(cr, panel[0], panel[1], panel[2], panel[3], 18 * s)
+        cr.stroke()
+
+        count = len(self._verify_bad)
+        inner = (245, 248, 252) if dark_ui else (235, 240, 246)
+        self._text(cr, panel[0] + panel[2] / 2, panel[1] + 34 * s,
+                   f"{count:,} FILE{'S' if count != 1 else ''} CANNOT BE PLAYED",
+                   22 * s, (255, 120, 120), 0.98, bold=True, anchor="middle")
+        self._text(cr, panel[0] + panel[2] / 2, panel[1] + 74 * s,
+                   "Remove them from the playlist so you cannot select them mid-set?",
+                   13 * s, inner, 0.88, anchor="middle")
+
+        # A short, honest breakdown: which kind of failure dominates is what
+        # tells the user whether to fix a share or re-copy files.
+        by_reason: Dict[str, int] = {}
+        for row in self._verify_bad:
+            key = str(row.get("reason") or "unreadable")
+            by_reason[key] = by_reason.get(key, 0) + 1
+        y = panel[1] + 112 * s
+        for key in ("missing", "empty", "unreadable"):
+            number = by_reason.get(key, 0)
+            if not number:
+                continue
+            text = f"{number:,}  {core.VERIFY_REASONS.get(key, key)}"
+            self._text(cr, panel[0] + 52 * s, y, text, 12 * s, inner, 0.80)
+            y += 24 * s
+
+        for box, label, colour in ((remove, "REMOVE FROM PLAYLIST", (235, 64, 72)),
+                                   (keep, "KEEP THEM", (150, 160, 172))):
+            cr.set_source_rgba(*_rgba(colour, 0.24))
+            self._rounded(cr, box[0], box[1], box[2], box[3], 10 * s)
+            cr.fill()
+            cr.set_source_rgba(*_rgba(colour, 0.92))
+            cr.set_line_width(max(1.2, 1.5 * s))
+            self._rounded(cr, box[0], box[1], box[2], box[3], 10 * s)
+            cr.stroke()
+            self._text(cr, box[0] + box[2] / 2, box[1] + 18 * s, label,
+                       13 * s, inner, 0.97, bold=True, anchor="middle")
+        self._text(cr, panel[0] + panel[2] / 2, panel[1] + panel[3] - 16 * s,
+                   "Y / ENTER  remove        N / ESC  keep", 10 * s, inner, 0.55,
+                   anchor="middle")
 
     def _paint_export_button(self, cr, s, accent, secondary, glass_ink) -> None:
         box = self.boxes["export_button"]

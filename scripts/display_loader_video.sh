@@ -866,6 +866,22 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
             display_exit_video 1
             exit 0
             ;;
+        --loop-start)
+            # A long task (the mixer's Verify Audio Files pass) keeps the exit
+            # movie on screen while it works. Print the player pid so the
+            # caller can stop it; rebroadcast by relaunching if the player
+            # window is closed early, which is what the supervisor in
+            # uninstall.sh does.
+            _MP_SKIP_ALLOWS_GUI=0
+            start_uninstall_exit_video || true
+            printf '%s\n' "${UNINSTALL_VIDEO_PID:-}"
+            exit 0
+            ;;
+        --loop-stop)
+            _MP_SKIP_ALLOWS_GUI=0
+            stop_uninstall_exit_video "${2:-}"
+            exit 0
+            ;;
         *)
             display_startup_loader_video 0
             exit 0
