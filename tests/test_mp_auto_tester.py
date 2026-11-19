@@ -185,19 +185,30 @@ class TestHarnessContract(unittest.TestCase):
 
     @needs_harness
     def test_the_ubuntu_38_host_is_a_target(self):
-        """Ubuntu 20.04 ships Python 3.8, the oldest platform we support.
+        """Ubuntu ships the oldest Python the tree supports.
 
         It is the only test bed that fails when PEP 585 (`dict[...]`) or
-        PEP 604 (`X | None`) syntax creeps in, so it must stay a target.
+        PEP 604 (`X | None`) syntax creeps in, so it must stay a target —
+        and it must be in the default run list, or a release ships without
+        ever touching the platform.
         """
         text = HARNESS.read_text(encoding="utf-8")
         self.assertIn("MP_UBUNTU_HOST", text)
         self.assertRegex(text, r'UBUNTU_HOST="\$\{MP_UBUNTU_HOST:-[0-9.]+\}"')
-        self.assertIn('ubuntu)  echo "Ubuntu 20.04 LTS', text)
+        self.assertIn('ubuntu)  echo "Ubuntu', text)
         self.assertRegex(
             text,
             r'REMOTE_HOST=\([^)]*\[ubuntu\]="\$UBUNTU_HOST"',
         )
+        # Wired end to end: selectable, and part of every default run.
+        self.assertRegex(text, r'ubuntu\|ub\|mpubtest001')
+        self.assertRegex(
+            text, r'declare -A REMOTE_OS=\([^)]*\[ubuntu\]="linux"')
+        for line in text.splitlines():
+            if line.startswith("            all|") or (
+                line.startswith("SYSTEMS=(") and "local" in line
+            ):
+                self.assertIn("ubuntu", line, "ubuntu missing from a run list")
 
     @needs_harness
     def test_window_lookup_works_on_wayland(self):
