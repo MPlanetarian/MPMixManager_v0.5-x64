@@ -39,6 +39,7 @@ import mixer_evdev as mixer_evdev  # noqa: E402
 import mixer_export as mixer_export  # noqa: E402
 import mixer_midi as mixer_midi  # noqa: E402
 import mixer_recording as mixer_recording  # noqa: E402
+import mixer_settings as settings_api  # noqa: E402
 
 # The host forces GDK_BACKEND=x11 and requires GdkX11 - the window needs an X11
 # id so the companion visualizer can stack itself directly underneath.
@@ -126,13 +127,15 @@ def browse_action(status: Dict[str, Any], dirty: bool) -> str:
     return "play"
 
 
-def deck_argv(theme: str, playlist_path: Optional[str] = None) -> list:
+def deck_argv(theme: str, playlist_path: Optional[str] = None,
+              autoplay: bool = False) -> list:
     """The player command for one mixer deck.
 
     Decks are for mixing *tracks*, so they open the Music Folders library
     (Music mode), never the mix-archive list. --music-mode is passed to both
     the UI and, via the UI, to the engine it spawns. --no-autoplay keeps the
-    first track paused until the DJ starts it.
+    first track paused until the DJ starts it; Settings > Startup can turn that
+    off so a deck loads its first track ready to play.
 
     ``playlist_path`` is only set on a first run with no configured library,
     where it names the generated one-row playlist holding the bundled theme
@@ -146,10 +149,11 @@ def deck_argv(theme: str, playlist_path: Optional[str] = None) -> list:
     extra = [
         "--music-mode",
         "--music-folder", "ALL",
-        "--no-autoplay",
         "--no-bluetooth-auto",
         "--theme", core.deck_theme(theme),
     ]
+    if not autoplay:
+        extra.append("--no-autoplay")
     if playlist_path:
         extra.extend(["--playlist", str(playlist_path)])
     return player_argv("NORMAL", extra_args=extra)
@@ -184,18 +188,32 @@ class LiquidMixer(GlassHost):
 
     TITLE = "MP Liquid Mixer"
 
-    def __init__(self, theme: Optional[str] = None, fullscreen: bool = True,
-                 with_visualizer: bool = True, font: Optional[str] = None) -> None:
+    def __init__(self, theme: Optional[str] = None, fullscreen: Optional[bool] = None,
+                 with_visualizer: Optional[bool] = None, font: Optional[str] = None) -> None:
         super().__init__(argv=[], embed_check=False, mode="NORMAL", cli_theme=theme, font=font)
+        # The Settings window's saved snapshot. It is read once here and kept
+        # on the window; every launch path (shortcut, X, run.sh) therefore
+        # starts with the same preferences, and a saved change is applied to
+        # the live window by _apply_settings.
+        self.settings = settings_api.load_settings()
         self.model = core.MixerModel.load()
-        self.theme = theme or core.read_theme()
-        if theme:
-            # Publish it: both decks and the visualizer follow the shared file,
-            # and the 1s poll would otherwise revert the window to the old one.
-            core.write_theme(theme)
+        # The launch theme: an explicit flag wins, then the saved default, then
+        # whatever the shared theme file says. A chosen theme is published to
+        # the shared file, otherwise the 1s poll would revert the window to the
+        # old theme a second after it opened.
+        explicit_theme = str(theme or self.settings.theme or "").strip()
+        if explicit_theme:
+            self.theme = explicit_theme
+            core.write_theme(self.theme)
             self.theme = core.read_theme()
-        self.start_fullscreen = bool(fullscreen)
-        self.with_visualizer = bool(with_visualizer)
+        else:
+            self.theme = core.read_theme()
+        # An explicit flag wins for this launch (`None` means "not given"), and
+        # the saved preference is the default otherwise.
+        self.start_fullscreen = (self.settings.fullscreen if fullscreen is None
+                                 else bool(fullscreen))
+        self.with_visualizer = (self.settings.visualizer_enabled if with_visualizer is None
+                                else bool(with_visualizer))
         self.window = None
         self.area = None
         self.fixed = None
@@ -228,6 +246,10 @@ class LiquidMixer(GlassHost):
         self._first_run_track: Optional[str] = core.first_run_preload_track()
         self._first_run_playlist: Optional[Path] = core.write_first_run_playlist(self._first_run_track)
         self.recorder = mixer_recording.MasterRecorder()
+        # The Settings snapshot names the container, capture source and the
+        # per-part ceiling, so a launch that presses REC straight away records
+        # with the chosen settings rather than the defaults.
+        self._apply_recorder_settings(self.settings)
         self._eq_sent: Dict[str, list] = {}
         self._eq_dirty = True
         self._knob_drag = None
@@ -243,6 +265,8 @@ class LiquidMixer(GlassHost):
         self._rec_second = -1
         self._s4_last_seen = 0.0
         self._s4_status_text = "S4: starting"
+        self._sinks: List[Dict[str, Any]] = []
+        self._settings_open = False
         # The decks open the Music Folders library, whose SMB shares nothing
         # mounts at login. Track what the last mount attempt found so the top
         # bar can say "library offline" instead of leaving a silent empty deck.
@@ -281,7 +305,18 @@ class LiquidMixer(GlassHost):
         only thing on screen in both cases. The script resolves the movie,
         picks the player and bounds the wait itself; a missing movie or player
         must never stop the mixer from opening or closing.
+
+        Settings > Startup & Exit can turn either movie off; the switch is
+        checked here rather than in the script so both the shortcut and every
+        in-window launch path obey it.
         """
+        intro = flag.startswith("--intro")
+        if intro and not getattr(self.settings, "startup_video", True):
+            _log("loader video skipped: disabled in Settings")
+            return
+        if not intro and not getattr(self.settings, "exit_video", True):
+            _log("exit video skipped: disabled in Settings")
+            return
         script = SCRIPTS_DIR / "display_loader_video.sh"
         if not script.is_file():
             _log(f"loader video skipped: {script} is missing")
@@ -319,6 +354,194 @@ class LiquidMixer(GlassHost):
             liquid_mixer_launch.release_launch_claim(os.getpid())
         except Exception:
             pass
+
+    # ------------------------------------------------------------------
+    # settings
+    # ------------------------------------------------------------------
+    def _apply_recorder_settings(self, settings: "settings_api.Settings") -> None:
+        """Push a settings snapshot into the recorder without restarting it.
+
+        The three values are set through their own setters so a live recording
+        is restarted exactly once per changed field, and so the recorder keeps
+        its own latched part limit for a part that is already open.
+
+        "Record from: master output" means the monitor of the *chosen* master
+        output, not the desktop default: if the mixer plays to an interface,
+        the recording must capture that interface or it would record silence.
+        """
+        try:
+            self.recorder.set_format(settings.recording_format)
+        except Exception as exc:
+            _log(f"settings: could not set the recording format: {exc!r}")
+        try:
+            self.recorder.set_part_limit_gib(settings.recording_part_limit_gib)
+        except Exception as exc:
+            _log(f"settings: could not set the part limit: {exc!r}")
+        capture = str(settings.recording_device or settings.master_output_device or "").strip()
+        try:
+            self.recorder.set_device(capture)
+        except Exception as exc:
+            _log(f"settings: could not set the capture device: {exc!r}")
+
+    def _open_settings(self) -> None:
+        """Open the modal Settings window and apply what the user saved."""
+        if self._settings_open or self.window is None:
+            return
+        self._settings_open = True
+        try:
+            import mixer_settings_dialog
+            sinks = settings_api.list_audio_sinks(force=True)
+            self._sinks = sinks
+            # Start from a snapshot that matches what is actually running: the
+            # on-screen WAV/FLAC button and REC do not wait for a Settings save,
+            # so the dialog must show the live format rather than the last saved
+            # one, or saving an unrelated field would silently revert it.
+            current = self.settings.copy()
+            current.recording_format = self.recorder.format
+            current.recording_part_limit_gib = self.recorder.part_limit_gib
+            current.recording_device = self.recorder.device
+            updated = mixer_settings_dialog.show_settings_dialog(
+                self.window, current, sinks=sinks,
+                themes=settings_api.theme_options(),
+            )
+        except Exception as exc:
+            _log(f"settings window failed: {exc!r}")
+            updated = None
+        finally:
+            self._settings_open = False
+        if updated is None:
+            return
+        self._apply_settings(updated)
+
+    def _apply_settings(self, updated: "settings_api.Settings") -> None:
+        """Apply a saved snapshot to the running window and persist it.
+
+        Every field is applied live where it has a live meaning (theme,
+        visualizer, recording, deck routing) and otherwise takes effect on the
+        next launch (the startup video, the starting window mode).
+        """
+        previous = self.settings
+        self.settings = updated
+        updated.save()
+
+        # -- theme ------------------------------------------------------
+        if updated.theme and updated.theme != previous.theme:
+            self.theme = updated.theme
+            core.write_theme(self.theme)
+            self._theme_seen = self.theme
+            self._apply_deck_theme()
+        elif not updated.theme and previous.theme:
+            # "Use the current shared theme": stop overriding it.
+            self.theme = core.read_theme()
+            self._apply_deck_theme()
+
+        # -- visualizer -------------------------------------------------
+        if updated.visualizer_enabled != previous.visualizer_enabled:
+            if not updated.visualizer_enabled:
+                self.with_visualizer = False
+                if self._viz_owned:
+                    self._stop_visualizer()
+                self._viz_owned = False
+            else:
+                self.with_visualizer = True
+                if core.visualizer_pid_alive() is None:
+                    self._start_visualizer()
+
+        # -- recording --------------------------------------------------
+        self._apply_recorder_settings(updated)
+
+        # -- deck output and equaliser ----------------------------------
+        self._route_decks_to_master(updated)
+        self._apply_default_eq(updated)
+
+        _log(
+            "settings saved: format=%s part=%sGiB visualizer=%s startup_video=%s "
+            "exit_video=%s theme=%s master=%s"
+            % (updated.recording_format, updated.recording_part_limit_gib,
+               updated.visualizer_enabled, updated.startup_video,
+               updated.exit_video, updated.theme or "(shared)",
+               updated.master_output_device or "(system default)")
+        )
+        if self.area is not None:
+            self.area.queue_draw()
+
+    def _route_decks_to_master(self, settings: "settings_api.Settings") -> None:
+        """Send every deck engine to the chosen master output.
+
+        ``PULSE_SINK`` pins the ALSA pulse plugin PortAudio uses, so the decks
+        follow the setting without the mixer ever changing the desktop's own
+        default sink. An already-open stream is moved separately.
+        """
+        sink = str(settings.master_output_device or "").strip()
+        if not sink:
+            return
+        for channel, deck in self.decks.items():
+            namespace = deck.get("namespace")
+            if not namespace:
+                continue
+            env = deck.get("env")
+            if isinstance(env, dict):
+                env.pop("PULSE_SINK", None)
+                env.pop("MP_AUDIO_OUTPUT_DEVICE", None)
+                env.update(settings_api.child_audio_env(settings))
+            moved = settings_api.move_process_streams(
+                namespace, sink, settings_api.child_audio_env(settings))
+            if moved:
+                _log(f"settings: moved deck {channel} stream(s) to {sink}")
+
+    def _apply_default_eq(self, settings: "settings_api.Settings") -> None:
+        """Set each deck's equaliser to the chosen default preset.
+
+        The mixer's own three knobs are the live control: they are reset to
+        flat here so the preset's curve is what the user hears, and they
+        override the preset the moment a knob is moved.
+
+        The preset's actual 10-band curve is read back from the engine and
+        recorded as "already sent". Without that, the next ``_apply_eq`` would
+        push the mixer's flat bands over the preset and silently cancel it.
+        """
+        preset = str(settings.eq_preset or "Flat")
+        need_flush = False
+        for channel, deck in self.decks.items():
+            namespace = deck.get("namespace")
+            if not namespace:
+                continue
+            bands = None
+            if core.player_socket(namespace).exists():
+                core.send_ipc(namespace, "set_eq_preset", timeout=0.3, preset=preset)
+                reply = core.send_ipc(namespace, "get_eq", timeout=0.3) or {}
+                payload = reply.get("data") if isinstance(reply.get("data"), dict) else reply
+                raw = payload.get("bands") if isinstance(payload, dict) else None
+                if isinstance(raw, list) and len(raw) == 10:
+                    bands = [float(value) for value in raw]
+            if bands is not None:
+                self._eq_sent[channel] = bands
+            else:
+                self._eq_sent.pop(channel, None)
+                need_flush = True
+            self.model.eq[channel] = {band: 0.0 for band in core.EQ_BANDS}
+        self._eq_dirty = need_flush
+
+    def _startup_settings(self) -> bool:
+        """Apply the preferences that need a live engine, once, at startup."""
+        try:
+            self._route_decks_to_master(self.settings)
+        except Exception as exc:
+            _log(f"settings: master-output routing at startup failed: {exc!r}")
+        try:
+            self._apply_default_eq(self.settings)
+        except Exception as exc:
+            _log(f"settings: default equaliser at startup failed: {exc!r}")
+        if self.settings.record_on_start and not self.recorder.is_recording:
+            # A saved "start recording" is honoured only when parec is there,
+            # and a failure is reported on the REC button rather than silently
+            # pretending a set is being captured.
+            self._toggle_recording()
+            _log(f"settings: record on start requested; recording={self.recorder.is_recording} "
+                 f"error={self.recorder.error or 'none'}")
+        if self.area is not None:
+            self.area.queue_draw()
+        return False
 
     def _destroy_window(self) -> None:
         """Close the window before the exit movie starts.
@@ -428,6 +651,11 @@ class LiquidMixer(GlassHost):
         if self.with_visualizer:
             GLib.timeout_add(500, self._start_visualizer)
         GLib.timeout_add(120, self._tick)
+        # The saved preferences that need a running deck are applied once the
+        # engines have had a moment to open their sockets: deck output routing,
+        # the default equaliser, and an optional recording started without a
+        # keypress.
+        GLib.timeout_add(1600, self._startup_settings)
         # Font metrics need a realized VTE and a real allocation. Re-fit a few
         # times so a slow engine start or a WM resize cannot leave the decks
         # at the fallback face.
@@ -806,10 +1034,16 @@ class LiquidMixer(GlassHost):
             # On a first run this names the one-row theme playlist; otherwise
             # the deck reads the generated Music Folders playlist as before.
             argv = deck_argv(self.theme,
-                             str(self._first_run_playlist) if self._first_run_playlist else None)
+                             str(self._first_run_playlist) if self._first_run_playlist else None,
+                             autoplay=bool(self.settings.decks_autoplay))
             env = _child_env(as_dict=True)
             env["MP_PLAYER_NAMESPACE"] = deck["namespace"]
             env["MP_LIQUID_GLASS_MIXER"] = "1"
+            # Settings > Master output pins the deck to the chosen sink without
+            # changing the desktop's default. An empty setting leaves the
+            # engine's own default alone.
+            env.update(settings_api.child_audio_env(self.settings))
+            deck["env"] = env
             env_list = [f"{key}={value}" for key, value in env.items()]
             try:
                 term.spawn_async(
@@ -1376,6 +1610,14 @@ class LiquidMixer(GlassHost):
                 write_player_visualizer_state,
             )
         if not self._viz_owned:
+            # V is a deliberate request. If Settings had the visualizer off,
+            # pressing V turns that preference back on so the next launch does
+            # not silently ignore the button the user just pressed.
+            if not self.settings.visualizer_enabled:
+                self.settings.visualizer_enabled = True
+                self.settings.save()
+                self.with_visualizer = True
+                _log("visualizer: re-enabled from the V key")
             self._start_visualizer()
             return
         state = read_player_visualizer_state()
@@ -1495,6 +1737,11 @@ class LiquidMixer(GlassHost):
             return True
         if key == Gdk.KEY_r and not from_deck:
             self._toggle_recording()
+            return True
+        # S is the Settings window. Numeric keysyms are used so the check does
+        # not depend on every test fake defining KEY_s.
+        if key in (ord("s"), ord("S")) and not from_deck:
+            self._open_settings()
             return True
         if key == Gdk.KEY_x and not from_deck:
             self.model.toggle_mode()
@@ -1666,6 +1913,9 @@ class LiquidMixer(GlassHost):
         if y < self.boxes["top_bar"][3]:
             if core.inside(x, y, self.boxes["trance_button"]):
                 # Status lamp: it deliberately does not change the audio.
+                return True
+            if core.inside(x, y, self.boxes["settings_button"]):
+                self._open_settings()
                 return True
             if core.inside(x, y, self.boxes["visualizer_button"]):
                 self._toggle_visualizer()
@@ -1927,6 +2177,12 @@ class LiquidMixer(GlassHost):
         self.theme = core.next_theme(self.theme)
         core.write_theme(self.theme)
         self._theme_seen = self.theme
+        # A saved default theme would otherwise win again at the next launch and
+        # undo the cycle. Cycling is an explicit choice, so it becomes the saved
+        # default too (when a default theme is actually set).
+        if self.settings.theme:
+            self.settings.theme = self.theme
+            self.settings.save()
         self._apply_deck_theme()
         self.area.queue_draw()
 
@@ -2184,6 +2440,18 @@ class LiquidMixer(GlassHost):
         vx = self.boxes["visualizer_button"]
         self._text(cr, vx[0] - 18 * s, box[1] + 23 * s, s4_text, 10.5 * s,
                    s4_color, 0.94, bold=True, anchor="end")
+
+        # Settings button: the same pill style as the visualizer toggle.
+        sx = self.boxes["settings_button"]
+        cr.set_source_rgba(*_rgba(_darken(core.theme_field(self.theme), 0.35), 0.35))
+        self._rounded(cr, sx[0], sx[1], sx[2], sx[3], 9 * s)
+        cr.fill()
+        cr.set_source_rgba(*_rgba(accent, 0.72))
+        cr.set_line_width(max(1.0, 1.2 * s))
+        self._rounded(cr, sx[0], sx[1], sx[2], sx[3], 9 * s)
+        cr.stroke()
+        self._text(cr, sx[0] + sx[2] / 2, sx[1] + 10 * s,
+                   "SETTINGS", 12 * s, glass_ink, 0.92, bold=True, anchor="middle")
 
         # Visualizer button.
         active = self._viz_owned and self._viz_visible
@@ -2805,7 +3073,7 @@ class LiquidMixer(GlassHost):
                 cr.line_to(width - 4 * s, height - 8 * s - step * 6 * s)
                 cr.stroke()
 
-        hints = "C  THEME    V  VISUALIZER    W  BLACK GLASS    X  MIX MODE    DBL-CLICK TOP / F11  ESC  QUIT"
+        hints = "S  SETTINGS    C  THEME    V  VISUALIZER    W  BLACK GLASS    X  MIX MODE    F11  ESC  QUIT"
         self._text(cr, box[0] + box[2] - 28 * s, box[1] + 5 * s, hints, 8.5 * s, glass_ink, 0.55, anchor="end")
         launches = "M  MANAGER    Z  VISUALIZER    W  BLACK GLASS    L  LIQUID PLAYER    G  MP GUI"
         self._text(cr, box[0] + box[2] - 28 * s, box[1] + 21 * s, launches, 7.6 * s, glass_ink, 0.44, anchor="end")
@@ -2841,8 +3109,10 @@ def main(argv: Optional[list] = None) -> int:
     # "starting" instead of pointing at a window that is not up yet.
     mixer = LiquidMixer(
         theme=args.theme,
-        fullscreen=not args.windowed,
-        with_visualizer=not args.no_visualizer,
+        # Only pass the flags the user actually gave, so a saved preference is
+        # used when the launch did not override it.
+        fullscreen=(False if args.windowed else None),
+        with_visualizer=(False if args.no_visualizer else None),
         font=args.font,
     )
     return mixer.run()

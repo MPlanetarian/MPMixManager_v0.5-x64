@@ -23,9 +23,10 @@ behind the whole surface.
 | **Traktor MIDI auto-map** | A detected **Traktor Kontrol** mixer in MIDI mode is mapped automatically (Play A/B, Sync A/B, Shift, Browse, Load, Record, channel volume and deck pitch). A generic MIDI controller is never opened or mapped; only a device whose ALSA name contains `Traktor` is used. The native S4 evdev path remains available for hardware that is not in MIDI mode. |
 | **Exit_MP_Video.mp4 brackets the window** | On every launch the shared loader movie plays **before** the mixer window exists, and after the last window closes the same movie plays **after** the window is gone. Both use `scripts/display_loader_video.sh` (`--intro-force` / `--exit-force`), so the movie, player choice, borderless window and timeout are the ones every other MP window uses. Each launch path (desktop shortcut, `X` in another MP window, or `run.sh`) shares this one implementation, so the movie never plays twice. |
 | **Desktop shortcut** | `MP Liquid Mixer.desktop` on the Desktop and in the application menu on Linux, written by `scripts/install_desktop_shortcuts.py` in the same style as the other four MP entries. It points at `scripts/launch_liquid_mixer.sh` through `mp-desktop-exec`, so moving or renaming the install keeps it working. macOS and Windows do not get one: the mixer needs X11/XWayland, VTE and ALSA. |
-| **WAV / FLAC at 4 GiB** | The master output records as WAV (default) or FLAC at a fixed 4 GiB part ceiling. WAV sizes are unsigned 32-bit, so a part passes the old 2 GiB wall; at the ceiling the next file is `..._PART_2`, `..._PART_3`, and so on. |
+| **WAV / FLAC with a selectable part size** | The master output records as WAV (default) or FLAC. The part ceiling is 4 GiB by default and can be lowered to 2 GiB or 1 GiB in Settings; WAV sizes are unsigned 32-bit, so a 4 GiB part passes the old 2 GiB wall. At the ceiling the next file is `..._PART_2`, `..._PART_3`, and so on. |
 | **Themed chrome** | A **Trance Connection Enabled** status lamp, a live system clock, the **WAV/FLAC** toggle, a **24-Bit** badge and the **DREAMWORLDS PRODUCTIONS / MPLANETARIAN** credit all use the active theme's accent and secondary colours, so `C` repaints them with the rest of the window. |
 | **Transparency bar** | The player's own 20%-80% slider range at the bottom of the screen, applied to the whole glass window so the visualizer shows through. |
+| **Settings window** | The **SETTINGS** button in the top bar (or `S`) opens one modal window for every configurable preference: recording folder, format and part size; the master output device (any sink, Bluetooth included); the default theme; the startup and exit videos; the background visualizer; a default equaliser preset; start full screen and deck autoplay. Saved to `~/.config/mix-manager/liquid_mixer_settings.json`. |
 | **Tempo & sync** | Vertical pitch sliders for A/B, master-tempo ownership, and Sync. BPM tags give a true beat match; without tags the target copies the master's pitch. The master follows the most recently started deck and hands over when its track ends. |
 | **Themes** | `C` cycles the same theme list as every other MP window. The players follow the shared `theme` file within a second, so both decks and the chrome change together. The mixer also repaints each deck terminal's background and ink from the theme, including when `C` is pressed inside a deck or in MP Gui. |
 
@@ -73,6 +74,7 @@ finds Python itself; no install step.
 | **Clock** | Real-time system clock (date and `HH:MM:SS`), read when the mixer opens and refreshed every second |
 | **Transparency bar** (drag) | Window opacity, 20%-80%, persisted |
 | `C` | Next theme. In a deck the player handles `C` itself (so search can still type "c"); here it writes the same shared theme file, and the mixer follows it. |
+| `S` or **SETTINGS** | Open the Settings window (see below) |
 | `R` or **REC** | Start/stop master-output recording |
 | `M` | Open MP Mix Manager in a new Konsole window (`Mix_Archive_Manager.sh`) |
 | `Z` | Open an MP Liquid Visualizer window |
@@ -86,8 +88,39 @@ finds Python itself; no install step.
 
 Inside a deck the player's own keys keep working: `Space` play/pause, arrows to
 seek, `1`/`2`/`3` libraries, `/` search, and the rest of the MP Audio Player
-key map. The mixer only takes `C`, `V`, `X`, `R`, `M`, `Z`, `W`, `L`, `G`,
-`F11` and `Esc`, and only when the deck is not the focused widget.
+key map. The mixer only takes `C`, `S`, `V`, `X`, `R`, `M`, `Z`, `W`, `L`,
+`G`, `F11` and `Esc`, and only when the deck is not the focused widget.
+
+### Settings
+
+**SETTINGS** in the top bar, or `S`, opens one window holding every preference
+the mixer can change. **Save Settings** applies it to the running window where
+that has a live meaning, and to the next launch where it does not.
+
+| Section | Setting | What it does |
+| :--- | :--- | :--- |
+| **Recording** | Output folder | Where finished recordings land. The default follows `MIX_ARCHIVE/MP_AUDIOWAV_REC_OUTPUT`; **Use default** puts it back. |
+| | Audio format | `WAV` (PCM 16-bit, the default) or `FLAC`. A live recording restarts in the chosen container. |
+| | Part size | **4 GB** (the WAV maximum, the default), **2 GB** or **1 GB** per part. A longer set continues as `_PART_2`, `_PART_3`. |
+| | Record from | The master output (the room mix, the default) or the monitor of any output device. |
+| | Start recording when the mixer opens | Presses REC once the decks are up. |
+| **Audio Output** | Master output | Both decks play through this device, **any sink including Bluetooth**. **System default** follows the desktop. The desktop's own default is never changed: the deck engines are pinned with `PULSE_SINK` and an existing stream is moved with `pactl move-sink-input`. |
+| **Appearance** | Default theme | Any theme in the drop-down. It becomes the shared theme on save and at launch. |
+| | Disable the visualizer window behind the mixer | Checked means the visualizer is never started at launch. `V` still opens one on demand. |
+| | Start full screen | Off starts in the centred 1920x1080 window. |
+| **Startup & Exit** | Play the startup video | Uncheck and `MP_loader.mp4` never plays before the window. |
+| | Play the exit video | Uncheck and `Exit_MP_Video.mp4` never plays when the mixer closes. |
+| | Load each deck ready to play | Off (the default) keeps both decks paused. |
+| **Deck Audio** | Default equaliser | `Flat`, `Ambient`, `Trance`, `Techno`, `House`, `Progressive`, `Vapourwave` or `Sensorium Interface`, applied to both decks at launch. The mixer's own EQ knobs override it for a deck once moved. |
+
+The settings live in `~/.config/mix-manager/liquid_mixer_settings.json`, a plain
+JSON file that can be edited by hand. Every value is validated on load: an
+unknown format, part size, theme or preset falls back to the documented default
+rather than breaking a launch. Deleting the file restores every default.
+
+The Settings window re-reads the device list when it opens, and **Refresh** in
+the Audio Output section fetches it again, so a headset connected while the
+mixer is running appears as soon as the desktop has it.
 
 ### Traktor hardware
 
@@ -113,20 +146,23 @@ it runs, so a device switched to MIDI mode or plugged in later is picked up.
 ## Recording
 
 The master output is recorded as **PCM 16-bit stereo WAV** by default. The
-format button switches to **FLAC** and back; both formats use the same capture
-and the same fixed ceiling.
+format button switches to **FLAC** and back; Settings > Recording sets the same
+two values, and both formats use the same capture.
 
-- **The limit is exactly 4 GiB and is not configurable.** A WAV part is capped
-  at 4,294,967,248 bytes of audio (44-byte header excluded, rounded down to a
-  whole 16-bit stereo frame). The RIFF `ChunkSize` and `data` size are written
-  as **unsigned 32-bit** fields, so a part is not trapped at 2 GiB.
+- **The part ceiling is 4 GiB by default and can be lowered to 2 GiB or 1 GiB**
+  in Settings > Recording. A WAV part at the 4 GiB default is capped at
+  4,294,967,248 bytes of audio (44-byte header excluded, rounded down to a whole
+  16-bit stereo frame). The RIFF `ChunkSize` and `data` size are written as
+  **unsigned 32-bit** fields, so a part is not trapped at 2 GiB.
 - **Parts continue automatically.** When the current part reaches the ceiling
   it is finalised and recording continues as `..._PART_2.wav` (or `.flac`),
   then `..._PART_3`, and so on. The original file keeps its name and is part 1.
 - **FLAC** is encoded with the `flac` command from raw PCM (or `ffmpeg`, which
   the suite already requires, when `flac` is absent). Its part limit is 16 MiB
-  below the 4 GiB line so encoder buffering can never push a file over.
+  below the chosen ceiling so encoder buffering can never push a file over.
 - The record log (`liquid_mixer_recording.log`) is written beside the parts.
+- The capture source is the master output (the default, or the device chosen in
+  Settings) rather than always the desktop default.
 
 ### Exporting to MIX_ARCHIVE
 
@@ -243,6 +279,8 @@ shows through the chrome and around the player screens.
 MP_Liquid_Mixer/
   MP_Liquid_Mixer.py   # the window, drawing, input, deck spawning, visualizer
   mixer_core.py        # model, equal-power curve, IPC, themes, layout
+  mixer_settings.py    # the saved preferences and the audio-device helpers
+  mixer_settings_dialog.py  # the Settings window (GTK)
   run.sh               # launcher
   README.md            # this file
 scripts/
@@ -371,13 +409,18 @@ mixer no longer stops anything.
 ## Tests
 
 ```bash
-python3 -m unittest tests.test_liquid_mixer -v
+python3 -m unittest tests.test_liquid_mixer tests.test_liquid_mixer_settings -v
 ```
 
 The suite covers the equal-power curve, channel gating (C/D inert), External
 unity, persistence, the 1920x1080 composition and 4K scaling, the opacity and
 fader coordinate maps, theme cycling, deck path namespacing and the player's
 `MP_PLAYER_NAMESPACE` / `--no-autoplay` wiring.
+
+`tests.test_liquid_mixer_settings` covers the Settings model: defaults,
+validation, persistence, the theme list, the device/sink helpers, the recording
+part limits and the recorder's capture device. The GTK dialog itself is driven
+by those tests through a stubbed `run()`, so a headless run still exercises it.
 
 ---
 

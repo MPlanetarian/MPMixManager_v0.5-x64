@@ -97,7 +97,8 @@ SHARED_GLOBS = {
     "theme": ("manager", "gui", "liquid", "visualizer"),
     "MP_Error.log": ("manager", "gui", "liquid", "visualizer"),
     # The mixer is a Linux-only extra, but its lock, state and logs are written
-    # by the same suite and belong to no single one of the four apps.
+    # by the same suite and belong to no single one of the four apps. This glob
+    # also owns the Settings window's liquid_mixer_settings.json.
     "liquid_mixer*": ("manager", "gui", "liquid", "visualizer"),
     # The one-row playlist a first-run mixer deck opens with. Derived state:
     # it is written again only while no library is configured.

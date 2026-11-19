@@ -1,9 +1,21 @@
 #!/usr/bin/env python3
 """
-Generate the MP Liquid Transparent Glass Icon for Desktop and Application Launchers.
+Generate the MP Liquid Transparent Glass icon, used as a *fallback* image.
+
+Since v0.5 the shipped application and tray icon is **Dreamworld Aurora**,
+drawn by MPlanetarian and stored as:
+
+- assets/dreamworld_aurora.png  (512x512 RGBA, the canonical image)
+- assets/dreamworld_aurora.ico  (16-256 px Windows icon)
+- assets/dreamworld_aurora.svg  (scalable wrapper around the artwork)
+
+``assets/mp_liquid_glass_icon.png`` is kept as an alias of the same artwork,
+because every installer, desktop entry and tray helper already points at that
+name. This script therefore writes the generated glass ring to a *separate*
+legacy name so running it can never replace Dreamworld Aurora.
 Outputs:
-- assets/mp_liquid_glass_icon.png (512x512 RGBA high-resolution glass icon)
-- assets/mp_liquid_glass_icon.svg (Scalable vector graphic)
+- assets/mp_liquid_glass_icon_generated.png (512x512 RGBA)
+- assets/mp_liquid_glass_icon_generated.svg (Scalable vector graphic)
 """
 
 import math
@@ -14,8 +26,9 @@ ROOT = Path(__file__).resolve().parent.parent
 ASSETS_DIR = ROOT / "assets"
 ASSETS_DIR.mkdir(parents=True, exist_ok=True)
 
-PNG_PATH = ASSETS_DIR / "mp_liquid_glass_icon.png"
-SVG_PATH = ASSETS_DIR / "mp_liquid_glass_icon.svg"
+# Deliberately not the shipped icon names. See the module docstring.
+PNG_PATH = ASSETS_DIR / "mp_liquid_glass_icon_generated.png"
+SVG_PATH = ASSETS_DIR / "mp_liquid_glass_icon_generated.svg"
 
 
 def generate_png_icon(size=512):
@@ -353,26 +366,29 @@ def generate_svg_icon():
 
 
 def main():
-    print("Generating MP Liquid Transparent Glass PNG icon...")
+    print("Generating MP Liquid Transparent Glass PNG icon (legacy fallback)...")
     png_img = generate_png_icon(512)
     png_img.save(PNG_PATH, format="PNG")
     print(f"✓ Saved PNG icon: {PNG_PATH}")
 
-    print("Generating MP Liquid Transparent Glass SVG icon...")
+    print("Generating MP Liquid Transparent Glass SVG icon (legacy fallback)...")
     generate_svg_icon()
     print(f"✓ Saved SVG icon: {SVG_PATH}")
 
-    # Also install to user local icons directory for desktop integration
+    # Install the fallback under its own name only. The shipped shortcut icon
+    # is Dreamworld Aurora; writing it into mp_liquid_glass_icon.* here would
+    # silently undo the v0.5 icon change for every user.
     icons_dir = Path.home() / ".local" / "share" / "icons" / "hicolor" / "512x512" / "apps"
     icons_dir.mkdir(parents=True, exist_ok=True)
-    local_png = icons_dir / "mp_liquid_glass_icon.png"
-    png_img.save(local_png, format="PNG")
+    png_img.save(icons_dir / "mp_liquid_glass_icon_generated.png", format="PNG")
 
     user_icons = Path.home() / ".local" / "share" / "icons"
     user_icons.mkdir(parents=True, exist_ok=True)
-    png_img.save(user_icons / "mp_liquid_glass_icon.png", format="PNG")
-    (user_icons / "mp_liquid_glass_icon.svg").write_text(SVG_PATH.read_text(encoding="utf-8"), encoding="utf-8")
-    print(f"✓ Installed icons to {user_icons}")
+    png_img.save(user_icons / "mp_liquid_glass_icon_generated.png", format="PNG")
+    (user_icons / "mp_liquid_glass_icon_generated.svg").write_text(
+        SVG_PATH.read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    print(f"✓ Installed fallback icons to {user_icons}")
 
 
 if __name__ == "__main__":

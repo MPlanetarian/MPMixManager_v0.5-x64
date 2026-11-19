@@ -12,8 +12,8 @@
 #   ./scripts/build_windows_launcher.sh --image fedora:44
 #
 # Version info comes from scripts/windows_launcher.rc — bump that (and VERSION)
-# before a release. The window icon is assets/mp_liquid_glass_icon.ico, the same
-# artwork the MP Liquid Player desktop shortcut uses.
+# before a release. The window icon is assets/mp_liquid_glass_icon.ico, the
+# same Dreamworld Aurora artwork the MP desktop shortcuts and tray use.
 # ==============================================================================
 set -euo pipefail
 

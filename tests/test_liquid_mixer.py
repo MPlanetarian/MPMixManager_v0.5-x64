@@ -1140,6 +1140,114 @@ class TestMixerShortcut(unittest.TestCase):
         self.assertNotIn("--intro-force", text)
 
 
+class TestSettingsAppliedToTheWindow(unittest.TestCase):
+    """The Settings snapshot must change the live window, not only the file."""
+
+    def setUp(self):
+        # _apply_settings() really saves, so point the write at a scratch file:
+        # a test run must never overwrite the user's own preferences.
+        import tempfile
+        self._tmp = tempfile.TemporaryDirectory()
+        self._settings_file = Path(self._tmp.name) / "liquid_mixer_settings.json"
+        self._save_patch = patch("mixer_settings.SETTINGS_PATH", self._settings_file)
+        self._save_patch.start()
+        self.addCleanup(self._save_patch.stop)
+        self.addCleanup(self._tmp.cleanup)
+
+    def _mixer(self):
+        import MP_Liquid_Mixer as app
+        mixer = app.LiquidMixer()
+        mixer.area = MagicMock()
+        mixer.window = MagicMock()
+        return mixer
+
+    def test_saving_the_format_moves_the_recorder(self):
+        import mixer_settings
+        mixer = self._mixer()
+        mixer.recorder = MagicMock()
+        mixer.recorder.format = "WAV"
+        with patch.object(mixer, "_route_decks_to_master"), \
+             patch.object(mixer, "_apply_default_eq"), \
+             patch.object(mixer.settings, "save"):
+            mixer._apply_settings(mixer_settings.Settings(recording_format="FLAC"))
+        mixer.recorder.set_format.assert_called_with("FLAC")
+
+    def test_saving_the_part_limit_moves_the_recorder(self):
+        import mixer_settings
+        mixer = self._mixer()
+        mixer.recorder = MagicMock()
+        with patch.object(mixer, "_route_decks_to_master"), \
+             patch.object(mixer, "_apply_default_eq"), \
+             patch.object(mixer.settings, "save"):
+            mixer._apply_settings(mixer_settings.Settings(recording_part_limit_gib=1))
+        mixer.recorder.set_part_limit_gib.assert_called_with(1)
+
+    def test_master_output_is_pushed_into_every_deck_environment(self):
+        import mixer_settings
+        mixer = self._mixer()
+        mixer.decks = {
+            "A": {"namespace": "mixerdeck_a", "env": {"MP_PLAYER_NAMESPACE": "mixerdeck_a"}},
+            "B": {"namespace": "mixerdeck_b", "env": {"MP_PLAYER_NAMESPACE": "mixerdeck_b"}},
+        }
+        settings = mixer_settings.Settings(master_output_device="alsa_output.hdmi")
+        with patch("mixer_settings.move_process_streams", return_value=1) as moved:
+            mixer._route_decks_to_master(settings)
+        for channel in ("A", "B"):
+            self.assertEqual(mixer.decks[channel]["env"]["PULSE_SINK"], "alsa_output.hdmi")
+        self.assertEqual(moved.call_count, len(mixer.decks))
+
+    def test_the_default_equaliser_is_sent_to_the_decks(self):
+        import mixer_settings
+        mixer = self._mixer()
+        mixer.decks = {"A": {"namespace": "mixerdeck_a"}}
+        mixer.model.eq["A"]["low"] = 6.0
+        settings = mixer_settings.Settings(eq_preset="Techno")
+        with patch.object(mixer_core, "player_socket") as sock, \
+             patch.object(mixer_core, "send_ipc") as send:
+            sock.return_value.exists.return_value = True
+            # The preset reply carries the engine's real 10-band curve, which
+            # is what stops the next mixer flush from cancelling the preset.
+            send.return_value = {"bands": [4.0, 3.0, 1.0, 0.0, 0.0, 1.0, 2.0, 3.0, 2.0, 1.0]}
+            mixer._apply_default_eq(settings)
+        preset_calls = [call for call in send.call_args_list
+                        if len(call.args) > 1 and call.args[1] == "set_eq_preset"]
+        self.assertEqual(len(preset_calls), 1)
+        self.assertEqual(preset_calls[0].kwargs["preset"], "Techno")
+        # The knobs reset to flat so the preset is what is actually heard.
+        self.assertEqual(mixer.model.eq["A"]["low"], 0.0)
+        # The preset's own curve is remembered as sent, not the flat bands.
+        self.assertEqual(mixer._eq_sent["A"][0], 4.0)
+        self.assertFalse(mixer._eq_dirty)
+
+    def test_disabling_the_visualizer_stops_the_window_launching_one(self):
+        import mixer_settings
+        mixer = self._mixer()
+        mixer._viz_owned = False
+        mixer.recorder = MagicMock()
+        mixer.with_visualizer = True
+        with patch.object(mixer, "_route_decks_to_master"), \
+             patch.object(mixer, "_apply_default_eq"), \
+             patch.object(mixer.settings, "save"):
+            mixer._apply_settings(mixer_settings.Settings(visualizer_enabled=False))
+        self.assertFalse(mixer.with_visualizer)
+
+    def test_the_startup_video_switch_is_honoured_before_the_script_runs(self):
+        mixer = self._mixer()
+        mixer.settings.startup_video = False
+        mixer.settings.exit_video = False
+        with patch("subprocess.run") as run:
+            mixer._play_loader_video("--intro-force")
+            mixer._play_loader_video("--exit-force")
+        run.assert_not_called()
+
+    def test_an_enabled_startup_video_still_runs_the_script(self):
+        mixer = self._mixer()
+        mixer.settings.startup_video = True
+        with patch("subprocess.run") as run:
+            mixer._play_loader_video("--intro-force")
+        self.assertTrue(run.called)
+
+
 class TestMixerChrome(unittest.TestCase):
     def test_new_buttons_have_their_own_boxes(self):
         boxes = mixer_core.layout()
@@ -1155,6 +1263,42 @@ class TestMixerChrome(unittest.TestCase):
                                 boxes["clock_button"][1] + boxes["clock_button"][3])
         self.assertLessEqual(boxes["export_button"][1] + boxes["export_button"][3],
                              boxes["mixer"][1] + boxes["mixer"][3])
+
+    def test_the_settings_button_sits_in_the_top_bar_without_overlaps(self):
+        boxes = mixer_core.layout()
+        self.assertIn("settings_button", boxes)
+        button = boxes["settings_button"]
+        trance = boxes["trance_button"]
+        visualizer = boxes["visualizer_button"]
+        self.assertGreaterEqual(button[0], trance[0] + trance[2])
+        self.assertLessEqual(button[0] + button[2], visualizer[0])
+        self.assertEqual(button[1], trance[1])
+        self.assertEqual(button[3], trance[3])
+        self.assertLessEqual(button[1] + button[3], boxes["top_bar"][3])
+
+    def test_the_settings_button_opens_the_dialog(self):
+        from types import SimpleNamespace
+        import MP_Liquid_Mixer as app
+        mixer = app.LiquidMixer()
+        mixer.area = MagicMock()
+        mixer.window = MagicMock()
+        mixer.window.get_allocated_width.return_value = 1920
+        mixer.window.get_allocated_height.return_value = 1080
+        box = mixer.boxes["settings_button"]
+        event = SimpleNamespace(x=box[0] + box[2] / 2, y=box[1] + box[3] / 2,
+                                x_root=0, state=0, type=0)
+        with patch.object(mixer, "_open_settings") as opened:
+            self.assertTrue(mixer._on_press(None, event))
+        opened.assert_called_once_with()
+
+    def test_the_settings_button_paints_with_a_plain_label(self):
+        # No emoji in the chrome: the suite's fonts do not all carry one, and a
+        # missing glyph turns the button into a box.
+        import inspect
+        import MP_Liquid_Mixer as app
+        source = inspect.getsource(app.LiquidMixer._paint_top_bar)
+        self.assertIn('"SETTINGS"', source)
+        self.assertNotIn("⚙", source)
 
     def test_the_format_button_toggles_wav_and_flac(self):
         import MP_Liquid_Mixer as app

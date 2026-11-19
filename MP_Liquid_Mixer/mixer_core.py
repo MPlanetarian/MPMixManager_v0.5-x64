@@ -1191,6 +1191,7 @@ def layout(width: int = DESIGN_W, height: int = DESIGN_H) -> Dict[str, Tuple[flo
         "opacity": rect(192, 1040, 1536, 24),
         "visualizer_button": rect(1600, 14, 196, 36),
         "trance_button": rect(540, 14, 300, 36),
+        "settings_button": rect(1150, 14, 144, 36),
         "close_button": rect(1836, 14, 48, 36),
     }
     # Channel strips: the volume faders are a quarter of their old height.

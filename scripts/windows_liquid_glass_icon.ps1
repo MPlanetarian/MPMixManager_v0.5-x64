@@ -2,8 +2,10 @@
 .SYNOPSIS
     Build a Windows .ico from assets\mp_liquid_glass_icon.png.
 
-The tray and desktop shortcuts both use that image. Windows notification
-icons and .lnk files need a real icon file, so this writes
+The tray and desktop shortcuts both use that image. Since v0.5 the file is
+the Dreamworld Aurora artwork drawn by MPlanetarian; the name is kept because
+every installer and shortcut already points at it. Windows notification icons
+and .lnk files need a real icon file, so this writes
 assets\mp_liquid_glass_icon.ico from the PNG whenever the PNG is newer.
 #>
 

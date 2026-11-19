@@ -1269,6 +1269,27 @@ def export_playlist_m3u(mixes: List[Dict[str, Any]], target_path: Union[str, Pat
         return True, str(tp.resolve())
     except Exception as e: return False, str(e)
 
+def export_playlist_file(mixes: List[Dict[str, Any]], target_path: Union[str, Path, None],
+                         fmt: Optional[str] = None) -> Tuple[bool, str]:
+    """Write a playlist in the chosen container.
+
+    The exporter understands m3u, m3u8, xspf, pls and json; the suffix decides
+    unless ``fmt`` names one. Returns (ok, real_path_or_error) like
+    export_playlist_m3u, which stays for the callers that only offer m3u.
+    """
+    if not target_path:
+        return False, "Destination path cannot be empty"
+    try:
+        scripts = str(Path(__file__).resolve().parent / "scripts")
+        if scripts not in sys.path:
+            sys.path.insert(0, scripts)
+        import playlist_formats as formats
+        written = formats.write_playlist(target_path, mixes, fmt)
+        return True, str(Path(written).resolve())
+    except Exception as exc:
+        return False, str(exc)
+
+
 def open_image_viewer(image_path: Union[str, Path]) -> bool:
     if not (ip := Path(image_path).expanduser().resolve()).is_file(): return False
     t_str = str(ip)
@@ -8018,6 +8039,12 @@ class TerminalPlayerUI:
         self.eq_custom_name_input = ""
         self.running, self.inspector_hud_active = True, False
         self.search_mode, self.search_query, self.export_mode, self.export_path = False, "", False, ""
+        # The export prompt picks a container first, then a path. The rows
+        # are frozen when the prompt opens, so changing the search filter
+        # afterwards cannot change what gets written.
+        self.export_format_mode = False
+        self.export_tracks = None
+        self.export_format = ".m3u8"
         self._playlist_clear_armed = False
         # Favorites clear decision window, DJ export and Traktor playlist prompts.
         self.favorites_clear_confirm = False
@@ -10234,15 +10261,40 @@ class TerminalPlayerUI:
             return
         self._notify(spawn_message(result) or "MP Black Glass could not be opened.", 4.0)
 
+    # Containers the playlist exporter can write, in the order the prompt
+    # numbers them. playlist_formats picks the real writer from the suffix.
+    _EXPORT_FORMATS = (
+        ("m3u8", "M3U8 (UTF-8, recommended)"),
+        ("m3u", "M3U (classic)"),
+        ("xspf", "XSPF (XML)"),
+        ("pls", "PLS (Winamp)"),
+        ("json", "JSON (full metadata)"),
+    )
+
+    def _default_export_path(self, fmt: str) -> str:
+        base = "~/Desktop" if os.path.isdir(os.path.expanduser("~/Desktop")) else "~"
+        return os.path.join(os.path.expanduser(base), f"MP_Archive_Playlist.{fmt}")
+
     def _export_playlist(self):
         if not (mixes := self.scanner.get_mixes(self.search_query)): return self._notify("No mixes in playlist to export.", 3.0)
+        # Freeze the rows the prompt was opened over.
+        self.export_tracks = list(mixes)
         chosen = choose_export_m3u_gui()
-        if chosen == "": return self._notify("Export cancelled.", 2.5)
+        # None means no GUI dialog was available, so fall through to the
+        # in-terminal format + path prompt. An empty string is a real cancel.
+        if chosen == "":
+            self.export_tracks = None
+            return self._notify("Export cancelled.", 2.5)
         if chosen:
-            ok, res = export_playlist_m3u(mixes, chosen)
-            return self._notify(f"Exported {len(mixes)} mixes to: {os.path.basename(res)}" if ok else f"Export failed: {res}", 4.0)
-        self.export_mode = True
-        self.export_path = os.path.join(os.path.expanduser("~/Desktop" if os.path.isdir(os.path.expanduser("~/Desktop")) else "~"), "MP_Archive_Playlist.m3u")
+            # The dialog returns a path; its suffix names the container, so use
+            # the format-aware writer rather than forcing .m3u.
+            ok, res = export_playlist_file(self.export_tracks, chosen)
+            return self._notify(f"Exported {len(self.export_tracks)} mixes to: {os.path.basename(res)}" if ok else f"Export failed: {res}", 4.0)
+        # No GUI dialog: ask for a container, then a path.
+        self.export_format_mode = True
+        self.export_mode = False
+        self.export_format = "." + self._EXPORT_FORMATS[0][0]
+        self.export_path = self._default_export_path(self.export_format.lstrip('.'))
 
     def _queue_selected(self):
         tp, tn = self._get_target_path()
@@ -10498,11 +10550,32 @@ class TerminalPlayerUI:
                     if c.isprintable(): self.eq_custom_name_input += c
                 except Exception: pass
                 return
+        if self.export_format_mode:
+            if data == b"\x1b":
+                self.export_format_mode = False; self.export_tracks = None; self._notify("Export cancelled", 2.5)
+                return
+            if data in (b"\r", b"\n"):
+                self.export_format_mode = False
+                self.export_mode = True
+                self.export_path = self._default_export_path(self.export_format.lstrip('.'))
+                return
+            try:
+                idx = int(data.decode("utf-8", "ignore"))
+            except (ValueError, UnicodeDecodeError):
+                return
+            if 1 <= idx <= len(self._EXPORT_FORMATS):
+                # Choosing a container moves straight to the path step; Enter
+                # on its own accepts the default (M3U8).
+                self.export_format = "." + self._EXPORT_FORMATS[idx - 1][0]
+                self.export_path = self._default_export_path(self.export_format.lstrip('.'))
+                self.export_format_mode = False
+                self.export_mode = True
+            return
         if self.export_mode:
             if data in (b"\r", b"\n"):
                 self.export_mode = False
-                mixes = self.scanner.get_mixes(self.search_query)
-                ok, res = export_playlist_m3u(mixes, self.export_path.strip() or os.path.expanduser("~/Desktop/MP_Archive_Playlist.m3u"))
+                mixes = self.export_tracks if self.export_tracks is not None else self.scanner.get_mixes(self.search_query)
+                ok, res = export_playlist_file(mixes, self.export_path.strip() or self._default_export_path(self.export_format.lstrip('.')), self.export_format.lstrip('.'))
                 self._notify(f"Exported {len(mixes)} mixes to: {os.path.basename(res)}" if ok else f"Export failed: {res}", 4.0)
             elif data == b"\x1b": self.export_mode = False; self._notify("Export cancelled", 2.5)
             elif data in (b"\x7f", b"\x08"): self.export_path = self.export_path[:-1]

@@ -38,6 +38,9 @@ PREVENT_AUTOPLAY_FILE = CONFIG_DIR / ".first_run_sample_prevent_autoplay"
 EQ_FLAG_FILE = CONFIG_DIR / ".first_run_eq_initialized"
 
 ASSETS_DIR = ROOT / "assets"
+# Dreamworld Aurora is the shipped v0.5 icon (designed by MPlanetarian).
+AURORA_PNG = ASSETS_DIR / "dreamworld_aurora.png"
+AURORA_SVG = ASSETS_DIR / "dreamworld_aurora.svg"
 ICON_PNG = ASSETS_DIR / "mp_liquid_glass_icon.png"
 ICON_SVG = ASSETS_DIR / "mp_liquid_glass_icon.svg"
 LAUNCHER_SCRIPT = ROOT / "scripts" / "launch_liquid_glass.sh"
@@ -56,16 +59,18 @@ def install_reward_desktop_shortcut():
     USER_DESKTOP.mkdir(parents=True, exist_ok=True)
     APPS_SHORTCUT.parent.mkdir(parents=True, exist_ok=True)
 
-    # 1. Ensure icons exist
-    if not ICON_PNG.exists() or not ICON_SVG.exists():
+    # 1. The shipped icon is Dreamworld Aurora (v0.5). It is a committed asset,
+    #    never generated at runtime: falling back to the drawn glass ring here
+    #    would put the old artwork back on the shortcut.
+    if not ICON_PNG.exists() and AURORA_PNG.exists():
         try:
-            from scripts.generate_liquid_glass_icon import generate_png_icon, generate_svg_icon
-            if not ICON_PNG.exists():
-                png_img = generate_png_icon(512)
-                png_img.save(ICON_PNG, format="PNG")
-            if not ICON_SVG.exists():
-                generate_svg_icon()
-        except Exception:
+            shutil.copy2(AURORA_PNG, ICON_PNG)
+        except OSError:
+            pass
+    if not ICON_SVG.exists() and AURORA_SVG.exists():
+        try:
+            shutil.copy2(AURORA_SVG, ICON_SVG)
+        except OSError:
             pass
 
     # 2. Install icons to user system directories

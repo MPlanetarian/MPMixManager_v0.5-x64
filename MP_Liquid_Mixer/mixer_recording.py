@@ -10,17 +10,22 @@ WAV has a hard ceiling: the RIFF ``ChunkSize`` and the ``data`` ``Subchunk2Size`
 are 32-bit *unsigned* fields, so the largest representable file is
 4,294,967,295 bytes (4 GiB - 1). The mixer therefore records PCM from
 ``parec --raw`` and writes the canonical 44-byte RIFF header itself, rather than
-letting the capture tool choose the container. At 4 GiB - 44 bytes of audio
-(the header overhead) the current file is finalised and the recording continues
-in ``<name>_PART_2.wav``, then ``_PART_3.wav``, and so on. The part files are
-ordinary PCM WAV files that any editor can open.
+letting the capture tool choose the container. At the part ceiling the current
+file is finalised and the recording continues in ``<name>_PART_2.wav``, then
+``_PART_3.wav``, and so on. The part files are ordinary PCM WAV files that any
+editor can open.
 
-The limit is fixed at 4 GiB and is not user-configurable, as required.
+The ceiling defaults to 4 GiB, which is the largest a WAV file can be, and the
+mixer's Settings window can lower it to 2 GiB or 1 GiB per part. A lower ceiling
+is a user preference (smaller files are easier to copy and to edit); a higher
+one is impossible, so ``part_limit_bytes`` never returns more than the format
+allows.
 """
 from __future__ import annotations
 
 import datetime
 import os
+import re
 import signal
 import struct
 import subprocess
@@ -55,11 +60,18 @@ MAX_PART_DATA_BYTES = (MAX_WAV_DATA_BYTES // BLOCK_ALIGN) * BLOCK_ALIGN
 FLAC_PART_SAFETY_BYTES = 16 * 1024 * 1024
 FLAC_PART_LIMIT_BYTES = MAX_WAV_FILE_BYTES - FLAC_PART_SAFETY_BYTES
 
-# The mixer's one fixed limit. Kept as a named constant so the UI, the writer
-# and the tests cannot disagree about where a part ends.
+# The largest part the WAV container allows, and the default ceiling. Kept as a
+# named constant so the UI, the writer and the tests cannot disagree.
 REC_MAX_FILE_BYTES = MAX_PART_DATA_BYTES
 
 RECORDING_FORMATS = ("WAV", "FLAC")
+
+# The ceilings the mixer's Settings window offers, in GiB. 4 is the container
+# limit; 2 and 1 exist because a long set is easier to copy, upload and edit in
+# smaller pieces. A setting outside this list is ignored rather than trusted.
+PART_LIMIT_CHOICES = (4, 2, 1)
+DEFAULT_PART_LIMIT_GIB = 4
+SETTINGS_PATH = CONFIG_DIR / "liquid_mixer_settings.json"
 
 _READ_CHUNK = 262144
 _HEADER_REFRESH_SECONDS = 1.0
@@ -76,10 +88,100 @@ def _config_value(key: str, path: Path) -> str:
     return ""
 
 
+def _settings_payload(path: Optional[Path] = None) -> dict:
+    """The mixer's settings JSON, or an empty dict when it cannot be read.
+
+    Imported lazily by name so the recorder (which the exporter also imports)
+    never drags GTK or the mixer window into a test.
+    """
+    target = Path(path or SETTINGS_PATH)
+    try:
+        import json
+        data = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def part_limit_gib() -> int:
+    """The configured part ceiling in GiB (4, 2 or 1; 4 when nothing is set).
+
+    The value lives in the mixer's settings file rather than here, so the
+    recorder can be imported by a test (or the exporter) without the window.
+    A malformed or out-of-range value falls back to the 4 GiB container limit
+    instead of producing a part size the writer cannot honour.
+    """
+    payload = _settings_payload()
+    raw = payload.get("recording_part_limit_gib", payload.get("part_limit_gib",
+                                                             DEFAULT_PART_LIMIT_GIB))
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_PART_LIMIT_GIB
+    return value if value in PART_LIMIT_CHOICES else DEFAULT_PART_LIMIT_GIB
+
+
+def recording_format(default: str = "WAV") -> str:
+    """The configured container for a new recording: ``WAV`` or ``FLAC``."""
+    value = str(_settings_payload().get("recording_format") or "").strip().upper()
+    return value if value in RECORDING_FORMATS else default
+
+
+def recording_device_setting() -> str:
+    """The sink whose monitor a new recording captures, or "" for master."""
+    payload = _settings_payload()
+    return str(payload.get("recording_device") or "").strip()
+
+
+def part_limit_bytes() -> int:
+    """The audio payload ceiling for one part, honouring the GiB setting.
+
+    Rounded down to a whole 16-bit stereo frame so a part never ends inside a
+    frame, and never above the format's own maximum.
+    """
+    return part_limit_bytes_for(part_limit_gib())
+
+
+def part_limit_bytes_for(gib: int) -> int:
+    """The WAV payload ceiling for one explicit GiB value."""
+    try:
+        gib = int(gib)
+    except (TypeError, ValueError):
+        gib = DEFAULT_PART_LIMIT_GIB
+    if gib not in PART_LIMIT_CHOICES:
+        gib = DEFAULT_PART_LIMIT_GIB
+    if gib >= DEFAULT_PART_LIMIT_GIB:
+        return MAX_PART_DATA_BYTES
+    return min(MAX_PART_DATA_BYTES, gib * 1024 * 1024 * 1024)
+
+
+def flac_part_limit_bytes() -> int:
+    """The FLAC part ceiling: the chosen GiB limit held below the safety line."""
+    return flac_part_limit_bytes_for(part_limit_gib())
+
+
+def flac_part_limit_bytes_for(gib: int) -> int:
+    """The FLAC part ceiling for one explicit GiB value."""
+    return max(0, part_limit_bytes_for(gib) - FLAC_PART_SAFETY_BYTES)
+
+
 def recording_dir(base: Optional[Path] = None, config_dir: Optional[Path] = None) -> Path:
-    """The player's recording folder: mix archive if configured, else the tree."""
+    """The player's recording folder: mix archive if configured, else the tree.
+
+    The mixer's Settings window can name a folder of its own. When
+    ``liquid_mixer.yml`` sets ``recording_dir``, that wins over the archive
+    default, and the folder is created if needed. A configured-but-unwritable
+    folder falls back to the normal candidates rather than losing the capture.
+    """
     base = Path(base or PROJECT_ROOT)
     config_dir = Path(config_dir or CONFIG_DIR)
+    override = recording_dir_override(config_dir)
+    if override:
+        try:
+            override.mkdir(parents=True, exist_ok=True)
+            return override.resolve()
+        except OSError:
+            pass
     mix_arc = os.environ.get("MIX_ARCHIVE_DIR") or _config_value("MIX_ARCHIVE_DIR", base / "config.env")
     if not mix_arc:
         mix_arc = _config_value("MIX_ARCHIVE_DIR", config_dir / "config.env")
@@ -96,6 +198,27 @@ def recording_dir(base: Optional[Path] = None, config_dir: Optional[Path] = None
     fallback = base / SUBDIR
     fallback.mkdir(parents=True, exist_ok=True)
     return fallback
+
+
+def recording_dir_override(config_dir: Optional[Path] = None) -> Optional[Path]:
+    """The ``recording_dir`` setting, expanded, or None when it is unset.
+
+    ``SETTINGS_PATH`` is the mixer's own settings file. A ``config_dir`` is
+    honoured only when it contains a settings file of its own, so a caller that
+    names a scratch directory does not hide the user's real preference.
+    """
+    payload = _settings_payload()
+    if config_dir is not None:
+        candidate = Path(config_dir) / SETTINGS_PATH.name
+        if candidate.is_file():
+            payload = _settings_payload(candidate)
+    value = str(payload.get("recording_dir") or "").strip()
+    if not value:
+        return None
+    expanded = os.path.expandvars(os.path.expanduser(value))
+    if not expanded:
+        return None
+    return Path(expanded)
 
 
 def recording_name(when: Optional[datetime.datetime] = None, fmt: str = "WAV") -> str:
@@ -186,12 +309,17 @@ class _WavPart:
     """One open WAV part: header + PCM payload, finalised on close."""
 
     def __init__(self, path: Path, sample_rate: int = SAMPLE_RATE,
-                 channels: int = CHANNELS, bits: int = BITS_PER_SAMPLE) -> None:
+                 channels: int = CHANNELS, bits: int = BITS_PER_SAMPLE,
+                 limit_bytes: Optional[int] = None) -> None:
         self.path = Path(path)
         self.sample_rate = sample_rate
         self.channels = channels
         self.bits = bits
         self.block_align = channels * (bits // 8)
+        # None means "read the user's setting now"; a number is what a test (or
+        # a part opened mid-recording) has already decided.
+        self.limit_bytes = int(limit_bytes) if limit_bytes is not None else part_limit_bytes()
+        self.limit_bytes = max(self.block_align, min(MAX_PART_DATA_BYTES, self.limit_bytes))
         self.data_bytes = 0
         self._last_header = 0.0
         self._closed = False
@@ -218,10 +346,10 @@ class _WavPart:
 
     @property
     def full(self) -> bool:
-        return self.data_bytes >= MAX_PART_DATA_BYTES
+        return self.data_bytes >= self.limit_bytes
 
     def room(self, size: int) -> int:
-        return max(0, min(int(size), MAX_PART_DATA_BYTES - self.data_bytes))
+        return max(0, min(int(size), self.limit_bytes - self.data_bytes))
 
     def finalize(self) -> None:
         if self._closed:
@@ -253,12 +381,16 @@ class _WavPart:
 
 def recorder_command(path: Optional[Path] = None, device: str = "@DEFAULT_MONITOR@",
                      parec: str = "parec") -> list:
-    """Capture raw PCM; MasterRecorder writes the 4 GiB-safe WAV/FLAC container.
+    """Capture raw PCM; MasterRecorder writes the WAV/FLAC container.
 
     ``path`` is accepted for callers that used to pass the destination to
     parec, but parec no longer writes a WAV file itself. It emits raw s16le
     frames on stdout, and the mixer owns the header, the encoder and the part
     boundary.
+
+    ``device`` is the source to capture: ``@DEFAULT_MONITOR@`` for the system
+    default, or a sink's ``<name>.monitor`` to record what a chosen output
+    device is playing (Settings > Audio > Recording output device).
     """
     del path
     return [
@@ -277,9 +409,14 @@ class _FlacPart:
     kind = "FLAC"
 
     def __init__(self, path: Path, flac: Optional[str] = None,
-                 ffmpeg: Optional[str] = None) -> None:
+                 ffmpeg: Optional[str] = None,
+                 limit_bytes: Optional[int] = None) -> None:
         self.path = Path(path)
         self.data_bytes = 0
+        # Encoders buffer input, so the limit is held below the chosen GiB
+        # value: the finished file can never cross the ceiling with a tail.
+        self.limit_bytes = int(limit_bytes) if limit_bytes is not None else flac_part_limit_bytes()
+        self.limit_bytes = max(0, min(MAX_WAV_FILE_BYTES, self.limit_bytes))
         self._closed = False
         if flac:
             command = [
@@ -326,7 +463,7 @@ class _FlacPart:
 
     @property
     def full(self) -> bool:
-        return self.output_bytes >= FLAC_PART_LIMIT_BYTES
+        return self.output_bytes >= self.limit_bytes
 
     def room(self, size: int) -> int:
         # FLAC's output size is what the 4 GiB ceiling applies to, not the
@@ -385,6 +522,13 @@ class MasterRecorder:
         self._stop_requested = False
         self._stop_path: Optional[Path] = None
         self._format = "WAV"
+        # The part ceiling is a user setting (Settings > Recording). It is
+        # latched when a capture starts, so changing it mid-recording keeps the
+        # current part's committed size and applies to the next part.
+        self._part_limit_gib = part_limit_gib()
+        # "" captures @DEFAULT_MONITOR@; a sink name captures that sink's
+        # monitor instead (Settings > Audio > Recording output device).
+        self.device = ""
 
     @property
     def is_recording(self) -> bool:
@@ -408,6 +552,52 @@ class MasterRecorder:
         if was_recording:
             self.start()
         return self._format
+
+    def set_part_limit_gib(self, gib: int) -> int:
+        """Change the part ceiling. A live recording is restarted on it."""
+        value = int(gib)
+        if value not in PART_LIMIT_CHOICES:
+            value = DEFAULT_PART_LIMIT_GIB
+        if value == self._part_limit_gib:
+            return self._part_limit_gib
+        was_recording = self.is_recording
+        if was_recording:
+            self.stop()
+        self._part_limit_gib = value
+        if was_recording:
+            self.start()
+        return self._part_limit_gib
+
+    @property
+    def part_limit_gib(self) -> int:
+        return self._part_limit_gib
+
+    def set_device(self, device: str) -> str:
+        """Capture this sink's monitor instead of the system default.
+
+        ``device`` is a PulseAudio/PipeWire sink name (``pactl list sinks``).
+        An empty value restores ``@DEFAULT_MONITOR@``. A live recording is
+        restarted so the capture follows the chosen device immediately.
+        """
+        value = str(device or "").strip()
+        if value == self.device:
+            return self.device
+        was_recording = self.is_recording
+        if was_recording:
+            self.stop()
+        self.device = value
+        if was_recording:
+            self.start()
+        return self.device
+
+    def capture_target(self) -> str:
+        """The parec device string: the chosen sink's monitor, or the default."""
+        device = str(self.device or "").strip()
+        if not device or device in ("@DEFAULT_SINK@", "@DEFAULT_MONITOR@", "default"):
+            return "@DEFAULT_MONITOR@"
+        if device.endswith(".monitor"):
+            return device
+        return f"{device}.monitor"
 
     @property
     def part(self) -> int:
@@ -443,18 +633,19 @@ class MasterRecorder:
             log = out_dir / "liquid_mixer_recording.log"
             try:
                 if fmt == "FLAC":
-                    writer = _FlacPart(path, flac_bin, ffmpeg_bin)
+                    writer = _FlacPart(path, flac_bin, ffmpeg_bin,
+                                       limit_bytes=flac_part_limit_bytes_for(self._part_limit_gib))
                 else:
-                    writer = _WavPart(path)
+                    writer = _WavPart(path, limit_bytes=part_limit_bytes_for(self._part_limit_gib))
             except Exception as exc:
                 self.error = str(exc)
                 return None
             try:
                 with open(log, "a", encoding="utf-8") as handle:
-                    handle.write(f"\n--- start {path.name} ({fmt}, 4 GiB parts) ---\n")
+                    handle.write(f"\n--- start {path.name} ({fmt}, {self._part_limit_gib} GiB parts) ---\n")
                     handle.flush()
                     proc = subprocess.Popen(
-                        recorder_command(parec=parec),
+                        recorder_command(parec=parec, device=self.capture_target()),
                         stdin=subprocess.DEVNULL,
                         stdout=subprocess.PIPE,
                         stderr=handle,
@@ -598,9 +789,10 @@ class MasterRecorder:
             return
         path = _unique_path(recording_part_path(base, self._part_index))
         if self._format == "FLAC":
-            self._writer = _FlacPart(path, find_flac(), find_ffmpeg())
+            self._writer = _FlacPart(path, find_flac(), find_ffmpeg(),
+                                     limit_bytes=flac_part_limit_bytes_for(self._part_limit_gib))
         else:
-            self._writer = _WavPart(path)
+            self._writer = _WavPart(path, limit_bytes=part_limit_bytes_for(self._part_limit_gib))
         self.path = path
 
     def _close_current_locked(self) -> None:

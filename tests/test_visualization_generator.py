@@ -375,6 +375,133 @@ class TestPresetOverrideRoundTrip(unittest.TestCase):
         self.assertEqual(after["name"], "Renamed Scene")
 
 
+class TestWheelControls(unittest.TestCase):
+    """The faders, the seed and the dropdowns must respond to the wheel.
+
+    A ``Gtk.Scale`` inside the controls panel used to swallow nothing: the
+    wheel scrolled the panel instead of the value, because GTK only scrolls a
+    range when it already holds focus. Every control now handles
+    ``scroll-event`` itself and returns ``True``, which stops the panel from
+    scrolling underneath the pointer.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            import gi
+            gi.require_version("Gtk", "3.0")
+            from gi.repository import Gtk
+        except Exception as exc:  # pragma: no cover - GTK is present on target
+            raise unittest.SkipTest(f"GTK not available: {exc}")
+        cls.Gtk = Gtk
+
+    def _window(self):
+        # The handlers read self.Gdk and self.GLib, which run() normally fills
+        # in. Build a bare instance and give it the two it needs.
+        import gi
+        from gi.repository import Gdk, GLib
+        app = object.__new__(generator.GeneratorWindow)
+        app.Gdk = Gdk
+        app.GLib = GLib
+        return app
+
+    def _scroll(self, direction, state=0):
+        from gi.repository import Gdk
+        event = Gdk.Event.new(Gdk.EventType.SCROLL)
+        event.direction = direction
+        event.state = state
+        return event
+
+    def test_scale_moves_one_step_per_notch(self):
+        app = self._window()
+        Gtk = self.Gtk
+        parent = Gtk.Box()
+        scale = app._labelled_scale(Gtk, parent, "Motion speed", 0.20, 2.60, 1.0)
+        from gi.repository import Gdk
+        before = scale.get_value()
+        handled = scale.emit("scroll-event", self._scroll(Gdk.ScrollDirection.UP))
+        after = scale.get_value()
+        self.assertTrue(handled)
+        self.assertGreater(after, before)
+        # 1/50 of the 2.4 span, applied once rather than twice.
+        self.assertAlmostEqual(after - before, 0.048, places=4)
+        scale.emit("scroll-event", self._scroll(Gdk.ScrollDirection.DOWN))
+        self.assertAlmostEqual(scale.get_value(), before, places=4)
+
+    def test_scale_clamps_at_both_ends(self):
+        app = self._window()
+        Gtk = self.Gtk
+        from gi.repository import Gdk
+        parent = Gtk.Box()
+        scale = app._labelled_scale(Gtk, parent, "Bass drive", 0.10, 2.50, 1.0)
+        adjustment = scale.get_adjustment()
+        scale.set_value(adjustment.get_upper())
+        scale.emit("scroll-event", self._scroll(Gdk.ScrollDirection.UP))
+        self.assertLessEqual(scale.get_value(), adjustment.get_upper())
+        scale.set_value(adjustment.get_lower())
+        scale.emit("scroll-event", self._scroll(Gdk.ScrollDirection.DOWN))
+        self.assertGreaterEqual(scale.get_value(), adjustment.get_lower())
+
+    def test_modifiers_change_the_step_size(self):
+        app = self._window()
+        Gtk = self.Gtk
+        from gi.repository import Gdk
+        parent = Gtk.Box()
+        scale = app._labelled_scale(Gtk, parent, "Zoom", 0.55, 1.75, 1.0)
+        normal = 1.2 / 50.0
+
+        scale.set_value(1.0)
+        scale.emit("scroll-event", self._scroll(Gdk.ScrollDirection.UP))
+        plain = scale.get_value() - 1.0
+
+        scale.set_value(1.0)
+        scale.emit("scroll-event", self._scroll(Gdk.ScrollDirection.UP, Gdk.ModifierType.CONTROL_MASK))
+        fine = scale.get_value() - 1.0
+
+        scale.set_value(1.0)
+        scale.emit("scroll-event", self._scroll(Gdk.ScrollDirection.UP, Gdk.ModifierType.SHIFT_MASK))
+        coarse = scale.get_value() - 1.0
+
+        self.assertAlmostEqual(plain, normal, places=4)
+        self.assertLess(fine, plain)
+        self.assertGreater(coarse, plain)
+
+    def test_combo_cycles_without_wrapping_the_wrong_way(self):
+        app = self._window()
+        Gtk = self.Gtk
+        from gi.repository import Gdk
+        combo = Gtk.ComboBoxText()
+        for index, label in enumerate(("A", "B", "C")):
+            combo.append(str(index), label)
+        combo.set_active(1)
+        app._bind_combo_wheel(combo)
+
+        self.assertTrue(combo.emit("scroll-event", self._scroll(Gdk.ScrollDirection.DOWN)))
+        self.assertEqual(combo.get_active(), 2)
+        combo.emit("scroll-event", self._scroll(Gdk.ScrollDirection.UP))
+        self.assertEqual(combo.get_active(), 1)
+
+    def test_handler_returns_true_so_the_panel_does_not_scroll(self):
+        app = self._window()
+        Gtk = self.Gtk
+        from gi.repository import Gdk
+        parent = Gtk.Box()
+        scale = app._labelled_scale(Gtk, parent, "Punch", 0.20, 2.00, 1.0)
+        self.assertTrue(scale.emit("scroll-event", self._scroll(Gdk.ScrollDirection.UP)))
+
+    def test_seed_spin_steps_by_one(self):
+        app = self._window()
+        Gtk = self.Gtk
+        from gi.repository import Gdk
+        spin = Gtk.SpinButton.new_with_range(0, 999999, 1)
+        spin.set_value(500)
+        app._bind_wheel(spin, step=1.0)
+        spin.emit("scroll-event", self._scroll(Gdk.ScrollDirection.UP))
+        self.assertEqual(spin.get_value(), 501)
+        spin.emit("scroll-event", self._scroll(Gdk.ScrollDirection.DOWN))
+        self.assertEqual(spin.get_value(), 500)
+
+
 class TestPresetRoundTrip(unittest.TestCase):
     def test_generated_preset_keeps_generative_metadata(self):
         import mp_visualizer_user_presets as registry

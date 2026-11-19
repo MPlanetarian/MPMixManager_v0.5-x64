@@ -130,6 +130,9 @@ def is_wsl() -> bool:
 def shortcut_targets(root: Path) -> dict[str, dict]:
     """Launch commands for the shortcuts. Paths stay inside this install."""
     root = Path(root)
+    # Every MP app shares one icon: Dreamworld Aurora (v0.5, MPlanetarian).
+    # mp_liquid_glass_icon.png is the historical name every installer and
+    # desktop entry already resolves, and it now holds that artwork.
     icon = root / "assets" / "mp_liquid_glass_icon.png"
     return {
         "MP Liquid Player": {
@@ -914,10 +917,23 @@ def _install_linux_icon(root: Path) -> None:
     svg = root / "assets" / "mp_liquid_glass_icon.svg"
     try:
         if png.is_file():
-            for size in sizes:
+            # Downscale per size instead of dropping a 512px file into every
+            # directory: the icon cache and tray pick the nearest size, and a
+            # 16x16 slot holding a 512x512 image looks soft in menus.
+            try:
+                from PIL import Image
+                source = Image.open(png).convert("RGBA")
+            except Exception:
+                source = None
+            for size, edge in sizes.items():
                 target = icons / "hicolor" / size / "apps"
                 target.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(png, target / "mp_liquid_glass_icon.png")
+                destination = target / "mp_liquid_glass_icon.png"
+                if source is None:
+                    shutil.copy2(png, destination)
+                else:
+                    scaled = source.resize((edge, edge), Image.LANCZOS)
+                    scaled.save(destination, format="PNG", optimize=True)
             scalable = icons / "hicolor" / "scalable" / "apps"
             scalable.mkdir(parents=True, exist_ok=True)
             shutil.copy2(png, icons / "mp_liquid_glass_icon.png")
