@@ -1846,7 +1846,7 @@ class LiquidMixer(GlassHost):
                 return str(midi.status), (250, 205, 90)
             if "switching" in str(midi.status):
                 return str(midi.status), (250, 205, 90)
-        return f"DJ MIXER {label}: not found - check the USB cable", (250, 205, 90)
+        return f"DJ MIXER {label} NOT FOUND", (250, 205, 90)
 
     # ------------------------------------------------------------------
     # visualizer
@@ -2297,9 +2297,6 @@ class LiquidMixer(GlassHost):
             if core.inside(x, y, self.boxes["settings_button"]):
                 self._open_settings()
                 return True
-            if core.inside(x, y, self.boxes["profile_button"]):
-                self._toggle_profile()
-                return True
             if core.inside(x, y, self.boxes["visualizer_button"]):
                 self._toggle_visualizer()
                 self.area.queue_draw()
@@ -2347,6 +2344,9 @@ class LiquidMixer(GlassHost):
                 self._s4_last_seen = time.time()
                 self.area.queue_draw()
                 return True
+        if core.inside(x, y, self.boxes.get("profile_button", (0, 0, 0, 0))):
+            self._toggle_profile()
+            return True
         for channel in core.CHANNELS:
             if core.inside(x, y, self.boxes[f"monitor_{channel}"]):
                 self._toggle_monitor_cue(channel)
@@ -3074,8 +3074,7 @@ class LiquidMixer(GlassHost):
         cr.rectangle(box[0], box[1] + box[3] - max(1.0, 1.2 * s), box[2], max(1.0, 1.2 * s))
         cr.fill()
         self._text(cr, box[0] + 28 * s, box[1] + 18 * s, "MP LIQUID MIXER", 21 * s, glass_ink, 0.96, bold=True)
-        self._text(cr, box[0] + 320 * s, box[1] + 25 * s, f"v{core.VERSION}", 12 * s, glass_ink, 0.55)
-        self._text(cr, box[0] + 960 * s, box[1] + 22 * s, core.theme_label(self.theme), 14 * s, accent, 0.95, bold=True, anchor="middle")
+        self._text(cr, box[0] + 412 * s, box[1] + 25 * s, f"v{core.VERSION}", 12 * s, glass_ink, 0.55)
 
         # Trance Connection status. It is a button in the suite's style; it is
         # a status lamp, so pressing it does not change the audio path.
@@ -3094,11 +3093,20 @@ class LiquidMixer(GlassHost):
         # MIDI DJ Mixer Profile: the A/B switch keeps the S4 and S3 maps apart.
         self._paint_profile_button(cr, s, accent, secondary, glass_ink)
 
-        # S4 fader status sits just left of the visualizer button.
+        # Controller status gets its own pill in the band between the trance
+        # lamp and the SETTINGS button, so it cannot sit on either of them.
         s4_text, s4_color = self._s4_status()
-        vx = self.boxes["visualizer_button"]
-        self._text(cr, vx[0] - 18 * s, box[1] + 23 * s, s4_text, 10.5 * s,
-                   s4_color, 0.94, bold=True, anchor="end")
+        pill = self.boxes["status_pill"]
+        cr.set_source_rgba(*_rgba(s4_color, 0.14))
+        self._rounded(cr, pill[0], pill[1], pill[2], pill[3], 9 * s)
+        cr.fill()
+        cr.set_source_rgba(*_rgba(s4_color, 0.72))
+        cr.set_line_width(max(1.0, 1.2 * s))
+        self._rounded(cr, pill[0], pill[1], pill[2], pill[3], 9 * s)
+        cr.stroke()
+        self._text(cr, pill[0] + pill[2] / 2, pill[1] + 11 * s, s4_text, 10.5 * s,
+                   s4_color, 0.98, bold=True, anchor="middle",
+                   max_width=pill[2] - 20 * s)
 
         # Settings button: the same pill style as the visualizer toggle.
         sx = self.boxes["settings_button"]
@@ -3113,6 +3121,7 @@ class LiquidMixer(GlassHost):
                    "SETTINGS", 12 * s, glass_ink, 0.92, bold=True, anchor="middle")
 
         # Visualizer button.
+        vx = self.boxes["visualizer_button"]
         active = self._viz_owned and self._viz_visible
         cr.set_source_rgba(*_rgba(accent if active else _darken(core.theme_field(self.theme), 0.35), 0.30 if active else 0.35))
         self._rounded(cr, vx[0], vx[1], vx[2], vx[3], 9 * s)
@@ -3167,10 +3176,10 @@ class LiquidMixer(GlassHost):
         sync_box = self.boxes[f"sync_{key}"]
         row_y = header[1] + header[3] / 2 - 15 * s
         cr.set_source_rgba(*_rgba(led, 0.95))
-        cr.arc(header[0] + 26 * s, row_y + 11 * s, 5.5 * s, 0, 6.2832)
+        cr.arc(header[0] + 24 * s, row_y + 11 * s, 5.5 * s, 0, 6.2832)
         cr.fill()
-        self._text(cr, header[0] + 42 * s, row_y + 5 * s, f"DECK {channel}",
-                   13 * s, glass_ink, 0.96, bold=True)
+        self._text(cr, header[0] + 40 * s, row_y + 5 * s, f"DECK {channel}",
+                   12 * s, glass_ink, 0.96, bold=True)
         right = "LIVE" if playing else ("READY" if online else "OFFLINE")
         self._text(cr, sync_box[0] - 14 * s, row_y + 5 * s, right, 9.5 * s, led, 0.92,
                    bold=True, anchor="end")
@@ -3471,8 +3480,9 @@ class LiquidMixer(GlassHost):
             radius = max(10.0, 15.0 * s)
             self._paint_knob_dial(cr, key, "", cx, cy, radius, hue, True, value, 0.0, 1.0,
                                   s, glass_ink)
+            caption = {"MASTER": "M", "MON": "MON"}.get(label, label)
             self._text(cr, cx, box[1] + box[3] + 2 * s,
-                       f"{label} {int(round(value * 100))}%", 6.8 * s, glass_ink, 0.72,
+                       f"{caption} {int(round(value * 100))}%", 6.8 * s, glass_ink, 0.72,
                        bold=True, anchor="middle")
 
     def _toggle_profile(self) -> None:
@@ -3508,11 +3518,8 @@ class LiquidMixer(GlassHost):
         cr.set_line_width(max(1.0, 1.3 * s))
         self._rounded(cr, box[0], box[1], box[2], box[3], 7 * s)
         cr.stroke()
-        self._text(cr, box[0] + 8 * s, box[1] + 5 * s, "MIDI DJ MIXER PROFILE", 6.8 * s,
-                   glass_ink, 0.75, bold=True)
-        self._text(cr, box[0] + box[2] / 2, box[1] + 14 * s,
-                   f"PROFILE {self.profile}  ({'KONTROL S4' if self.profile == 'A' else 'KONTROL S3'})",
-                   7.4 * s, hue, 0.98, bold=True, anchor="middle")
+        self._text(cr, box[0] + box[2] / 2, box[1] + 13 * s,
+                   f"PROFILE {self.profile}", 8 * s, hue, 0.98, bold=True, anchor="middle")
 
     def _paint_format_buttons(self, cr, s, accent, secondary, glass_ink) -> None:
         """WAV/FLAC toggle and the fixed 24-Bit badge.
@@ -4049,7 +4056,6 @@ class LiquidMixer(GlassHost):
         cr.set_source_rgba(*_rgba((245, 248, 252), 0.98))
         cr.arc(thumb_x, cy, max(7.0, 8.0 * s), 0, 6.2832)
         cr.fill()
-        self._text(cr, track[0] - 16 * s, cy - 7 * s, "TRANSPARENCY", 10 * s, glass_ink, 0.60, anchor="end", bold=True)
         self._text(cr, track[0] + track[2] + 16 * s, cy - 7 * s, f"{int(round(self.model.opacity * 100))}%",
                    10 * s, glass_ink, 0.75, bold=True)
 

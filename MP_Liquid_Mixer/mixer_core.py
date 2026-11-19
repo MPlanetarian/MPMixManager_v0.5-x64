@@ -1445,8 +1445,8 @@ def layout(width: int = DESIGN_W, height: int = DESIGN_H) -> Dict[str, Tuple[flo
         "sync_b": rect(1746, 94, 70, 26),
         # The deck-switch button in each player's header. Clicking flips that
         # playlist window between its two decks (A <-> C, B <-> D).
-        "deck_switch_a": rect(112, 94, 150, 26),
-        "deck_switch_b": rect(1198, 94, 150, 26),
+        "deck_switch_a": rect(132, 94, 146, 26),
+        "deck_switch_b": rect(1218, 94, 146, 26),
         # Master and monitor trims at the top of the window.
         "master_knob": rect(296, 10, 44, 44),
         "monitor_knob": rect(348, 10, 44, 44),
@@ -1455,7 +1455,8 @@ def layout(width: int = DESIGN_W, height: int = DESIGN_H) -> Dict[str, Tuple[flo
         "trance_button": rect(540, 14, 300, 36),
         "settings_button": rect(1150, 14, 144, 36),
         "close_button": rect(1836, 14, 48, 36),
-        "profile_button": rect(864, 14, 240, 36),
+        "profile_button": rect(852, 64, 216, 24),
+        "status_pill": rect(872, 14, 250, 36),
     }
     # Channel strips: FX button, headphone cue, letter, fader, meter. The FX
     # button arms the channel's filter-knob effect, the cue button routes the
