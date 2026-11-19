@@ -157,6 +157,37 @@ The decks deliberately **do not autoplay**. Each starts in **Music mode** with t
 Music Folders playlist loaded and its first track paused; `Space` or the player's
 Play button starts it.
 
+### The Music Folders library must be mounted
+
+The decks browse the **Music Folders** library rather than the mix archive, and
+that library is generated from SMB shares as `~/MUSIC_SMB/<id>/...` paths. Those
+paths are `rclone` FUSE mounts, and a plain desktop login does not start them.
+When they are down nothing can play: every row fails `os.path.isfile()` inside
+the engine, so pressing Enter (or Play, or the S4's Play button) looks like it
+does nothing at all.
+
+The mixer therefore mounts the configured shares itself when it opens, on a
+worker thread so the window stays responsive, and reloads both decks' Music
+playlists once they answer. Selecting a row whose share is down mounts just that
+share before playing it, bounded so a wedged mount cannot freeze the deck.
+
+If nothing can be mounted, the deck headers say so, and a refused row names the
+folder: *"Cannot play track.flac: music folder MUSIC004 is offline."* The fix is
+almost always a stale `~/.config/mix-manager/music_folders.json` entry or an SMB
+login the server no longer accepts:
+
+```bash
+python3 scripts/music_folders_manager.py --status   # which shares answer
+python3 scripts/music_folders_manager.py --mount    # mount them now
+python3 scripts/music_folders_manager.py --list     # configured folders
+```
+
+Re-point a share that moved and rebuild the library with `--remove <id>`,
+`--add <path>` and `--generate ALL`. A share that is mounted but lists zero
+files is not a mixer problem: check it from the server (`smbclient "//host/share"
+-U user -c ls`), because an empty share is usually the wrong share name rather
+than a broken mount.
+
 ### Opening it with `X`
 
 `X` opens this window from **MP Gui**, **MP Liquid Player**, and the console

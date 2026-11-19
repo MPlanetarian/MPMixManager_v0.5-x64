@@ -61,8 +61,12 @@ class TestPresetRegistration(unittest.TestCase):
     def test_ids_are_at_the_end_and_distinct(self):
         ids = [p["id"] for p in vis.VISUALIZER_PRESETS]
         self.assertEqual(len(ids), len(set(ids)), "preset ids must be unique")
-        self.assertEqual(ids[-2], vis.STREAM_WAVES_HORIZONTAL_ID)
-        self.assertEqual(ids[-1], vis.STREAM_WAVES_VERTICAL_ID)
+        # The wave pair closes the *built-in* library. User presets use ids of
+        # 1000 and up and are appended from the user's own directory, so they
+        # legitimately follow it; compare against the built-ins only.
+        builtin = [p["id"] for p in vis.VISUALIZER_PRESETS if int(p["id"]) < 1000]
+        self.assertEqual(builtin[-2], vis.STREAM_WAVES_HORIZONTAL_ID)
+        self.assertEqual(builtin[-1], vis.STREAM_WAVES_VERTICAL_ID)
 
     def test_both_are_reachable_by_cycling(self):
         keys = {p["key"] for p in vis.VISUALIZER_PRESETS}
@@ -197,6 +201,10 @@ class TestShaderContract(unittest.TestCase):
     def test_manifest_lists_every_preset(self):
         manifest = json.loads((ROOT / "shaders" / "presets" / "manifest.json").read_text())
         for preset in vis.VISUALIZER_PRESETS:
+            # User presets (id >= 1000) carry their own shader and are never
+            # compiled into the shipped tree, so the manifest cannot list them.
+            if int(preset["id"]) >= 1000:
+                continue
             self.assertIn(int(preset["id"]), manifest["presets"])
 
 

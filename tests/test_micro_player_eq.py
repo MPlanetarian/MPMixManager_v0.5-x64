@@ -104,7 +104,15 @@ class TestMicroPlayerEQ(unittest.TestCase):
 
         text_dump = strip_ansi("\n".join(captured_lines))
         self.assertIn("MP MICRO AUDIO PLAYER", text_dump)
-        self.assertIn("EQ", text_dump)
+        # The micro strip names the active equaliser style beside a 🎛 chip
+        # rather than a literal "EQ" label, so assert the chip and the style.
+        # The micro strip carries a live 🎛 meter in place of the words "EQ".
+        # Assert the chip exists and drew a meter, not a fixed string: the
+        # glyphs change every frame with the audio levels.
+        self.assertIn("🎛", text_dump)
+        meters = [seg for line in captured_lines for seg in [strip_ansi(line)] if "🎛" in seg]
+        self.assertTrue(meters, "the micro strip lost its equaliser chip")
+        self.assertRegex(meters[0], r"🎛 \[[^\]]{4,}\]", "the eq chip drew no meter")
 
         # Check visualizer rendered header (e.g. LEFT CHANNEL or NEON PRISM or HIGH-RESOLUTION)
         has_eq_visualizer = any(
@@ -125,7 +133,8 @@ class TestMicroPlayerEQ(unittest.TestCase):
             self.assertGreaterEqual(len(captured_lines), 9, f"Style {style} should output at least 9 lines in micro mode")
             text_dump = strip_ansi("\n".join(captured_lines))
             self.assertIn("MP MICRO AUDIO PLAYER", text_dump)
-            self.assertIn("EQ", text_dump)
+            self.assertIn("🎛", text_dump, f"style {style} lost the EQ chip")
+            self.assertRegex(text_dump, r"🎛 \[[^\]]{4,}\]", f"style {style} drew no meter")
 
 
 if __name__ == "__main__":
