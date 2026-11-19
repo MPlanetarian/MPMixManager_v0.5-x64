@@ -535,8 +535,11 @@ class FrameFittingTests(TempConfigCase):
     def test_the_bass_chip_and_favourites_share_one_row(self):
         ui = self._ui("NORMAL", "MIX_ARCHIVE")
         self._frame(False, ui, 90, 24)
+        # The contract is that the two chips share one row, not the literal
+        # row number: the Vertical-frame refit (9da4dc6) added a blank spacer
+        # above the action row and moved both from 16 to 17 together.
         self.assertEqual(ui._bass_button_row, ui._favorites_button_row)
-        self.assertEqual(ui._bass_button_row, 16)
+        self.assertGreater(ui._bass_button_row, 0)
 
     def test_the_mini_key_hints_survive(self):
         """The [G] MP Gui hint used to be the row that got clipped away."""

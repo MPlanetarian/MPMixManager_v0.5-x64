@@ -115,6 +115,11 @@ usage() {
     echo "While the uninstall or reset runs, Exit_MP_Video.mp4 loops in a window"
     echo "until this script exits. Music, mixes, playlists and converted audio"
     echo "are never deleted."
+    echo ""
+    echo "Removing the last application also removes what the installer added"
+    echo "outside this folder: desktop and menu shortcuts, the tray autostart"
+    echo "entry, icons, launch agents and user services (Web Companion, bit-rot"
+    echo "scrub timer, boot ledger), KDE window rules and the MOTD shell hook."
 }
 
 _need_value() {
@@ -465,6 +470,14 @@ if [ "$NO_STOP" -eq 0 ] && [ "$DRY_RUN" -eq 0 ] && [ "${_remaining:-none}" = "no
     if command -v pkill >/dev/null 2>&1; then
         pkill -f "mp_system_tray\\.py" >/dev/null 2>&1 || true
         pkill -f "windows_tray\\.ps1" >/dev/null 2>&1 || true
+        # The tray and the companion are independent of the four apps, so a
+        # full uninstall stops them too; leaving them running would let them
+        # rewrite the state that was just deleted.
+        pkill -f "MP_Liquid_Mixer\\.py" >/dev/null 2>&1 || true
+        pkill -f "black_glass_window\\.py" >/dev/null 2>&1 || true
+        pkill -f "schedule_mix_playback\\.py" >/dev/null 2>&1 || true
+        pkill -f "mp_visualizer_idle_saver" >/dev/null 2>&1 || true
+        pkill -f "mix_web_companion\\.py" >/dev/null 2>&1 || true
     fi
     if [ "$(uname -s 2>/dev/null || echo)" = "Darwin" ] && command -v launchctl >/dev/null 2>&1; then
         launchctl bootout "gui/$(id -u)/com.mplanetarian.mp-mix-manager-tray" >/dev/null 2>&1 || true

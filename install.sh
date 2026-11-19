@@ -63,18 +63,32 @@ if [ -z "${VERSION:-}" ]; then
 fi
 export VERSION
 
+# Refuse to run as root. Everything here is a per-user install: launchers go in
+# ~/.local/bin, the venv in ~/.local/share, config in ~/.config. Running with
+# sudo writes all of that under root's HOME with root-owned files, and the real
+# user's shortcuts then point at an interpreter they cannot update. The old
+# script happily did this and only surfaced it later as permission errors.
+if [ "$(id -u 2>/dev/null || echo 1)" -eq 0 ]; then
+    echo -e "${RED}Do not run the installer as root (or with sudo).${NC}" >&2
+    echo "Run it as the user who will use MP Mix Manager:  ./install.sh" >&2
+    exit 1
+fi
+
 # 0. Optional Reinstall / Factory Reset
+#
+# This is a shift-based loop, not `for _arg in "$@"`. The old loop read the
+# --apps value from "$2" (the second word of the command line), so any option
+# placed before it swallowed the value: `./install.sh --reinstall --apps gui`
+# set MP_INSTALL_APPS="--apps" and then skipped "gui". The selection was
+# silently lost and all four apps were installed.
 REINSTALL=0
 REINSTALL_ARGS=()
-_mp_skip_next=0
-for _arg in "$@"; do
-    if [ "$_mp_skip_next" -eq 1 ]; then
-        _mp_skip_next=0
-        continue
-    fi
-    case "$_arg" in
+MP_DRY_RUN="${MP_DRY_RUN:-0}"
+while [ $# -gt 0 ]; do
+    case "$1" in
         --reinstall|--re-install|--factory-reset|--reset)
             REINSTALL=1
+            shift
             ;;
         --help|-h)
             echo -e "${BOLD}MP Mix Manager Installer${NC}"
@@ -83,6 +97,7 @@ for _arg in "$@"; do
             echo ""
             echo "Options:"
             echo "  --install                 Normal install (default)"
+            echo "  --version, -V             Print the installer version and exit"
             echo "  --install-harmony         Install the optional MP Harmony Agent (default)"
             echo "  --no-harmony              Skip the optional MP Harmony Agent"
             echo "  --apps LIST               Set up all four apps (--apps all) or only"
@@ -96,6 +111,7 @@ for _arg in "$@"; do
             echo "  --fresh                   Reinstall: preserve nothing"
             echo "  --yes, -y                 Reinstall: do not prompt; preserve all"
             echo "  --dry-run                 Reinstall: show what would change"
+            echo "  --                        Pass every later option to --reinstall"
             echo "  MP_INSTALL_ACCOMPANIMENT=0  Run in silence (no theme track, no exit movie)"
             echo "  -h, --help                Show this help"
             echo ""
@@ -104,45 +120,75 @@ for _arg in "$@"; do
             echo "Run ./uninstall.sh --help to reset or remove apps."
             exit 0
             ;;
+        --version|-V)
+            echo "MP Mix Manager installer (MP_Mix_Manager_v${VERSION#v})"
+            exit 0
+            ;;
         --install)
             # Explicit normal install. Nothing to do; the script proceeds.
+            shift
             ;;
         --install-harmony)
             MP_INSTALL_HARMONY="always"
             export MP_INSTALL_HARMONY
+            shift
             ;;
         --no-harmony)
             MP_INSTALL_HARMONY="never"
             export MP_INSTALL_HARMONY
+            shift
             ;;
         --apps|--components)
-            _mp_apps_next="${2:-}"
-            if [ -z "$_mp_apps_next" ]; then
+            if [ $# -lt 2 ] || [ -z "${2:-}" ]; then
                 echo "--apps needs a value: all, manager, gui, liquid, visualizer" >&2
                 exit 1
             fi
-            MP_INSTALL_APPS="$_mp_apps_next"
+            MP_INSTALL_APPS="$2"
             export MP_INSTALL_APPS
-            _mp_skip_next=1
+            shift 2
             ;;
         --apps=*|--components=*)
-            MP_INSTALL_APPS="${_arg#*=}"
+            if [ -z "${1#*=}" ]; then
+                echo "--apps needs a value: all, manager, gui, liquid, visualizer" >&2
+                exit 1
+            fi
+            MP_INSTALL_APPS="${1#*=}"
             export MP_INSTALL_APPS
+            shift
             ;;
         --preserve-playlists|--preserve-music-folders|--preserve-archive-config|\
         --no-preserve-playlists|--no-preserve-music-folders|--no-preserve-archive-config|\
         --keep-playlists|--keep-music-folders|--keep-archive-config|--no-preserve|\
         --fresh|--yes|-y|--dry-run)
-            REINSTALL_ARGS+=("$_arg")
+            REINSTALL_ARGS+=("$1")
+            [ "$1" = "--dry-run" ] && MP_DRY_RUN=1
+            shift
+            ;;
+        --)
+            shift
+            while [ $# -gt 0 ]; do
+                REINSTALL_ARGS+=("$1")
+                [ "$1" = "--dry-run" ] && MP_DRY_RUN=1
+                shift
+            done
             ;;
         *)
-            echo -e "${RED}Unknown option: $_arg${NC}" >&2
+            echo -e "${RED}Unknown option: $1${NC}" >&2
             echo "Run ./install.sh --help to see the available options." >&2
             exit 1
             ;;
     esac
 done
-unset _arg _mp_skip_next 2>/dev/null || true
+unset _arg 2>/dev/null || true
+
+# Reinstall-only options are meaningless on a normal install. They used to be
+# collected into REINSTALL_ARGS and silently ignored, so `./install.sh --fresh`
+# ran a plain install and did the opposite of what it looked like.
+if [ "$REINSTALL" -eq 0 ] && [ ${#REINSTALL_ARGS[@]} -gt 0 ]; then
+    echo -e "${RED}These options only apply to --reinstall: ${REINSTALL_ARGS[*]}${NC}" >&2
+    echo "Use: ./install.sh --reinstall ${REINSTALL_ARGS[*]}" >&2
+    exit 2
+fi
 
 # The theme track plays until this process exits. Exit_MP_Video.mp4 loops in
 # its own window for the same stretch, then the window is closed. The EXIT
@@ -284,12 +330,19 @@ case "$(uname -s)" in
         else
             HOST_OS="linux"
             if [ -f /etc/os-release ]; then
-                # shellcheck source=/dev/null
-                source /etc/os-release
-                echo -e "      Platform:     ${GREEN}Linux${NC} (${CYAN}${PRETTY_NAME:-Linux}${NC})"
-                if [[ "${ID:-}" == *"bazzite"* ]] || [[ "${VARIANT_ID:-}" == *"bazzite"* ]] || [[ "${NAME:-}" == *"Bazzite"* ]]; then
+                # Never `source /etc/os-release` here: it defines VERSION, which
+                # this script exports as the app version. Sourcing it made the
+                # banner (and every child that reads $VERSION) report the distro
+                # release, e.g. "MP_Mix_Manager_v44.20261012.0 (Kinoite)".
+                MP_OS_NAME="$( . /etc/os-release 2>/dev/null; printf '%s' "${PRETTY_NAME:-Linux}" )"
+                MP_OS_ID="$( . /etc/os-release 2>/dev/null; printf '%s' "${ID:-}" )"
+                MP_OS_VARIANT="$( . /etc/os-release 2>/dev/null; printf '%s' "${VARIANT_ID:-}" )"
+                MP_OS_ALIAS="$( . /etc/os-release 2>/dev/null; printf '%s' "${NAME:-}" )"
+                echo -e "      Platform:     ${GREEN}Linux${NC} (${CYAN}${MP_OS_NAME:-Linux}${NC})"
+                if [[ "${MP_OS_ID:-}" == *"bazzite"* ]] || [[ "${MP_OS_VARIANT:-}" == *"bazzite"* ]] || [[ "${MP_OS_ALIAS:-}" == *"Bazzite"* ]]; then
                     echo -e "${GREEN}      ✓ Verified Bazzite Linux environment.${NC}"
                 fi
+                unset MP_OS_NAME MP_OS_ID MP_OS_VARIANT MP_OS_ALIAS
             else
                 echo -e "      Platform:     ${GREEN}Generic Linux${NC}"
             fi
@@ -297,7 +350,9 @@ case "$(uname -s)" in
         ;;
     *)
         HOST_OS="linux"
-        echo -e "      Platform:     ${YELLOW}Unknown (${OS})${NC}"
+        # ${OS} is never defined, and `set -u` turned an unknown uname into a
+        # hard abort right here instead of a warning.
+        echo -e "      Platform:     ${YELLOW}Unknown ($(uname -s 2>/dev/null || echo unknown))${NC}"
         ;;
 esac
 echo ""
@@ -401,6 +456,7 @@ else
     echo -e "      Python:       ${YELLOW}not found (3.8 or newer is required)${NC}"
     MP_INSTALL_PYTHON="${MP_INSTALL_PYTHON:-ask}"
     _mp_py_install=""
+    _mp_py_needs_sudo=0
     case "$HOST_OS" in
         macos)
             _mp_py_install='if ! command -v brew >/dev/null 2>&1; then echo "Homebrew is required: https://brew.sh"; exit 1; fi; brew install python3'
@@ -413,12 +469,13 @@ else
         freebsd)
             _mp_py_install='pkg install -y python3'
             _mp_py_hint="sudo pkg install python3"
+            _mp_py_needs_sudo=1
             ;;
         linux)
-            if [ -f /etc/os-release ]; then
-                # shellcheck source=/dev/null
-                . /etc/os-release
-            fi
+            # Do not source /etc/os-release: it defines VERSION, which this
+            # script exports as the app version. The package manager command is
+            # all that is needed here anyway.
+            _mp_py_needs_sudo=1
             if command -v rpm-ostree >/dev/null 2>&1; then
                 _mp_py_install='rpm-ostree install --allow-inactive --apply-live python3'
             elif command -v dnf >/dev/null 2>&1; then
@@ -433,13 +490,16 @@ else
             _mp_py_hint="sudo dnf install python3  (or apt/pacman/zypper equivalent)"
             ;;
     esac
+    [ -n "$_mp_py_install" ] || _mp_py_needs_sudo=0
 
     if [ -n "$_mp_py_install" ]; then
         _do_py_install=0
         if [ "$MP_INSTALL_PYTHON" = "always" ]; then
             _do_py_install=1
         elif [ "$MP_INSTALL_PYTHON" != "never" ] && [ -t 0 ]; then
-            read -r -p "      Install Python 3 now? [Y/n] " _mp_py_ans
+            # `|| _mp_py_ans=""` keeps a piped/EOF run alive: under `set -e`
+            # an EOF from read aborted the installer instead of taking the default.
+            read -r -p "      Install Python 3 now? [Y/n] " _mp_py_ans || _mp_py_ans=""
             case "${_mp_py_ans:-y}" in
                 n|N|no|NO) _do_py_install=0 ;;
                 *) _do_py_install=1 ;;
@@ -449,7 +509,11 @@ else
         if [ "$_do_py_install" -eq 1 ]; then
             echo -e "${CYAN}      Installing Python 3...${NC}"
             set +e
-            if [ "$(id -u 2>/dev/null || echo 1)" -ne 0 ] && ! printf '%s' "$_mp_py_install" | grep -qE '^(brew|winget)'; then
+            # Decide from the platform, not by pattern-matching the command
+            # string. The macOS command begins with a brew presence check, so
+            # the old `grep -qE '^(brew|winget)'` never matched and Homebrew was
+            # run under sudo (which fails, or worse, installs root-owned files).
+            if [ "${_mp_py_needs_sudo:-0}" -eq 1 ] && [ "$(id -u 2>/dev/null || echo 1)" -ne 0 ]; then
                 if command -v sudo >/dev/null 2>&1; then
                     # shellcheck disable=SC2086
                     sudo sh -c "$_mp_py_install"
@@ -637,7 +701,7 @@ else
                 echo -e "${DIM}      Optional extras skipped (MP_INSTALL_DEV_DEPS=never).${NC}"
             elif [ -t 0 ]; then
                 echo -e "${DIM}      Optional extras (spectrograms, cloud backup, PDF reports, tray) are\n      not required. Install them now?${NC}"
-                read -r -p "      Install optional extras? [y/N] " _mp_opt
+                read -r -p "      Install optional extras? [y/N] " _mp_opt || _mp_opt=""
                 case "${_mp_opt:-n}" in
                     y|Y|yes|YES) "$MP_PYTHON" "$MP_DEPS" --install --optional --python "$MP_PYTHON" || true ;;
                     *) echo -e "${DIM}      Skipped. Run 'scripts/mp_dependencies.py --install --optional' any time.${NC}" ;;
@@ -657,12 +721,21 @@ echo -e "${BOLD}${BLUE}[5/10] Checking Configuration File...${NC}"
 MP_CONFIG_CREATED=0
 if [ ! -f "$SCRIPT_DIR/config.env" ]; then
     if [ -f "$SCRIPT_DIR/config.env.example" ]; then
-        cp "$SCRIPT_DIR/config.env.example" "$SCRIPT_DIR/config.env"
+        # config.env can hold SMTP and SMB passwords (see the *PASSWORD keys in
+        # the template). Create it private from the start; copying it with the
+        # template's mode left it world-readable on a shared machine.
+        ( umask 077; cp "$SCRIPT_DIR/config.env.example" "$SCRIPT_DIR/config.env" ) 2>/dev/null \
+            || cp "$SCRIPT_DIR/config.env.example" "$SCRIPT_DIR/config.env"
+        chmod 600 "$SCRIPT_DIR/config.env" 2>/dev/null || true
         MP_CONFIG_CREATED=1
-        echo -e "${GREEN}      ✓ Created default config.env from template.${NC}"
+        echo -e "${GREEN}      ✓ Created default config.env from template (mode 600).${NC}"
     fi
 else
     echo -e "${GREEN}      ✓ Active config.env found.${NC}"
+    # An install from an older version may have left it group/world readable.
+    if [ -w "$SCRIPT_DIR/config.env" ]; then
+        chmod 600 "$SCRIPT_DIR/config.env" 2>/dev/null || true
+    fi
 fi
 
 # First install selects Dreamworlds Ultra [Default]. The shared theme
@@ -810,10 +883,7 @@ link "$SCRIPT_DIR/scripts/install_harmony_agent.sh" "install-harmony"
 link "$SCRIPT_DIR/scripts/mp_harmony_tts.py" "mp-harmony-tts"
 link "$SCRIPT_DIR/scripts/kc_launch_beszel_hub_and_agent.sh" "beszel-hub-and-agent"
 link "$SCRIPT_DIR/scripts/beszel.sh" "beszel"
-link "$SCRIPT_DIR/scripts/dsh_mobile.sh" "dsh-mobile"
-link "$SCRIPT_DIR/scripts/dsh_mobile.sh" "manage-dsh-mobile"
 link "$SCRIPT_DIR/scripts/kc_run_aider_qwen.sh" "aider-qwen"
-link "$SCRIPT_DIR/Mix_Archive_Manager.sh" "$HOME/manager.sh"
 
 # A dead link left by an older install would shadow a good one from the
 # package manager, so remove it before publishing the new set.
@@ -846,7 +916,10 @@ fi
 # Keep the user config next to the resolver so a launcher started outside this
 # tree still finds the archive and theme settings.
 if [ -f "$SCRIPT_DIR/config.env" ] && [ ! -f "$HOME/.config/mix-manager/config.env" ]; then
-    cp -p "$SCRIPT_DIR/config.env" "$HOME/.config/mix-manager/config.env" 2>/dev/null || true
+    # `cp -p` is intentional: the source is the private (mode 600) config, so
+    # the copy keeps those permissions instead of widening them.
+    ( umask 077; cp -p "$SCRIPT_DIR/config.env" "$HOME/.config/mix-manager/config.env" ) 2>/dev/null || true
+    chmod 600 "$HOME/.config/mix-manager/config.env" 2>/dev/null || true
 fi
 
 echo -e "${GREEN}      ✓ Installed ${MP_LINKED} launchers into ~/.local/bin and ~/manager.sh.${NC}"
@@ -854,6 +927,50 @@ if [ ${#MP_LINK_SKIPPED[@]} -gt 0 ]; then
     echo -e "${DIM}      • not linked (not in this build): ${MP_LINK_SKIPPED[*]}${NC}"
 fi
 unset MP_LINKED MP_LINK_SKIPPED
+
+# Publish ~/.local/bin on PATH. Plenty of distributions (and GNOME/KDE
+# terminals that start from a desktop session) do not include it, so `manager`
+# worked only if the user had already edited a profile by hand. Add a small
+# drop-in rather than editing .bashrc: it is idempotent and easy to remove.
+if [ "$HOST_OS" != "windows" ] && [ "$HOST_OS" != "wsl" ]; then
+    case ":${PATH:-}:" in
+        *":$HOME/.local/bin:"*)
+            echo -e "${GREEN}      ✓ ~/.local/bin is already on PATH.${NC}"
+            ;;
+        *)
+            _mp_path_done=0
+            if [ "$HOST_OS" = "macos" ]; then
+                _mp_profile="$HOME/.zprofile"
+                _mp_marker="# Added by MP Mix Manager installer"
+                if [ -f "$_mp_profile" ] && grep -qF "$_mp_marker" "$_mp_profile" 2>/dev/null; then
+                    _mp_path_done=1
+                else
+                    {
+                        printf '\n%s\n' "$_mp_marker"
+                        printf '%s\n' 'case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) export PATH="$HOME/.local/bin:$PATH" ;; esac'
+                    } >> "$_mp_profile" 2>/dev/null && _mp_path_done=1
+                    unset _mp_marker
+                fi
+                unset _mp_marker
+            elif [ -d "$HOME/.config/environment.d" ] || mkdir -p "$HOME/.config/environment.d" 2>/dev/null; then
+                # systemd user environment: read by every login session on
+                # Bazzite, Fedora, Arch and Debian.
+                printf '%s\n' 'PATH=$HOME/.local/bin:$PATH' \
+                    > "$HOME/.config/environment.d/90-mp-mix-manager.conf" 2>/dev/null && _mp_path_done=1
+            fi
+            if [ "$_mp_path_done" -eq 1 ]; then
+                echo -e "${GREEN}      ✓ Added ~/.local/bin to PATH for future sessions.${NC}"
+                if [ "$HOST_OS" != "macos" ]; then
+                    echo -e "${DIM}        Log out and back in, or run: export PATH=\"\$HOME/.local/bin:\$PATH\"${NC}"
+                fi
+            else
+                echo -e "${YELLOW}      ⚠ Could not add ~/.local/bin to PATH automatically.${NC}"
+                echo -e "${DIM}        Add it yourself: export PATH=\"\$HOME/.local/bin:\$PATH\"${NC}"
+            fi
+            unset _mp_path_done _mp_profile
+            ;;
+    esac
+fi
 
 # Register KWin Borderless Window Rule on Bazzite / KDE Plasma
 if [ "$HOST_OS" = "linux" ] && [ -n "$MP_PYTHON" ]; then
@@ -999,7 +1116,7 @@ else
     echo -e "      ${DIM}assistant and voice bridge for this manager (port 11435).${NC}"
     echo -e "      ${DIM}It is installed outside this folder, in ~/OpenAI/MP_Harmony_Agent,${NC}"
     echo -e "      ${DIM}and is not required by any other feature.${NC}"
-    read -r -p "      Install the MP Harmony Agent? [Y/n] " _mp_harmony_ans
+    read -r -p "      Install the MP Harmony Agent? [Y/n] " _mp_harmony_ans || _mp_harmony_ans=""
     case "${_mp_harmony_ans:-y}" in
         n|N|no|NO) MP_HARMONY_WANT=0 ;;
         *)         MP_HARMONY_WANT=1 ;;
@@ -1029,7 +1146,9 @@ else
         fi
     else
         echo -e "${YELLOW}      ⚠ The MP Harmony Agent could not be installed.${NC}"
-        echo -e "${DIM}        Everything else was installed. Retry with:${NC}"
+        # This is step 8: the app selection, desktop shortcuts and tray still
+        # run afterwards, so do not claim the whole install already finished.
+        echo -e "${DIM}        The rest of the install continues. Retry the agent any time with:${NC}"
         echo -e "${DIM}        scripts/install_harmony_agent.sh install${NC}"
     fi
 fi
@@ -1107,10 +1226,46 @@ if [ -n "$MP_PYTHON" ] && [ -f "$SCRIPT_DIR/scripts/mp_app_selection.py" ]; then
     [ -n "$_mp_apps_norm" ] && MP_APPS_SELECTION="$_mp_apps_norm"
     unset _mp_apps_norm
 else
+    # No interpreter: parse in bash, but never accept an empty or unknown set.
+    # The old fallback passed the raw text through, so `--apps nonsense` produced
+    # a selection no shortcut installer understood and installed nothing.
     case "$MP_APPS_CHOICE" in
-        all|"") MP_APPS_SELECTION="manager gui liquid visualizer" ;;
-        *)      MP_APPS_SELECTION="$(printf '%s' "$MP_APPS_CHOICE" | tr ',;' '  ')" ;;
+        all|"")
+            MP_APPS_SELECTION="manager gui liquid visualizer"
+            ;;
+        *)
+            _mp_apps_parsed=""
+            for _mp_token in $(printf '%s' "$MP_APPS_CHOICE" | tr ',;' '  '); do
+                case "$(printf '%s' "$_mp_token" | tr '[:upper:]' '[:lower:]')" in
+                    manager|mp-mix-manager|mp_mix_manager) _mp_apps_parsed="$_mp_apps_parsed manager" ;;
+                    gui|mp-gui|mp_gui)                     _mp_apps_parsed="$_mp_apps_parsed gui" ;;
+                    liquid|player|mp-liquid-player)        _mp_apps_parsed="$_mp_apps_parsed liquid" ;;
+                    visualizer|mp-liquid-visualizer)       _mp_apps_parsed="$_mp_apps_parsed visualizer" ;;
+                esac
+            done
+            unset _mp_token
+            # Empty means the value named nothing valid; fall back to all four,
+            # matching the Python parser (an empty install is never intended).
+            MP_APPS_SELECTION="${_mp_apps_parsed:-manager gui liquid visualizer}"
+            # Rebuild in the canonical order, which is what the parser stores.
+            _mp_apps_ordered=""
+            for _mp_want in manager gui liquid visualizer; do
+                case " $MP_APPS_SELECTION " in
+                    *" $_mp_want "*) _mp_apps_ordered="$_mp_apps_ordered $_mp_want" ;;
+                esac
+            done
+            unset _mp_want
+            MP_APPS_SELECTION="${_mp_apps_ordered# }"
+            unset _mp_apps_parsed _mp_apps_ordered
+            ;;
     esac
+    # Record the choice here too. Previously only the step-10 shortcut installer
+    # wrote this file, so a failure there silently lost the selection (the tray
+    # and the phone launch pad reverted to all four).
+    _mp_apps_state="$HOME/.config/mix-manager"
+    mkdir -p "$_mp_apps_state" 2>/dev/null || true
+    printf '%s\n' "$MP_APPS_SELECTION" > "$_mp_apps_state/installed_apps" 2>/dev/null || true
+    unset _mp_apps_state
 fi
 export MP_APPS_SELECTION
 
@@ -1178,7 +1333,10 @@ if [ "$HOST_OS" = "macos" ] || [ "$HOST_OS" = "windows" ] || [ "$HOST_OS" = "wsl
 else
     # Linux Desktop Entries (.desktop)
     mkdir -p "$HOME/.local/share/applications"
-    for _dentry in "wan2gp-start-profile45.desktop" "wan2gp-stop.desktop" "ollama-serve.desktop" "ollama-stop.desktop" "beszel-hub-and-agent.desktop" "dsh-mobile.desktop"; do
+    # The desktop entries below ship in this tree. Keep the list to files that
+    # actually exist: the Python shortcut installer already writes MP-specific
+    # entries, so these are the extras.
+    for _dentry in "wan2gp-start-profile45.desktop" "wan2gp-stop.desktop" "ollama-serve.desktop" "ollama-stop.desktop" "beszel-hub-and-agent.desktop" "aider-qwen.desktop"; do
         if [ -f "$SCRIPT_DIR/desktop/$_dentry" ]; then
             cp -p "$SCRIPT_DIR/desktop/$_dentry" "$HOME/.local/share/applications/$_dentry"
             if [ -d "$HOME/Desktop" ]; then
@@ -1188,7 +1346,7 @@ else
         fi
     done
     update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
-    echo -e "${GREEN}      ✓ Application, WAN2GP, Ollama, Beszel, and dsh-mobile shortcuts installed.${NC}"
+    echo -e "${GREEN}      ✓ Application, WAN2GP, Ollama and Beszel shortcuts installed.${NC}"
 
     # MP Harmony and MP Reporter are separate programs, so their shortcuts are
     # owned by their own installer. Offer them here only when the user asked
@@ -1209,8 +1367,7 @@ else
         cp -p "$SCRIPT_DIR/scripts/kc_run_ollama_serve.sh" "$HOME/KDE_CONNECT_CMDS/kc_run_ollama_serve.sh" 2>/dev/null || true
         cp -p "$SCRIPT_DIR/scripts/kc_stop_ollama.sh" "$HOME/KDE_CONNECT_CMDS/kc_stop_ollama.sh" 2>/dev/null || true
         cp -p "$SCRIPT_DIR/scripts/kc_launch_beszel_hub_and_agent.sh" "$HOME/KDE_CONNECT_CMDS/kc_launch_beszel_hub_and_agent.sh" 2>/dev/null || true
-        cp -p "$SCRIPT_DIR/scripts/kc_launch_dsh_mobile.sh" "$HOME/KDE_CONNECT_CMDS/kc_launch_dsh_mobile.sh" 2>/dev/null || true
-        chmod +x "$HOME/KDE_CONNECT_CMDS/kc_start_wan2gp_profile45.sh" "$HOME/KDE_CONNECT_CMDS/kc_stop_wan2gp.sh" "$HOME/KDE_CONNECT_CMDS/kc_run_ollama_serve.sh" "$HOME/KDE_CONNECT_CMDS/kc_stop_ollama.sh" "$HOME/KDE_CONNECT_CMDS/kc_launch_beszel_hub_and_agent.sh" "$HOME/KDE_CONNECT_CMDS/kc_launch_dsh_mobile.sh" 2>/dev/null || true
+        chmod +x "$HOME/KDE_CONNECT_CMDS/kc_start_wan2gp_profile45.sh" "$HOME/KDE_CONNECT_CMDS/kc_stop_wan2gp.sh" "$HOME/KDE_CONNECT_CMDS/kc_run_ollama_serve.sh" "$HOME/KDE_CONNECT_CMDS/kc_stop_ollama.sh" "$HOME/KDE_CONNECT_CMDS/kc_launch_beszel_hub_and_agent.sh" 2>/dev/null || true
         echo -e "${GREEN}      ✓ Synced KDE Connect scripts to ~/KDE_CONNECT_CMDS.${NC}"
     fi
 fi
@@ -1225,9 +1382,13 @@ unset MP_HARMONY_WANT 2>/dev/null || true
 # required piece is missing so scripts and support can tell the difference.
 echo -e "${BOLD}${BLUE}[check] Verifying the installation...${NC}"
 MP_VERIFIED=0
+MP_VERIFY_OUT=""
 if [ -f "$MP_DEPS" ] && [ -n "$MP_PYTHON" ]; then
     set +e
-    "$MP_PYTHON" "$MP_DEPS" --verify --python "$MP_PYTHON" >/dev/null 2>&1
+    # Keep the engine's report. It used to be discarded with >/dev/null while the
+    # failure text below told the user to read "the list directly above" — a list
+    # that had never been printed.
+    MP_VERIFY_OUT="$("$MP_PYTHON" "$MP_DEPS" --verify --python "$MP_PYTHON" 2>&1)"
     MP_FINAL_RC=$?
     set -e
     [ "$MP_FINAL_RC" -eq 0 ] && MP_VERIFIED=1
@@ -1246,13 +1407,19 @@ if [ "$MP_VERIFIED" -ne 1 ]; then
         echo -e "${CYAN}        $_mp_fix${NC}"
         unset _mp_fix
     else
-        echo -e "${DIM}        The list directly above names each missing dependency and${NC}"
-        echo -e "${DIM}        the command that installs it.${NC}"
+        # Print what the engine actually said, then the next step.
+        if [ -n "$MP_VERIFY_OUT" ]; then
+            printf '%s\n' "$MP_VERIFY_OUT" | sed 's/^/        /'
+            echo ""
+        fi
+        echo -e "${DIM}        The report above names each missing dependency and the${NC}"
+        echo -e "${DIM}        command that installs it. Nothing else needs reinstalling.${NC}"
     fi
     echo -e "${DIM}        Everything else is installed. Re-run ./install.sh when fixed.${NC}"
     echo ""
     exit 1
 fi
+unset MP_VERIFY_OUT 2>/dev/null || true
 
 echo -e "${GREEN}      ✓ All required dependencies are present.${NC}"
 echo -e "${GREEN}      ✓ MP Mix Manager is ready to launch.${NC}"

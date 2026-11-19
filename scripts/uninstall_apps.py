@@ -5,6 +5,10 @@ Reset clears that app's saved window and playback settings and leaves it
 installed. Uninstall removes its shortcuts. Saved settings are deleted only
 when asked, so a later install can come back with them.
 
+Removing the last app also clears the per-user integration the installer
+added outside this tree (services, login agents, icons, KDE rules, shell
+hook); see ``scripts/uninstall_integration.py``.
+
 The install tree, music, mixes, playlists, favorites, backups and converted
 audio are never deleted.
 """
@@ -20,6 +24,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import mp_app_selection as selection  # noqa: E402
+import uninstall_integration as integration  # noqa: E402
 from install_desktop_shortcuts import (  # noqa: E402
     SHORTCUT_NAMES,
     _remove_deselected,
@@ -35,11 +40,18 @@ APP_STATE = {
     "manager": (
         "header_cache.env",
         ".header_refresh_stamp",
+        "archive_scan_cache.json",
+        "boot_epoch.cache",
+        "perf_display.cache",
+        "perf_display.stamp",
+        "s4_conn.cache",
+        "traktor_s4_notified.flag",
     ),
     "gui": (
         "liquid_gui_window.json",
         "liquid_glass.log",
         "liquid_glass_tracklist.log",
+        "liquid_glass_font",
         ".liquid_glass_welcomed",
     ),
     "liquid": (
@@ -51,9 +63,21 @@ APP_STATE = {
         "custom_eq_presets.json",
         ".first_run_eq_initialized",
         ".first_run_sample_loaded",
+        "playback_resume.json",
+        "mp_player_state.json",
+        "mp_player.pid",
+        "mp_audio_player.port",
+        "mp_audio_player.sock",
+        "tty_audio_mode",
     ),
     "visualizer": (
         "liquid_player_visualizer.json",
+        "visualizer_idle_saver.json",
+        "visualizer_idle_saver.pid",
+        "visualizer_idle_saver.log",
+        "visualizer_dwell",
+        "visualizer_idle_threshold",
+        "mp_web_visualizer.json",
     ),
 }
 
@@ -61,6 +85,20 @@ APP_STATE = {
 SHARED_GLOBS = {
     "liquid_ui_size.*": ("gui", "liquid"),
     "audio_volume.cache*": ("liquid",),
+    # The tray, the Web Companion and the bridge publish one small record
+    # each. Any of the four windows can start them, so they go with the last
+    # one uninstalled.
+    "mp_system_tray.*": ("manager", "gui", "liquid", "visualizer"),
+    "web_companion*": ("manager", "gui", "liquid", "visualizer"),
+    "bridge_status.json": ("manager", "gui", "liquid", "visualizer"),
+    ".bridge_perm_test": ("manager", "gui", "liquid", "visualizer"),
+    "track_durations.json": ("manager", "gui", "liquid", "visualizer"),
+    "user_activity.jsonl": ("manager", "gui", "liquid", "visualizer"),
+    "theme": ("manager", "gui", "liquid", "visualizer"),
+    "MP_Error.log": ("manager", "gui", "liquid", "visualizer"),
+    # The mixer is a Linux-only extra, but its lock, state and logs are written
+    # by the same suite and belong to no single one of the four apps.
+    "liquid_mixer*": ("manager", "gui", "liquid", "visualizer"),
     # MP Black Glass panes and the visualizers they attach publish one small
     # record per live process. They belong to no single app: any of the four
     # windows can open a pane, so they go with the last one uninstalled.
@@ -68,11 +106,18 @@ SHARED_GLOBS = {
     "black_glass_window.*.json": ("gui", "liquid", "visualizer"),
     "black_glass_visualizer.*.json": ("gui", "liquid", "visualizer"),
     "black_glass_visualizer_state.*.json": ("gui", "liquid", "visualizer"),
+    "gui_window_shape.*": ("gui",),
+    "visualizer-presets": ("visualizer",),
+    "visualizer-spirv": ("visualizer",),
+    "visualizer_preset": ("gui", "liquid", "visualizer"),
+    "scheduled_mixes.json": ("manager",),
+    "scheduler_daemon.*": ("manager",),
+    ".first_run_sample_prevent_autoplay": ("gui", "liquid"),
 }
 
 # Removed from the config directory only when every app is uninstalled and the
 # user asked to delete settings. The copy in the install tree is never touched.
-FULL_UNINSTALL_SETTINGS = ("config.env",)
+FULL_UNINSTALL_SETTINGS = ("config.env", "install_dir", "motd", "motd.kernel")
 
 # User data. A "delete settings" answer does not mean delete the library.
 NEVER_DELETE = {
@@ -106,7 +151,6 @@ TRAY_PATHS = (
     Path("AppData") / "Roaming" / "Microsoft" / "Windows" / "Start Menu"
     / "Programs" / "Startup" / "MP Mix Manager Tray.lnk",
 )
-
 
 def parse_targets(text: str) -> list[str]:
     """The apps named by the uninstaller. An unknown word is an error.
@@ -280,7 +324,12 @@ def apply_changes(
     _drop_shortcuts(desktop, apps_dir, remain, dry_run)
 
     if delete_config:
-        for path in state_paths(config_dir, targets, remain):
+        # The last app leaving means nothing can read any app's state again.
+        # Clear every app's files, not only the ones named on the command line:
+        # a player that was uninstalled in an earlier run can still have left a
+        # socket, a resume point or a preset behind.
+        clearing = list(selection.COMPONENTS) if not remain else targets
+        for path in state_paths(config_dir, clearing, remain):
             _remove(path, config_dir, dry_run, "setting")
         if not remain:
             for name in FULL_UNINSTALL_SETTINGS:
@@ -297,6 +346,11 @@ def apply_changes(
         print("No MP applications remain installed.")
         for relative in TRAY_PATHS:
             _remove(home / relative, home, dry_run, "tray")
+        # Shortcuts, the tray entry and installed_apps are only part of what a
+        # full uninstall owns. Services, icons, window rules, bundles and the
+        # shell banner hook are removed here, after the last app is gone.
+        print("")
+        integration.remove_all(home, root, dry_run=dry_run)
 
     return remain
 

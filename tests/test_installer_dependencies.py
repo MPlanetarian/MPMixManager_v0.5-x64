@@ -76,6 +76,11 @@ def imported_third_party_modules() -> set[str]:
     local |= {p.stem for p in (ROOT / "scripts").glob("*.py")}
     local |= {p.stem for p in (ROOT / "scripts" / "lib").glob("*.py")}
     local |= {p.name for p in (ROOT / "scripts").iterdir() if p.is_dir()}
+    # In-tree application packages (each is a directory of sibling modules the
+    # app imports by bare name, so they are not pip dependencies).
+    local |= {p.name for p in ROOT.iterdir() if p.is_dir() and (p / "__init__.py").exists()}
+    for pkg in ROOT.glob("*/"):
+        local |= {py.stem for py in pkg.glob("*.py")}
     local |= {"shared", "lib", "assets", "scripts", "mp_install_dir"}
 
     found: set[str] = set()

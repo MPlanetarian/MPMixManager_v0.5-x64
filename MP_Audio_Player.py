@@ -86,6 +86,107 @@ def _ensure_audio_backends():
         except ImportError: pass
 
 
+def portaudio_name_is_generic(name: str) -> bool:
+    """True for PortAudio's placeholder names, which name no real sink.
+
+    PortAudio reports the ALSA "default" plugin as the device name, and that is
+    what the player used to print: ``Output: default``. It says nothing about
+    where the sound is going, so callers replace it with the system sink.
+    """
+    text = str(name or "").strip().lower()
+    if not text:
+        return True
+    if text in ("default", "default audio output", "pulse", "pipewire", "sysdefault"):
+        return True
+    # ALSA plugin spellings such as default:CARD=NVidia or sysdefault:CARD=x.
+    return text.startswith(("default:", "sysdefault:", "defaults:"))
+
+
+def output_device_label(name: str, system_sink: str = "") -> str:
+    """The device name to show on the Output line.
+
+    A real device name is returned untouched. When PortAudio only says
+    "default", the system sink's own name is shown instead, because that is the
+    device the sound actually reaches. If no system name is known either, the
+    original placeholder is kept rather than printing an empty label.
+    """
+    shown = str(name or "").strip()
+    sink = str(system_sink or "").strip()
+    if not portaudio_name_is_generic(shown):
+        return shown
+    if sink and not portaudio_name_is_generic(sink):
+        return sink
+    return shown or "default"
+
+
+def _mixer_deck_theme_fallback(name: str) -> str:
+    """Map a theme this player cannot paint onto the closest one it can.
+
+    The Liquid Mixer offers themes the player's --theme table does not carry.
+    Those live in the sibling MP_Liquid_Mixer package, so it is imported from
+    there by path; a tree without the mixer keeps the name unchanged.
+    """
+    try:
+        import sys as _sys
+        from pathlib import Path as _Path
+        _pkg = _Path(__file__).resolve().parent / "MP_Liquid_Mixer"
+        if _pkg.is_dir() and str(_pkg) not in _sys.path:
+            _sys.path.insert(0, str(_pkg))
+        from mixer_core import DECK_THEME_FALLBACK as _fb
+        return _fb.get(name, name)
+    except Exception:
+        return name
+
+
+def _system_output_sink_name() -> str:
+    """The system's current default sink description, or "".
+
+    Cached because it is read while a frame is being drawn, and every call
+    shells out. PipeWire/PulseAudio first (pactl describes the sink the way a
+    person would name it), then wpctl, then a plain ALSA card name.
+    """
+    cached = globals().get("_SYS_SINK_CACHE")
+    if isinstance(cached, tuple):
+        stamp, value = cached
+        if time.monotonic() - stamp < 10.0:
+            return value
+    value = ""
+    try:
+        if shutil.which("pactl"):
+            out = subprocess.run(
+                ["pactl", "get-default-sink"], capture_output=True, text=True, timeout=1.0
+            ).stdout.strip()
+            if out:
+                desc = subprocess.run(
+                    ["pactl", "list", "sinks"], capture_output=True, text=True, timeout=1.0
+                ).stdout
+                # Find the block for that sink and read its Description.
+                block = ""
+                for chunk in desc.split("Sink #"):
+                    if f"Name: {out}" in chunk:
+                        block = chunk
+                        break
+                for line in block.splitlines():
+                    if line.strip().startswith("Description:"):
+                        value = line.split(":", 1)[1].strip()
+                        break
+                if not value:
+                    value = out
+        if not value and shutil.which("wpctl"):
+            out = subprocess.run(
+                ["wpctl", "inspect", "@DEFAULT_AUDIO_SINK@"],
+                capture_output=True, text=True, timeout=1.0
+            ).stdout
+            for line in out.splitlines():
+                if "node.description" in line or "node.nick" in line:
+                    value = line.split("=", 1)[1].strip().strip('"')
+                    break
+    except Exception:
+        value = ""
+    globals()["_SYS_SINK_CACHE"] = (time.monotonic(), value)
+    return value
+
+
 def _configured_output_device(sd_module=None):
     """Resolve MP_AUDIO_OUTPUT_DEVICE to a PortAudio output index.
 
@@ -581,6 +682,83 @@ def is_cloud_or_remote_path(p: Union[str, Path, None]) -> bool:
     if not p: return False
     s = str(p)
     return s.startswith(("\\\\", "//", "smb://")) or any(k in s for k in ("GoogleDrive", "google3:", "MUSIC_SMB", "/run/media/", "/mnt/", "/media/", "/gvfs/smb-share:"))
+
+def music_share_for_path(p: Union[str, Path, None]) -> Optional[Dict[str, Any]]:
+    """The configured Music Folder whose mount root contains this path.
+
+    The generated music playlists name ``<mount_root>/<id>/...`` paths. Nothing
+    mounts those SMB shares at login, so a row can exist in the playlist while
+    its file does not. This maps an unreachable row back to the share that owns
+    it, which is what makes an on-demand mount possible.
+    """
+    if not p:
+        return None
+    raw = str(p)
+    try:
+        import music_folders_manager as mfm
+    except ImportError:
+        try:
+            from scripts import music_folders_manager as mfm
+        except ImportError:
+            return None
+    try:
+        config = mfm.load_music_config()
+        mount_root = str(config.get("mount_root") or "")
+        if not mount_root or not raw.startswith(mount_root):
+            return None
+        for folder in mfm.load_folders(config):
+            if str(folder.get("type", "")).lower() != "smb" or not folder.get("id"):
+                continue
+            base = os.path.join(mount_root, str(folder["id"]))
+            if raw == base or raw.startswith(base + os.sep):
+                return folder
+    except Exception:
+        return None
+    return None
+
+def ensure_music_share_for_path(p: Union[str, Path, None]) -> bool:
+    """Mount the SMB share that owns ``p``. True when its file is now readable.
+
+    Used when the user picks a row whose file is missing: a share that was
+    simply not mounted comes back to life here instead of failing silently.
+    An already-mounted share is a no-op inside ``connect_folder``.
+    """
+    folder = music_share_for_path(p)
+    if not folder:
+        return False
+    try:
+        import music_folders_manager as mfm
+    except ImportError:
+        try:
+            from scripts import music_folders_manager as mfm
+        except ImportError:
+            return False
+    # A desktop session has ~/.local/bin on PATH; a service or a stripped
+    # environment may not, and rclone lives there on Linux.
+    local_bin = str(Path.home() / ".local" / "bin")
+    if os.path.isdir(local_bin) and local_bin not in os.environ.get("PATH", "").split(os.pathsep):
+        os.environ["PATH"] = local_bin + os.pathsep + os.environ.get("PATH", "")
+    try:
+        config = mfm.load_music_config()
+        mfm.connect_folder(folder, config, interactive=False)
+    except Exception as exc:
+        try: mp_log_error("MP_Audio_Player", f"Could not mount music share for {p}", details=str(exc))
+        except Exception: pass
+        return False
+    try:
+        return os.path.isfile(str(p))
+    except OSError:
+        return False
+
+def unavailable_media_hint(p: Union[str, Path, None]) -> str:
+    """One actionable line for a row whose file cannot be opened."""
+    name = os.path.basename(str(p or ""))
+    folder = music_share_for_path(p)
+    if folder:
+        return (f"Cannot play {name}: music folder {folder.get('id')} is offline. "
+                f"Check the SMB login in MP Mix Manager > Music Folders (option 2).")
+    return (f"Cannot play {name}: the file is missing or on an unmounted drive. "
+            f"Reconnect it, or refresh the library in Music Folders.")
 
 @functools.lru_cache(maxsize=1)
 def get_base_dir() -> Path:
@@ -2878,6 +3056,10 @@ class AudioEngine:
         self.position_sec, self.duration_sec, self.sample_rate, self.channels = 0.0, 0.0, 44100, 2
         self.pitch_percent, self.pitch_factor, self.resampler = 0, 1.0, AudioResampler()
         self.sf_file = self.stream = self.audio_source = self.audio_buffer = self.feeder = self.stream_error = self.pending_seek_sec = None
+        # Why the last track could not be loaded ("" after a good load). The
+        # UI reads this so a Play press on an offline library is explained
+        # instead of silently doing nothing.
+        self.last_load_error = ""
         self.output_rate, self.output_device_name, self._next_stream_retry, self.track_ended = 44100, "", 0.0, False
         self._mac_output_device = None
         self._sf_lock, self._sf_refs, self._sf_retired = threading.Lock(), 0, []
@@ -3231,9 +3413,18 @@ class AudioEngine:
         # Traktor playlist generated elsewhere names files that may not be
         # mounted; without this the cursor moved to a dead entry and every
         # control then failed against it.
+        #
+        # Remember the reason on the engine as well as in the log. Play, the
+        # S4's Play button and the browse knob all reach the engine without
+        # going through the playlist row handler, so a bare False left them
+        # doing nothing at all on an unmounted library.
         target_path = str(self.playlist[index].get("path") or "")
         if not target_path or not os.path.isfile(target_path):
+            self.last_load_error = unavailable_media_hint(target_path)
+            try: mp_log_error("MP_Audio_Player", f"Cannot open track (file missing or unreadable): {target_path}")
+            except Exception: pass
             return False
+        self.last_load_error = ""
         self.current_index, self.current_track = index, self.playlist[index]
         self._stop_feeder()
         try:
@@ -3246,6 +3437,8 @@ class AudioEngine:
                 except Exception: pass
                 try: mp_log_error("MP_Audio_Player", f"Unplayable audio (no sample rate): {self.current_track.get('path', '')}")
                 except Exception: pass
+                self.last_load_error = (f"Cannot play {os.path.basename(str(self.current_track.get('path', '')))}: "
+                                        f"the file has no readable audio stream.")
                 self.state = "stopped"
                 return False
             self.audio_source, self.sample_rate, self.channels = src, src.samplerate, src.channels
@@ -3289,9 +3482,12 @@ class AudioEngine:
             ):
                 try: mp_log_error("MP_Audio_Player", f"Cannot open track (file missing or unreadable): {self.current_track.get('path', '')}", details=f"{type(exc).__name__}: {exc}")
                 except Exception: pass
+                self.last_load_error = unavailable_media_hint(self.current_track.get("path"))
             else:
                 try: mp_log_error("MP_Audio_Player", f"Failed loading track: {self.current_track.get('path', '')}", exc)
                 except Exception: pass
+                self.last_load_error = (f"Cannot play {os.path.basename(str(self.current_track.get('path', '')))}: "
+                                        f"{type(exc).__name__}: {exc}")
             return False
 
     def _sync_state_file(self, force: bool = False):
@@ -3695,6 +3891,7 @@ class AudioEngine:
             "output_rate": int(self.output_rate or 0), "output_device": cur_out,
             "bluetooth_connected": is_bt, "bluetooth_device": bt_dev, "bluetooth_codec": bt_c,
             "bluetooth_auto_route": bool(getattr(self, "auto_bluetooth", True)), "audio_error": str(self.stream_error or ""),
+            "last_load_error": str(getattr(self, "last_load_error", "") or ""),
             "channels": int(self.channels), "mini_eq": self.get_mini_visualizer(),
             "levels": levels, "peaks": peaks,
             "levels_left": levels_left, "levels_right": levels_right,
@@ -3794,16 +3991,26 @@ class PlayerIPCServer:
                 pos = float(req.get("position", 0.0) or 0.0)
                 if f := req.get("file"):
                     def _l(tf, p):
+                        # A row from a generated Music Folders playlist can name
+                        # a file on an SMB share that is not mounted yet. Try the
+                        # share before giving up; the UI reports last_load_error.
+                        # This already runs on a worker thread, so a wedged share
+                        # delays only this one request.
+                        if not os.path.isfile(tf):
+                            ensure_music_share_for_path(tf)
                         for i, t in enumerate(e.playlist):
                             if t["path"] == tf or t["name"] == os.path.basename(tf):
                                 e.load_track(i, True, start_position=p)
+                                e._sync_state_file(force=True)
                                 return
                         e.playlist.insert(0, {"name": os.path.basename(tf), "path": tf, "size_mb": 0, "mtime": time.time(), "ext": os.path.splitext(tf)[1][1:].upper()})
                         e.load_track(0, True, start_position=p)
+                        e._sync_state_file(force=True)
                     threading.Thread(target=_l, args=(f, pos), daemon=True).start()
                 else:
                     if pos > 0: e.seek(pos)
                     e.play()
+                    e._sync_state_file(force=True)
             elif cmd == "pause": e.pause()
             elif cmd in ("toggle", "play_pause"): e.toggle_play_pause(); res["state"] = e.state
             elif cmd == "transport_stop":
@@ -4796,6 +5003,9 @@ _THEME_PALETTES = {
     "retro_terminal": {"highlight": "\033[1;37m", "active": "\033[1;37m", "border": "\033[1;37m", "accent": "\033[1;37m"},
     "retro_linux_memories": {"highlight": "\033[38;2;91;134;187m", "active": "\033[38;2;21;83;158m", "border": "\033[38;2;84;84;83m", "accent": "\033[38;2;240;173;78m"},
     "into_darkness_void_out": {"highlight": "\033[1;37m", "active": "\033[38;2;200;200;200m", "border": "\033[38;2;72;72;72m", "accent": "\033[1;37m"},
+    # Blood Moon: vivid crimson selection bar, deep ruby ink and a wine-tinted
+    # console field, matching scripts/mp_theme_palette.py exactly.
+    "blood_moon": {"highlight": "\033[38;2;255;32;64m", "active": "\033[38;2;255;90;95m", "border": "\033[38;2;180;0;32m", "accent": "\033[38;2;137;17;34m"},
     # Sensorium: the bright chartreuse stays on the selection fill, but the ink
     # and borders are darkened so they read on the light coral console pane.
     # The champagne-gold gradient lives in _base_theme_rgb.
@@ -4840,6 +5050,12 @@ _THEME_ALIASES = {
     "into darkness (void out)": "into_darkness_void_out",
     "into darkness": "into_darkness_void_out",
     "void out": "into_darkness_void_out",
+    "blood_moon": "blood_moon",
+    "blood moon": "blood_moon",
+    "blood-moon": "blood_moon",
+    "crimson": "blood_moon",
+    "vampire": "blood_moon",
+    "blood_ruby": "blood_moon",
     "retro_linux": "retro_linux_memories",
     "linux_memories": "retro_linux_memories",
     "retro-linux-memories": "retro_linux_memories",
@@ -4944,6 +5160,7 @@ class EqualizerVisualizer:
         "retro_linux_memories",
         "the_whitest_white",
         "into_darkness_void_out",
+        "blood_moon",
     ]
     THEME_NAMES = {
         "stream_of_frequency": "Stream of Frequency [Special Edition]",
@@ -4961,6 +5178,7 @@ class EqualizerVisualizer:
         "retro_linux_memories": "Retro Linux Memories",
         "the_whitest_white": "The Whitest White",
         "into_darkness_void_out": "Into Darkness (Void Out)",
+        "blood_moon": "Blood Moon [Crimson Eclipse]",
     }
 
     def __init__(self, default_style: Optional[str] = None, default_theme: Optional[str] = None, theme: Optional[str] = None, style: Optional[str] = None):
@@ -4986,11 +5204,7 @@ class EqualizerVisualizer:
                     # must not displace the --theme the deck was started with.
                     _probe = _THEME_ALIASES.get(_shared, _shared)
                     if _probe not in self.THEMES:
-                        try:
-                            from mixer_core import DECK_THEME_FALLBACK as _fb
-                            _probe = _fb.get(_probe, _probe)
-                        except Exception:
-                            pass
+                        _probe = _mixer_deck_theme_fallback(_probe)
                     if _probe in self.THEMES:
                         selected_theme = _shared
             # Dreamworlds Ultra is the built-in default when no theme has ever
@@ -5076,11 +5290,7 @@ class EqualizerVisualizer:
             # Only a theme the mixer genuinely offers may be remapped. Garbage
             # must stay garbage so sync_theme_from_file() reports no change and
             # an unknown value cannot silently repaint the window.
-            try:
-                from mixer_core import DECK_THEME_FALLBACK as _fallback
-                c = _fallback.get(c, c)
-            except Exception:
-                pass
+            c = _mixer_deck_theme_fallback(c)
         if c in self.THEMES:
             self.theme_idx = self.THEMES.index(c)
             if c == "stream_of_frequency":
@@ -5267,7 +5477,11 @@ class EqualizerVisualizer:
         return [f"  {self.b_col}{lbl}{NC}", f"  {self.b_col}{bot}{NC}"]
 
     def render_neon_prism_eq(self, levels_l: np.ndarray, levels_r: np.ndarray, peaks_l: np.ndarray, peaks_r: np.ndarray, width: int = 80, height: int = 7, rms: float = 0.0, peak_db: float = -60.0) -> List[str]:
-        target_iw = max(20, width - 6 if width >= 26 else width - 4)
+        # The frame is ╭ + left + ┬ + right + ╮, so the three border cells come
+        # out of the inner width. Reserving only two drew a row one cell wider
+        # than every other equaliser (79 against 78 at width 80) and pushed the
+        # right channel past the player border.
+        target_iw = max(18, width - 7 if width >= 26 else width - 5)
         # Odd cell counts are handed to the right half so the two channels are
         # as even as the column allows.
         ch_w_l = target_iw // 2
@@ -5317,7 +5531,7 @@ class EqualizerVisualizer:
         return lines + self._stereo_footer(ch_w_l, ch_w_r)
 
     def render_stardust_particles_eq(self, levels_l: np.ndarray, levels_r: np.ndarray, peaks_l: np.ndarray, peaks_r: np.ndarray, width: int = 80, height: int = 7, rms: float = 0.0, peak_db: float = -60.0) -> List[str]:
-        target_iw = max(20, width - 6 if width >= 26 else width - 4)
+        target_iw = max(18, width - 7 if width >= 26 else width - 5)
         ch_w_l = target_iw // 2
         ch_w_r = target_iw - ch_w_l
         min_w = min(ch_w_l, ch_w_r)
@@ -5518,7 +5732,9 @@ class EqualizerVisualizer:
 
     def render_master_spectrum(self, levels: np.ndarray, peaks: np.ndarray, width: int = 80, height: int = 7) -> List[str]:
         target_iw = max(20, width - 6 if width >= 26 else width - 4)
-        num_bars = max(16, (target_iw - 2) // 3)
+        # The bar floor must fit the box: 16 bars are 48 cells, which a
+        # 40-column window cannot hold. Take the larger of 8 and the room.
+        num_bars = max(4, min(48, (target_iw - 2) // 3))
         hdr = self._rule_label("HIGH-RESOLUTION MASTER FREQUENCY SPECTRUM (30Hz - 18kHz) ", target_iw)
         top_line = f"  {self.b_col}╭{hdr}{'─' * max(0, target_iw - _display_width(hdr))}╮{NC}"
         bot_line = f"  {self.b_col}╰{'─' * target_iw}╯{NC}"
@@ -5544,6 +5760,8 @@ class EqualizerVisualizer:
         rem_w = max(10, target_iw - _display_width(peak_str) - 4)
         fl = self._format_freq_labels(rem_w)
         ftr_mid = f"  {fl}  {peak_str}"
+        if _display_width(ftr_mid) > target_iw:
+            ftr_mid = _clip_display(ftr_mid, target_iw)
         ftr_pad = max(0, target_iw - _display_width(ftr_mid))
         lines.append(f"  {self.b_col}│{NC}{DIM}{CYAN}{ftr_mid}{' ' * ftr_pad}{NC}{self.b_col}│{NC}")
         lines.append(bot_line)
@@ -5552,11 +5770,18 @@ class EqualizerVisualizer:
     def render_analog_vu(self, peak_db: float, levels_l: np.ndarray, levels_r: np.ndarray, width: int = 80) -> List[str]:
         target_iw = max(20, width - 6 if width >= 26 else width - 4)
         hdr = "── DUAL ANALOG STUDIO VU METERS (PEAK & RMS BALLISTICS) "
+        # A narrow window cannot hold the long title. Clip it to the inner
+        # width instead of drawing a row wider than the box, which pushed the
+        # right border off the player at width 60.
+        if _display_width(hdr) > target_iw:
+            hdr = _clip_display(hdr, target_iw)
         top_line = f"  {self.b_col}╭{hdr}{'─' * max(0, target_iw - _display_width(hdr))}╮{NC}"
         bot_line = f"  {self.b_col}╰{'─' * target_iw}╯{NC}"
         lines = [top_line]
 
-        blen = max(10, target_iw - 28)
+        # Keep the band length inside the box so the meter row and its
+        # [CLIP]/[SAFE] tag cannot push the right border off a narrow window.
+        blen = max(4, min(target_iw - 28, target_iw - 24))
         scale_raw = "-40   -30   -20   -10   -7   -5   -3   -1    0  +1  +2  +3 dB"
         scale_pfx = "  "
         scale_str = scale_pfx + scale_raw
@@ -5570,6 +5795,16 @@ class EqualizerVisualizer:
             meter = "".join(f"{self._get_bar_color(i / blen)}█{NC}" if i < filled else f"{DIM}░{NC}" for i in range(blen))
             clip_s = f"{BOLD}{RED}[CLIP]{NC}" if filled >= blen - 1 else f"{DIM}[SAFE]{NC}"
             row_content = f"  {BOLD}{CYAN}{name}{NC} [{meter}] {clip_s}"
+            if _display_width(row_content) > target_iw:
+                # A narrow box cannot show the channel name beside the meter.
+                # Shrink the meter rather than letting the row run past the
+                # border; the clip tag carries the reading.
+                short_name = "L" if name.startswith("L") else "R"
+                row_content = f" {BOLD}{CYAN}{short_name}{NC}[{meter}]"
+                if _display_width(row_content) > target_iw:
+                    room = max(2, target_iw - 12)
+                    meter = "".join(f"{self._get_bar_color(i / max(1, room))}█{NC}" if i < min(filled, room) else f"{DIM}░{NC}" for i in range(room))
+                    row_content = f" {BOLD}{CYAN}{short_name}{NC}[{meter}]"
             row_pad = max(0, target_iw - _display_width(row_content))
             lines.append(f"  {self.b_col}│{NC}{row_content}{' ' * row_pad}{self.b_col}│{NC}")
 
@@ -9547,6 +9782,28 @@ class TerminalPlayerUI:
         if not (mixes and 0 <= self.selected_row < len(mixes)):
             return
         chosen = mixes[self.selected_row]
+        path = str(chosen.get("path") or "")
+        # Nothing mounts the Music Folders SMB shares at login, so a generated
+        # playlist row can name a file on a share that is simply not up. Without
+        # this the engine refused the track inside load_track and the deck did
+        # nothing at all: no sound, no message. Mount on a worker: a wedged
+        # share can take tens of seconds, and the deck must stay responsive.
+        if path and not os.path.isfile(path):
+            share = music_share_for_path(path)
+            if share:
+                self._notify(f"Mounting {share.get('id')} - {os.path.basename(path)}...", 6.0)
+
+                def _mount_then_play(target=path):
+                    if ensure_music_share_for_path(target):
+                        self._send_cmd("play", file=target)
+                    else:
+                        self._notify(unavailable_media_hint(target), 6.0)
+
+                threading.Thread(target=_mount_then_play, name="music-row-mount",
+                                 daemon=True).start()
+                return
+            self._notify(unavailable_media_hint(path), 6.0)
+            return
         if self.is_remote:
             self._send_cmd("play", file=chosen["path"])
             return
@@ -10813,6 +11070,11 @@ class TerminalPlayerUI:
             rdot = f"{bold_s}{COLOR_TRAFFIC_RED}●{NC}" if flash else f"{dim_s}{RED}○{NC}"
             lines.append(f"  {rdot} {bold_s}{COLOR_TRAFFIC_RED}RECORDING TO WAV:{NC} {bold_s}{COLOR_ELECTRIC_CYAN}{rf}{NC} {dim_s}[{rmb:.1f} MB  •  {rdur}  •  Max 3GB/WAV]{NC}")
         out_n = bt_dev or st.get("output_device", "Speakers")
+        # PortAudio names the ALSA plugin "default", which says nothing about
+        # where the sound actually goes. Show the system sink's own name when
+        # that is all PortAudio gave us.
+        if not bt_dev:
+            out_n = output_device_label(out_n, _system_output_sink_name())
         bt_b = f"{bold_s}{COLOR_NEON_PINK}🎧 Output: {out_n}{NC}" if (is_bt or "bluetooth" in str(out_n).lower()) else f"{dim_s}{CYAN}🔊 Output: {out_n}{NC}"
         s4_b = f"  │  {bold_s}\033[38;2;0;255;127m🎛️ S4 MIDI [hw:0,0]{NC}" if (CONFIG_DIR / "traktor_s4_midi.pid").exists() else ""
         src_badge = " Lossless" if (w >= 116 and is_lossless_path(st.get("path", ""))) else ""

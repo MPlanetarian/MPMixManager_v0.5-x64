@@ -228,6 +228,11 @@ class LiquidMixer(GlassHost):
         self._rec_second = -1
         self._s4_last_seen = 0.0
         self._s4_status_text = "S4: starting"
+        # The decks open the Music Folders library, whose SMB shares nothing
+        # mounts at login. Track what the last mount attempt found so the top
+        # bar can say "library offline" instead of leaving a silent empty deck.
+        self._library_status: Dict[str, Any] = {}
+        self._library_error = ""
         # The wall clock is read from the system when the window is constructed
         # and then once a second in _tick, so it ticks even when nothing else
         # in the mixer changes.
@@ -389,6 +394,7 @@ class LiquidMixer(GlassHost):
             GLib.timeout_add(100, self._apply_windowed_size)
 
         self._spawn_decks(Vte, GLib)
+        self._mount_music_library()
         self._start_s4()
         self._start_midi()
         if self.with_visualizer:
@@ -465,6 +471,57 @@ class LiquidMixer(GlassHost):
     # ------------------------------------------------------------------
     # decks
     # ------------------------------------------------------------------
+    def _mount_music_library(self) -> None:
+        """Bring the Music Folders SMB shares up before the decks read them.
+
+        The desks' playlists are generated from ``~/MUSIC_SMB/<id>`` paths, and
+        those are rclone mounts that a plain desktop login never starts. When
+        they are down every row fails ``os.path.isfile`` inside the engine, so
+        Enter does nothing: exactly the "no audio, nothing happens" report.
+        Running this on a worker thread keeps the window responsive while the
+        shares answer; the decks may start first and simply fill in afterwards.
+        """
+        def worker():
+            status = core.ensure_music_folders_mounted(force=True)
+            self._library_status = status
+            _log(f"music library: {status.get('detail', '')}")
+            try:
+                from gi.repository import GLib as _GLib
+                _GLib.idle_add(self._on_library_mounted)
+            except Exception:
+                pass
+
+        threading.Thread(target=worker, name="music-library-mount", daemon=True).start()
+
+    def _on_library_mounted(self) -> bool:
+        # A deck that opened before its share came up scanned an empty library.
+        # Reloading the Music playlist in place is what the player's own [2]
+        # key does, so the rows appear without restarting the engines.
+        detail = str(self._library_status.get("detail") or "")
+        if int(self._library_status.get("online") or 0) > 0:
+            self._library_error = ""
+            for channel, deck in self.decks.items():
+                namespace = deck.get("namespace")
+                if not namespace:
+                    continue
+                core.send_ipc(namespace, "load_playlist", timeout=0.6,
+                              mode="MUSIC", folder_name="ALL", play=False)
+            if self.area is not None:
+                self.area.queue_draw()
+            _log(f"decks reloaded: {detail}")
+        elif int(self._library_status.get("total") or 0) == 0:
+            # Nothing to mount: either the library is local-only or Music
+            # Folders were never configured. Neither is an offline library,
+            # so the decks keep their normal headers.
+            self._library_error = ""
+            _log(f"music library: {detail}")
+        elif detail:
+            # Name the problem on the deck headers instead of a blank list.
+            self._library_error = detail
+            if self.area is not None:
+                self.area.queue_draw()
+        return False
+
     def _spawn_decks(self, Vte, GLib) -> None:
         from gi.repository import Gdk as Gdk, Pango
         Gtk = self.Gtk
@@ -1912,6 +1969,15 @@ class LiquidMixer(GlassHost):
         self._text(cr, header[0] + 42 * s, header[1] + 11 * s, f"DECK {channel}", 14 * s, glass_ink, 0.95, bold=True)
         sync_box = self.boxes[f"sync_{key}"]
         title = status.get("name") or status.get("title") or ("Engine starting..." if online else "Waiting for engine...")
+        # When every music share is down the deck's list is empty and pressing
+        # Enter cannot possibly play anything. Say that in the header instead
+        # of leaving a deck that looks ready but silently does nothing. The
+        # engine's own reason covers Play and the S4 button, which do not go
+        # through the playlist row handler.
+        if self._library_error and not playing:
+            title = f"Music library offline - {self._library_error}"
+        elif not playing and str(status.get("last_load_error") or ""):
+            title = str(status.get("last_load_error"))
         self._text(cr, header[0] + 140 * s, header[1] + 12 * s, str(title), 11.5 * s, glass_ink, 0.72,
                    max_width=max(40.0, sync_box[0] - (header[0] + 140 * s) - 10 * s))
         right = "LIVE" if playing else ("READY" if online else "OFFLINE")

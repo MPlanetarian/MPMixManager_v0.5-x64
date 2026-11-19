@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
 Unit tests for Option 33 Submenu System:
-- Verifies that all 6 Option 33 submenus:
+- Verifies that the Option 33 submenus:
   1. manage_ai_models
   2. manage_ollama
   3. manage_open_webui
   4. manage_harmony_agent
-  5. manage_dsh_mobile
-  6. manage_wan2gp
+  5. manage_wan2gp
+  (manage_dsh_mobile was removed with the DeepSeek Harness)
   (as well as manage_beszel and run_wan2gp_output_monitor)
   use run_interactive_submenu to enable keyboard navigation (Up/Down arrow keys, Enter to select).
 - Verifies non-interactive execution and clean return on exit (0/ESC/q).
@@ -33,7 +33,6 @@ class TestOption33Submenus(unittest.TestCase):
             "manage_ollama",
             "manage_open_webui",
             "manage_harmony_agent",
-            "manage_dsh_mobile",
             "manage_wan2gp",
             "manage_beszel",
             "run_wan2gp_output_monitor",
@@ -47,7 +46,6 @@ class TestOption33Submenus(unittest.TestCase):
         self.assertIn('run_interactive_submenu "OLLAMA LOCAL LLM SERVER MANAGER"', self.mgr_content)
         self.assertIn('run_interactive_submenu "OPEN WEBUI SERVER & WEB CHAT MANAGER"', self.mgr_content)
         self.assertIn('run_interactive_submenu "MP HARMONY AI AGENT & VOICE BRIDGE (:11435)"', self.mgr_content)
-        self.assertIn('run_interactive_submenu "DEEPSEEK HARNESS (DSH-MOBILE) SERVER MANAGER"', self.mgr_content)
         self.assertIn('run_interactive_submenu "WAN2GP AI VIDEO & IMAGE WORKSTATION SUITE"', self.mgr_content)
         self.assertIn('run_interactive_submenu "WAN2GP DIRECTORY CONFIGURATION"', self.mgr_content)
         self.assertIn('run_interactive_submenu "BESZEL WORKSTATION & GPU MONITORING SUITE"', self.mgr_content)
@@ -83,7 +81,6 @@ class TestOption33Submenus(unittest.TestCase):
             "manage_ollama",
             "manage_open_webui",
             "manage_harmony_agent",
-            "manage_dsh_mobile",
             "manage_wan2gp",
             "manage_beszel",
             "run_wan2gp_output_monitor",

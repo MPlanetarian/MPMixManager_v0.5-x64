@@ -14,6 +14,7 @@ import math
 import os
 import socket
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
@@ -336,6 +337,119 @@ class MixerModel:
             return cls.from_dict(json.loads(Path(path or STATE_PATH).read_text(encoding="utf-8")))
         except (OSError, json.JSONDecodeError, UnicodeError):
             return cls()
+
+
+# -- music folder mounts -------------------------------------------------
+# The decks browse the Music Folders library, which is generated from SMB
+# shares and points at ~/MUSIC_SMB/<id>/... paths. Those shares are rclone
+# FUSE mounts that nothing starts on a normal desktop login, so the playlist
+# is full of paths whose parent directory exists but is empty. Selecting a row
+# then fails `os.path.isfile()` inside the engine and the deck simply does
+# nothing. The Music Folders menu and the Web Companion each mount the shares
+# themselves; the mixer, which opens the library directly, has to do it too.
+MUSIC_MOUNT_RETRY_SECONDS = 30.0
+_MUSIC_MOUNT_STATE: Dict[str, Any] = {"attempted_at": 0.0, "online": 0, "total": 0, "detail": ""}
+
+
+def _music_folders_module():
+    """The Music Folders helper, imported the way the player imports siblings."""
+    try:
+        import music_folders_manager as module
+        return module
+    except ImportError:
+        pass
+    if str(SCRIPTS_DIR) not in sys.path:
+        sys.path.insert(0, str(SCRIPTS_DIR))
+    try:
+        import music_folders_manager as module
+        return module
+    except ImportError:
+        return None
+
+
+def ensure_music_folders_mounted(force: bool = False,
+                                 deadline_sec: float = 20.0) -> Dict[str, Any]:
+    """Mount the configured SMB music shares and report what is reachable.
+
+    Returns ``{"online": n, "total": n, "detail": "..."}``. A missing
+    configuration is reported as zero folders, never as an error: a deck on a
+    machine with local-only music folders has nothing to mount and must still
+    start. Results are cached briefly so the mixer's status poll and both
+    decks do not each spawn a fleet of rclone processes.
+    """
+    now = time.monotonic()
+    state = _MUSIC_MOUNT_STATE
+    if not force and state["attempted_at"] and now - state["attempted_at"] < MUSIC_MOUNT_RETRY_SECONDS:
+        return dict(state)
+
+    module = _music_folders_module()
+    if module is None:
+        state.update(attempted_at=now, online=0, total=0,
+                     detail="music_folders_manager.py was not found")
+        return dict(state)
+
+    # A desktop launch has ~/.local/bin on PATH, but a service or a stripped
+    # environment may not; rclone lives there on Linux.
+    local_bin = str(Path.home() / ".local" / "bin")
+    if Path(local_bin).is_dir() and local_bin not in os.environ.get("PATH", "").split(os.pathsep):
+        os.environ["PATH"] = local_bin + os.pathsep + os.environ.get("PATH", "")
+
+    try:
+        config = module.load_music_config()
+        folders = [f for f in module.load_folders(config)
+                   if str(f.get("type", "")).lower() == "smb" and f.get("id")]
+    except Exception as exc:
+        state.update(attempted_at=now, online=0, total=0,
+                     detail=f"could not read the Music Folders configuration: {exc}")
+        return dict(state)
+
+    if not folders:
+        state.update(attempted_at=now, online=0, total=0,
+                     detail="no SMB Music Folders configured")
+        return dict(state)
+
+    # Mount in parallel: six serial rclone mounts never finish inside a launch
+    # window, and one offline share must not hold the other five.
+    results: Dict[str, bool] = {}
+    lock = threading.Lock()
+
+    def _one(folder: Dict[str, Any]) -> None:
+        try:
+            ok, _msg = module.connect_folder(folder, config, interactive=False)
+        except Exception:
+            ok = False
+        with lock:
+            results[str(folder.get("id"))] = bool(ok)
+
+    threads = []
+    for folder in folders:
+        thread = threading.Thread(target=_one, args=(folder,),
+                                  name=f"music-mount-{folder.get('id')}", daemon=True)
+        thread.start()
+        threads.append(thread)
+    deadline = time.monotonic() + max(1.0, float(deadline_sec))
+    for thread in threads:
+        thread.join(max(0.0, deadline - time.monotonic()))
+
+    online = sum(1 for ok in results.values() if ok)
+    offline = [fid for fid in (str(f.get("id")) for f in folders)
+               if not results.get(fid)]
+    detail = f"{online}/{len(folders)} music shares mounted"
+    if offline:
+        detail += " (offline: " + ", ".join(offline) + ")"
+    state.update(attempted_at=time.monotonic(), online=online,
+                 total=len(folders), detail=detail)
+    return dict(state)
+
+
+def library_available(path: Optional[str]) -> bool:
+    """True when a playlist row's file can actually be opened right now."""
+    if not path:
+        return False
+    try:
+        return os.path.isfile(str(path))
+    except OSError:
+        return False
 
 
 # -- theme ---------------------------------------------------------------
