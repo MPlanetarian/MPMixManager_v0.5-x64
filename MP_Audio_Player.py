@@ -4566,6 +4566,49 @@ def _fit_text_line(cands: List[str], max_cols: int) -> str:
         if _display_width(l) <= max_cols: return l
     return _clip_display(cands[-1] if cands else "", max_cols)
 
+RAINBOW_CYCLE_SECONDS = 24.0
+
+
+def rainbow_hue_at(seconds: float) -> float:
+    """Hue (0..1) on the shared 24-second rainbow cycle."""
+    try:
+        return (float(seconds) % RAINBOW_CYCLE_SECONDS) / RAINBOW_CYCLE_SECONDS
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _rotate_ansi_hue(seq: str, shift: float) -> str:
+    """Rotate the hue of one 24-bit SGR colour, keeping its saturation/value."""
+    import colorsys
+    m = re.search(r"38;2;(\d+);(\d+);(\d+)", str(seq or ""))
+    if not m:
+        return seq
+    r, g, b = (int(m.group(i)) / 255.0 for i in (1, 2, 3))
+    h, l, sat = colorsys.rgb_to_hls(r, g, b)
+    r2, g2, b2 = colorsys.hls_to_rgb((h + shift) % 1.0, l, sat)
+    rgb = f"38;2;{int(round(r2 * 255))};{int(round(g2 * 255))};{int(round(b2 * 255))}"
+    return re.sub(r"38;2;\d+;\d+;\d+", rgb, seq, count=1)
+
+
+def animate_theme_palette(theme_name: str, seconds: float,
+                          base: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+    """Rotate a theme's palette colours for the frame at ``seconds``.
+
+    Only Dynamic Liquid Glass moves. t=0 and t=24 return the base palette
+    unchanged, so the resting frame and the console manager agree.
+    """
+    pal = dict(base if base is not None else _THEME_PALETTES.get(theme_name, _DEFAULT_PALETTE))
+    if theme_name != "dynamic_rainbow_liquid_glass":
+        return pal
+    hue = rainbow_hue_at(seconds)
+    if hue == 0.0:
+        return pal
+    for key, value in list(pal.items()):
+        if isinstance(value, str):
+            pal[key] = _rotate_ansi_hue(value, hue)
+    return pal
+
+
 def theme_body_ansi(theme_name: str) -> str:
     """ANSI colour for player body text. Each theme keeps its own hue."""
     script_dir = str(Path(__file__).resolve().parent / "scripts")
@@ -4661,7 +4704,7 @@ def _rgb_from_ansi(seq: str) -> Optional[Tuple[int, int, int]]:
     m = re.search(r"\033\[[0-9;]*(?:38|48);2;(\d+);(\d+);(\d+)m", str(seq or ""))
     return (int(m.group(1)), int(m.group(2)), int(m.group(3))) if m else None
 
-def _selection_bar_ansi(theme_name: str) -> Tuple[str, str]:
+def _selection_bar_ansi(theme_name: str, at: Optional[float] = None) -> Tuple[str, str]:
     """Background and foreground for a selected row, taken from the active theme.
 
     The playlist used to paint a fixed grey bar in the console and reverse video
@@ -4670,6 +4713,8 @@ def _selection_bar_ansi(theme_name: str) -> Tuple[str, str]:
     and picks black or white text from its luminance to stay readable.
     """
     pal = _THEME_PALETTES.get(theme_name, _DEFAULT_PALETTE)
+    if at is not None:
+        pal = animate_theme_palette(theme_name, at, pal)
     rgb = _rgb_from_ansi(pal.get("highlight", ""))
     if rgb is None:
         try:
@@ -5373,7 +5418,39 @@ class EqualizerVisualizer:
 
     def get_style_display_name(self) -> str: return self.STYLE_NAMES.get(self.style, self.style.replace("_", " ").title())
     def get_theme_display_name(self) -> str: return self.THEME_NAMES.get(self.theme, self.theme.replace("_", " ").title())
-    def get_theme_palette(self) -> Dict[str, str]: return _THEME_PALETTES.get(self.theme, _DEFAULT_PALETTE)
+    def begin_frame(self, at: Optional[float] = None) -> None:
+        """Stamp the frame clock so every surface shares one rainbow hue.
+
+        The border, the selection bar, the pitch knob and the equaliser all
+        read this value, so they cannot drift apart mid-frame when each painted
+        its own hue from a slightly later clock.
+        """
+        self._frame_at = time.time() if at is None else float(at)
+
+    def frame_time(self) -> float:
+        """Seconds on the current frame clock (0.0 before the first frame)."""
+        return getattr(self, "_frame_at", 0.0)
+
+    def get_theme_palette(self, at: Optional[float] = None) -> Dict[str, str]:
+        """The palette for the active theme, animated where the theme asks.
+
+        Dynamic Liquid Glass is the one theme whose colours move: the Web
+        Companion sweeps it on a 24-second cycle and the shader hosts drive it
+        per frame, so the console player reads the same clock instead of a
+        frozen table entry. ``at`` is seconds into the cycle; omit it to use
+        the wall clock. Every other theme returns its static palette, and t=0
+        is byte-for-byte the shipped entry so a still frame matches the manager.
+        """
+        pal = _THEME_PALETTES.get(self.theme, _DEFAULT_PALETTE)
+        if self.theme != "dynamic_rainbow_liquid_glass":
+            return pal
+        if at is None:
+            t = getattr(self, "_frame_at", None)
+            if t is None:
+                t = time.time()
+        else:
+            t = float(at)
+        return animate_theme_palette(self.theme, t, pal)
 
     def _base_theme_rgb(self, c_frac: float, ultra_floor: float = 0.10) -> Tuple[float, float, float]:
         t = self.theme
@@ -9379,8 +9456,17 @@ class TerminalPlayerUI:
         store = self._favorites_store()
         face = f"  {favorite_glyph(True)} FAVORITES  "
         # The favourites label takes the active theme as well, so a C press
-        # recolours this row on the compact frames too.
-        button = theme_chip(self.visualizer.theme, face, lift=0.32)
+        # recolours this row on the compact frames too. A bare UI built without
+        # a visualizer (tests, one-shot printers) keeps a readable default.
+        _theme = getattr(getattr(self, "visualizer", None), "theme", "dreamworlds_ultra")
+        if whole_row:
+            # The CLI action row is text only: no filled block, which used to
+            # paint a solid bar across the row above the playlist header. The
+            # ink still follows the theme so C recolours it.
+            _ink, _ = theme_chip_style(_theme)
+            button = f"\033[1;38;2;{_ink[0]};{_ink[1]};{_ink[2]}m{face}\033[0m"
+        else:
+            button = theme_chip(_theme, face, lift=0.32)
         count = len(store)
         mode = self._bass_mode()
         # The CLI row is text-only (see bass_mode_label): no filled block.
@@ -11281,7 +11367,13 @@ class TerminalPlayerUI:
                     else:
                         f_str = f"{m.get('size_mb', 0):.0f}MB".rjust(6)
                     fav = fav_store.is_favorite(path)
-                    cache_key = (i, path, rn, ext_s, f_str, act, sel, in_q, pfx, iw, avail_name, theme_name, bold_s, self.mode, fav, _LIMITED_GLYPHS)
+                    # A selected or playing row carries animated ink on the
+                    # rainbow themes, so its key is stamped with the frame's
+                    # 0.1-second tick. Every other row keeps a stable key and
+                    # stays cached.
+                    bar_tick = round(self.visualizer.frame_time(), 1)
+                    cache_key = (i, path, rn, ext_s, f_str, act, sel, in_q, pfx, iw, avail_name, theme_name, bold_s, self.mode, fav, _LIMITED_GLYPHS,
+                                 bar_tick if (sel or act) else None)
                     # Mouse hit-testing reads these every frame, including when
                     # the painted line itself is reused.
                     self._playlist_star_col = _display_width(f"  │ {pfx}[{i+1:4d}] ") + 1

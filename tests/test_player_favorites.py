@@ -202,8 +202,11 @@ class FavoritesPlayerTests(unittest.TestCase):
         self.assertIn("FAVORITES", visible)
         self.assertIn("[3]", visible)
         self.assertIn("[H]", visible)
-        self.assertIn("38;2;255;196;0", visible)
-        self.assertNotIn("48;2;", visible)
+        # The label takes the active theme's colour rather than a fixed gold,
+        # and the whole-row form still paints no background block.
+        self.assertIn("38;2;245;250;255", visible)
+        self.assertNotIn("38;2;255;196;0", visible)
+        self.assertNotIn("48;2;", visible.split("BASS BOOST")[0])
 
     def test_full_frame_draws_the_favorites_button(self):
         engine = player.AudioEngine([], auto_bluetooth=False)
