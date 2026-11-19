@@ -9458,8 +9458,11 @@ class TerminalPlayerUI:
         if not sys.platform.startswith("linux") or os.environ.get("MP_LIQUID_VISUALIZER_STATE"):
             return
         try:
-            from liquid_visualizer_session import visualizer_pids
-            if visualizer_pids():
+            from liquid_visualizer_session import companion_visualizer_pids
+            # Only a visualizer that belongs to *this* player counts. A window
+            # the user opened with Z is theirs, so it must not stop the
+            # companion from being spawned behind the player.
+            if companion_visualizer_pids(for_gui=False):
                 return
             root = Path(__file__).resolve().parent
             script = root / "MP_Liquid_Visualizer.py"
@@ -9469,11 +9472,18 @@ class TerminalPlayerUI:
                 return
             config_dir = Path.home() / ".config" / "mix-manager"
             config_dir.mkdir(parents=True, exist_ok=True)
+            # Mark the child as the player's companion. Without this the new
+            # window is treated as a user-opened one: it never bonds behind the
+            # player and the VISUALIZATION button cannot hide or show it.
+            child_env = {k: v for k, v in os.environ.items()
+                         if k != "MP_VISUALIZER_STATE"}
+            child_env["MP_VISUALIZER_COMPANION"] = "1"
+            child_env.pop("MP_VISUALIZER_DETACHED", None)
             with (config_dir / "liquid_visualizer.log").open("a", encoding="utf-8") as log:
                 subprocess.Popen(
                     [sys.executable, str(script), "--preset", str(preset.get("key") or "random")],
                     cwd=str(root), stdin=subprocess.DEVNULL, stdout=log, stderr=log,
-                    start_new_session=True,
+                    start_new_session=True, env=child_env,
                 )
         except Exception:
             pass

@@ -18,6 +18,79 @@ from PIL import Image, ImageDraw, ImageFont
 
 faulthandler.enable()
 
+# ANSI palette used by the terminal emulator below. `_apply_sgr` handles the
+# 16-colour forms, the 256-colour cube (38;5/48;5) and truecolor (38;2/48;2);
+# these tables are what those branches resolve against.
+ANSI_COLORS = {
+    30: (0, 0, 0), 31: (205, 49, 49), 32: (13, 188, 121), 33: (229, 229, 16),
+    34: (36, 114, 200), 35: (188, 63, 188), 36: (17, 168, 205), 37: (229, 229, 229),
+    90: (102, 102, 102), 91: (241, 76, 76), 92: (35, 209, 139), 93: (245, 245, 67),
+    94: (59, 142, 234), 95: (214, 112, 214), 96: (41, 184, 219), 97: (255, 255, 255),
+}
+ANSI_BG_COLORS = {
+    40: (0, 0, 0), 41: (205, 49, 49), 42: (13, 188, 121), 43: (229, 229, 16),
+    44: (36, 114, 200), 45: (188, 63, 188), 46: (17, 168, 205), 47: (229, 229, 229),
+    100: (102, 102, 102), 101: (241, 76, 76), 102: (35, 209, 139), 103: (245, 245, 67),
+    104: (59, 142, 234), 105: (214, 112, 214), 106: (41, 184, 219), 107: (255, 255, 255),
+}
+
+
+def ansi256_rgb(index: int) -> tuple:
+    """Map an xterm-256 colour index to RGB.
+
+    0-15 are the system colours, 16-231 a 6x6x6 cube and 232-255 a 24-step
+    grey ramp. Anything out of range clamps to the nearest valid entry so a
+    malformed SGR cannot raise inside the frame loop.
+    """
+    try:
+        n = int(index)
+    except (TypeError, ValueError):
+        return (200, 235, 255)
+    n = max(0, min(255, n))
+    base = {
+        0: (0, 0, 0), 1: (205, 49, 49), 2: (13, 188, 121), 3: (229, 229, 16),
+        4: (36, 114, 200), 5: (188, 63, 188), 6: (17, 168, 205), 7: (229, 229, 229),
+        8: (102, 102, 102), 9: (241, 76, 76), 10: (35, 209, 139), 11: (245, 245, 67),
+        12: (59, 142, 234), 13: (214, 112, 214), 14: (41, 184, 219), 15: (255, 255, 255),
+    }
+    if n < 16:
+        return base[n]
+    if n < 232:
+        n -= 16
+        steps = (0, 95, 135, 175, 215, 255)
+        return (steps[n // 36], steps[(n // 6) % 6], steps[n % 6])
+    grey = 8 + (n - 232) * 10
+    return (grey, grey, grey)
+
+
+# Mono faces that actually carry the playlist marks (► ★ ◆). SFNSMono is the
+# last resort: it renders those glyphs as blank boxes, which is why the
+# playlist looked like it had no cursor on macOS.
+OVERLAY_FONT_CANDIDATES = [
+    "/System/Library/Fonts/Menlo.ttc",
+    "/System/Library/Fonts/SFNSMono.ttf",
+    "/System/Library/Fonts/Supplemental/Andale Mono.ttf",
+    "/Library/Fonts/Arial Unicode.ttf",
+]
+
+
+def load_overlay_font(size: int):
+    """The first candidate face that opens, falling back to PIL's default.
+
+    The playlist cursor and favourite star are drawn as glyphs, so a font
+    without them renders a blank box instead of a mark. Menlo is preferred
+    because it carries both.
+    """
+    for path in OVERLAY_FONT_CANDIDATES:
+        try:
+            return ImageFont.truetype(path, size)
+        except Exception:
+            continue
+    try:
+        return ImageFont.load_default(size)
+    except Exception:
+        return ImageFont.load_default()
+
 if not hasattr(ctypes, "_CData"):
     for base in getattr(ctypes.c_int, "__mro__", ()):
         if base.__name__ == "_CData":
