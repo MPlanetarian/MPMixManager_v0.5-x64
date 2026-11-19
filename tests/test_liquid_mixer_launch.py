@@ -57,6 +57,15 @@ class LauncherCase(unittest.TestCase):
                 pass
 
         self.addCleanup(_close)
+        # The lock owner is this test process, whose cmdline is not a mixer.
+        # The real probe checks that the pid is a live MP Liquid Mixer before
+        # honouring the lock, so stand that check up here: these tests are
+        # about the probe never writing and about the lock blocking a second
+        # window, not about the stale-lock recovery (covered separately).
+        owner = patch.object(launcher, "lock_owner_alive", return_value=True)
+        owner.start()
+        self.addCleanup(owner.stop)
+        return fd
         return fd
 
 

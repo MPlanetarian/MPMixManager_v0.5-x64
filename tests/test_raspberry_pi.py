@@ -116,8 +116,12 @@ class TestPiDetection(unittest.TestCase):
         self.assertEqual(pi.visualizer_fps_cap(), 24)
         os.environ["MP_VISUALIZER_FPS_CAP"] = "0"
         self.assertEqual(pi.visualizer_fps_cap(), 0, "0 must disable the cap")
+        # The ceiling is 240 so the Settings menu can offer 144 for a 144 Hz
+        # panel; a typo above that still clamps instead of freezing the window.
         os.environ["MP_VISUALIZER_FPS_CAP"] = "500"
-        self.assertEqual(pi.visualizer_fps_cap(), 120, "a typo must be clamped")
+        self.assertEqual(pi.visualizer_fps_cap(), 240, "a typo must be clamped")
+        os.environ["MP_VISUALIZER_FPS_CAP"] = "144"
+        self.assertEqual(pi.visualizer_fps_cap(), 144, "144 must survive the clamp")
 
     def test_default_env_sets_fps_cap(self):
         os.environ["MP_FORCE_RASPBERRY_PI"] = "1"
