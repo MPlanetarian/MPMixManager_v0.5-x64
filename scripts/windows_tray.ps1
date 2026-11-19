@@ -389,7 +389,7 @@ function Stop-MpSuite {
                 "launch_liquid_glass",
                 "launch-liquid-glass",
                 "launch_liquid_visualizer",
-                "traktor_s4_midi",
+                "dj_s4_midi",
                 "manager.ps1"
             )) {
                 if ($command -like "*$needle*") { $isMp = $true; break }

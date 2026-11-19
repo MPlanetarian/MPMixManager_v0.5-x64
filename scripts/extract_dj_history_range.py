@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Extract Tracklist from Traktor History Files by Range
+Extract Tracklist from DJ History Files by Range
 Allows extracting a contiguous slice of played tracks (e.g. tracks 95 to 118)
-from Traktor Pro history (.nml) files and saving permanently to a mix tracklist file.
+from DJ Pro history (.nml) files and saving permanently to a mix tracklist file.
 """
 
 import argparse
@@ -27,12 +27,12 @@ MAGENTA = "\033[35m"
 CYAN = "\033[36m"
 
 
-def find_traktor_history_dirs():
-    """Locate all candidate Traktor History directories across platforms and storage."""
+def find_dj_history_dirs():
+    """Locate all candidate DJ History directories across platforms and storage."""
     candidates = []
 
     # Config env value if present
-    env_hist = os.environ.get("TRAKTOR_HISTORY_DIR")
+    env_hist = os.environ.get("DJ_HISTORY_DIR")
     if env_hist and os.path.isdir(env_hist):
         candidates.append(os.path.abspath(env_hist))
 
@@ -44,7 +44,7 @@ def find_traktor_history_dirs():
         os.path.expanduser("~/MIX_ARCHIVE"),
     ]:
         if os.path.isdir(base):
-            for p in glob.glob(os.path.join(base, "Traktor*", "History")):
+            for p in glob.glob(os.path.join(base, "DJ*", "History")):
                 if os.path.isdir(p):
                     candidates.append(p)
 
@@ -56,7 +56,7 @@ def find_traktor_history_dirs():
         Path("/c/Users") / os.environ.get("USERNAME", "") / "Documents" / "Native Instruments",
     ]:
         if doc_root.is_dir():
-            for p in doc_root.glob("Traktor*/History"):
+            for p in doc_root.glob("DJ*/History"):
                 if p.is_dir():
                     candidates.append(str(p))
 
@@ -71,8 +71,8 @@ def find_traktor_history_dirs():
 
 
 def list_history_files(limit=30):
-    """Return sorted list of Traktor history .nml files (newest first)."""
-    hdirs = find_traktor_history_dirs()
+    """Return sorted list of DJ history .nml files (newest first)."""
+    hdirs = find_dj_history_dirs()
     all_files = []
     for d in hdirs:
         for f in glob.glob(os.path.join(d, "history_*.nml")):
@@ -94,7 +94,7 @@ def list_history_files(limit=30):
 
 def parse_history_entries(history_file):
     """
-    Parse a Traktor history (.nml) file and return a list of tracks in session order.
+    Parse a DJ history (.nml) file and return a list of tracks in session order.
     Prefers the <PLAYLIST TYPE="PROTOCOL"> node; falls back to <COLLECTION>.
     Each entry: {"artist": str, "title": str, "duration_sec": float, "deck": str}
     """
@@ -213,7 +213,7 @@ def build_tracklist_content(tracks, start_idx, end_idx, history_file, mix_file=N
         "Album:         Stream of Frequency",
         f"Title:         {mix_name_clean}",
         f"Extracted:     {now_str}",
-        f"Traktor Source: {h_bname} (Tracks {start_idx} to {end_idx})",
+        f"DJ Source: {h_bname} (Tracks {start_idx} to {end_idx})",
         f"Total Tracks:  {count}",
         "--------------------------------------------------",
     ]
@@ -235,14 +235,14 @@ def build_tracklist_content(tracks, start_idx, end_idx, history_file, mix_file=N
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Extract tracklist from Traktor history .nml by range")
-    parser.add_argument("--history", "-H", help="Path or full filename of Traktor .nml history file")
+    parser = argparse.ArgumentParser(description="Extract tracklist from DJ history .nml by range")
+    parser.add_argument("--history", "-H", help="Path or full filename of DJ .nml history file")
     parser.add_argument("--start", "-s", type=int, help="Start track number (1-based, inclusive)")
     parser.add_argument("--end", "-e", type=int, help="End track number (1-based, inclusive)")
     parser.add_argument("--output", "-o", help="Target .txt tracklist output path to save/overwrite permanently")
     parser.add_argument("--mix-file", "-m", help="Path to selected mix audio file")
     parser.add_argument("--mix-title", help="Mix title for tracklist header")
-    parser.add_argument("--list-history", action="store_true", help="List recent Traktor history files and exit")
+    parser.add_argument("--list-history", action="store_true", help="List recent DJ history files and exit")
     parser.add_argument("--count", help="Print total track count in a history file and exit")
     parser.add_argument("--json", action="store_true", help="Output results in JSON format")
 
@@ -254,9 +254,9 @@ def main():
             print(json.dumps(files, indent=2))
         else:
             if not files:
-                print(f"{YELLOW}No Traktor History (.nml) files found in standard locations.{NC}")
+                print(f"{YELLOW}No DJ History (.nml) files found in standard locations.{NC}")
                 sys.exit(1)
-            print(f"\n{BOLD}{CYAN}Recent Traktor History Files ({len(files)} found):{NC}\n")
+            print(f"\n{BOLD}{CYAN}Recent DJ History Files ({len(files)} found):{NC}\n")
             for i, f in enumerate(files, start=1):
                 dt = datetime.fromtimestamp(f["mtime"]).strftime("%Y-%m-%d %H:%M")
                 sz_kb = f["size"] // 1024
@@ -268,7 +268,7 @@ def main():
         h_path = args.count
         if not os.path.isfile(h_path):
             # check candidates
-            for d in find_traktor_history_dirs():
+            for d in find_dj_history_dirs():
                 cand = os.path.join(d, h_path)
                 if os.path.isfile(cand):
                     h_path = cand
@@ -297,7 +297,7 @@ def main():
     if os.path.isfile(hist_input):
         h_file = os.path.abspath(hist_input)
     else:
-        for d in find_traktor_history_dirs():
+        for d in find_dj_history_dirs():
             cand = os.path.join(d, hist_input)
             if os.path.isfile(cand):
                 h_file = cand
@@ -315,7 +315,7 @@ def main():
     try:
         entries = parse_history_entries(h_file)
     except Exception as exc:
-        print(f"{BOLD}{RED}❌ Failed to parse Traktor history file: {exc}{NC}", file=sys.stderr)
+        print(f"{BOLD}{RED}❌ Failed to parse DJ history file: {exc}{NC}", file=sys.stderr)
         sys.exit(1)
 
     total = len(entries)

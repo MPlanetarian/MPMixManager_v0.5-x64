@@ -23,7 +23,10 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional, Tuple
 
-MODES = ("FLANGER", "DELAY", "REVERB", "GATER")
+MODES = ("FLANGER", "REVERB", "DELAY", "GATER")
+# "FILTER" is not an effect: it is the plain resonant sweep the orange square
+# selects, so the knob behaves like a classic DJ filter.
+FILTER_MODE = "FILTER"
 DEFAULT_MODE = "FLANGER"
 
 # Short names and the slot colours used by the four squares on the mixer.
@@ -32,17 +35,21 @@ MODE_LABELS = {
     "DELAY": "Delay",
     "REVERB": "Reverb",
     "GATER": "Gater",
+    FILTER_MODE: "Filter",
 }
 MODE_COLORS = {
     "FLANGER": (235, 64, 72),     # red
     "DELAY": (250, 205, 90),      # yellow
     "REVERB": (72, 149, 239),     # blue
-    "GATER": (255, 150, 40),      # orange
+    "GATER": (60, 220, 120),      # green
+    FILTER_MODE: (255, 150, 40),  # orange, the Filter switch
 }
 
 
 def normalize_mode(mode: Optional[str]) -> str:
     name = str(mode or "").strip().upper()
+    if name == FILTER_MODE:
+        return FILTER_MODE
     return name if name in MODES else DEFAULT_MODE
 
 
@@ -76,6 +83,11 @@ class ChannelEffect:
         self._reverb = None             # (2, tail_len)
         self._reverb_index = 0
         self._gater_phase = 0.0
+        self._filter_state = None
+        self._filter_alpha = 0.0
+        self._filter_cutoff = 0.0
+        self._filter_high = False
+        self._filter_rate = 0
 
     # -- configuration ----------------------------------------------------
     def configure(self, mode: Optional[str] = None, amount: Any = None,
@@ -123,6 +135,8 @@ class ChannelEffect:
         self._delay_buffer = None
         self._reverb = None
         self._gater_phase = 0.0
+        self._filter_state = None
+        self._filter_cutoff = 0.0
 
     def _numpy(self):
         if self._np is None:
@@ -141,6 +155,8 @@ class ChannelEffect:
             data = np.column_stack((data, data))
         if len(data) == 0:
             return block
+        if self.mode == FILTER_MODE:
+            return self._filter(data)
         if self.mode == "FLANGER":
             return self._flanger(data)
         if self.mode == "DELAY":
@@ -148,6 +164,55 @@ class ChannelEffect:
         if self.mode == "REVERB":
             return self._reverb_tail(data)
         return self._gater(data)
+
+    def _filter(self, data):
+        """Centre-detented DJ filter: low-pass below the centre, high-pass above.
+
+        Amount 0.5 is flat, so the knob's centre is a true bypass. Below the
+        centre it closes a one-pole low pass down to 180 Hz; above it opens a
+        high pass up to 6.5 kHz. A little feedback around the cutoff gives the
+        sweep the resonance a DJ filter is expected to have.
+        """
+        np = self._numpy()
+        rate = float(self.sample_rate)
+        amount = float(self.amount)
+        # Treat the knob as 0..1 with 0.5 as the detent.
+        if 0.47 <= amount <= 0.53:
+            return data
+        if amount < 0.47:
+            t = amount / 0.47                       # 0 at the bottom, 1 at the detent
+            cutoff = 180.0 + (rate * 0.45 - 180.0) * max(0.0, t)
+            high_pass = False
+        else:
+            t = (amount - 0.53) / 0.47              # 0 at the detent, 1 at the top
+            cutoff = 120.0 + (6500.0 - 120.0) * max(0.0, 1.0 - t)
+            high_pass = True
+        cutoff = max(20.0, min(rate * 0.45, cutoff))
+        if self._filter_state is None or self._filter_cutoff != cutoff \
+                or self._filter_high != high_pass or self._filter_rate != rate:
+            x = 2.0 * np.pi * cutoff / rate
+            alpha = x / (x + 1.0)
+            self._filter_alpha = float(alpha)
+            self._filter_cutoff = cutoff
+            self._filter_high = high_pass
+            self._filter_rate = rate
+            self._filter_state = np.zeros((2, 2), dtype=np.float32)
+        alpha = self._filter_alpha
+        state = self._filter_state
+        out = np.empty_like(data)
+        for frame in range(len(data)):
+            for channel in range(2):
+                low = state[channel, 0] + alpha * (data[frame, channel] - state[channel, 0])
+                state[channel, 0] = low
+                if high_pass:
+                    out[frame, channel] = data[frame, channel] - low
+                else:
+                    out[frame, channel] = low
+        # Resonance: a touch of the removed band folded back at full sweep.
+        drive = 0.0 if 0.47 <= amount <= 0.53 else 0.55 * abs(amount - 0.5) * 2.0
+        if drive > 0.0:
+            out = out + (data - out) * float(min(0.45, drive * 0.45))
+        return np.clip(out, -1.0, 1.0)
 
     def _flanger(self, data):
         np = self._numpy()

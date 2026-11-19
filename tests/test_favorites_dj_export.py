@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Favorites DJ set exporter: copy, verify, tracklist, m3u8 and Traktor playlist."""
+"""Favorites DJ set exporter: copy, verify, tracklist, m3u8 and DJ playlist."""
 
 import json
 import os
@@ -165,7 +165,7 @@ class ExporterTests(unittest.TestCase):
         self.assertIn("could be opened as audio", " ".join(result["errors"]))
 
 
-class TraktorPlaylistTests(unittest.TestCase):
+class DJPlaylistTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
@@ -198,9 +198,9 @@ class TraktorPlaylistTests(unittest.TestCase):
         self.env = patch.dict(
             os.environ,
             {
-                "TRAKTOR_COLLECTION_PATH": str(self.collection),
-                "TRAKTOR_HISTORY_DIR": str(self.history_dir),
-                "TRAKTOR_ENABLED": "true",
+                "DJ_COLLECTION_PATH": str(self.collection),
+                "DJ_HISTORY_DIR": str(self.history_dir),
+                "DJ_ENABLED": "true",
             },
             clear=False,
         )
@@ -211,11 +211,11 @@ class TraktorPlaylistTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_ready_reports_collection_and_history(self):
-        ready, reason = exporter.traktor_ready()
+        ready, reason = exporter.dj_ready()
         self.assertTrue(ready, reason)
 
     def test_playlist_is_written_key_sorted_with_a_backup(self):
-        result = exporter.create_traktor_playlist(
+        result = exporter.create_dj_playlist(
             ["Airbase - Escape.flac", "Gai Barone - Lonely Keys.flac"],
             "Fav Test",
             "history_2026y11m12d_01h00m00s.nml",
@@ -234,10 +234,10 @@ class TraktorPlaylistTests(unittest.TestCase):
         self.assertEqual(keys[1], "/:music/:Gai Barone - Lonely Keys.flac")
 
     def test_missing_history_is_reported(self):
-        ready, _ = exporter.traktor_ready()
+        ready, _ = exporter.dj_ready()
         self.assertTrue(ready)
         (self.history).unlink()
-        ready, reason = exporter.traktor_ready()
+        ready, reason = exporter.dj_ready()
         self.assertFalse(ready)
         self.assertIn("History", reason)
 
@@ -252,12 +252,12 @@ class TraktorPlaylistTests(unittest.TestCase):
             + "</PLAYLIST></NODE></PLAYLISTS></NML>",
             encoding="utf-8",
         )
-        result = exporter.create_traktor_playlist(["Airbase - Escape.flac"], "Fallback")
+        result = exporter.create_dj_playlist(["Airbase - Escape.flac"], "Fallback")
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["matched"], 1)
 
     def test_track_in_neither_session_nor_collection_is_reported(self):
-        result = exporter.create_traktor_playlist(["Unknown - Track.flac"], "No Match")
+        result = exporter.create_dj_playlist(["Unknown - Track.flac"], "No Match")
         self.assertFalse(result["ok"])
         self.assertEqual(result["reason"], "no_match")
         self.assertIn("Unknown - Track.flac", result["missing"])
@@ -314,11 +314,11 @@ class FavoritesPlayerExportTests(unittest.TestCase):
         self.ui.fav_export_dest = ""
         self.ui.fav_export_name = ""
         self.ui.fav_export_kind = "local"
-        self.ui.traktor_offer_paths = None
-        self.ui.traktor_offer_name = ""
-        self.ui.traktor_input_mode = ""
-        self.ui.traktor_playlist_name = ""
-        self.ui.traktor_history_id = ""
+        self.ui.dj_offer_paths = None
+        self.ui.dj_offer_name = ""
+        self.ui.dj_input_mode = ""
+        self.ui.dj_playlist_name = ""
+        self.ui.dj_history_id = ""
         self.ui._reset_click_targets()
 
     def tearDown(self):
@@ -332,7 +332,7 @@ class FavoritesPlayerExportTests(unittest.TestCase):
     def test_j_opens_the_dj_export_decision_window(self):
         self.store.toggle(_track("Mix A.flac", "/mixes/a.flac"))
         with patch.object(player.TerminalPlayerUI, "_fav_exporter_module") as module:
-            module.return_value.traktor_ready.return_value = (False, "not configured")
+            module.return_value.dj_ready.return_value = (False, "not configured")
             self.ui._process_key(b"J")
         self.assertEqual(self.ui.fav_export_mode, "choose")
         self.assertIn("DJ export", self.ui.notification_msg)
@@ -347,14 +347,14 @@ class FavoritesPlayerExportTests(unittest.TestCase):
         self.store.toggle(_track("Mix A.flac", "/mixes/a.flac"))
         self.ui._fav_export_button = (20, 30, 44)
         with patch.object(player.TerminalPlayerUI, "_fav_exporter_module") as module:
-            module.return_value.traktor_ready.return_value = (False, "not configured")
+            module.return_value.dj_ready.return_value = (False, "not configured")
             self.ui._process_key(b"\x1b[<0;36;20M")
         self.assertEqual(self.ui.fav_export_mode, "choose")
 
     def test_export_flow_prompts_for_the_tracklist_name_then_the_folder(self):
         self.store.toggle(_track("Mix A.flac", "/mixes/a.flac"))
         with patch.object(player.TerminalPlayerUI, "_fav_exporter_module") as module:
-            module.return_value.traktor_ready.return_value = (False, "not configured")
+            module.return_value.dj_ready.return_value = (False, "not configured")
             module.return_value.DEFAULT_LOCAL_DIR = Path("/tmp/fav-default")
             self.ui.fav_export_mode = "choose"
             self.ui._process_key(b"1")
@@ -392,21 +392,21 @@ class FavoritesPlayerExportTests(unittest.TestCase):
         self.store.toggle(_track("Mix A.flac", "/mixes/a.flac"))
         self.ui.favorites_clear_confirm = True
         with patch.object(player.TerminalPlayerUI, "_fav_exporter_module") as module:
-            module.return_value.traktor_ready.return_value = (False, "not configured")
+            module.return_value.dj_ready.return_value = (False, "not configured")
             self.ui._process_key(b"y")
         self.assertFalse(self.ui.favorites_clear_confirm)
         self.assertEqual(len(self.store), 0)
         self.assertIn("cleared", self.ui.notification_msg)
 
-    def test_clear_then_offers_a_traktor_playlist_when_ready(self):
+    def test_clear_then_offers_a_dj_playlist_when_ready(self):
         self.store.toggle(_track("Mix A.flac", "/mixes/a.flac"))
         self.ui.favorites_clear_confirm = True
         with patch.object(player.TerminalPlayerUI, "_fav_exporter_module") as module:
-            module.return_value.traktor_ready.return_value = (True, "ready")
+            module.return_value.dj_ready.return_value = (True, "ready")
             self.ui._process_key(b"y")
         self.assertEqual(len(self.store), 0)
-        self.assertEqual(self.ui.traktor_offer_paths, ["/mixes/a.flac"])
-        self.assertIn("Traktor playlist", self.ui.notification_msg)
+        self.assertEqual(self.ui.dj_offer_paths, ["/mixes/a.flac"])
+        self.assertIn("DJ playlist", self.ui.notification_msg)
 
     def test_clear_key_uses_the_decision_window_in_favorites(self):
         self.store.toggle(_track("Mix A.flac", "/mixes/a.flac"))
@@ -421,27 +421,27 @@ class FavoritesPlayerExportTests(unittest.TestCase):
         self.assertTrue(self.ui._playlist_clear_armed)
         self.assertFalse(self.ui.favorites_clear_confirm)
 
-    def test_traktor_offer_is_only_shown_when_ready(self):
-        self.ui.traktor_offer_paths = ["/mixes/a.flac"]
-        self.ui.traktor_playlist_name = "Favs"
-        self.assertIn("Traktor is ready", self.ui._favorites_prompt_line())
-        self.ui.traktor_offer_paths = None
+    def test_dj_offer_is_only_shown_when_ready(self):
+        self.ui.dj_offer_paths = ["/mixes/a.flac"]
+        self.ui.dj_playlist_name = "Favs"
+        self.assertIn("DJ is ready", self.ui._favorites_prompt_line())
+        self.ui.dj_offer_paths = None
         self.assertEqual(self.ui._favorites_prompt_line(), "")
 
-    def test_decline_traktor_keeps_the_export(self):
-        self.ui.traktor_offer_paths = ["/mixes/a.flac"]
+    def test_decline_dj_keeps_the_export(self):
+        self.ui.dj_offer_paths = ["/mixes/a.flac"]
         self.ui._process_key(b"n")
-        self.assertIsNone(self.ui.traktor_offer_paths)
+        self.assertIsNone(self.ui.dj_offer_paths)
         self.assertIn("skipped", self.ui.notification_msg)
 
-    def test_accept_traktor_asks_for_name_then_history(self):
-        self.ui.traktor_offer_paths = ["/mixes/a.flac"]
-        self.ui.traktor_offer_name = "Set 1"
+    def test_accept_dj_asks_for_name_then_history(self):
+        self.ui.dj_offer_paths = ["/mixes/a.flac"]
+        self.ui.dj_offer_name = "Set 1"
         self.ui._process_key(b"y")
-        self.assertEqual(self.ui.traktor_input_mode, "playlist_name")
+        self.assertEqual(self.ui.dj_input_mode, "playlist_name")
         self.ui._process_key(b"\r")
-        self.assertEqual(self.ui.traktor_input_mode, "history_id")
-        self.assertEqual(self.ui.traktor_playlist_name, "Set 1")
+        self.assertEqual(self.ui.dj_input_mode, "history_id")
+        self.assertEqual(self.ui.dj_playlist_name, "Set 1")
 
 
 class PreparationFolderTests(unittest.TestCase):
@@ -536,7 +536,7 @@ class PreparationFolderTests(unittest.TestCase):
         self.assertIn("Favorites.m3u", text)
 
 
-class TraktorHistoryFavoritesTests(unittest.TestCase):
+class DJHistoryFavoritesTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
@@ -575,9 +575,9 @@ class TraktorHistoryFavoritesTests(unittest.TestCase):
         self.env = patch.dict(
             os.environ,
             {
-                "TRAKTOR_COLLECTION_PATH": str(self.collection),
-                "TRAKTOR_HISTORY_DIR": str(self.history_dir),
-                "TRAKTOR_ENABLED": "true",
+                "DJ_COLLECTION_PATH": str(self.collection),
+                "DJ_HISTORY_DIR": str(self.history_dir),
+                "DJ_ENABLED": "true",
             },
             clear=False,
         )
@@ -593,10 +593,10 @@ class TraktorHistoryFavoritesTests(unittest.TestCase):
         self.assertEqual(loaded["tracks"][0]["path"], str(self.audio))
         self.assertTrue(self.audio.is_file())
 
-    def test_duplicate_traktor_playlist_name_is_rejected(self):
-        first = exporter.create_traktor_playlist([self.audio.name], "Fav Test", self.history.name)
+    def test_duplicate_dj_playlist_name_is_rejected(self):
+        first = exporter.create_dj_playlist([self.audio.name], "Fav Test", self.history.name)
         self.assertTrue(first["ok"], first)
-        second = exporter.create_traktor_playlist([self.audio.name], "Fav Test", self.history.name)
+        second = exporter.create_dj_playlist([self.audio.name], "Fav Test", self.history.name)
         self.assertFalse(second["ok"])
         self.assertEqual(second["reason"], "duplicate_name")
         root = ET.parse(self.collection).getroot()
@@ -688,24 +688,24 @@ class ExportTracksUiTests(unittest.TestCase):
         self.assertEqual(self.ui.fav_export_mode, "progress")
         self.assertEqual(self.ui.fav_export_folder, "")
 
-    def test_summary_can_export_again_and_rejects_a_used_traktor_name(self):
+    def test_summary_can_export_again_and_rejects_a_used_dj_name(self):
         self.ui.fav_export_mode = "summary"
         self.ui.fav_export_result = {"ok": True, "copied": [{}], "elapsed_sec": 1.25, "dest": "/tmp/set", "playlist_name": "Set"}
-        self.ui.fav_export_traktor_ready = True
+        self.ui.fav_export_dj_ready = True
         self.ui._process_key(b"y")
         self.assertEqual(self.ui.fav_export_mode, "choose")
         self.ui.fav_export_mode = ""
-        self.ui.traktor_input_mode = "playlist_name"
-        self.ui.traktor_playlist_name = "Set"
-        self.ui._traktor_used_names = ["Set"]
+        self.ui.dj_input_mode = "playlist_name"
+        self.ui.dj_playlist_name = "Set"
+        self.ui._dj_used_names = ["Set"]
         self.ui._process_key(b"\r")
-        self.assertEqual(self.ui.traktor_input_mode, "playlist_name")
+        self.assertEqual(self.ui.dj_input_mode, "playlist_name")
         self.assertIn("another name", self.ui.notification_msg.lower())
 
     def test_history_import_asks_to_add_or_start_new(self):
         self.store.toggle(_track("Kept.flac", "/music/kept.flac"))
         self.ui.fav_export_mode = "history_id"
-        self.ui.traktor_history_id = "history_2026"
+        self.ui.dj_history_id = "history_2026"
         self.ui._process_key(b"\r")
         self.assertEqual(self.ui.fav_export_mode, "history_merge")
         with patch.object(player.TerminalPlayerUI, "_fav_exporter_module") as module:
@@ -727,7 +727,7 @@ class ExportTracksUiTests(unittest.TestCase):
         self.store.toggle(_track("Kept.flac", str(Path(kept) / "Kept.flac")))
         Path(kept, "Kept.flac").write_bytes(b"fLaC")
         self.ui.fav_export_mode = "history_merge"
-        self.ui.traktor_history_id = "history_2026"
+        self.ui.dj_history_id = "history_2026"
         with patch.object(player.TerminalPlayerUI, "_fav_exporter_module") as module:
             module.return_value.favorites_from_history.return_value = {
                 "ok": True,

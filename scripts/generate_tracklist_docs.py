@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 MP_Mix_Manager_v0.3 - Tracklist Document Generator (HTML & PDF)
-Converts Traktor/Stream of Frequency .txt tracklists into publication-quality
+Converts DJ/Stream of Frequency .txt tracklists into publication-quality
 interactive HTML documents and print-ready PDF files.
 """
 

@@ -100,7 +100,7 @@ opts=(
 "6|Audio Players & Retro Playback|(cliamp, VLC)"
 "7|Configure Mix Archive Storage|(Primary Archive)"
 "SECTION|SECTION 3: SYSTEM & SETTINGS|"
-"8|Live Session Monitors|(Tracklist, Traktor)"
+"8|Live Session Monitors|(Tracklist, DJ)"
 "9|Network Services|(SSH, Samba)"
 "0|Return to Main Menu|(or Esc / q)"
 )

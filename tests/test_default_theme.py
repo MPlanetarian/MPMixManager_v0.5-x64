@@ -79,9 +79,9 @@ class TestDreamworldsUltraIsDefault(unittest.TestCase):
         self.assertEqual(viz.theme, "dreamworlds_ultra")
         self.assertEqual(viz.get_theme_display_name(), "Dreamworlds Ultra")
 
-    def test_web_companion_and_traktor_fall_back_to_ultra(self):
+    def test_web_companion_and_dj_fall_back_to_ultra(self):
         import mix_web_companion as mwc
-        import traktor_monitor as tm
+        import dj_monitor as tm
 
         self.assertEqual(tm._ACTIVE_THEME_ID, "dreamworlds_ultra")
         self.assertEqual(tm.resolve_theme_id(None), "dreamworlds_ultra")

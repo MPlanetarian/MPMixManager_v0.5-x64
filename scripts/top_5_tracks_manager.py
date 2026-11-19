@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-scripts/top_5_tracks_manager.py - MP Mix Archive Manager: Top 5 Tracks Suite & Traktor Dispatch
+scripts/top_5_tracks_manager.py - MP Mix Archive Manager: Top 5 Tracks Suite & DJ Dispatch
 Features:
 1. Parse master_tracklists.html across all mix archives.
 2. Select & manage user's Top 5 Tracks of all time.
-3. Search Traktor database (collection.nml or History/*.nml) by audio ID / title / artist.
+3. Search DJ database (collection.nml or History/*.nml) by audio ID / title / artist.
 4. Remote audio import from Mac / network via SMB, NFS, SSH/rsync, or local storage into TOP_5_TRACKS/.
 5. Generate M3U8, M3U, and XSPF playlists and immediately trigger playback of Track 1.
 6. Export joined continuous mix into:
@@ -265,11 +265,11 @@ def display_top_5():
         print(f"  {DIM}Use option 'Select / Change Top 5 Tracks' to pick them from your Master HTML Tracklist.{NC}")
     else:
         for i, t in enumerate(tracks, start=1):
-            audio_status = f"{GREEN}✓ Ready{NC}" if t.get("audio_path") and os.path.isfile(t.get("audio_path")) else f"{YELLOW}Pending Traktor Import{NC}"
+            audio_status = f"{GREEN}✓ Ready{NC}" if t.get("audio_path") and os.path.isfile(t.get("audio_path")) else f"{YELLOW}Pending DJ Import{NC}"
             print(f"  {BOLD}{CYAN}[Track #{i}]{NC} {BOLD}{GREEN}{t.get('artist')}{NC} - {BOLD}{t.get('title')}{NC}")
             print(f"            {DIM}Mix Source:{NC} {t.get('mix_source', 'Unknown')}")
-            if t.get("traktor_audio_id"):
-                print(f"            {DIM}Traktor ID:{NC} {t.get('traktor_audio_id')[:32]}...")
+            if t.get("dj_audio_id"):
+                print(f"            {DIM}DJ ID:{NC} {t.get('dj_audio_id')[:32]}...")
             print(f"            {DIM}Audio Status:{NC} {audio_status}")
             if t.get("audio_path") and os.path.isfile(t.get("audio_path")):
                 print(f"            {DIM}Local File:{NC} {t.get('audio_path')}")
@@ -328,7 +328,7 @@ def select_top_5_interactive():
                     "title": picked["title"],
                     "full_text": picked["full_text"],
                     "mix_source": picked["mix"],
-                    "traktor_audio_id": "",
+                    "dj_audio_id": "",
                     "audio_path": ""
                 })
                 print(f"{BOLD}{GREEN}✓ Selected Track #{rank}:{NC} {picked['artist']} - {picked['title']}")
@@ -345,23 +345,23 @@ def select_top_5_interactive():
     input(f"{BOLD}Press Enter to return...{NC}")
 
 
-def find_traktor_nml_sources():
+def find_dj_nml_sources():
     """Locate collection.nml and history NML files."""
     cfg = load_config()
     sources = []
 
     # Configured collection path
-    col_path = cfg.get("TRAKTOR_COLLECTION_PATH", "")
+    col_path = cfg.get("DJ_COLLECTION_PATH", "")
     if col_path and os.path.isfile(col_path):
         sources.append(col_path)
 
     # Configured history directory
-    hist_dir = cfg.get("TRAKTOR_HISTORY_DIR", "")
+    hist_dir = cfg.get("DJ_HISTORY_DIR", "")
     if hist_dir and os.path.isdir(hist_dir):
         sources.extend(glob.glob(os.path.join(hist_dir, "*.nml")))
 
     # Standard locations
-    std_hist = "/run/media/mplanetarian/WD BLACK B/MIX_ARCHIVE/Traktor 3.11.1/History"
+    std_hist = "/run/media/mplanetarian/WD BLACK B/MIX_ARCHIVE/DJ 3.11.1/History"
     if os.path.isdir(std_hist):
         for nml in glob.glob(os.path.join(std_hist, "*.nml")):
             if nml not in sources:
@@ -380,12 +380,12 @@ def find_traktor_nml_sources():
     return sources
 
 
-def search_traktor_for_track(artist, title, full_text=""):
+def search_dj_for_track(artist, title, full_text=""):
     """
-    Search Traktor NML files for matching entry.
+    Search DJ NML files for matching entry.
     Returns dict with {audio_id, volume, dir, file, full_path_hint} or None.
     """
-    nml_sources = find_traktor_nml_sources()
+    nml_sources = find_dj_nml_sources()
     if not nml_sources:
         return None
 
@@ -450,7 +450,7 @@ def search_traktor_for_track(artist, title, full_text=""):
     return None
 
 
-def resolve_audio_file(traktor_info, artist, title):
+def resolve_audio_file(dj_info, artist, title):
     """
     Attempt to locate the actual physical audio file on local disks, SMB, NFS, or Mac.
     Returns path to local file (or downloaded file in TOP_5_TRACKS), or None.
@@ -465,15 +465,15 @@ def resolve_audio_file(traktor_info, artist, title):
         if os.path.isfile(existing) and os.path.getsize(existing) > 1000:
             return existing
 
-    vol = traktor_info.get("volume", "") if traktor_info else ""
-    rel_dir = traktor_info.get("dir", "") if traktor_info else ""
-    file_name = traktor_info.get("file", "") if traktor_info else ""
+    vol = dj_info.get("volume", "") if dj_info else ""
+    rel_dir = dj_info.get("dir", "") if dj_info else ""
+    file_name = dj_info.get("file", "") if dj_info else ""
 
     # Potential local search roots
     search_roots = []
 
     # Configured Audio Root
-    cfg_audio = cfg.get("TRAKTOR_AUDIO_ROOT", "")
+    cfg_audio = cfg.get("DJ_AUDIO_ROOT", "")
     if cfg_audio and os.path.isdir(cfg_audio):
         search_roots.append(cfg_audio)
 
@@ -494,12 +494,12 @@ def resolve_audio_file(traktor_info, artist, title):
     ])
 
     # Check SMB share mount if configured
-    smb_mount = cfg.get("TRAKTOR_SMB_MOUNT", "")
+    smb_mount = cfg.get("DJ_SMB_MOUNT", "")
     if smb_mount and os.path.isdir(smb_mount):
         search_roots.append(smb_mount)
 
     # Check NFS mount if configured
-    nfs_mount = cfg.get("TRAKTOR_NFS_MOUNT", "")
+    nfs_mount = cfg.get("DJ_NFS_MOUNT", "")
     if nfs_mount and os.path.isdir(nfs_mount):
         search_roots.append(nfs_mount)
 
@@ -525,8 +525,8 @@ def resolve_audio_file(traktor_info, artist, title):
                     return dest_file
 
     # Remote Mac transfer via SSH / rsync if configured
-    mac_host = cfg.get("TRAKTOR_MAC_HOST", "")
-    mac_user = cfg.get("TRAKTOR_MAC_USER", "")
+    mac_host = cfg.get("DJ_MAC_HOST", "")
+    mac_user = cfg.get("DJ_MAC_USER", "")
     if mac_host and mac_user and file_name:
         print(f"  {YELLOW}Attempting remote transfer from Mac ({mac_user}@{mac_host})...{NC}")
         remote_path = f"/Volumes/{vol}/{rel_dir}/{file_name}"
@@ -563,7 +563,7 @@ def resolve_audio_file(traktor_info, artist, title):
 
 def import_top_5_and_playlist():
     """
-    Search Traktor DB for each Top 5 track, copy to TOP_5_TRACKS/,
+    Search DJ DB for each Top 5 track, copy to TOP_5_TRACKS/,
     build M3U8/M3U/XSPF playlists, and immediately start playback of Track 1!
     """
     status, reasons = check_prerequisites()
@@ -582,7 +582,7 @@ def import_top_5_and_playlist():
         return
 
     print(f"\n{BOLD}{MAGENTA}======================================================================{NC}")
-    print(f"{BOLD}{MAGENTA}   IMPORTING TOP 5 TRACKS FROM TRAKTOR & GENERATING PLAYLIST          {NC}")
+    print(f"{BOLD}{MAGENTA}   IMPORTING TOP 5 TRACKS FROM DJ & GENERATING PLAYLIST          {NC}")
     print(f"{BOLD}{MAGENTA}======================================================================{NC}\n")
 
     os.makedirs(TOP5_AUDIO_DIR, exist_ok=True)
@@ -591,13 +591,13 @@ def import_top_5_and_playlist():
     imported_files = []
     for i, t in enumerate(tracks, start=1):
         print(f"[{i}/5] Processing: {BOLD}{CYAN}{t['artist']} - {t['title']}{NC}")
-        # Search Traktor DB
-        info = search_traktor_for_track(t["artist"], t["title"], t.get("full_text", ""))
+        # Search DJ DB
+        info = search_dj_for_track(t["artist"], t["title"], t.get("full_text", ""))
         if info:
-            t["traktor_audio_id"] = info.get("audio_id", "")
-            print(f"      {GREEN}✓ Found in Traktor:{NC} {info.get('file')} (Volume: {info.get('volume')})")
+            t["dj_audio_id"] = info.get("audio_id", "")
+            print(f"      {GREEN}✓ Found in DJ:{NC} {info.get('file')} (Volume: {info.get('volume')})")
         else:
-            print(f"      {YELLOW}Notice:{NC} Not found in local Traktor History files, checking storage & fallback...")
+            print(f"      {YELLOW}Notice:{NC} Not found in local DJ History files, checking storage & fallback...")
 
         # Resolve Audio File
         audio_file = resolve_audio_file(info, t["artist"], t["title"])
@@ -618,14 +618,14 @@ def import_top_5_and_playlist():
     save_top_5_state(state)
 
     if not imported_files:
-        print(f"\n{RED}Error: None of the 5 audio files could be resolved. Please check Traktor configuration.{NC}")
+        print(f"\n{RED}Error: None of the 5 audio files could be resolved. Please check DJ configuration.{NC}")
         input(f"{BOLD}Press Enter to return...{NC}")
         return
 
     # Build Playlists
-    m3u8_file = os.path.join(PLAYLISTS_DIR, "Mix_Archive_Top_5_Tracks_Traktor_Playlist.m3u8")
-    m3u_file = os.path.join(PLAYLISTS_DIR, "Mix_Archive_Top_5_Tracks_Traktor_Playlist.m3u")
-    xspf_file = os.path.join(PLAYLISTS_DIR, "Mix_Archive_Top_5_Tracks_Traktor_Playlist.xspf")
+    m3u8_file = os.path.join(PLAYLISTS_DIR, "Mix_Archive_Top_5_Tracks_DJ_Playlist.m3u8")
+    m3u_file = os.path.join(PLAYLISTS_DIR, "Mix_Archive_Top_5_Tracks_DJ_Playlist.m3u")
+    xspf_file = os.path.join(PLAYLISTS_DIR, "Mix_Archive_Top_5_Tracks_DJ_Playlist.xspf")
 
     with open(m3u8_file, "w", encoding="utf-8") as f_m3u8, open(m3u_file, "w", encoding="utf-8") as f_m3u:
         f_m3u8.write("#EXTM3U\n")
@@ -738,7 +738,7 @@ def export_top_5_mix():
         p = t.get("audio_path", "")
         if not p or not os.path.isfile(p):
             print(f"\n{RED}Error: Track '{t.get('artist')} - {t.get('title')}' audio file is missing!{NC}")
-            print(f"{YELLOW}Please run 'Import Your Top 5 Tracks from Traktor Now & Playlist Them' first.{NC}")
+            print(f"{YELLOW}Please run 'Import Your Top 5 Tracks from DJ Now & Playlist Them' first.{NC}")
             input(f"{BOLD}Press Enter to return...{NC}")
             return
         audio_files.append(p)
@@ -908,26 +908,26 @@ def export_top_5_mix():
     input(f"{BOLD}Press Enter to return...{NC}")
 
 
-def configure_traktor_interactive():
-    """Configure Traktor DB location and network settings (SMB, NFS, Mac)."""
+def configure_dj_interactive():
+    """Configure DJ DB location and network settings (SMB, NFS, Mac)."""
     cfg = load_config()
     print(f"\n{BOLD}{MAGENTA}======================================================================{NC}")
-    print(f"{BOLD}{MAGENTA}   CONFIGURE TRAKTOR DATABASE & REMOTE IMPORT (SMB, NFS, MAC)        {NC}")
+    print(f"{BOLD}{MAGENTA}   CONFIGURE DJ DATABASE & REMOTE IMPORT (SMB, NFS, MAC)        {NC}")
     print(f"{BOLD}{MAGENTA}======================================================================{NC}\n")
 
-    current_col = cfg.get("TRAKTOR_COLLECTION_PATH", "")
-    current_audio = cfg.get("TRAKTOR_AUDIO_ROOT", "")
-    current_smb = cfg.get("TRAKTOR_SMB_MOUNT", "")
-    current_nfs = cfg.get("TRAKTOR_NFS_MOUNT", "")
-    current_mac_host = cfg.get("TRAKTOR_MAC_HOST", "")
-    current_mac_user = cfg.get("TRAKTOR_MAC_USER", "")
-    current_hist_host = cfg.get("TRAKTOR_SMB_HOST", "")
-    current_hist_share = cfg.get("TRAKTOR_SMB_SHARE", "")
-    current_hist_user = cfg.get("TRAKTOR_SMB_USER", "") or cfg.get("MUSIC_SMB_USER", "")
-    current_hist_pass = cfg.get("TRAKTOR_SMB_PASSWORD", "") or cfg.get("MUSIC_SMB_PASSWORD", "")
-    current_hist_dir = cfg.get("TRAKTOR_SMB_HISTORY_DIR", "")
+    current_col = cfg.get("DJ_COLLECTION_PATH", "")
+    current_audio = cfg.get("DJ_AUDIO_ROOT", "")
+    current_smb = cfg.get("DJ_SMB_MOUNT", "")
+    current_nfs = cfg.get("DJ_NFS_MOUNT", "")
+    current_mac_host = cfg.get("DJ_MAC_HOST", "")
+    current_mac_user = cfg.get("DJ_MAC_USER", "")
+    current_hist_host = cfg.get("DJ_SMB_HOST", "")
+    current_hist_share = cfg.get("DJ_SMB_SHARE", "")
+    current_hist_user = cfg.get("DJ_SMB_USER", "") or cfg.get("MUSIC_SMB_USER", "")
+    current_hist_pass = cfg.get("DJ_SMB_PASSWORD", "") or cfg.get("MUSIC_SMB_PASSWORD", "")
+    current_hist_dir = cfg.get("DJ_SMB_HISTORY_DIR", "")
 
-    print(f"  {BOLD}1) Traktor Collection / History Path:{NC} {current_col or '[Auto-detect]'}")
+    print(f"  {BOLD}1) DJ Collection / History Path:{NC} {current_col or '[Auto-detect]'}")
     print(f"  {BOLD}2) Audio Storage Root Directory:    {NC} {current_audio or '[Auto-detect]'}")
     print(f"  {BOLD}3) SMB Share Mount Point:           {NC} {current_smb or '[Not set]'}")
     print(f"  {BOLD}4) NFS Share Mount Point:           {NC} {current_nfs or '[Not set]'}")
@@ -945,45 +945,45 @@ def configure_traktor_interactive():
     while True:
         choice = input("Select setting to modify [1-11, or 0 to finish]: ").strip()
         if choice == "1":
-            val = input(f"Enter Traktor collection.nml path (or History dir) [{current_col}]: ").strip()
+            val = input(f"Enter DJ collection.nml path (or History dir) [{current_col}]: ").strip()
             if val:
-                save_config_key("TRAKTOR_COLLECTION_PATH", val)
+                save_config_key("DJ_COLLECTION_PATH", val)
                 current_col = val
         elif choice == "2":
             val = input(f"Enter local audio root folder [{current_audio}]: ").strip()
             if val:
-                save_config_key("TRAKTOR_AUDIO_ROOT", val)
+                save_config_key("DJ_AUDIO_ROOT", val)
                 current_audio = val
         elif choice == "3":
             val = input(f"Enter SMB mount point (e.g. /run/user/1000/gvfs/... or /mnt/mac_smb) [{current_smb}]: ").strip()
-            save_config_key("TRAKTOR_SMB_MOUNT", val)
+            save_config_key("DJ_SMB_MOUNT", val)
             current_smb = val
         elif choice == "4":
             val = input(f"Enter NFS mount point (e.g. /mnt/mac_nfs) [{current_nfs}]: ").strip()
-            save_config_key("TRAKTOR_NFS_MOUNT", val)
+            save_config_key("DJ_NFS_MOUNT", val)
             current_nfs = val
         elif choice == "5":
             val = input(f"Enter Mac Hostname or IP [{current_mac_host}]: ").strip()
-            save_config_key("TRAKTOR_MAC_HOST", val)
+            save_config_key("DJ_MAC_HOST", val)
             current_mac_host = val
         elif choice == "6":
             val = input(f"Enter Mac SSH Username [{current_mac_user}]: ").strip()
-            save_config_key("TRAKTOR_MAC_USER", val)
+            save_config_key("DJ_MAC_USER", val)
             current_mac_user = val
         elif choice == "7":
-            val = input(f"Enter SMB host / IP holding the Traktor History folder [{current_hist_host}]: ").strip()
+            val = input(f"Enter SMB host / IP holding the DJ History folder [{current_hist_host}]: ").strip()
             if val:
-                save_config_key("TRAKTOR_SMB_HOST", val)
+                save_config_key("DJ_SMB_HOST", val)
                 current_hist_host = val
         elif choice == "8":
             val = input(f"Enter SMB share name [{current_hist_share}]: ").strip()
             if val:
-                save_config_key("TRAKTOR_SMB_SHARE", val)
+                save_config_key("DJ_SMB_SHARE", val)
                 current_hist_share = val
         elif choice == "9":
             val = input(f"Enter SMB username [{current_hist_user}]: ").strip()
             if val:
-                save_config_key("TRAKTOR_SMB_USER", val)
+                save_config_key("DJ_SMB_USER", val)
                 current_hist_user = val
         elif choice == "10":
             try:
@@ -991,13 +991,13 @@ def configure_traktor_interactive():
             except Exception:
                 val = ""
             if val:
-                save_config_key("TRAKTOR_SMB_PASSWORD", val)
+                save_config_key("DJ_SMB_PASSWORD", val)
                 current_hist_pass = val
         elif choice == "11":
-            default_dir = "Documents/Native Instruments/Traktor 3.11.1/History"
+            default_dir = "Documents/Native Instruments/DJ 3.11.1/History"
             val = input(f"Enter History folder inside the share [{current_hist_dir or default_dir}]: ").strip()
             if val:
-                save_config_key("TRAKTOR_SMB_HISTORY_DIR", val)
+                save_config_key("DJ_SMB_HISTORY_DIR", val)
                 current_hist_dir = val
         elif choice in ["0", "q", "exit", ""]:
             break
@@ -1046,9 +1046,9 @@ def main_menu():
 
         print(f"  ${BOLD}${CYAN}1)${NC} View Current Top 5 Tracks of All Time")
         print(f"  ${BOLD}${CYAN}2)${NC} Select / Change Top 5 Tracks ({GREEN}Browse Master HTML Tracklist{NC})")
-        print(f"  ${BOLD}${CYAN}3)${NC} Import Your Top 5 Tracks from Traktor Now & Playlist Them ({GREEN}Auto-Play Track 1{NC})")
+        print(f"  ${BOLD}${CYAN}3)${NC} Import Your Top 5 Tracks from DJ Now & Playlist Them ({GREEN}Auto-Play Track 1{NC})")
         print(f"  ${BOLD}${CYAN}4)${NC} Export Top 5 Tracks as Continuous Joined Mix ({GREEN}FLAC, WAV, MP3, Spek, Tracklist{NC})")
-        print(f"  ${BOLD}${CYAN}5)${NC} Configure Traktor Database & Remote Mac Import ({GREEN}SMB, NFS, Local, SSH{NC})")
+        print(f"  ${BOLD}${CYAN}5)${NC} Configure DJ Database & Remote Mac Import ({GREEN}SMB, NFS, Local, SSH{NC})")
         print(f"  ${BOLD}${CYAN}6)${NC} View Master Tracklist HTML Index in Browser")
         print(f"  ${BOLD}${CYAN}0)${NC} Return to Main Menu\n")
 
@@ -1063,7 +1063,7 @@ def main_menu():
         elif choice == "4":
             export_top_5_mix()
         elif choice == "5":
-            configure_traktor_interactive()
+            configure_dj_interactive()
         elif choice == "6":
             h_path = get_master_html_path()
             if h_path and os.path.isfile(h_path):
@@ -1096,7 +1096,7 @@ if __name__ == "__main__":
             export_top_5_mix()
             sys.exit(0)
         elif arg in ["--config", "config"]:
-            configure_traktor_interactive()
+            configure_dj_interactive()
             sys.exit(0)
 
     main_menu()

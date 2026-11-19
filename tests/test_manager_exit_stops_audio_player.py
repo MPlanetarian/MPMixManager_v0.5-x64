@@ -148,9 +148,9 @@ class TestManagerExitStopsAudioPlayer(unittest.TestCase):
                 if p.poll() is None:
                     p.kill()
 
-    def test_stop_mp_audio_daemon_cleans_traktor_s4_midi_service(self):
-        """Verify traktor_s4_midi.pid is cleaned up upon manager exit."""
-        s4_pid_file = os.path.join(self.config_dir, "traktor_s4_midi.pid")
+    def test_stop_mp_audio_daemon_cleans_dj_s4_midi_service(self):
+        """Verify dj_s4_midi.pid is cleaned up upon manager exit."""
+        s4_pid_file = os.path.join(self.config_dir, "dj_s4_midi.pid")
         with open(s4_pid_file, "w") as f:
             f.write("9999998\n")
 
@@ -168,7 +168,7 @@ class TestManagerExitStopsAudioPlayer(unittest.TestCase):
             text=True,
         )
         self.assertEqual(res.returncode, 0, f"Script failed: {res.stderr}")
-        self.assertFalse(os.path.exists(s4_pid_file), "traktor_s4_midi.pid should be removed on exit")
+        self.assertFalse(os.path.exists(s4_pid_file), "dj_s4_midi.pid should be removed on exit")
 
     def test_exit_mix_manager_preserves_liquid_glass_player(self):
         """Verify exit_mix_manager does NOT terminate MP Liquid Glass Audio Player when open."""

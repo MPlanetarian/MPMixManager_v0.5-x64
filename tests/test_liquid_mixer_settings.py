@@ -311,6 +311,89 @@ class TestSettingsDialog(unittest.TestCase):
         self.assertEqual(result.recording_dir, "")
 
 
+class TestSettingsDialogTheme(unittest.TestCase):
+    """The Settings window uses the mixer's theme, and C repaints it."""
+
+    def setUp(self):
+        try:
+            import gi
+            gi.require_version("Gtk", "3.0")
+            from gi.repository import Gtk
+            self.Gtk = Gtk
+            if not Gtk.init_check([])[0]:
+                self.skipTest("no display for GTK")
+            import mixer_settings_dialog
+            self.dialog_module = mixer_settings_dialog
+        except Exception as exc:  # pragma: no cover - headless host
+            self.skipTest(f"GTK unavailable: {exc}")
+
+    def test_a_theme_is_styled_and_c_cycles_it(self):
+        Gtk = self.Gtk
+        window = Gtk.Window()
+        window.show_all()
+        seen = []
+
+        def colors(name):
+            seen.append(name)
+            return ((166, 77, 255), (247, 37, 133), (0, 229, 255))
+
+        def field(name):
+            return (12, 12, 16)
+
+        def ink(name):
+            return (240, 244, 250)
+
+        cycles = iter(["sensorium", "stream_of_frequency"])
+        result_theme = {"name": "into_darkness_void_out"}
+
+        def cycle():
+            result_theme["name"] = next(cycles)
+            return result_theme["name"]
+
+        original = Gtk.Dialog.run
+        captured = {}
+
+        def fake_run(dialog_self):
+            captured["dialog"] = dialog_self
+            # Deliver a C key the way a real window would. GTK will not accept
+            # a Python stand-in for a GdkEvent, so the handler is pulled off
+            # the signal and called with the minimal event it reads.
+            handler = None
+            for signal_id in ():
+                pass
+            handler = dialog_self._settings_theme_key_handler
+            self.assertTrue(handler(_KeyEvent(ord("c"))))
+            self.assertFalse(handler(_KeyEvent(ord("z"))))
+            return Gtk.ResponseType.CANCEL
+
+        Gtk.Dialog.run = fake_run
+        try:
+            self.dialog_module.show_settings_dialog(
+                window, mixer_settings.Settings(),
+                theme="into_darkness_void_out",
+                on_cycle_theme=cycle,
+                theme_colors=colors, theme_label=lambda n: n,
+                theme_field=field, theme_ink=ink,
+            )
+        finally:
+            Gtk.Dialog.run = original
+        self.assertIn("into_darkness_void_out", seen)
+        self.assertIn("sensorium", seen)
+        # The mixer's own handler supplied the new name.
+        self.assertEqual(result_theme["name"], "sensorium")
+
+    def test_css_is_built_for_the_theme_palette(self):
+        css = self.dialog_module._css_rgb((10, 20, 30), 0.5)
+        self.assertEqual(css, "rgba(10,20,30,0.500)")
+
+
+class _KeyEvent:
+    """Minimal Gdk.EventKey stand-in with just the keyval the dialog reads."""
+
+    def __init__(self, keyval):
+        self.keyval = keyval
+
+
 class TestSinkHelpers(unittest.TestCase):
     def test_the_sink_monitor_name_is_formatted_once(self):
         self.assertEqual(mixer_settings.sink_monitor(""),

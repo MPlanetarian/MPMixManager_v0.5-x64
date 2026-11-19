@@ -57,7 +57,7 @@ def get_alsa_seq_clients():
 def classify_device(name, manufacturer):
     """Categorize the device (Keyboard, DJ Controller, Synthesizer, etc.)."""
     full = f"{manufacturer} {name}".lower()
-    if "traktor" in full:
+    if "kontrol" in full:
         return "DJ Controller / Audio Interface"
     elif any(k in full for k in ["minilab", "mpk", "keystation", "launchkey", "keyboard", "piano", "keys"]):
         return "MIDI Keyboard Controller"
@@ -177,7 +177,9 @@ def print_devices(devices):
         return
 
     keyboards = [d for d in devices if "Keyboard" in d["category"]]
-    traktors = [d for d in devices if "DJ Controller" in d["category"] or "traktor" in d["name"].lower()]
+    dj_controllers = [d for d in devices
+                      if "DJ Controller" in d["category"]
+                      or "kontrol" in d["name"].lower()]
 
     print(f"\n{BOLD}{CYAN}=== Connected USB MIDI Devices ({len(devices)} Found) ==={RESET}\n")
 
@@ -199,7 +201,7 @@ def print_devices(devices):
         print()
 
     print(f"{DIM}{'─' * 60}{RESET}")
-    print(f"{BOLD}Summary:{RESET} Found {GREEN}{len(keyboards)} Keyboard(s){RESET} and {MAGENTA}{len(traktors)} DJ/Traktor Controller(s){RESET}")
+    print(f"{BOLD}Summary:{RESET} Found {GREEN}{len(keyboards)} Keyboard(s){RESET} and {MAGENTA}{len(dj_controllers)} DJ Controller(s){RESET}")
     print(f"{DIM}{'─' * 60}{RESET}\n")
 
 

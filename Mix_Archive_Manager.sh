@@ -3096,7 +3096,7 @@ _stop_mp_audio_daemon() {
     local port_file="${HOME}/.config/mix-manager/mp_audio_player.port"
     local sock_file="${HOME}/.config/mix-manager/mp_audio_player.sock"
     local state_file="${HOME}/.config/mix-manager/mp_player_state.json"
-    local s4_pid_file="${HOME}/.config/mix-manager/traktor_s4_midi.pid"
+    local s4_pid_file="${HOME}/.config/mix-manager/dj_s4_midi.pid"
     local port=""
     [ -f "$port_file" ] && IFS= read -r port < "$port_file" 2>/dev/null || true
     local py=""
@@ -3568,7 +3568,7 @@ return 0; fi; elif [ "$OS_TYPE" = "wsl" ]; then if command -v wt.exe &>/dev/null
 return 0; fi; fi; open_path "$target"
 }
 find_mix_tracklist() {
-local mix_file="$1"; [ -z "$mix_file" ] && return 1; local mix_basename; mix_basename=$(basename "$mix_file"); local mix_stem="${mix_basename%.*}"; local mix_dir; mix_dir="$(dirname "$mix_file")"; local ep_num=""; if [[ "$mix_stem" =~ [_\ -]([0-9]{2,3})([_\ -]|$) ]]; then ep_num="${BASH_REMATCH[1]}"; fi; local date_str=""; if [[ "$mix_stem" =~ ([0-9]{4}-[0-9]{2}-[0-9]{2}) ]]; then date_str="${BASH_REMATCH[1]}"; fi; local candidate_dirs=("$mix_dir" "$OUTPUT_DIR" "${MIX_ARCHIVE_DIR:-$PWD}/FLAC_CONVERTED_OUTPUTS" "${MIX_ARCHIVE_DIR:-$PWD}" "$PWD/FLAC_CONVERTED_OUTPUTS" "$PWD" "${MIX_ARCHIVE_DIR:-$PWD}/TEMP"); if command -v get_all_flac_output_dirs &>/dev/null; then while IFS= read -r f_dir; do [ -n "$f_dir" ] && candidate_dirs+=("$f_dir"); done < <(get_all_flac_output_dirs); fi; if command -v get_all_mix_archive_dirs &>/dev/null; then while IFS= read -r a_dir; do [ -n "$a_dir" ] && candidate_dirs+=("$a_dir"); done < <(get_all_mix_archive_dirs); fi; if [ -f "${mix_file%.*}.txt" ]; then echo "${mix_file%.*}.txt"; return 0; fi; for d in "${candidate_dirs[@]}"; do if [ -f "$d/${mix_stem}.txt" ]; then echo "$d/${mix_stem}.txt"; return 0; fi; done; if [ -n "$ep_num" ]; then shopt -s nullglob nocaseglob; for d in "${candidate_dirs[@]}"; do for match in "$d"/*"${ep_num}"*.txt; do if [ -f "$match" ]; then shopt -u nullglob nocaseglob; echo "$match"; return 0; fi; done; done; shopt -u nullglob nocaseglob; fi; if [ -n "$date_str" ]; then shopt -s nullglob nocaseglob; for d in "${candidate_dirs[@]}"; do for match in "$d"/*"${date_str}"*.txt; do if [ -f "$match" ]; then shopt -u nullglob nocaseglob; echo "$match"; return 0; fi; done; done; shopt -u nullglob nocaseglob; fi; local clean_kw; clean_kw=$(echo "$mix_stem" | sed -E 's/MPlanetarian|Stream|of|Frequency|Part|WMI|Mix//gi' | tr '_-' ' ' | awk '{print $1}'); if [ -n "$clean_kw" ] && [ "${#clean_kw}" -ge 4 ]; then shopt -s nullglob nocaseglob; for d in "${candidate_dirs[@]}"; do for match in "$d"/*"${clean_kw}"*.txt; do if [ -f "$match" ]; then shopt -u nullglob nocaseglob; echo "$match"; return 0; fi; done; done; shopt -u nullglob nocaseglob; fi; if [ -d "${MIX_ARCHIVE_DIR:-$PWD}" ]; then if [ -n "$ep_num" ]; then local deep_match; deep_match=$(find "${MIX_ARCHIVE_DIR:-$PWD}" -maxdepth 3 -type f -name "*${ep_num}*.txt" ! -path "*/SPEK_OUTPUTS/*" 2>/dev/null | head -1); if [ -n "$deep_match" ] && [ -f "$deep_match" ]; then echo "$deep_match"; return 0; fi; fi; if [ -n "$date_str" ]; then local deep_match_date; deep_match_date=$(find "${MIX_ARCHIVE_DIR:-$PWD}" -maxdepth 3 -type f -name "*${date_str}*.txt" ! -path "*/SPEK_OUTPUTS/*" 2>/dev/null | head -1); if [ -n "$deep_match_date" ] && [ -f "$deep_match_date" ]; then echo "$deep_match_date"; return 0; fi; fi; fi; local tmp_tl="/tmp/Tracklist_${mix_stem}.txt"; { echo "=================================================="; echo "STREAM OF FREQUENCY - MIX TRACKLIST"; echo "=================================================="; echo "Mix File:       $mix_basename"; [ -n "$ep_num" ] && echo "Episode:        Episode $ep_num"; [ -n "$date_str" ] && echo "Recorded Date:  $date_str"; echo "Directory:      $mix_dir"; echo "Detected on:    $(date '+%Y-%m-%d %H:%M:%S')"; echo "--------------------------------------------------"; echo "A standalone .txt tracklist file was not yet found"; echo "directly on disk for this mix file."; echo ""; echo "To auto-generate complete tracklists from your Traktor"; echo "history or audio metadata, launch Option 16 in the"; echo "MP Mix Archive Manager."; echo "=================================================="; } > "$tmp_tl" 2>/dev/null; if [ -f "$tmp_tl" ]; then echo "$tmp_tl"; return 0; fi; return 1
+local mix_file="$1"; [ -z "$mix_file" ] && return 1; local mix_basename; mix_basename=$(basename "$mix_file"); local mix_stem="${mix_basename%.*}"; local mix_dir; mix_dir="$(dirname "$mix_file")"; local ep_num=""; if [[ "$mix_stem" =~ [_\ -]([0-9]{2,3})([_\ -]|$) ]]; then ep_num="${BASH_REMATCH[1]}"; fi; local date_str=""; if [[ "$mix_stem" =~ ([0-9]{4}-[0-9]{2}-[0-9]{2}) ]]; then date_str="${BASH_REMATCH[1]}"; fi; local candidate_dirs=("$mix_dir" "$OUTPUT_DIR" "${MIX_ARCHIVE_DIR:-$PWD}/FLAC_CONVERTED_OUTPUTS" "${MIX_ARCHIVE_DIR:-$PWD}" "$PWD/FLAC_CONVERTED_OUTPUTS" "$PWD" "${MIX_ARCHIVE_DIR:-$PWD}/TEMP"); if command -v get_all_flac_output_dirs &>/dev/null; then while IFS= read -r f_dir; do [ -n "$f_dir" ] && candidate_dirs+=("$f_dir"); done < <(get_all_flac_output_dirs); fi; if command -v get_all_mix_archive_dirs &>/dev/null; then while IFS= read -r a_dir; do [ -n "$a_dir" ] && candidate_dirs+=("$a_dir"); done < <(get_all_mix_archive_dirs); fi; if [ -f "${mix_file%.*}.txt" ]; then echo "${mix_file%.*}.txt"; return 0; fi; for d in "${candidate_dirs[@]}"; do if [ -f "$d/${mix_stem}.txt" ]; then echo "$d/${mix_stem}.txt"; return 0; fi; done; if [ -n "$ep_num" ]; then shopt -s nullglob nocaseglob; for d in "${candidate_dirs[@]}"; do for match in "$d"/*"${ep_num}"*.txt; do if [ -f "$match" ]; then shopt -u nullglob nocaseglob; echo "$match"; return 0; fi; done; done; shopt -u nullglob nocaseglob; fi; if [ -n "$date_str" ]; then shopt -s nullglob nocaseglob; for d in "${candidate_dirs[@]}"; do for match in "$d"/*"${date_str}"*.txt; do if [ -f "$match" ]; then shopt -u nullglob nocaseglob; echo "$match"; return 0; fi; done; done; shopt -u nullglob nocaseglob; fi; local clean_kw; clean_kw=$(echo "$mix_stem" | sed -E 's/MPlanetarian|Stream|of|Frequency|Part|WMI|Mix//gi' | tr '_-' ' ' | awk '{print $1}'); if [ -n "$clean_kw" ] && [ "${#clean_kw}" -ge 4 ]; then shopt -s nullglob nocaseglob; for d in "${candidate_dirs[@]}"; do for match in "$d"/*"${clean_kw}"*.txt; do if [ -f "$match" ]; then shopt -u nullglob nocaseglob; echo "$match"; return 0; fi; done; done; shopt -u nullglob nocaseglob; fi; if [ -d "${MIX_ARCHIVE_DIR:-$PWD}" ]; then if [ -n "$ep_num" ]; then local deep_match; deep_match=$(find "${MIX_ARCHIVE_DIR:-$PWD}" -maxdepth 3 -type f -name "*${ep_num}*.txt" ! -path "*/SPEK_OUTPUTS/*" 2>/dev/null | head -1); if [ -n "$deep_match" ] && [ -f "$deep_match" ]; then echo "$deep_match"; return 0; fi; fi; if [ -n "$date_str" ]; then local deep_match_date; deep_match_date=$(find "${MIX_ARCHIVE_DIR:-$PWD}" -maxdepth 3 -type f -name "*${date_str}*.txt" ! -path "*/SPEK_OUTPUTS/*" 2>/dev/null | head -1); if [ -n "$deep_match_date" ] && [ -f "$deep_match_date" ]; then echo "$deep_match_date"; return 0; fi; fi; fi; local tmp_tl="/tmp/Tracklist_${mix_stem}.txt"; { echo "=================================================="; echo "STREAM OF FREQUENCY - MIX TRACKLIST"; echo "=================================================="; echo "Mix File:       $mix_basename"; [ -n "$ep_num" ] && echo "Episode:        Episode $ep_num"; [ -n "$date_str" ] && echo "Recorded Date:  $date_str"; echo "Directory:      $mix_dir"; echo "Detected on:    $(date '+%Y-%m-%d %H:%M:%S')"; echo "--------------------------------------------------"; echo "A standalone .txt tracklist file was not yet found"; echo "directly on disk for this mix file."; echo ""; echo "To auto-generate complete tracklists from your DJ"; echo "history or audio metadata, launch Option 16 in the"; echo "MP Mix Archive Manager."; echo "=================================================="; } > "$tmp_tl" 2>/dev/null; if [ -f "$tmp_tl" ]; then echo "$tmp_tl"; return 0; fi; return 1
 }
 find_mix_cover() {
 local mix_file="$1"; [ -z "$mix_file" ] && return 1; local mix_basename; mix_basename=$(basename "$mix_file"); local mix_stem="${mix_basename%.*}"; local mix_dir; mix_dir="$(dirname "$mix_file")"; local ep_num=""; if [[ "$mix_stem" =~ [_\ -]([0-9]{2,3})([_\ -]|$) ]]; then ep_num="${BASH_REMATCH[1]}"; fi; local date_str=""; if [[ "$mix_stem" =~ ([0-9]{4}-[0-9]{2}-[0-9]{2}) ]]; then date_str="${BASH_REMATCH[1]}"; fi; local candidate_dirs=("$mix_dir" "$mix_dir/COVERS" "${MIX_ARCHIVE_DIR:-$PWD}/COVERS" "$PWD/COVERS" "${MIX_ARCHIVE_DIR:-$PWD}" "$PWD" "$SCRIPT_DIR/COVERS" "$SCRIPT_DIR"); if command -v get_all_mix_archive_dirs &>/dev/null; then while IFS= read -r a_dir; do [ -n "$a_dir" ] && candidate_dirs+=("$a_dir" "$a_dir/COVERS"); done < <(get_all_mix_archive_dirs); fi; for d in "${candidate_dirs[@]}"; do for ext in png jpg jpeg webp; do if [ -f "$d/${mix_stem}.${ext}" ]; then echo "$d/${mix_stem}.${ext}"; return 0; fi; done; done; if [ -n "$ep_num" ]; then shopt -s nullglob nocaseglob; for d in "${candidate_dirs[@]}"; do for match in "$d"/*"${ep_num}"*.png "$d"/*"${ep_num}"*.jpg; do if [ -f "$match" ]; then shopt -u nullglob nocaseglob; echo "$match"; return 0; fi; done; done; shopt -u nullglob nocaseglob; fi; if [ -n "$date_str" ]; then shopt -s nullglob nocaseglob; for d in "${candidate_dirs[@]}"; do for match in "$d"/*"${date_str}"*.png "$d"/*"${date_str}"*.jpg; do if [ -f "$match" ]; then shopt -u nullglob nocaseglob; echo "$match"; return 0; fi; done; done; shopt -u nullglob nocaseglob; fi; if [ -d "${MIX_ARCHIVE_DIR:-$PWD}" ]; then if [ -n "$ep_num" ]; then local deep_cov; deep_cov=$(find "${MIX_ARCHIVE_DIR:-$PWD}" -maxdepth 3 -type f \( -name "*${ep_num}*.png" -o -name "*${ep_num}*.jpg" \) ! -path "*/SPEK_OUTPUTS/*" 2>/dev/null | head -1); if [ -n "$deep_cov" ] && [ -f "$deep_cov" ]; then echo "$deep_cov"; return 0; fi; fi; fi; for d in "${candidate_dirs[@]}"; do if [ -f "$d/Cover_4K.png" ]; then echo "$d/Cover_4K.png"; return 0; fi; if [ -f "$d/Cover.png" ]; then echo "$d/Cover.png"; return 0; fi; if [ -f "$d/Cover.jpg" ]; then echo "$d/Cover.jpg"; return 0; fi; if [ -f "$d/001.png" ]; then echo "$d/001.png"; return 0; fi; done; if [ -f "$SCRIPT_DIR/assets/Cover.png" ]; then echo "$SCRIPT_DIR/assets/Cover.png"; return 0; fi; return 1
@@ -4718,6 +4718,17 @@ launch_mp_liquid_visualizer() {
         press_enter
         return 0
     fi
+    # A Raspberry Pi cannot drive the raymarcher at a usable frame rate, so the
+    # visualizer is not offered there at all. Say so once, in the console, and
+    # leave every other app working.
+    if type mp_is_raspberry_pi >/dev/null 2>&1 && mp_is_raspberry_pi \
+       && [ "${MP_FORCE_VISUALIZER_ON_PI:-0}" != "1" ]; then
+        echo -e "\n${YELLOW}The MP Visualizer is not available on Raspberry Pi.${NC}"
+        echo -e "${DIM}The VideoCore GPU cannot run the 3D raymarch at a usable frame rate.${NC}"
+        echo -e "${DIM}Every other MP app works normally.${NC}\n"
+        press_enter
+        return 0
+    fi
     local preset_arg="${1:-}"
     local vis_py="$SCRIPT_DIR/MP_Liquid_Visualizer.py"
     [ ! -f "$vis_py" ] && vis_py="$SCRIPT_DIR/scripts/mp_liquid_visualizer_vulkan.py"
@@ -4879,6 +4890,58 @@ manage_mp_liquid_visualizer_presets() {
         esac
     done
 }
+# ------------------------------------------------------------------------------
+# MP Visualizer frame-rate cap
+#
+# The raymarch is the one part of the suite that can saturate a GPU, so the cap
+# is a user setting rather than a fixed number: a laptop on battery wants 30, a
+# desktop card can hold 60, 120 or 144. It is stored as MP_VISUALIZER_FPS_CAP,
+# which every renderer already reads (0 means "follow the display").
+# ------------------------------------------------------------------------------
+configure_visualizer_fps_cap() {
+while true; do
+    local cur="${MP_VISUALIZER_FPS_CAP:-0}"
+    local cur_label="Uncapped (follow the display)"
+    case "$cur" in
+        30)  cur_label="30 FPS" ;;
+        60)  cur_label="60 FPS" ;;
+        120) cur_label="120 FPS" ;;
+        144) cur_label="144 FPS" ;;
+    esac
+    local hdr
+    hdr="  Current Visualizer cap: ${BOLD}${GREEN}${cur_label}${NC}\n"
+    hdr+="  ${DIM}A cap below the display rate keeps the GPU cooler and leaves headroom for audio.${NC}\n"
+    if type mp_is_raspberry_pi >/dev/null 2>&1 && mp_is_raspberry_pi; then
+        hdr+="  ${YELLOW}This machine is a Raspberry Pi, where the MP Visualizer is not available at all.${NC}\n"
+    fi
+    local opts=(
+        "1|30 FPS|(Coolest - best for laptops on battery and older GPUs)"
+        "2|60 FPS|(Smooth - matches most desktop displays)"
+        "3|120 FPS|(High refresh displays)"
+        "4|144 FPS|(Gaming monitors and 144 Hz panels)"
+        "5|Uncapped|(Follow the display's own refresh rate)"
+        "0|Return to Settings|(or Esc / q)"
+    )
+    run_interactive_submenu "MP VISUALIZER FRAME-RATE CAP" "$hdr" opts 0
+    local chosen="" label=""
+    case "$REPLY" in
+        1) chosen=30;  label="30 FPS" ;;
+        2) chosen=60;  label="60 FPS" ;;
+        3) chosen=120; label="120 FPS" ;;
+        4) chosen=144; label="144 FPS" ;;
+        5) chosen=0;   label="Uncapped" ;;
+        0|[qQ]|[eE][xX][iI][tT]|ESC) return 0 ;;
+        *) echo -e "\n${RED}Invalid option!${NC}"; sleep 1; continue ;;
+    esac
+    save_config_setting "MP_VISUALIZER_FPS_CAP" "$chosen"
+    export MP_VISUALIZER_FPS_CAP="$chosen"
+    echo -e "\n${GREEN}✓ Visualizer cap set to ${BOLD}${label}${NC}${GREEN}.${NC}"
+    echo -e "${DIM}Applies to the next MP Visualizer window you open.${NC}\n"
+    sleep 1.4
+    return 0
+done
+}
+
 configure_liquid_glass_backend() {
 local cur="${LIQUID_GLASS_BACKEND:-opengl}"
 while true; do
@@ -5449,8 +5512,8 @@ rename_mix() {
 echo -e "\n${BOLD}${BLUE}=== RENAME MIX FILE & ASSOCIATED ASSETS ===${NC}"; read -r -p "Enter current FLAC filename (or search keyword): " src_flac; src_flac_name=$(basename "$src_flac" | tr -d '\r' | tr -d '\n'); local src_path=""; local found_dir=""; if [ -f "$src_flac" ]; then src_path="$src_flac"; found_dir="$(dirname "$src_path")"; src_flac_name="$(basename "$src_path")"; else while IFS= read -r fdir; do if [ -n "$fdir" ] && [ -f "$fdir/$src_flac_name" ]; then src_path="$fdir/$src_flac_name"; found_dir="$fdir"; break; fi; done < <(get_all_flac_output_dirs); fi; if [ -z "$src_path" ]; then local candidates=(); while IFS= read -r fdir; do if [ -d "$fdir" ]; then shopt -s nullglob nocaseglob; for mf in "$fdir"/*"$src_flac"*.flac; do [ -f "$mf" ] && candidates+=("$mf"); done; shopt -u nullglob nocaseglob; fi; done < <(get_all_flac_output_dirs); if [ ${#candidates[@]} -eq 1 ]; then src_path="${candidates[0]}"; found_dir="$(dirname "$src_path")"; src_flac_name="$(basename "$src_path")"; elif [ ${#candidates[@]} -gt 1 ]; then echo -e "\nMultiple matching FLAC files found:"; for i in "${!candidates[@]}"; do echo "  $((i+1))) [$(basename "$(dirname "${candidates[$i]}")")] $(basename "${candidates[$i]}")"; done; read -r -p "Select mix to rename [1-${#candidates[@]}]: " pick; if [[ "$pick" =~ ^[0-9]+$ ]] && [ "$pick" -ge 1 ] && [ "$pick" -le "${#candidates[@]}" ]; then src_path="${candidates[$((pick-1))]}"; found_dir="$(dirname "$src_path")"; src_flac_name="$(basename "$src_path")"; else echo -e "${RED}Invalid selection.${NC}"; return; fi; fi; fi; if [ -z "$src_path" ] || [ ! -f "$src_path" ]; then echo -e "${RED}Error: File '$src_flac' not found across any configured archive directories!${NC}"; return; fi; echo -e "\n${CYAN}Located Mix in:${NC} ${found_dir}\nCurrent file: ${WHITE}$src_flac_name${NC}"; read -r -p "Enter destination filename for final FLAC: " dest_flac; dest_flac_name=$(basename "$dest_flac" | tr -d '\r' | tr -d '\n'); [[ "$dest_flac_name" != *.flac ]] && dest_flac_name="${dest_flac_name}.flac"; dest_path="${found_dir}/${dest_flac_name}"; if [ -f "$dest_path" ]; then echo -e "${RED}Error: Destination file '$dest_path' already exists!${NC}"; return; fi; mv "$src_path" "$dest_path"; echo -e "${GREEN}✓ Renamed FLAC: $src_flac_name ➔ $dest_flac_name${NC}"; src_base="${src_flac_name%.*}"; dest_base="${dest_flac_name%.*}"; src_txt="${found_dir}/${src_base}.txt"; dest_txt="${found_dir}/${dest_base}.txt"; if [ -f "$src_txt" ]; then mv "$src_txt" "$dest_txt"; echo -e "${GREEN}✓ Renamed Tracklist: $(basename "$src_txt") ➔ $(basename "$dest_txt")${NC}"; fi; local spek_dirs=("SPEK_OUTPUTS" "${found_dir}/SPEK_OUTPUTS" "$(dirname "$found_dir")/SPEK_OUTPUTS"); for s_dir in "${spek_dirs[@]}"; do if [ -f "$s_dir/${src_base}_spectrogram.png" ]; then mv "$s_dir/${src_base}_spectrogram.png" "$s_dir/${dest_base}_spectrogram.png"; echo -e "${GREEN}✓ Renamed Spectrogram in $s_dir: ${src_base}_spectrogram.png ➔ ${dest_base}_spectrogram.png${NC}"; fi; done
 }
 view_tasks() {
-echo -e "\n${BOLD}${BLUE}=== RUNNING BACKGROUND TASKS ===${NC}"; local tasks_found=0; if pgrep -f "Make_SOF_FLAC_CONVERSION.sh" > /dev/null || pgrep -x "ffmpeg" > /dev/null; then echo -e "  [${YELLOW}RUNNING${NC}] FLAC Conversion Batch Job (Make_SOF_FLAC_CONVERSION.sh / ffmpeg)"; ((tasks_found++)); fi; if pgrep -f "Check_Find_Tracklists.sh" > /dev/null; then echo -e "  [${YELLOW}RUNNING${NC}] Tracklist Generator Job (Check_Find_Tracklists.sh)"; ((tasks_found++)); fi; if pgrep -f "Verify_FLAC_Files.sh" > /dev/null; then echo -e "  [${YELLOW}RUNNING${NC}] FLAC Verification Scan (Verify_FLAC_Files.sh)"; ((tasks_found++)); fi; if pgrep -f "backup_to_gdrive.sh" > /dev/null || pgrep -f "backup_mix_archive.sh" > /dev/null || pgrep -x "rclone" > /dev/null; then echo -e "  [${YELLOW}RUNNING${NC}] Cloud Backup / Active Transfer (backup_mix_archive.sh / rclone)"; ((tasks_found++)); fi; if pgrep -f "import_new_mixes.sh" > /dev/null; then echo -e "  [${YELLOW}RUNNING${NC}] SMB Import Process (import_new_mixes.sh)"; ((tasks_found++)); fi; if pgrep -f "SOF_Live_Tracker.sh" > /dev/null; then echo -e "  [${YELLOW}RUNNING${NC}] Live Tracklist Monitor (SOF_Live_Tracker.sh)"; ((tasks_found++)); fi; local chrome_upload_info=""; if command -v chrome-upload-monitor &>/dev/null; then chrome_upload_info=$(chrome-upload-monitor --check 2>/dev/null || true); elif [ -x "$HOME/.local/bin/chrome-upload-monitor" ]; then chrome_upload_info=$("$HOME/.local/bin/chrome-upload-monitor" --check 2>/dev/null || true); elif [ -x "./chrome_upload_monitor.py" ]; then chrome_upload_info=$(python3 ./chrome_upload_monitor.py --check 2>/dev/null || true); fi; if [ -n "$chrome_upload_info" ]; then echo -e "  [${YELLOW}RUNNING${NC}] Chrome Podcast Connect / Web Upload: ${CYAN}${chrome_upload_info}${NC}"; ((tasks_found++)); fi; if pgrep -f "python.*wgp\.py" > /dev/null; then local wgp_pids; wgp_pids=$(pgrep -f "python.*wgp\.py" | tr '\n' ' '); echo -e "  [${GREEN}RUNNING${NC}] WAN2GP AI Video Server (PID: ${wgp_pids})"; ((tasks_found++)); fi; if pgrep -f "wan2gp_flux_batch" > /dev/null; then local flux_pids; flux_pids=$(pgrep -f "wan2gp_flux_batch" | tr '\n' ' '); echo -e "  [${GREEN}RUNNING${NC}] WAN2GP Flux 2 Klein Batch Processor (PID: ${flux_pids})"; ((tasks_found++)); fi; if pgrep -f "wan2gp_ltx.*batch" > /dev/null; then local ltx_pids; ltx_pids=$(pgrep -f "wan2gp_ltx.*batch" | tr '\n' ' '); echo -e "  [${GREEN}RUNNING${NC}] WAN2GP LTX Video Batch Processor (PID: ${ltx_pids})"; ((tasks_found++)); fi; if pgrep -f "remove_duplicate_images\.py" > /dev/null; then local dup_pids; dup_pids=$(pgrep -f "remove_duplicate_images\.py" | tr '\n' ' '); echo -e "  [${GREEN}RUNNING${NC}] Duplicate Image Remover (PID: ${dup_pids})"; ((tasks_found++)); fi; if pgrep -f "traktor_monitor" > /dev/null; then local tm_pids
-tm_pids=$(pgrep -f "traktor_monitor" | tr '\n' ' '); echo -e "  [${GREEN}RUNNING${NC}] Traktor Live Monitor & Audio Recorder (PID: ${tm_pids})"; ((tasks_found++)); fi; if pgrep -x "Traktor" > /dev/null || pgrep -x "Traktor.exe" > /dev/null || pgrep -f "Traktor Pro" > /dev/null; then local tp_pids; tp_pids=$(pgrep -x "Traktor" 2>/dev/null || pgrep -x "Traktor.exe" 2>/dev/null || pgrep -f "Traktor Pro" 2>/dev/null | tr '\n' ' '); echo -e "  [${GREEN}RUNNING${NC}] Native Instruments Traktor Pro DJ (PID: ${tp_pids})"; ((tasks_found++)); fi; if systemctl is-active --quiet sshd || pgrep -x sshd > /dev/null; then local ssh_pids; ssh_pids=$(pgrep -x sshd | tr '\n' ' '); echo -e "  [${GREEN}RUNNING${NC}] SSH Server (sshd - Port 22, PID: ${ssh_pids})"; ((tasks_found++)); fi; if systemctl is-active --quiet smb || pgrep -x smbd > /dev/null; then local smb_pids; smb_pids=$(pgrep -x smbd | tr '\n' ' '); echo -e "  [${GREEN}RUNNING${NC}] Samba File Sharing (smbd, nmbd, wsdd - Ports 139, 445, PID: ${smb_pids})"; ((tasks_found++)); fi; if systemctl is-active --quiet vsftpd || pgrep -x vsftpd > /dev/null; then local ftp_pids; ftp_pids=$(pgrep -x vsftpd | tr '\n' ' '); echo -e "  [${GREEN}RUNNING${NC}] FTP Server (vsftpd - Port 21, PID: ${ftp_pids})"; ((tasks_found++)); fi; if pgrep -f "ujust" > /dev/null || pgrep -f "rpm-ostree" > /dev/null; then echo -e "  [${YELLOW}RUNNING${NC}] System Maintenance / Update (ujust / rpm-ostree)"; ((tasks_found++)); fi; if pgrep -i -f "audacious" > /dev/null; then local aud_pids aud_desc=""; aud_pids=$(pgrep -i -f audacious | tr '\n' ' '); if get_audacious_track_info 2>/dev/null; then aud_desc=" [${AUDACIOUS_STATE^^}: ${AUDACIOUS_TITLE} - ${AUDACIOUS_POS_FMT}/${AUDACIOUS_DUR_FMT}]"; fi; echo -e "  [${GREEN}RUNNING${NC}] Audacious Audio Player (PID: ${aud_pids})${aud_desc}"; ((tasks_found++)); fi; if pgrep -i -f "strawberry" > /dev/null; then local straw_pids straw_desc=""; straw_pids=$(pgrep -i -f strawberry | tr '\n' ' '); if get_strawberry_track_info 2>/dev/null; then straw_desc=" [${STRAWBERRY_STATE^^}: ${STRAWBERRY_TITLE} - ${STRAWBERRY_POS_FMT}/${STRAWBERRY_DUR_FMT}]"; fi; echo -e "  [${GREEN}RUNNING${NC}] Strawberry Music Player (PID: ${straw_pids})${straw_desc}"; ((tasks_found++)); fi; if pgrep -x "cliamp" > /dev/null; then local cliamp_pids cliamp_desc=""; cliamp_pids=$(pgrep -x cliamp | tr '\n' ' '); if get_cliamp_track_info 2>/dev/null; then cliamp_desc=" [${CLIAMP_STATE^^}: ${CLIAMP_TITLE} - ${CLIAMP_POS_FMT}/${CLIAMP_DUR_FMT}]"; fi; echo -e "  [${GREEN}RUNNING${NC}] cliamp Retro Music Player (PID: ${cliamp_pids})${cliamp_desc}"; ((tasks_found++)); fi;  local bsz_running=false; local bsz_has_agent=false; if command -v netstat.exe &>/dev/null; then if netstat.exe -ano 2>/dev/null | grep -E ":8090\s+.*LISTENING" &>/dev/null; then bsz_running=true; fi; if netstat.exe -ano 2>/dev/null | grep -E ":45876\s+.*LISTENING" &>/dev/null; then bsz_has_agent=true; fi; elif command -v curl &>/dev/null; then if curl -s -m 1 -o /dev/null "http://localhost:8090/" 2>/dev/null; then bsz_running=true; fi; fi; if [ "$bsz_running" = false ] && command -v tasklist.exe &>/dev/null; then if tasklist.exe //FI "IMAGENAME eq beszel.exe" 2>/dev/null | grep -qi "beszel.exe"; then bsz_running=true; fi; if tasklist.exe //FI "IMAGENAME eq beszel-agent.exe" 2>/dev/null | grep -qi "beszel-agent.exe"; then bsz_has_agent=true; fi; fi; if [ "$bsz_running" = false ] && command -v podman &>/dev/null; then if podman ps --filter "name=beszel" --format "{{.Names}}" 2>/dev/null | grep -q "^beszel$"; then bsz_running=true; if podman ps --filter "name=beszel-agent" --format "{{.Names}}" 2>/dev/null | grep -q "^beszel-agent$"; then bsz_has_agent=true; fi; fi; fi; if [ "$bsz_running" = true ]; then local bsz_status="Hub :8090"; [ "$bsz_has_agent" = true ] && bsz_status="Hub :8090 + Agent"; echo -e "  [${GREEN}RUNNING${NC}] Beszel Server Monitoring (${bsz_status})"; ((tasks_found++)); fi; local olm_running=false olm_pids=""; if curl -s --connect-timeout 1 "http://127.0.0.1:11434/" 2>/dev/null | grep -qi "Ollama is running"; then olm_running=true; fi; if [ "$OS_TYPE" = "windows" ]; then if command -v netstat.exe &>/dev/null; then olm_pids=$(netstat.exe -ano 2>/dev/null | grep -E ":11434\s+.*LISTENING" | awk '{print $5}' | sort -u | tr '\n' ' ')
+echo -e "\n${BOLD}${BLUE}=== RUNNING BACKGROUND TASKS ===${NC}"; local tasks_found=0; if pgrep -f "Make_SOF_FLAC_CONVERSION.sh" > /dev/null || pgrep -x "ffmpeg" > /dev/null; then echo -e "  [${YELLOW}RUNNING${NC}] FLAC Conversion Batch Job (Make_SOF_FLAC_CONVERSION.sh / ffmpeg)"; ((tasks_found++)); fi; if pgrep -f "Check_Find_Tracklists.sh" > /dev/null; then echo -e "  [${YELLOW}RUNNING${NC}] Tracklist Generator Job (Check_Find_Tracklists.sh)"; ((tasks_found++)); fi; if pgrep -f "Verify_FLAC_Files.sh" > /dev/null; then echo -e "  [${YELLOW}RUNNING${NC}] FLAC Verification Scan (Verify_FLAC_Files.sh)"; ((tasks_found++)); fi; if pgrep -f "backup_to_gdrive.sh" > /dev/null || pgrep -f "backup_mix_archive.sh" > /dev/null || pgrep -x "rclone" > /dev/null; then echo -e "  [${YELLOW}RUNNING${NC}] Cloud Backup / Active Transfer (backup_mix_archive.sh / rclone)"; ((tasks_found++)); fi; if pgrep -f "import_new_mixes.sh" > /dev/null; then echo -e "  [${YELLOW}RUNNING${NC}] SMB Import Process (import_new_mixes.sh)"; ((tasks_found++)); fi; if pgrep -f "SOF_Live_Tracker.sh" > /dev/null; then echo -e "  [${YELLOW}RUNNING${NC}] Live Tracklist Monitor (SOF_Live_Tracker.sh)"; ((tasks_found++)); fi; local chrome_upload_info=""; if command -v chrome-upload-monitor &>/dev/null; then chrome_upload_info=$(chrome-upload-monitor --check 2>/dev/null || true); elif [ -x "$HOME/.local/bin/chrome-upload-monitor" ]; then chrome_upload_info=$("$HOME/.local/bin/chrome-upload-monitor" --check 2>/dev/null || true); elif [ -x "./chrome_upload_monitor.py" ]; then chrome_upload_info=$(python3 ./chrome_upload_monitor.py --check 2>/dev/null || true); fi; if [ -n "$chrome_upload_info" ]; then echo -e "  [${YELLOW}RUNNING${NC}] Chrome Podcast Connect / Web Upload: ${CYAN}${chrome_upload_info}${NC}"; ((tasks_found++)); fi; if pgrep -f "python.*wgp\.py" > /dev/null; then local wgp_pids; wgp_pids=$(pgrep -f "python.*wgp\.py" | tr '\n' ' '); echo -e "  [${GREEN}RUNNING${NC}] WAN2GP AI Video Server (PID: ${wgp_pids})"; ((tasks_found++)); fi; if pgrep -f "wan2gp_flux_batch" > /dev/null; then local flux_pids; flux_pids=$(pgrep -f "wan2gp_flux_batch" | tr '\n' ' '); echo -e "  [${GREEN}RUNNING${NC}] WAN2GP Flux 2 Klein Batch Processor (PID: ${flux_pids})"; ((tasks_found++)); fi; if pgrep -f "wan2gp_ltx.*batch" > /dev/null; then local ltx_pids; ltx_pids=$(pgrep -f "wan2gp_ltx.*batch" | tr '\n' ' '); echo -e "  [${GREEN}RUNNING${NC}] WAN2GP LTX Video Batch Processor (PID: ${ltx_pids})"; ((tasks_found++)); fi; if pgrep -f "remove_duplicate_images\.py" > /dev/null; then local dup_pids; dup_pids=$(pgrep -f "remove_duplicate_images\.py" | tr '\n' ' '); echo -e "  [${GREEN}RUNNING${NC}] Duplicate Image Remover (PID: ${dup_pids})"; ((tasks_found++)); fi; if pgrep -f "dj_monitor" > /dev/null; then local tm_pids
+tm_pids=$(pgrep -f "dj_monitor" | tr '\n' ' '); echo -e "  [${GREEN}RUNNING${NC}] DJ Live Monitor & Audio Recorder (PID: ${tm_pids})"; ((tasks_found++)); fi; if pgrep -x "DJ" > /dev/null || pgrep -x "DJ.exe" > /dev/null || pgrep -f "DJ Pro" > /dev/null; then local tp_pids; tp_pids=$(pgrep -x "DJ" 2>/dev/null || pgrep -x "DJ.exe" 2>/dev/null || pgrep -f "DJ Pro" 2>/dev/null | tr '\n' ' '); echo -e "  [${GREEN}RUNNING${NC}] Native Instruments DJ Pro DJ (PID: ${tp_pids})"; ((tasks_found++)); fi; if systemctl is-active --quiet sshd || pgrep -x sshd > /dev/null; then local ssh_pids; ssh_pids=$(pgrep -x sshd | tr '\n' ' '); echo -e "  [${GREEN}RUNNING${NC}] SSH Server (sshd - Port 22, PID: ${ssh_pids})"; ((tasks_found++)); fi; if systemctl is-active --quiet smb || pgrep -x smbd > /dev/null; then local smb_pids; smb_pids=$(pgrep -x smbd | tr '\n' ' '); echo -e "  [${GREEN}RUNNING${NC}] Samba File Sharing (smbd, nmbd, wsdd - Ports 139, 445, PID: ${smb_pids})"; ((tasks_found++)); fi; if systemctl is-active --quiet vsftpd || pgrep -x vsftpd > /dev/null; then local ftp_pids; ftp_pids=$(pgrep -x vsftpd | tr '\n' ' '); echo -e "  [${GREEN}RUNNING${NC}] FTP Server (vsftpd - Port 21, PID: ${ftp_pids})"; ((tasks_found++)); fi; if pgrep -f "ujust" > /dev/null || pgrep -f "rpm-ostree" > /dev/null; then echo -e "  [${YELLOW}RUNNING${NC}] System Maintenance / Update (ujust / rpm-ostree)"; ((tasks_found++)); fi; if pgrep -i -f "audacious" > /dev/null; then local aud_pids aud_desc=""; aud_pids=$(pgrep -i -f audacious | tr '\n' ' '); if get_audacious_track_info 2>/dev/null; then aud_desc=" [${AUDACIOUS_STATE^^}: ${AUDACIOUS_TITLE} - ${AUDACIOUS_POS_FMT}/${AUDACIOUS_DUR_FMT}]"; fi; echo -e "  [${GREEN}RUNNING${NC}] Audacious Audio Player (PID: ${aud_pids})${aud_desc}"; ((tasks_found++)); fi; if pgrep -i -f "strawberry" > /dev/null; then local straw_pids straw_desc=""; straw_pids=$(pgrep -i -f strawberry | tr '\n' ' '); if get_strawberry_track_info 2>/dev/null; then straw_desc=" [${STRAWBERRY_STATE^^}: ${STRAWBERRY_TITLE} - ${STRAWBERRY_POS_FMT}/${STRAWBERRY_DUR_FMT}]"; fi; echo -e "  [${GREEN}RUNNING${NC}] Strawberry Music Player (PID: ${straw_pids})${straw_desc}"; ((tasks_found++)); fi; if pgrep -x "cliamp" > /dev/null; then local cliamp_pids cliamp_desc=""; cliamp_pids=$(pgrep -x cliamp | tr '\n' ' '); if get_cliamp_track_info 2>/dev/null; then cliamp_desc=" [${CLIAMP_STATE^^}: ${CLIAMP_TITLE} - ${CLIAMP_POS_FMT}/${CLIAMP_DUR_FMT}]"; fi; echo -e "  [${GREEN}RUNNING${NC}] cliamp Retro Music Player (PID: ${cliamp_pids})${cliamp_desc}"; ((tasks_found++)); fi;  local bsz_running=false; local bsz_has_agent=false; if command -v netstat.exe &>/dev/null; then if netstat.exe -ano 2>/dev/null | grep -E ":8090\s+.*LISTENING" &>/dev/null; then bsz_running=true; fi; if netstat.exe -ano 2>/dev/null | grep -E ":45876\s+.*LISTENING" &>/dev/null; then bsz_has_agent=true; fi; elif command -v curl &>/dev/null; then if curl -s -m 1 -o /dev/null "http://localhost:8090/" 2>/dev/null; then bsz_running=true; fi; fi; if [ "$bsz_running" = false ] && command -v tasklist.exe &>/dev/null; then if tasklist.exe //FI "IMAGENAME eq beszel.exe" 2>/dev/null | grep -qi "beszel.exe"; then bsz_running=true; fi; if tasklist.exe //FI "IMAGENAME eq beszel-agent.exe" 2>/dev/null | grep -qi "beszel-agent.exe"; then bsz_has_agent=true; fi; fi; if [ "$bsz_running" = false ] && command -v podman &>/dev/null; then if podman ps --filter "name=beszel" --format "{{.Names}}" 2>/dev/null | grep -q "^beszel$"; then bsz_running=true; if podman ps --filter "name=beszel-agent" --format "{{.Names}}" 2>/dev/null | grep -q "^beszel-agent$"; then bsz_has_agent=true; fi; fi; fi; if [ "$bsz_running" = true ]; then local bsz_status="Hub :8090"; [ "$bsz_has_agent" = true ] && bsz_status="Hub :8090 + Agent"; echo -e "  [${GREEN}RUNNING${NC}] Beszel Server Monitoring (${bsz_status})"; ((tasks_found++)); fi; local olm_running=false olm_pids=""; if curl -s --connect-timeout 1 "http://127.0.0.1:11434/" 2>/dev/null | grep -qi "Ollama is running"; then olm_running=true; fi; if [ "$OS_TYPE" = "windows" ]; then if command -v netstat.exe &>/dev/null; then olm_pids=$(netstat.exe -ano 2>/dev/null | grep -E ":11434\s+.*LISTENING" | awk '{print $5}' | sort -u | tr '\n' ' ')
 [ -n "$olm_pids" ] && olm_running=true; fi; if [ "$olm_running" = "false" ] && command -v tasklist.exe &>/dev/null; then if tasklist.exe //FI "IMAGENAME eq ollama.exe" 2>/dev/null | grep -qi "ollama.exe"; then olm_running=true; olm_pids=$(tasklist.exe //FI "IMAGENAME eq ollama.exe" //FO CSV //NH 2>/dev/null | awk -F'","' '{print $2}' | tr -d '"\r ' | tr '\n' ' '); fi; fi; else if pgrep -f "ollama serve" &>/dev/null; then olm_running=true; olm_pids=$(pgrep -f "ollama serve" 2>/dev/null | tr '\n' ' '); fi; fi; if [ "$olm_running" = "true" ]; then local olm_pid_str=""; [ -n "$olm_pids" ] && olm_pid_str=", PID: ${olm_pids% }"; echo -e "  [${GREEN}RUNNING${NC}] Ollama Local AI Server (http://127.0.0.1:11434${olm_pid_str})"; ((tasks_found++)); fi; local webui_running=false webui_pids="" webui_port=8080; for p in 8080 42004; do if curl -s -I --connect-timeout 0.75 "http://127.0.0.1:${p}/" 2>/dev/null | grep -qi "HTTP/" || curl -s -I --connect-timeout 0.75 "http://localhost:${p}/" 2>/dev/null | grep -qi "HTTP/"; then webui_running=true; webui_port=$p; break; fi; done; if [ "$OS_TYPE" = "windows" ]; then if command -v netstat.exe &>/dev/null; then local n_pids; n_pids=$(netstat.exe -ano 2>/dev/null | tr -d '\r' | awk -v port=":${webui_port}" '$2 ~ port && $4 == "LISTENING" {print $5}' | sort -u | tr '\n' ' '); if [ -n "$n_pids" ]; then webui_pids="$n_pids"; webui_running=true; fi; fi; if [ "$webui_running" = "false" ] && command -v tasklist.exe &>/dev/null; then if tasklist.exe //FI "WINDOWTITLE eq Open WebUI*" 2>/dev/null | grep -qi "cmd.exe\|python.exe"; then webui_running=true; fi; fi; else if systemctl --user is-active --quiet "open-webui.service" 2>/dev/null || pgrep -f "open-webui" &>/dev/null; then webui_running=true; webui_pids=$(pgrep -f "open-webui" 2>/dev/null | tr '\n' ' '); fi; fi; if [ "$webui_running" = "true" ]; then local webui_pid_str=""; [ -n "$webui_pids" ] && webui_pid_str=", PID: ${webui_pids% }"; echo -e "  [${GREEN}RUNNING${NC}] Open WebUI Server (http://localhost:${webui_port}${webui_pid_str})"; ((tasks_found++)); fi; if [ $tasks_found -eq 0 ]; then echo -e "  ${GREEN}No active background tasks found.${NC}"; fi; echo -e "${BLUE}================================${NC}"
 }
 view_cover() {
@@ -6944,31 +7007,31 @@ local file="${1:-}"; if [ "$OS_TYPE" != "macos" ]; then echo -e "\n${BOLD}${RED}
 launch_garageband() {
 local file="${1:-}"; if [ "$OS_TYPE" != "macos" ]; then echo -e "\n${BOLD}${RED}⚠️  Apple GarageBand is exclusively available on macOS.${NC}"; press_enter; return 1; fi; echo -e "\n${BOLD}${YELLOW}Launching Apple GarageBand...${NC}\n"; if [ -n "$file" ] && [ -f "$file" ]; then if open -a "GarageBand" "$file" 2>/dev/null; then echo -e "${GREEN}✓ Opened '$(basename "$file")' in Apple GarageBand.${NC}"; sleep 1.2; return 0; fi; else if open -a "GarageBand" 2>/dev/null; then echo -e "${GREEN}✓ Apple GarageBand launched.${NC}"; sleep 1.2; return 0; fi; fi; echo -e "${RED}Error: Apple GarageBand was not found in /Applications.${NC}"; press_enter; return 1
 }
-launch_traktor() {
-if [ "$OS_TYPE" = "macos" ]; then echo -e "\n${BOLD}${YELLOW}Launching Native Instruments Traktor Pro on macOS...${NC}\n"; if [ -d "/Applications/Native Instruments/Traktor Pro 3/Traktor.app" ] && open "/Applications/Native Instruments/Traktor Pro 3/Traktor.app" 2>/dev/null; then echo -e "${GREEN}✓ Traktor Pro launched successfully.${NC}"; sleep 1.2; return 0; elif [ -d "/Applications/Native Instruments/Traktor Pro 4/Traktor.app" ] && open "/Applications/Native Instruments/Traktor Pro 4/Traktor.app" 2>/dev/null; then echo -e "${GREEN}✓ Traktor Pro launched successfully.${NC}"; sleep 1.2; return 0; elif open -b "com.native-instruments.Traktor" 2>/dev/null; then echo -e "${GREEN}✓ Traktor Pro launched successfully.${NC}"; sleep 1.2; return 0; elif open -a "Traktor Pro 4" 2>/dev/null || open -a "Traktor Pro 3" 2>/dev/null || open -a "Traktor" 2>/dev/null; then echo -e "${GREEN}✓ Traktor Pro launched successfully.${NC}"; sleep 1.2; return 0; else echo -e "${RED}Traktor Pro was not found in /Applications.${NC}"; press_enter; return 1; fi; elif [ "$OS_TYPE" = "windows" ] || [ "$OS_TYPE" = "wsl" ]; then echo -e "\n${BOLD}${YELLOW}Launching Native Instruments Traktor Pro on Windows...${NC}\n"; local traktor_paths=("/c/Program Files/Native Instruments/Traktor Pro 4/Traktor.exe" "/c/Program Files/Native Instruments/Traktor Pro 3/Traktor.exe" "/c/Program Files/Native Instruments/Traktor 2/Traktor.exe" "/c/Program Files (x86)/Native Instruments/Traktor Pro 3/Traktor.exe"); for p in "${traktor_paths[@]}"; do if [ -f "$p" ]; then local win_p; win_p="$(cygpath -w "$p" 2>/dev/null || wslpath -w "$p" 2>/dev/null || echo "$p")"; cmd.exe /c start "" "$win_p" &>/dev/null &
-echo -e "${GREEN}✓ Traktor Pro launched successfully.${NC}"; sleep 1.2; return 0; fi; done; if command -v cmd.exe &>/dev/null && cmd.exe /c "where Traktor.exe" &>/dev/null; then cmd.exe /c start "" "Traktor.exe" &>/dev/null &
-echo -e "${GREEN}✓ Traktor Pro launched successfully.${NC}"; sleep 1.2; return 0; fi; echo -e "${RED}Traktor Pro was not found in standard Program Files directories.${NC}"; press_enter; return 1; else echo -e "\n${BOLD}${RED}═══════════════════════════════════════════════════════════════════════════════${NC}\n${BOLD}${RED}            ⚠️  PLATFORM NOT SUPPORTED FOR TRAKTOR PRO ⚠️                      ${NC}\n${BOLD}${RED}═══════════════════════════════════════════════════════════════════════════════${NC}\n  • ${BOLD}Platform:${NC}           $(uname -s)\n  • ${BOLD}Status:${NC}             ${RED}Unsupported by Native Instruments${NC}\n  • ${BOLD}Compatibility:${NC}      Native Instruments Traktor Pro is officially supported\n                          on ${BOLD}${GREEN}macOS${NC} and ${BOLD}${CYAN}Windows${NC} only.\n  • ${BOLD}Recommended Alternative:${NC}\n                          For Linux & FreeBSD DJing, ${BOLD}${GREEN}Mixxx${NC} is the industry standard\n                          open-source DJ platform (Flatpak: org.mixxx.Mixxx, pkg: mixxx).\n${BOLD}${RED}═══════════════════════════════════════════════════════════════════════════════${NC}\n"; press_enter; return 1; fi
+launch_dj() {
+if [ "$OS_TYPE" = "macos" ]; then echo -e "\n${BOLD}${YELLOW}Launching Native Instruments DJ Pro on macOS...${NC}\n"; if [ -d "/Applications/Native Instruments/DJ Pro 3/DJ.app" ] && open "/Applications/Native Instruments/DJ Pro 3/DJ.app" 2>/dev/null; then echo -e "${GREEN}✓ DJ Pro launched successfully.${NC}"; sleep 1.2; return 0; elif [ -d "/Applications/Native Instruments/DJ Pro 4/DJ.app" ] && open "/Applications/Native Instruments/DJ Pro 4/DJ.app" 2>/dev/null; then echo -e "${GREEN}✓ DJ Pro launched successfully.${NC}"; sleep 1.2; return 0; elif open -b "com.native-instruments.DJ" 2>/dev/null; then echo -e "${GREEN}✓ DJ Pro launched successfully.${NC}"; sleep 1.2; return 0; elif open -a "DJ Pro 4" 2>/dev/null || open -a "DJ Pro 3" 2>/dev/null || open -a "DJ" 2>/dev/null; then echo -e "${GREEN}✓ DJ Pro launched successfully.${NC}"; sleep 1.2; return 0; else echo -e "${RED}DJ Pro was not found in /Applications.${NC}"; press_enter; return 1; fi; elif [ "$OS_TYPE" = "windows" ] || [ "$OS_TYPE" = "wsl" ]; then echo -e "\n${BOLD}${YELLOW}Launching Native Instruments DJ Pro on Windows...${NC}\n"; local dj_paths=("/c/Program Files/Native Instruments/DJ Pro 4/DJ.exe" "/c/Program Files/Native Instruments/DJ Pro 3/DJ.exe" "/c/Program Files/Native Instruments/DJ 2/DJ.exe" "/c/Program Files (x86)/Native Instruments/DJ Pro 3/DJ.exe"); for p in "${dj_paths[@]}"; do if [ -f "$p" ]; then local win_p; win_p="$(cygpath -w "$p" 2>/dev/null || wslpath -w "$p" 2>/dev/null || echo "$p")"; cmd.exe /c start "" "$win_p" &>/dev/null &
+echo -e "${GREEN}✓ DJ Pro launched successfully.${NC}"; sleep 1.2; return 0; fi; done; if command -v cmd.exe &>/dev/null && cmd.exe /c "where DJ.exe" &>/dev/null; then cmd.exe /c start "" "DJ.exe" &>/dev/null &
+echo -e "${GREEN}✓ DJ Pro launched successfully.${NC}"; sleep 1.2; return 0; fi; echo -e "${RED}DJ Pro was not found in standard Program Files directories.${NC}"; press_enter; return 1; else echo -e "\n${BOLD}${RED}═══════════════════════════════════════════════════════════════════════════════${NC}\n${BOLD}${RED}            ⚠️  PLATFORM NOT SUPPORTED FOR DJ PRO ⚠️                      ${NC}\n${BOLD}${RED}═══════════════════════════════════════════════════════════════════════════════${NC}\n  • ${BOLD}Platform:${NC}           $(uname -s)\n  • ${BOLD}Status:${NC}             ${RED}Unsupported by Native Instruments${NC}\n  • ${BOLD}Compatibility:${NC}      Native Instruments DJ Pro is officially supported\n                          on ${BOLD}${GREEN}macOS${NC} and ${BOLD}${CYAN}Windows${NC} only.\n  • ${BOLD}Recommended Alternative:${NC}\n                          For Linux & FreeBSD DJing, ${BOLD}${GREEN}Mixxx${NC} is the industry standard\n                          open-source DJ platform (Flatpak: org.mixxx.Mixxx, pkg: mixxx).\n${BOLD}${RED}═══════════════════════════════════════════════════════════════════════════════${NC}\n"; press_enter; return 1; fi
 }
-get_traktor_version_mac() {
-if [ "$OS_TYPE" != "macos" ]; then echo ""; return 1; fi; local ver=""; if [ -x "/usr/libexec/PlistBuddy" ] && [ -f "/Applications/Native Instruments/Traktor Pro 3/Traktor.app/Contents/Info.plist" ]; then ver="$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "/Applications/Native Instruments/Traktor Pro 3/Traktor.app/Contents/Info.plist" 2>/dev/null | awk '{print $1}')"; elif [ -x "/usr/libexec/PlistBuddy" ] && [ -f "/Applications/Traktor Pro 3.app/Contents/Info.plist" ]; then ver="$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "/Applications/Traktor Pro 3.app/Contents/Info.plist" 2>/dev/null | awk '{print $1}')"; elif [ -x "/usr/libexec/PlistBuddy" ] && [ -f "/Applications/Traktor.app/Contents/Info.plist" ]; then ver="$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "/Applications/Traktor.app/Contents/Info.plist" 2>/dev/null | awk '{print $1}')"; fi; if [ -z "$ver" ] && [ -d "$HOME/Documents/Native Instruments" ]; then ver="$(find "$HOME/Documents/Native Instruments" -maxdepth 1 -type d -name "Traktor 3*" 2>/dev/null | sort -V | tail -n 1 | sed 's/.*Traktor //')"; fi; echo "${ver:-3}"
+get_dj_version_mac() {
+if [ "$OS_TYPE" != "macos" ]; then echo ""; return 1; fi; local ver=""; if [ -x "/usr/libexec/PlistBuddy" ] && [ -f "/Applications/Native Instruments/DJ Pro 3/DJ.app/Contents/Info.plist" ]; then ver="$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "/Applications/Native Instruments/DJ Pro 3/DJ.app/Contents/Info.plist" 2>/dev/null | awk '{print $1}')"; elif [ -x "/usr/libexec/PlistBuddy" ] && [ -f "/Applications/DJ Pro 3.app/Contents/Info.plist" ]; then ver="$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "/Applications/DJ Pro 3.app/Contents/Info.plist" 2>/dev/null | awk '{print $1}')"; elif [ -x "/usr/libexec/PlistBuddy" ] && [ -f "/Applications/DJ.app/Contents/Info.plist" ]; then ver="$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "/Applications/DJ.app/Contents/Info.plist" 2>/dev/null | awk '{print $1}')"; fi; if [ -z "$ver" ] && [ -d "$HOME/Documents/Native Instruments" ]; then ver="$(find "$HOME/Documents/Native Instruments" -maxdepth 1 -type d -name "DJ 3*" 2>/dev/null | sort -V | tail -n 1 | sed 's/.*DJ //')"; fi; echo "${ver:-3}"
 }
-resolve_traktor_playlist_generator() {
-    local gen_py="$SCRIPT_DIR/scripts/generate_traktor_playlist_from_history.py"
-    local gen_sh="$SCRIPT_DIR/scripts/generate_traktor_playlist_from_history.sh"
+resolve_dj_playlist_generator() {
+    local gen_py="$SCRIPT_DIR/scripts/generate_dj_playlist_from_history.py"
+    local gen_sh="$SCRIPT_DIR/scripts/generate_dj_playlist_from_history.sh"
     if [ -x "$gen_sh" ]; then
         printf '%s' "$gen_sh"
     elif [ -f "$gen_py" ]; then
         printf '%s' "$gen_py"
-    elif [ -f "$SCRIPT_DIR/generate_traktor_playlist_from_history.py" ]; then
-        printf '%s' "$SCRIPT_DIR/generate_traktor_playlist_from_history.py"
+    elif [ -f "$SCRIPT_DIR/generate_dj_playlist_from_history.py" ]; then
+        printf '%s' "$SCRIPT_DIR/generate_dj_playlist_from_history.py"
     else
         return 1
     fi
 }
-generate_traktor_playlist_from_history() {
+generate_dj_playlist_from_history() {
     local tool
-    tool="$(resolve_traktor_playlist_generator)" || {
-        echo -e "\n${RED}Error: generate_traktor_playlist_from_history.py was not found in scripts/!${NC}\n"
+    tool="$(resolve_dj_playlist_generator)" || {
+        echo -e "\n${RED}Error: generate_dj_playlist_from_history.py was not found in scripts/!${NC}\n"
         press_enter
         return 1
     }
@@ -7102,7 +7165,7 @@ while true; do
     local reaper_badge="${RED}[NOT INSTALLED]${NC}" audacity_badge="${RED}[NOT INSTALLED]${NC}"
     local ardour_badge="${YELLOW}[AVAILABLE]${NC}" lmms_badge="${YELLOW}[AVAILABLE]${NC}" bitwig_badge="${YELLOW}[AVAILABLE]${NC}"
     local bespoke_badge="${YELLOW}[AVAILABLE]${NC}" logic_badge="${YELLOW}[macOS Only]${NC}" garage_badge="${YELLOW}[macOS Only]${NC}"
-    local fl_badge="${YELLOW}[AVAILABLE]${NC}" traktor_badge="${YELLOW}[macOS & Windows Only]${NC}"
+    local fl_badge="${YELLOW}[AVAILABLE]${NC}" dj_badge="${YELLOW}[macOS & Windows Only]${NC}"
     is_app_installed "reaper" "fm.reaper.Reaper" "REAPER" "REAPER (x64)/reaper.exe" && reaper_badge="${GREEN}✓ INSTALLED${NC}"
     is_app_installed "audacity" "org.audacityteam.Audacity" "Audacity" "Audacity/Audacity.exe" && audacity_badge="${GREEN}✓ INSTALLED${NC}"
     is_app_installed "ardour" "org.ardour.Ardour" "Ardour" "Ardour/bin/ardour.exe" && ardour_badge="${GREEN}✓ INSTALLED${NC}"
@@ -7112,10 +7175,10 @@ while true; do
     if [ "$OS_TYPE" = "macos" ]; then
         if [ -d "/Applications/Logic Pro.app" ] || [ -d "/Applications/Logic Pro X.app" ] || osascript -e 'id of application "Logic Pro"' &>/dev/null; then logic_badge="${GREEN}✓ INSTALLED${NC}"; else logic_badge="${RED}[NOT INSTALLED]${NC}"; fi
         if [ -d "/Applications/GarageBand.app" ] || osascript -e 'id of application "GarageBand"' &>/dev/null; then garage_badge="${GREEN}✓ INSTALLED${NC}"; else garage_badge="${RED}[NOT INSTALLED]${NC}"; fi
-        if [ -d "/Applications/Native Instruments/Traktor Pro 3/Traktor.app" ] || [ -d "/Applications/Native Instruments/Traktor Pro 4/Traktor.app" ] || [ -d "/Applications/Traktor Pro 4.app" ] || [ -d "/Applications/Traktor Pro 3.app" ] || [ -d "/Applications/Traktor.app" ] || osascript -e 'id of application "Traktor"' &>/dev/null; then traktor_badge="${GREEN}✓ INSTALLED${NC}"; else traktor_badge="${RED}[NOT INSTALLED]${NC}"; fi
+        if [ -d "/Applications/Native Instruments/DJ Pro 3/DJ.app" ] || [ -d "/Applications/Native Instruments/DJ Pro 4/DJ.app" ] || [ -d "/Applications/DJ Pro 4.app" ] || [ -d "/Applications/DJ Pro 3.app" ] || [ -d "/Applications/DJ.app" ] || osascript -e 'id of application "DJ"' &>/dev/null; then dj_badge="${GREEN}✓ INSTALLED${NC}"; else dj_badge="${RED}[NOT INSTALLED]${NC}"; fi
         if [ -d "/Applications/FL Studio 2024.app" ] || [ -d "/Applications/FL Studio 21.app" ] || [ -d "/Applications/FL Studio.app" ]; then fl_badge="${GREEN}✓ INSTALLED${NC}"; fi
     elif [ "$OS_TYPE" = "windows" ] || [ "$OS_TYPE" = "wsl" ]; then
-        if [ -f "/c/Program Files/Native Instruments/Traktor Pro 4/Traktor.exe" ] || [ -f "/c/Program Files/Native Instruments/Traktor Pro 3/Traktor.exe" ]; then traktor_badge="${GREEN}✓ INSTALLED${NC}"; else traktor_badge="${YELLOW}[AVAILABLE]${NC}"; fi
+        if [ -f "/c/Program Files/Native Instruments/DJ Pro 4/DJ.exe" ] || [ -f "/c/Program Files/Native Instruments/DJ Pro 3/DJ.exe" ]; then dj_badge="${GREEN}✓ INSTALLED${NC}"; else dj_badge="${YELLOW}[AVAILABLE]${NC}"; fi
         if [ -f "/c/Program Files/Image-Line/FL Studio 2024/FL64.exe" ] || [ -f "/c/Program Files/Image-Line/FL Studio 21/FL64.exe" ]; then fl_badge="${GREEN}✓ INSTALLED${NC}"; fi
     fi
     local hdr="       ${BOLD}${CYAN}📅 ${current_datetime}${NC}\n"
@@ -7129,15 +7192,15 @@ while true; do
         "7|Launch Apple Logic Pro|${logic_badge}"
         "8|Launch Apple GarageBand|${garage_badge}"
         "9|Launch Image-Line FL Studio / Fruity Loops|${fl_badge}"
-        "10|Launch Native Instruments Traktor Pro|${traktor_badge}"
-        "11|Launch Traktor Live Monitor & Audio Recorder|(New Window - CPU, Decks, Recording, Audio I/O)"
+        "10|Launch Native Instruments DJ Pro|${dj_badge}"
+        "11|Launch DJ Live Monitor & Audio Recorder|(New Window - CPU, Decks, Recording, Audio I/O)"
     )
     if [ "$OS_TYPE" = "macos" ]; then
-        local t_ver; t_ver="$(get_traktor_version_mac 2>/dev/null || echo "3")"
+        local t_ver; t_ver="$(get_dj_version_mac 2>/dev/null || echo "3")"
         if [ -n "$t_ver" ] && [ "$t_ver" != "3" ]; then
-            opts+=("12|Generate Playlist from History Files on Traktor 3|(v${t_ver} Key Sorted / Decks Ready)")
+            opts+=("12|Generate Playlist from History Files on DJ 3|(v${t_ver} Key Sorted / Decks Ready)")
         else
-            opts+=("12|Generate Playlist from History Files on Traktor 3|(Key Sorted / Decks Ready)")
+            opts+=("12|Generate Playlist from History Files on DJ 3|(Key Sorted / Decks Ready)")
         fi
         opts+=("SEP|SEP|")
         opts+=("13|Open Mix WAV/FLAC Audio File in DAW...|(Reaper, Logic Pro, FL Studio)")
@@ -7157,9 +7220,9 @@ while true; do
         7) launch_logic_pro ;;
         8) launch_garageband ;;
         9) launch_fl_studio ;;
-        10) launch_traktor ;;
-        11) launch_traktor_monitor_window ;;
-        12) if [ "$OS_TYPE" = "macos" ]; then generate_traktor_playlist_from_history; else open_mix_in_daw; fi ;;
+        10) launch_dj ;;
+        11) launch_dj_monitor_window ;;
+        12) if [ "$OS_TYPE" = "macos" ]; then generate_dj_playlist_from_history; else open_mix_in_daw; fi ;;
         13) if [ "$OS_TYPE" = "macos" ]; then open_mix_in_daw; else echo -e "\n${RED}Invalid choice!${NC}"; sleep 1.2; fi ;;
         0|[qQ]|[eE][xX][iI][tT]|ESC) return 0 ;;
         *) echo -e "\n${RED}Invalid choice!${NC}"; sleep 1.2 ;;
@@ -8000,7 +8063,7 @@ manage_visual_media_launchers() {
 local opts=("1|Launch MP_Liquid_Visualizer — 3D Vulkan Audio-Reactive Visualizer|1094x734 on macOS, the Liquid Player size on Linux, 700x700 elsewhere Borderless • Cosmic Dreamworlds / Orbital Void Reflux" "2|Select MP_Liquid_Visualizer Preset|(Cosmic Dreamworlds / Orbital Void Reflux)" "3|Launch Video Playlists|(NFT Videos in VLC)" "4|Launch Specific Video in Default Video Player|(${DEFAULT_VIDEO_PLAYER:-vlc})" "5|Launch GIMP Image Editor|(gimp / org.gimp.GIMP)" "6|Launch Electric Sheep Generative Screensaver|(electricsheep / infinidream)" "7|Launch GeeXLab Demo Launcher|(FurMark_linux64/demo_launcher.sh)" "8|MP Visualizer Screen Saver|(Idle Auto-Launch • Fullscreen • Preset Cycle)" "0|Return to Main Menu|(or Esc / q)"); while true; do run_interactive_submenu "VISUAL, VIDEO & ART LAUNCHERS SUITE" "" opts 0; case "$REPLY" in 1|z|Z|visualizer|liquid-visualizer) launch_mp_liquid_visualizer ;; 2|preset|presets) manage_mp_liquid_visualizer_presets ;; 3) launch_video_playlists ;; 4) manage_video_dispatcher ;; 5) launch_gimp ;; 6) launch_electricsheep ;; 7) launch_geexlab_demos ;; 8|screensaver|saver|idle-saver) manage_visualizer_screensaver ;; 0|[qQ]|[eE][xX][iI][tT]|ESC) return 0 ;; *) echo -e "\n${RED}Invalid choice!${NC}"; sleep 1; ;; esac; done
 }
 manage_live_monitors() {
-local opts=("1|Launch Live Tracklist Monitor|(SOF_Live_Tracker.sh)" "2|Launch Traktor Live Monitor & Audio Recorder|(New Window - CPU, Tracks, Audio I/O)" "3|Launch Live File Transfer Monitor|(transfer-monitor)" "4|Launch Chrome Upload Monitor|(Podcast Connect / Web Uploads)" "5|View Running Background Tasks|(Track and inspect background jobs)" "6|Live Audio & Video Output Conversion Monitor|(MP_Mix_Manager_Audio_File_Output_Monitor.py)" "0|Return to Main Menu|(or Esc / q)"); while true; do run_interactive_submenu "LIVE SESSION & STREAM MONITORS SUITE" "" opts 0; case "$REPLY" in 1) echo -e "\n${BOLD}${YELLOW}Launching Live Tracklist Monitor (Press Ctrl+C to return)...${NC}\n"; sleep 0.8; trap ':' INT; run_sub_script "SOF_Live_Tracker.sh"; trap 'exit_mix_manager' INT; press_enter; ;; 2) launch_traktor_monitor_window ;; 3) echo -e "\n${BOLD}${YELLOW}Launching Live File Transfer Monitor (Press Ctrl+C to return)...${NC}\n"; sleep 0.8; trap ':' INT; if command -v transfer-monitor &>/dev/null; then transfer-monitor; elif [ -x "$HOME/.local/bin/transfer-monitor" ]; then "$HOME/.local/bin/transfer-monitor"; else echo -e "${RED}Error: transfer-monitor command not found in PATH or ~/.local/bin!${NC}"; fi; trap 'exit_mix_manager' INT; press_enter ;; 4) echo -e "\n${BOLD}${YELLOW}Launching Chrome Upload Monitor (Press Ctrl+C to return)...${NC}\n"; sleep 0.8; trap ':' INT; if command -v chrome-upload-monitor &>/dev/null; then chrome-upload-monitor; elif [ -x "$HOME/.local/bin/chrome-upload-monitor" ]; then "$HOME/.local/bin/chrome-upload-monitor"; elif [ -x "./chrome_upload_monitor.py" ]; then python3 ./chrome_upload_monitor.py; elif [ -x "$SCRIPT_DIR/chrome_upload_monitor.py" ]; then python3 "$SCRIPT_DIR/chrome_upload_monitor.py"; elif [ -x "./Monitor_Chrome_Uploads.sh" ]; then ./Monitor_Chrome_Uploads.sh; elif [ -x "$SCRIPT_DIR/Monitor_Chrome_Uploads.sh" ]; then "$SCRIPT_DIR/Monitor_Chrome_Uploads.sh"; else echo -e "${RED}Error: chrome-upload-monitor command not found in PATH or ~/.local/bin!${NC}"; fi; trap 'exit_mix_manager' INT; press_enter ;; 5) view_tasks; press_enter ;; 6) local mon_py="$SCRIPT_DIR/scripts/MP_Mix_Manager_Audio_File_Output_Monitor.py"; [ ! -f "$mon_py" ] && mon_py="$SCRIPT_DIR/MP_Mix_Manager_Audio_File_Output_Monitor.py"; if [ -f "$mon_py" ]; then python3 "$mon_py"; else echo -e "${RED}Error: MP_Mix_Manager_Audio_File_Output_Monitor.py not found!${NC}"; press_enter; fi ;; 0|[qQ]|[eE][xX][iI][tT]|ESC) return 0 ;; *) echo -e "\n${RED}Invalid choice!${NC}"; sleep 1; ;; esac; done
+local opts=("1|Launch Live Tracklist Monitor|(SOF_Live_Tracker.sh)" "2|Launch DJ Live Monitor & Audio Recorder|(New Window - CPU, Tracks, Audio I/O)" "3|Launch Live File Transfer Monitor|(transfer-monitor)" "4|Launch Chrome Upload Monitor|(Podcast Connect / Web Uploads)" "5|View Running Background Tasks|(Track and inspect background jobs)" "6|Live Audio & Video Output Conversion Monitor|(MP_Mix_Manager_Audio_File_Output_Monitor.py)" "0|Return to Main Menu|(or Esc / q)"); while true; do run_interactive_submenu "LIVE SESSION & STREAM MONITORS SUITE" "" opts 0; case "$REPLY" in 1) echo -e "\n${BOLD}${YELLOW}Launching Live Tracklist Monitor (Press Ctrl+C to return)...${NC}\n"; sleep 0.8; trap ':' INT; run_sub_script "SOF_Live_Tracker.sh"; trap 'exit_mix_manager' INT; press_enter; ;; 2) launch_dj_monitor_window ;; 3) echo -e "\n${BOLD}${YELLOW}Launching Live File Transfer Monitor (Press Ctrl+C to return)...${NC}\n"; sleep 0.8; trap ':' INT; if command -v transfer-monitor &>/dev/null; then transfer-monitor; elif [ -x "$HOME/.local/bin/transfer-monitor" ]; then "$HOME/.local/bin/transfer-monitor"; else echo -e "${RED}Error: transfer-monitor command not found in PATH or ~/.local/bin!${NC}"; fi; trap 'exit_mix_manager' INT; press_enter ;; 4) echo -e "\n${BOLD}${YELLOW}Launching Chrome Upload Monitor (Press Ctrl+C to return)...${NC}\n"; sleep 0.8; trap ':' INT; if command -v chrome-upload-monitor &>/dev/null; then chrome-upload-monitor; elif [ -x "$HOME/.local/bin/chrome-upload-monitor" ]; then "$HOME/.local/bin/chrome-upload-monitor"; elif [ -x "./chrome_upload_monitor.py" ]; then python3 ./chrome_upload_monitor.py; elif [ -x "$SCRIPT_DIR/chrome_upload_monitor.py" ]; then python3 "$SCRIPT_DIR/chrome_upload_monitor.py"; elif [ -x "./Monitor_Chrome_Uploads.sh" ]; then ./Monitor_Chrome_Uploads.sh; elif [ -x "$SCRIPT_DIR/Monitor_Chrome_Uploads.sh" ]; then "$SCRIPT_DIR/Monitor_Chrome_Uploads.sh"; else echo -e "${RED}Error: chrome-upload-monitor command not found in PATH or ~/.local/bin!${NC}"; fi; trap 'exit_mix_manager' INT; press_enter ;; 5) view_tasks; press_enter ;; 6) local mon_py="$SCRIPT_DIR/scripts/MP_Mix_Manager_Audio_File_Output_Monitor.py"; [ ! -f "$mon_py" ] && mon_py="$SCRIPT_DIR/MP_Mix_Manager_Audio_File_Output_Monitor.py"; if [ -f "$mon_py" ]; then python3 "$mon_py"; else echo -e "${RED}Error: MP_Mix_Manager_Audio_File_Output_Monitor.py not found!${NC}"; press_enter; fi ;; 0|[qQ]|[eE][xX][iI][tT]|ESC) return 0 ;; *) echo -e "\n${RED}Invalid choice!${NC}"; sleep 1; ;; esac; done
 }
 manage_system_process_monitors() {
 local opts=("1|Launch Resource Monitor|btop • CPU, RAM, Disks, Network" "2|Launch GPU Process Monitor|nvtop • NVIDIA / AMD / Intel GPU VRAM & Cores" "3|Launch System Process Monitor|top • Standard UNIX Process Table" "0|Return to Main Menu|(or Esc / q)"); while true; do run_interactive_submenu "SYSTEM & HARDWARE PROCESS MONITORS" "" opts 0; case "$REPLY" in 1) echo -e "\n${BOLD}${YELLOW}Launching btop Resource Monitor (Press 'q' to exit)...${NC}\n"; sleep 0.5; trap ':' INT; if command -v btop &>/dev/null; then _sync_btop_theme "$CURRENT_THEME"; btop; else echo -e "${RED}Error: btop command not found in PATH!${NC}"; press_enter; fi; trap 'exit_mix_manager' INT ;; 2) echo -e "\n${BOLD}${YELLOW}Launching nvtop GPU Monitor (Press 'q' to exit)...${NC}\n"; sleep 0.5; trap ':' INT; if command -v nvtop &>/dev/null; then nvtop; else echo -e "${RED}Error: nvtop command not found in PATH!${NC}"; press_enter; fi; trap 'exit_mix_manager' INT ;; 3) echo -e "\n${BOLD}${YELLOW}Launching top Process Monitor (Press 'q' to exit)...${NC}\n"; sleep 0.5; trap ':' INT; if command -v top &>/dev/null; then top; else echo -e "${RED}Error: top command not found in PATH!${NC}"; press_enter; fi; trap 'exit_mix_manager' INT ;; 0|[qQ]|[eE][xX][iI][tT]|ESC) return 0 ;; *) echo -e "\n${RED}Invalid choice!${NC}"; sleep 1; ;; esac; done
@@ -8190,13 +8253,13 @@ local target_file="$1"; if [ -n "$target_file" ] && [ "$target_file" = "$_LAST_S
 inspect_playing_audio_file() {
 local target="$1"; local script_sh="$SCRIPT_DIR/scripts/inspect_playing_audio.sh"; [ ! -f "$script_sh" ] && script_sh="$PWD/scripts/inspect_playing_audio.sh"; if [ -x "$script_sh" ]; then if [ -n "$target" ]; then "$script_sh" "$target"; else "$script_sh"; fi; else local script_py="$SCRIPT_DIR/scripts/inspect_playing_audio.py"; [ ! -f "$script_py" ] && script_py="$PWD/scripts/inspect_playing_audio.py"; if [ -f "$script_py" ]; then if [ -n "$target" ]; then python3 "$script_py" "$target"; else python3 "$script_py"; fi; else echo -e "\n${RED}Error: inspect_playing_audio script not found in scripts/!${NC}"; sleep 1.5; fi; fi
 }
-launch_traktor_monitor_window() {
-local mon_sh=""; if [ -x "$SCRIPT_DIR/scripts/traktor_monitor.sh" ]; then mon_sh="$SCRIPT_DIR/scripts/traktor_monitor.sh"; elif [ -x "$SCRIPT_DIR/traktor_monitor.sh" ]; then mon_sh="$SCRIPT_DIR/traktor_monitor.sh"; elif [ -x "$HOME/.local/bin/traktor-monitor" ]; then mon_sh="$HOME/.local/bin/traktor-monitor"; elif command -v traktor-monitor &>/dev/null; then mon_sh="$(command -v traktor-monitor)"; elif [ -f "$SCRIPT_DIR/scripts/traktor_monitor.py" ]; then mon_sh="$SCRIPT_DIR/scripts/traktor_monitor.py"; elif [ -f "$PWD/scripts/traktor_monitor.py" ]; then mon_sh="$PWD/scripts/traktor_monitor.py"; fi; if [ -z "$mon_sh" ]; then echo -e "\n${RED}Error: traktor_monitor.sh / traktor-monitor was not found in scripts/ or PATH!${NC}"; press_enter; return 1; fi
+launch_dj_monitor_window() {
+local mon_sh=""; if [ -x "$SCRIPT_DIR/scripts/dj_monitor.sh" ]; then mon_sh="$SCRIPT_DIR/scripts/dj_monitor.sh"; elif [ -x "$SCRIPT_DIR/dj_monitor.sh" ]; then mon_sh="$SCRIPT_DIR/dj_monitor.sh"; elif [ -x "$HOME/.local/bin/dj-monitor" ]; then mon_sh="$HOME/.local/bin/dj-monitor"; elif command -v dj-monitor &>/dev/null; then mon_sh="$(command -v dj-monitor)"; elif [ -f "$SCRIPT_DIR/scripts/dj_monitor.py" ]; then mon_sh="$SCRIPT_DIR/scripts/dj_monitor.py"; elif [ -f "$PWD/scripts/dj_monitor.py" ]; then mon_sh="$PWD/scripts/dj_monitor.py"; fi; if [ -z "$mon_sh" ]; then echo -e "\n${RED}Error: dj_monitor.sh / dj-monitor was not found in scripts/ or PATH!${NC}"; press_enter; return 1; fi
 local hdr
-hdr="  ${BOLD}Process Metrics:${NC}   Traktor CPU %, RSS RAM, Thread Count & Execution State\n"
+hdr="  ${BOLD}Process Metrics:${NC}   DJ CPU %, RSS RAM, Thread Count & Execution State\n"
 hdr+="  ${BOLD}Deck Tracking:${NC}     Active open audio files & deck playback detection\n"
 hdr+="  ${BOLD}Audio Recorder:${NC}    Live WAV write detection, file-growth tracking & standby\n"
-hdr+="  ${BOLD}Hardware & I/O:${NC}    Traktor audio device, sample rate, latency & buffer size\n"
+hdr+="  ${BOLD}Hardware & I/O:${NC}    DJ audio device, sample rate, latency & buffer size\n"
 hdr+="  ${BOLD}Hotkeys in Live:${NC}   [s] Start Rec  │  [x] Stop Rec  │  [t] Toggle Rec  │  [c] Switch Theme  │  [q] Quit\n"
 hdr+="  ${BOLD}Cross-Platform:${NC}    macOS (AppleScript UI), Windows 10 & 11, Linux (Bazzite/Fedora)\n"
 local opts=(
@@ -8204,22 +8267,22 @@ local opts=(
     "2|Run Live Monitor in Current Terminal Window|"
     "3|Single Diagnostic Status Snapshot|(--once)"
     "SEP|SEP|"
-    "4|Trigger Traktor Audio Recording: ${GREEN}START RECORDING${NC}|"
-    "5|Trigger Traktor Audio Recording: ${RED}STOP RECORDING${NC}|"
-    "6|Trigger Traktor Audio Recording: ${YELLOW}TOGGLE RECORDING${NC}|"
+    "4|Trigger DJ Audio Recording: ${GREEN}START RECORDING${NC}|"
+    "5|Trigger DJ Audio Recording: ${RED}STOP RECORDING${NC}|"
+    "6|Trigger DJ Audio Recording: ${YELLOW}TOGGLE RECORDING${NC}|"
     "SEP|SEP|"
-    "7|Traktor Monitor Color Themes|(14 MP Themes & Previews)"
+    "7|DJ Monitor Color Themes|(14 MP Themes & Previews)"
     "0|Return to Main Menu|(or Esc / q)"
 )
-run_interactive_submenu "TRAKTOR PRO LIVE MONITOR & AUDIO RECORDER CONTROL" "$hdr" opts 0
+run_interactive_submenu "DJ PRO LIVE MONITOR & AUDIO RECORDER CONTROL" "$hdr" opts 0
 case "$REPLY" in
-1) if ! pgrep -i -f "Traktor" &>/dev/null; then echo -e "\n${BOLD}${YELLOW}Traktor Pro is not running. Opening Traktor Pro...${NC}"; launch_traktor &>/dev/null || true; sleep 1.5; fi; echo -e "\n${BOLD}${GREEN}Launching Traktor Live Monitor in a new terminal window...${NC}\n"; local full_cmd; printf -v full_cmd '%q; echo ""; echo "Traktor monitor closed. Press [Enter] to exit..."; read -r' "$mon_sh"; if launch_in_terminal "Traktor Live Monitor" "$full_cmd" "window"; then echo -e "${GREEN}✓ Traktor Live Monitor launched in standalone window.${NC}"; sleep 1.2; else echo -e "${YELLOW}External terminal emulator not available; running in current window...${NC}\n"; sleep 0.8; trap ':' INT; "$mon_sh"; trap 'exit_mix_manager' INT; press_enter; fi ;;
-2) if ! pgrep -i -f "Traktor" &>/dev/null; then echo -e "\n${BOLD}${YELLOW}Traktor Pro is not running. Opening Traktor Pro...${NC}"; launch_traktor &>/dev/null || true; sleep 1.5; fi; echo -e "\n${BOLD}${YELLOW}Launching Traktor Live Monitor in current window (Press 'q' to quit)...${NC}\n"; sleep 0.8; trap ':' INT; "$mon_sh"; trap 'exit_mix_manager' INT; press_enter ;;
-3) echo -e "\n${BOLD}${YELLOW}Querying Traktor Diagnostic Snapshot...${NC}\n"; "$mon_sh" --once; echo ""; press_enter ;;
-4) echo -e "\n${BOLD}${YELLOW}Sending START RECORDING trigger to Traktor...${NC}\n"; "$mon_sh" --start-recording; echo ""; press_enter ;;
-5) echo -e "\n${BOLD}${YELLOW}Sending STOP RECORDING trigger to Traktor...${NC}\n"; "$mon_sh" --stop-recording; echo ""; press_enter ;;
-6) echo -e "\n${BOLD}${YELLOW}Sending TOGGLE RECORDING trigger to Traktor...${NC}\n"; "$mon_sh" --toggle-recording; echo ""; press_enter ;;
-7) echo -e "\n${BOLD}${CYAN}Loading Traktor Monitor Theme Browser...${NC}\n"; "$mon_sh" --list-themes; echo ""; read -r -p "Enter theme name to activate (or press Enter to cancel): " thm_in; thm_in="${thm_in//[\'\"]}"; if [ -n "$thm_in" ]; then "$mon_sh" --set-theme "$thm_in"; fi; echo ""; press_enter ;;
+1) if ! pgrep -i -f "DJ" &>/dev/null; then echo -e "\n${BOLD}${YELLOW}DJ Pro is not running. Opening DJ Pro...${NC}"; launch_dj &>/dev/null || true; sleep 1.5; fi; echo -e "\n${BOLD}${GREEN}Launching DJ Live Monitor in a new terminal window...${NC}\n"; local full_cmd; printf -v full_cmd '%q; echo ""; echo "DJ monitor closed. Press [Enter] to exit..."; read -r' "$mon_sh"; if launch_in_terminal "DJ Live Monitor" "$full_cmd" "window"; then echo -e "${GREEN}✓ DJ Live Monitor launched in standalone window.${NC}"; sleep 1.2; else echo -e "${YELLOW}External terminal emulator not available; running in current window...${NC}\n"; sleep 0.8; trap ':' INT; "$mon_sh"; trap 'exit_mix_manager' INT; press_enter; fi ;;
+2) if ! pgrep -i -f "DJ" &>/dev/null; then echo -e "\n${BOLD}${YELLOW}DJ Pro is not running. Opening DJ Pro...${NC}"; launch_dj &>/dev/null || true; sleep 1.5; fi; echo -e "\n${BOLD}${YELLOW}Launching DJ Live Monitor in current window (Press 'q' to quit)...${NC}\n"; sleep 0.8; trap ':' INT; "$mon_sh"; trap 'exit_mix_manager' INT; press_enter ;;
+3) echo -e "\n${BOLD}${YELLOW}Querying DJ Diagnostic Snapshot...${NC}\n"; "$mon_sh" --once; echo ""; press_enter ;;
+4) echo -e "\n${BOLD}${YELLOW}Sending START RECORDING trigger to DJ...${NC}\n"; "$mon_sh" --start-recording; echo ""; press_enter ;;
+5) echo -e "\n${BOLD}${YELLOW}Sending STOP RECORDING trigger to DJ...${NC}\n"; "$mon_sh" --stop-recording; echo ""; press_enter ;;
+6) echo -e "\n${BOLD}${YELLOW}Sending TOGGLE RECORDING trigger to DJ...${NC}\n"; "$mon_sh" --toggle-recording; echo ""; press_enter ;;
+7) echo -e "\n${BOLD}${CYAN}Loading DJ Monitor Theme Browser...${NC}\n"; "$mon_sh" --list-themes; echo ""; read -r -p "Enter theme name to activate (or press Enter to cancel): " thm_in; thm_in="${thm_in//[\'\"]}"; if [ -n "$thm_in" ]; then "$mon_sh" --set-theme "$thm_in"; fi; echo ""; press_enter ;;
 0|[qQ]|[eE][xX][iI][tT]|ESC) return 0 ;;
 *) echo -e "\n${RED}Invalid choice!${NC}"; sleep 1.2 ;;
 esac
@@ -8681,8 +8744,8 @@ for s in "$SCRIPT_DIR/$1" "$SCRIPT_DIR/scripts/$1" "./$1"; do [[ -f "$s" ]] && {
 search_and_play_mix() {
 clear; echo -e "${BOLD}${MAGENTA}${S70}\n            SEARCH FOR MIX & AUTO-PLAY WITH LIVE TRACKLIST            \n${S70}${NC}\n"; read -r -p "Enter mix search query (Episode #, Title, Date, Artist): " query; [[ -z "$query" ]] && { echo -e "\n${YELLOW}Search cancelled.${NC}"; sleep 1; return 0; }; echo -e "\n${CYAN}Searching archive for '${query}'...${NC}"; local raw_dirs=("$OUTPUT_DIR" "$PWD" "${OUTPUT_DIR%/*}/CONVERTED_WAV_FILES" "${MIX_ARCHIVE_DIR:-$SCRIPT_DIR/MIX_ARCHIVE}" "${MIX_ARCHIVE_DIR:-$SCRIPT_DIR/MIX_ARCHIVE}/FLAC_CONVERTED_OUTPUTS" "${ICLOUD_PATH:-}" "${DROPBOX_PATH:-}"); local d valid_dirs=() flac_matches=() wav_matches=() other_matches=() matches=(); local -A seen_dirs=() seen_real=(); while IFS= read -r d; do [[ -n "$d" && -d "$d" && -z "${seen_dirs[$d]}" ]] && { valid_dirs+=("$d"); seen_dirs["$d"]=1; }; done < <(printf "%s\n" "${raw_dirs[@]}"; get_all_flac_output_dirs; get_all_wav_archive_dirs; get_all_mix_archive_dirs); if ((${#valid_dirs[@]})); then while IFS= read -r -d '' file; do local rp; rp="$(realpath "$file" 2>/dev/null || echo "$file")"; if [[ -z "${seen_real[$rp]}" ]]; then seen_real["$rp"]=1; case "${file,,}" in *.flac) flac_matches+=("$file") ;; *.wav) wav_matches+=("$file") ;; *) other_matches+=("$file") ;; esac; fi; done < <(find "${valid_dirs[@]}" -maxdepth 3 -type f \( -iname "*$query*.flac" -o -iname "*$query*.wav" -o -iname "*$query*.mp3" \) -print0 2>/dev/null); fi; matches=("${flac_matches[@]}" "${wav_matches[@]}" "${other_matches[@]}"); ((${#matches[@]} == 0)) && { echo -e "\n${YELLOW}No audio mixes matching '${query}' were found.${NC}"; press_enter; return 0; }; local selected_mix="${matches[0]}"; if ((${#matches[@]} == 1)); then local ext="${selected_mix##*.}"; echo -e "\n${GREEN}Found 1 matching mix:${NC} [${ext^^}] ${selected_mix##*/}"; else echo -e "\n${BOLD}${CYAN}Multiple matches found (${#matches[@]} files):${NC}"; for i in "${!matches[@]}"; do local m_ext="${matches[$i]##*.}"; printf "  %2d) %-7s %s\n" "$((i + 1))" "[${m_ext^^}]" "${matches[$i]##*/}"; done; read -r -p $'\n'"Select mix to play [1-${#matches[@]}, or q to cancel]: " sel_idx; if [[ "$sel_idx" =~ ^[0-9]+$ ]] && ((sel_idx >= 1 && sel_idx <= ${#matches[@]})); then selected_mix="${matches[$((sel_idx - 1))]}"; else echo -e "\n${YELLOW}Selection cancelled.${NC}"; sleep 1; return 0; fi; fi; selected_mix="$(realpath "$selected_mix" 2>/dev/null || echo "$selected_mix")"; local bname="${selected_mix##*/}" py_player="$SCRIPT_DIR/MP_Audio_Player.py"; [ ! -f "$py_player" ] && py_player="$SCRIPT_DIR/scripts/MP_Audio_Player.py"; echo -e "\n${BOLD}${YELLOW}Preparing playback for:${NC} $bname"; echo -e "${CYAN}Launching playback in MP Audio Player...${NC}"; python3 "$py_player" --play "$selected_mix" 2>/dev/null || true; echo -e "${CYAN}Verifying playback status in MP Audio Player...${NC}"; local attempt started=0; for ((attempt=1; attempt<=10; attempt++)); do sleep 0.4; if get_mp_audio_player_track_info 2>/dev/null && { [[ "$MP_PLAYER_STATE" = "playing" ]] || ((MP_PLAYER_RUNNING == 1)); }; then started=1; break; fi; done; if ((started)) || pgrep -f "MP_Audio_Player.*--daemon" &>/dev/null; then echo -e "${BOLD}${GREEN}✓ Playback active in MP Audio Player!${NC}\n${CYAN}Loading tracklist...${NC}\n"; local bname_no_ext="${bname%.*}" found_tl; found_tl=$(find_mix_tracklist "$selected_mix" 2>/dev/null || true); if [[ ! -f "$found_tl" ]]; then shopt -s nullglob nocaseglob; for tc in "$OUTPUT_DIR/$bname_no_ext.txt" "${selected_mix%.*}.txt" "${selected_mix%/*}/$bname_no_ext.txt" "$PWD/$bname_no_ext.txt" "$OUTPUT_DIR/"*"$query"*".txt" "$PWD/"*"$query"*".txt"; do [[ -f "$tc" ]] && { found_tl="$tc"; break; }; done; shopt -u nullglob nocaseglob; fi; if [[ -f "$found_tl" ]]; then echo -e "${BOLD}${MAGENTA}${S70}\n           CURRENTLY PLAYING TRACKLIST: ${found_tl##*/}\n${S70}${NC}\n"; cat "$found_tl"; echo -e "\n${BOLD}${BLUE}──────────────────────────────────────────────────────────────────────${NC}\n${DIM}Playback active in MP Audio Player. Press [Enter] to return...${NC}"; read -r; else echo -e "\n${YELLOW}Track playing in MP Audio Player, no matching .txt found for '${bname_no_ext}'.${NC}"; press_enter; fi; else echo -e "\n${YELLOW}⚠️ MP Audio Player did not start. Skipping tracklist.${NC}"; sleep 1.8; fi
 }
-extract_tracklist_from_traktor_history() {
-clear; echo -e "${BOLD}${MAGENTA}${S70}\n      EXTRACT TRACKLIST FROM TRAKTOR HISTORY FILES BY RANGE           \n${S70}${NC}\n"; echo -e "${BOLD}${CYAN}Step 1: Select an Existing Mix from Archive${NC}\n"; read -r -p "Enter mix search query (Episode #, Title, Artist, or ENTER to browse): " m_query; local raw_dirs=("$OUTPUT_DIR" "$PWD" "${OUTPUT_DIR%/*}/CONVERTED_WAV_FILES" "${MIX_ARCHIVE_DIR:-$SCRIPT_DIR/MIX_ARCHIVE}" "${MIX_ARCHIVE_DIR:-$SCRIPT_DIR/MIX_ARCHIVE}/FLAC_CONVERTED_OUTPUTS" "${ICLOUD_PATH:-}" "${DROPBOX_PATH:-}"); local d valid_dirs=() flac_m=() wav_m=(); local -A seen_dirs=() seen_real=(); while IFS= read -r d; do [[ -n "$d" && -d "$d" && -z "${seen_dirs[$d]}" ]] && { valid_dirs+=("$d"); seen_dirs["$d"]=1; }; done < <(printf "%s\n" "${raw_dirs[@]}"; get_all_flac_output_dirs; get_all_wav_archive_dirs; get_all_mix_archive_dirs); if ((${#valid_dirs[@]})); then local pattern="*.flac"; [ -n "$m_query" ] && pattern="*$m_query*.flac"; while IFS= read -r -d '' file; do local rp; rp="$(realpath "$file" 2>/dev/null || echo "$file")"; [[ -z "${seen_real[$rp]}" ]] && { flac_m+=("$file"); seen_real["$rp"]=1; }; done < <(find "${valid_dirs[@]}" -maxdepth 3 -type f -iname "$pattern" -print0 2>/dev/null); pattern="*.wav"; [ -n "$m_query" ] && pattern="*$m_query*.wav"; while IFS= read -r -d '' file; do local rp; rp="$(realpath "$file" 2>/dev/null || echo "$file")"; [[ -z "${seen_real[$rp]}" ]] && { wav_m+=("$file"); seen_real["$rp"]=1; }; done < <(find "${valid_dirs[@]}" -maxdepth 3 -type f -iname "$pattern" -print0 2>/dev/null); fi; local candidate_mixes=("${flac_m[@]}" "${wav_m[@]}"); if ((${#candidate_mixes[@]} == 0)); then echo -e "\n${YELLOW}No audio mixes matching '${m_query}' were found.${NC}"; press_enter; return 0; fi; local selected_mix=""; if ((${#candidate_mixes[@]} == 1)); then selected_mix="${candidate_mixes[0]}"; local ext="${selected_mix##*.}"; echo -e "${GREEN}Found 1 matching mix:${NC} [${ext^^}] ${selected_mix##*/}\n"; else echo -e "${BOLD}${CYAN}Available Mixes (${#candidate_mixes[@]} found, showing top 25):${NC}"; local max_show=25; ((${#candidate_mixes[@]} < max_show)) && max_show=${#candidate_mixes[@]}; for ((i=0; i<max_show; i++)); do local m="${candidate_mixes[$i]}" ext="${candidate_mixes[$i]##*.}"; printf "  %2d) %-7s %s\n" "$((i + 1))" "[${ext^^}]" "${m##*/}"; done; read -r -p $'\n'"Select mix [1-$max_show, or q to cancel]: " sel_idx; if [[ "$sel_idx" =~ ^[0-9]+$ ]] && ((sel_idx >= 1 && sel_idx <= max_show)); then selected_mix="${candidate_mixes[$((sel_idx - 1))]}"; else echo -e "\n${YELLOW}Mix selection cancelled.${NC}"; sleep 1; return 0; fi; fi; local target_tl="${selected_mix%.*}.txt" mix_base="${selected_mix##*/}" mix_stem="${mix_base%.*}"; echo -e "${BOLD}Target Mix:${NC}       ${CYAN}${mix_base}${NC}"; if [ -f "$target_tl" ]; then echo -e "${BOLD}Target Tracklist:${NC} ${YELLOW}${target_tl}${NC} ${RED}(Existing tracklist will be permanently overwritten!)${NC}\n"; else echo -e "${BOLD}Target Tracklist:${NC} ${GREEN}${target_tl}${NC} (New tracklist will be created)\n"; fi; echo -e "${BOLD}${CYAN}Step 2: Select Traktor History File (.nml)${NC}\n"; local py_extract="$SCRIPT_DIR/scripts/extract_traktor_history_range.py"; [ ! -f "$py_extract" ] && py_extract="$SCRIPT_DIR/extract_traktor_history_range.py"; if [ ! -f "$py_extract" ]; then echo -e "${RED}Error: extract_traktor_history_range.py not found!${NC}"; press_enter; return 1; fi; python3 "$py_extract" --list-history; read -r -p "Select History file [1-30] or enter full history filename (or q to cancel): " h_choice; [[ "$h_choice" =~ ^[qQ]$ || -z "$h_choice" ]] && { echo -e "\n${YELLOW}Operation cancelled.${NC}"; sleep 1; return 0; }; local chosen_history=""; if [[ "$h_choice" =~ ^[0-9]+$ ]]; then local raw_json; raw_json=$(python3 "$py_extract" --list-history --json 2>/dev/null || true); chosen_history=$(python3 -c "import json, sys; data = json.loads(sys.argv[1]); idx = int(sys.argv[2]) - 1; print(data[idx]['path'] if 0 <= idx < len(data) else '')" "$raw_json" "$h_choice" 2>/dev/null || true); if [ -z "$chosen_history" ] || [ ! -f "$chosen_history" ]; then echo -e "\n${RED}Invalid selection number: $h_choice${NC}"; press_enter; return 1; fi; else local hist_input="${h_choice#[\'\"]}"; hist_input="${hist_input%[\'\"]}"; hist_input="${hist_input##*/}"; if [[ ! "$hist_input" =~ ^history_[0-9]{4}y[0-9]{2}m[0-9]{2}d_[0-9]{2}h[0-9]{2}m[0-9]{2}s(\.nml)?$ ]] && [[ ! "$hist_input" =~ \.nml$ ]]; then echo -e "\n${BOLD}${RED}❌ Rejection: You must enter the exact, full history file name!${NC}"; echo -e "${YELLOW}Example: history_2026y07m20d_08h01m28s.nml${NC}\n"; press_enter; return 1; fi; chosen_history="$hist_input"; fi; local total_tracks; total_tracks=$(python3 "$py_extract" --count "$chosen_history" 2>/dev/null || echo "0"); if [ "$total_tracks" -le 0 ] 2>/dev/null; then echo -e "\n${BOLD}${RED}❌ Error: Unable to read history file or history file is empty.${NC}"; press_enter; return 1; fi; echo -e "\n${GREEN}✔ History File:${NC} ${chosen_history##*/}  ${DIM}(Contains ${total_tracks} session tracks)${NC}\n"; echo -e "${BOLD}${CYAN}Step 3: Enter Track Range${NC}"; echo -e "${DIM}Specify the 1-indexed track numbers from session (e.g. '95 to 118' or '95-118')${NC}\n"; read -r -p "Enter track range: " range_input; local start_tr="" end_tr=""; if [[ "$range_input" =~ ^[[:space:]]*([0-9]+)[[:space:]]*(to|-)[[:space:]]*([0-9]+)[[:space:]]*$ ]] || [[ "$range_input" =~ ^[[:space:]]*([0-9]+)[[:space:]]+([0-9]+)[[:space:]]*$ ]]; then start_tr="${BASH_REMATCH[1]}"; end_tr="${BASH_REMATCH[3]:-${BASH_REMATCH[2]}}"; else echo -e "\n${BOLD}${RED}❌ Invalid range format: '${range_input}'!${NC}"; echo -e "${YELLOW}Expected format: e.g. 95 to 118 or 95-118${NC}\n"; press_enter; return 1; fi; echo -e "\n${CYAN}Extracting tracks ${start_tr} to ${end_tr} and saving to:${NC} ${target_tl}..."; if ! python3 "$py_extract" --history "$chosen_history" --start "$start_tr" --end "$end_tr" --output "$target_tl" --mix-file "$selected_mix" --mix-title "$mix_stem"; then echo -e "\n${BOLD}${RED}❌ Extraction failed.${NC}"; press_enter; return 1; fi; echo -e "\n${BOLD}${MAGENTA}${S70}\n               EXTRACTED TRACKLIST PREVIEW                            \n${S70}${NC}\n"; cat "$target_tl"; echo -e "\n${BOLD}${BLUE}──────────────────────────────────────────────────────────────────────${NC}"; local edit_choice=""; read -r -p "Would you like to open and edit the extracted tracklist now? [Y/n]: " edit_choice; edit_choice="${edit_choice:-Y}"; if [[ "$edit_choice" =~ ^[yY] ]]; then local ed="${EDITOR:-}"; [ -z "$ed" ] && command -v nano &>/dev/null && ed="nano"; [ -z "$ed" ] && command -v vi &>/dev/null && ed="vi"; if [ -n "$ed" ]; then "$ed" "$target_tl"; elif [ -f "$SCRIPT_DIR/scripts/view_tracklist_console.sh" ]; then bash "$SCRIPT_DIR/scripts/view_tracklist_console.sh" "$target_tl"; else echo -e "${YELLOW}Tracklist saved at: ${target_tl}${NC}"; press_enter; fi; fi
+extract_tracklist_from_dj_history() {
+clear; echo -e "${BOLD}${MAGENTA}${S70}\n      EXTRACT TRACKLIST FROM DJ HISTORY FILES BY RANGE           \n${S70}${NC}\n"; echo -e "${BOLD}${CYAN}Step 1: Select an Existing Mix from Archive${NC}\n"; read -r -p "Enter mix search query (Episode #, Title, Artist, or ENTER to browse): " m_query; local raw_dirs=("$OUTPUT_DIR" "$PWD" "${OUTPUT_DIR%/*}/CONVERTED_WAV_FILES" "${MIX_ARCHIVE_DIR:-$SCRIPT_DIR/MIX_ARCHIVE}" "${MIX_ARCHIVE_DIR:-$SCRIPT_DIR/MIX_ARCHIVE}/FLAC_CONVERTED_OUTPUTS" "${ICLOUD_PATH:-}" "${DROPBOX_PATH:-}"); local d valid_dirs=() flac_m=() wav_m=(); local -A seen_dirs=() seen_real=(); while IFS= read -r d; do [[ -n "$d" && -d "$d" && -z "${seen_dirs[$d]}" ]] && { valid_dirs+=("$d"); seen_dirs["$d"]=1; }; done < <(printf "%s\n" "${raw_dirs[@]}"; get_all_flac_output_dirs; get_all_wav_archive_dirs; get_all_mix_archive_dirs); if ((${#valid_dirs[@]})); then local pattern="*.flac"; [ -n "$m_query" ] && pattern="*$m_query*.flac"; while IFS= read -r -d '' file; do local rp; rp="$(realpath "$file" 2>/dev/null || echo "$file")"; [[ -z "${seen_real[$rp]}" ]] && { flac_m+=("$file"); seen_real["$rp"]=1; }; done < <(find "${valid_dirs[@]}" -maxdepth 3 -type f -iname "$pattern" -print0 2>/dev/null); pattern="*.wav"; [ -n "$m_query" ] && pattern="*$m_query*.wav"; while IFS= read -r -d '' file; do local rp; rp="$(realpath "$file" 2>/dev/null || echo "$file")"; [[ -z "${seen_real[$rp]}" ]] && { wav_m+=("$file"); seen_real["$rp"]=1; }; done < <(find "${valid_dirs[@]}" -maxdepth 3 -type f -iname "$pattern" -print0 2>/dev/null); fi; local candidate_mixes=("${flac_m[@]}" "${wav_m[@]}"); if ((${#candidate_mixes[@]} == 0)); then echo -e "\n${YELLOW}No audio mixes matching '${m_query}' were found.${NC}"; press_enter; return 0; fi; local selected_mix=""; if ((${#candidate_mixes[@]} == 1)); then selected_mix="${candidate_mixes[0]}"; local ext="${selected_mix##*.}"; echo -e "${GREEN}Found 1 matching mix:${NC} [${ext^^}] ${selected_mix##*/}\n"; else echo -e "${BOLD}${CYAN}Available Mixes (${#candidate_mixes[@]} found, showing top 25):${NC}"; local max_show=25; ((${#candidate_mixes[@]} < max_show)) && max_show=${#candidate_mixes[@]}; for ((i=0; i<max_show; i++)); do local m="${candidate_mixes[$i]}" ext="${candidate_mixes[$i]##*.}"; printf "  %2d) %-7s %s\n" "$((i + 1))" "[${ext^^}]" "${m##*/}"; done; read -r -p $'\n'"Select mix [1-$max_show, or q to cancel]: " sel_idx; if [[ "$sel_idx" =~ ^[0-9]+$ ]] && ((sel_idx >= 1 && sel_idx <= max_show)); then selected_mix="${candidate_mixes[$((sel_idx - 1))]}"; else echo -e "\n${YELLOW}Mix selection cancelled.${NC}"; sleep 1; return 0; fi; fi; local target_tl="${selected_mix%.*}.txt" mix_base="${selected_mix##*/}" mix_stem="${mix_base%.*}"; echo -e "${BOLD}Target Mix:${NC}       ${CYAN}${mix_base}${NC}"; if [ -f "$target_tl" ]; then echo -e "${BOLD}Target Tracklist:${NC} ${YELLOW}${target_tl}${NC} ${RED}(Existing tracklist will be permanently overwritten!)${NC}\n"; else echo -e "${BOLD}Target Tracklist:${NC} ${GREEN}${target_tl}${NC} (New tracklist will be created)\n"; fi; echo -e "${BOLD}${CYAN}Step 2: Select DJ History File (.nml)${NC}\n"; local py_extract="$SCRIPT_DIR/scripts/extract_dj_history_range.py"; [ ! -f "$py_extract" ] && py_extract="$SCRIPT_DIR/extract_dj_history_range.py"; if [ ! -f "$py_extract" ]; then echo -e "${RED}Error: extract_dj_history_range.py not found!${NC}"; press_enter; return 1; fi; python3 "$py_extract" --list-history; read -r -p "Select History file [1-30] or enter full history filename (or q to cancel): " h_choice; [[ "$h_choice" =~ ^[qQ]$ || -z "$h_choice" ]] && { echo -e "\n${YELLOW}Operation cancelled.${NC}"; sleep 1; return 0; }; local chosen_history=""; if [[ "$h_choice" =~ ^[0-9]+$ ]]; then local raw_json; raw_json=$(python3 "$py_extract" --list-history --json 2>/dev/null || true); chosen_history=$(python3 -c "import json, sys; data = json.loads(sys.argv[1]); idx = int(sys.argv[2]) - 1; print(data[idx]['path'] if 0 <= idx < len(data) else '')" "$raw_json" "$h_choice" 2>/dev/null || true); if [ -z "$chosen_history" ] || [ ! -f "$chosen_history" ]; then echo -e "\n${RED}Invalid selection number: $h_choice${NC}"; press_enter; return 1; fi; else local hist_input="${h_choice#[\'\"]}"; hist_input="${hist_input%[\'\"]}"; hist_input="${hist_input##*/}"; if [[ ! "$hist_input" =~ ^history_[0-9]{4}y[0-9]{2}m[0-9]{2}d_[0-9]{2}h[0-9]{2}m[0-9]{2}s(\.nml)?$ ]] && [[ ! "$hist_input" =~ \.nml$ ]]; then echo -e "\n${BOLD}${RED}❌ Rejection: You must enter the exact, full history file name!${NC}"; echo -e "${YELLOW}Example: history_2026y07m20d_08h01m28s.nml${NC}\n"; press_enter; return 1; fi; chosen_history="$hist_input"; fi; local total_tracks; total_tracks=$(python3 "$py_extract" --count "$chosen_history" 2>/dev/null || echo "0"); if [ "$total_tracks" -le 0 ] 2>/dev/null; then echo -e "\n${BOLD}${RED}❌ Error: Unable to read history file or history file is empty.${NC}"; press_enter; return 1; fi; echo -e "\n${GREEN}✔ History File:${NC} ${chosen_history##*/}  ${DIM}(Contains ${total_tracks} session tracks)${NC}\n"; echo -e "${BOLD}${CYAN}Step 3: Enter Track Range${NC}"; echo -e "${DIM}Specify the 1-indexed track numbers from session (e.g. '95 to 118' or '95-118')${NC}\n"; read -r -p "Enter track range: " range_input; local start_tr="" end_tr=""; if [[ "$range_input" =~ ^[[:space:]]*([0-9]+)[[:space:]]*(to|-)[[:space:]]*([0-9]+)[[:space:]]*$ ]] || [[ "$range_input" =~ ^[[:space:]]*([0-9]+)[[:space:]]+([0-9]+)[[:space:]]*$ ]]; then start_tr="${BASH_REMATCH[1]}"; end_tr="${BASH_REMATCH[3]:-${BASH_REMATCH[2]}}"; else echo -e "\n${BOLD}${RED}❌ Invalid range format: '${range_input}'!${NC}"; echo -e "${YELLOW}Expected format: e.g. 95 to 118 or 95-118${NC}\n"; press_enter; return 1; fi; echo -e "\n${CYAN}Extracting tracks ${start_tr} to ${end_tr} and saving to:${NC} ${target_tl}..."; if ! python3 "$py_extract" --history "$chosen_history" --start "$start_tr" --end "$end_tr" --output "$target_tl" --mix-file "$selected_mix" --mix-title "$mix_stem"; then echo -e "\n${BOLD}${RED}❌ Extraction failed.${NC}"; press_enter; return 1; fi; echo -e "\n${BOLD}${MAGENTA}${S70}\n               EXTRACTED TRACKLIST PREVIEW                            \n${S70}${NC}\n"; cat "$target_tl"; echo -e "\n${BOLD}${BLUE}──────────────────────────────────────────────────────────────────────${NC}"; local edit_choice=""; read -r -p "Would you like to open and edit the extracted tracklist now? [Y/n]: " edit_choice; edit_choice="${edit_choice:-Y}"; if [[ "$edit_choice" =~ ^[yY] ]]; then local ed="${EDITOR:-}"; [ -z "$ed" ] && command -v nano &>/dev/null && ed="nano"; [ -z "$ed" ] && command -v vi &>/dev/null && ed="vi"; if [ -n "$ed" ]; then "$ed" "$target_tl"; elif [ -f "$SCRIPT_DIR/scripts/view_tracklist_console.sh" ]; then bash "$SCRIPT_DIR/scripts/view_tracklist_console.sh" "$target_tl"; else echo -e "${YELLOW}Tracklist saved at: ${target_tl}${NC}"; press_enter; fi; fi
 }
 manage_cover_converter() {
 local script; _find_scr "convert_cover_art.py" || return 1; script="$REPLY"; local opts=("1|Optimize to 1MB Podcast (JPG)|" "2|Convert to WebP (q90)|" "3|Resize Cover Art|" "4|Custom Byte Target|" "5|Batch Convert COVERS/|" "6|Custom CLI Arguments|" "0|Return to Main Menu|(or Esc / q)"); while true; do run_interactive_submenu "COVER ART CONVERTER & OPTIMIZER" "" opts 0; case "$REPLY" in 1|2|3|4) read -r -p "Cover path [default: ./Cover.png]: " img; img="${img:-./Cover.png}"; if [[ ! -f "$img" ]]; then echo -e "\n${RED}Not found: $img${NC}"; press_enter; continue; fi; case "$REPLY" in 1) python3 "$script" -i "$img" --bytes 1MB -f jpg ;; 2) python3 "$script" -i "$img" -f webp -q 90 ;; 3) read -r -p "Preset: 1) 3000x3000 2) 1400x1400 3) 1080x1080 4) 500x500: " r; local res=("1400x1400" "3000x3000" "1400x1400" "1080x1080" "500x500"); python3 "$script" -i "$img" -r "${res[${r:-2}]:-1400x1400}" ;; 4) read -r -p "Target max size [default: 1MB]: " sz; python3 "$script" -i "$img" --bytes "${sz:-1MB}" ;; esac ;; 5) local d="$PWD/COVERS"; [[ ! -d "$d" ]] && d="${MIX_ARCHIVE_DIR:-$SCRIPT_DIR/MIX_ARCHIVE}/COVERS"; [[ -d "$d" ]] && python3 "$script" -d "$d" --bytes 1MB -f jpg || echo -e "\n${YELLOW}COVERS/ not found.${NC}" ;; 6) python3 "$script" -h; read -r -p $'\n'"Custom args: " args; [[ -n "$args" ]] && python3 "$script" $args ;; 0|[qQ]|[eE][xX][iI][tT]|ESC) return 0 ;; *) echo -e "\n${RED}Invalid option!${NC}"; sleep 1; continue ;; esac; press_enter; done
@@ -8697,7 +8760,7 @@ manage_audio_checksums() {
 local script; _find_scr "manage_checksums.sh" || return 1; script="$REPLY"; local opts=("1|Generate SHA-256 (FLAC_CONVERTED_OUTPUTS)|" "2|Generate SHA-256 (Current Directory)|($PWD)" "3|Verify Archive Checksums|" "4|View Manifest|" "5|View Logs|" "0|Return to Main Menu|(or Esc / q)"); while true; do run_interactive_submenu "AUDIO FILE CHECKSUM CREATION & VERIFICATION" "" opts 0; case "$REPLY" in 1) bash "$script" -g -d "$OUTPUT_DIR" ;; 2) bash "$script" -g -d "$PWD" ;; 3) bash "$script" -v ;; 4) local mf="$PWD/checksums.sha256"; [[ ! -f "$mf" ]] && mf="$OUTPUT_DIR/checksums.sha256"; [[ -f "$mf" ]] && head -n 40 "$mf" || echo -e "\n${YELLOW}No manifest found.${NC}" ;; 5) [[ -d "$PWD/VERIFY_LOGS" ]] && ls -lh "$PWD/VERIFY_LOGS" || echo -e "\n${YELLOW}No logs found.${NC}" ;; 0|[qQ]|[eE][xX][iI][tT]|ESC) return 0 ;; *) echo -e "\n${RED}Invalid!${NC}"; sleep 1; continue ;; esac; press_enter; done
 }
 manage_mix_search_and_import() {
-local opts=("1|Universal Search & Import Wizard|" "2|Dedicated Traktor & SOF SMB Share Ingest|" "0|Return to Main Menu|(or Esc / q)"); while true; do run_interactive_submenu "SEARCH & IMPORT MIXES FROM LOCAL STORAGE & NETWORK SMB" "" opts 0; case "$REPLY" in 1) run_sub_script "search_and_import_mixes.sh"; press_enter ;; 2) run_sub_script "import_new_mixes.sh"; press_enter ;; 0|[qQ]|[eE][xX][iI][tT]|ESC) return 0 ;; *) return 0 ;; esac; done
+local opts=("1|Universal Search & Import Wizard|" "2|Dedicated DJ & SOF SMB Share Ingest|" "0|Return to Main Menu|(or Esc / q)"); while true; do run_interactive_submenu "SEARCH & IMPORT MIXES FROM LOCAL STORAGE & NETWORK SMB" "" opts 0; case "$REPLY" in 1) run_sub_script "search_and_import_mixes.sh"; press_enter ;; 2) run_sub_script "import_new_mixes.sh"; press_enter ;; 0|[qQ]|[eE][xX][iI][tT]|ESC) return 0 ;; *) return 0 ;; esac; done
 }
 manage_installation_and_config() { run_sub_script "manage_installation_config.sh"; }
 reboot_system() {
@@ -8980,9 +9043,9 @@ _s4_hardware_connected() {
         if [ -z "${_S4_PROBE_PID:-}" ] || ! kill -0 "$_S4_PROBE_PID" 2>/dev/null; then
             (
                 local found=0
-                if command -v amidi >/dev/null 2>&1 && amidi -l 2>/dev/null | grep -qi "Traktor"; then
+                if command -v amidi >/dev/null 2>&1 && amidi -l 2>/dev/null | grep -qi "DJ"; then
                     found=1
-                elif ls /dev/snd/midiC*D* >/dev/null 2>&1 && grep -qi "Traktor" /proc/asound/cards 2>/dev/null; then
+                elif ls /dev/snd/midiC*D* >/dev/null 2>&1 && grep -qi "DJ" /proc/asound/cards 2>/dev/null; then
                     found=1
                 fi
                 mkdir -p "$HOME/.config/mix-manager" 2>/dev/null || true
@@ -8995,9 +9058,9 @@ _s4_hardware_connected() {
     fi
     _LAST_S4_PROBE="$now"
     _S4_CONN_CACHE=0
-    if command -v amidi >/dev/null 2>&1 && amidi -l 2>/dev/null | grep -qi "Traktor"; then
+    if command -v amidi >/dev/null 2>&1 && amidi -l 2>/dev/null | grep -qi "DJ"; then
         _S4_CONN_CACHE=1
-    elif ls /dev/snd/midiC*D* >/dev/null 2>&1 && grep -qi "Traktor" /proc/asound/cards 2>/dev/null; then
+    elif ls /dev/snd/midiC*D* >/dev/null 2>&1 && grep -qi "DJ" /proc/asound/cards 2>/dev/null; then
         _S4_CONN_CACHE=1
     fi
     [ "$_S4_CONN_CACHE" = "1" ]
@@ -9342,7 +9405,7 @@ case "${1:-}" in
     exit $?
     ;;
 esac
-_traktor_json_field() {
+_dj_json_field() {
     JSON_TEXT="$1" python3 -c 'import json, os, sys
 raw = os.environ.get("JSON_TEXT", "")
 try:
@@ -9359,17 +9422,17 @@ else:
     print(val)
 ' "$2"
 }
-_traktor_show_path() {
+_dj_show_path() {
     local value="$1"
     printf '%s' "${value//$'\x1f'/' / '}"
 }
-_traktor_menu_label() {
+_dj_menu_label() {
     local value="$1"
     value="${value//|/ /}"
     value="${value//$'\x1f'/' / '}"
     printf '%s' "$value"
 }
-_traktor_load_tree() {
+_dj_load_tree() {
     local err rc=0 tsv line kind path name parent count_a count_b
     _TP_KIND=()
     _TP_PATH=()
@@ -9377,11 +9440,11 @@ _traktor_load_tree() {
     _TP_PARENT=()
     _TP_A=()
     _TP_B=()
-    err="$(mktemp "${TMPDIR:-/tmp}/mp-traktor-tree.XXXXXX" 2>/dev/null)" || err=""
+    err="$(mktemp "${TMPDIR:-/tmp}/mp-dj-tree.XXXXXX" 2>/dev/null)" || err=""
     if [ -n "$err" ]; then
-        tsv="$(generate_traktor_playlist_from_history --list-playlist-tree --tsv 2>"$err")" || rc=$?
+        tsv="$(generate_dj_playlist_from_history --list-playlist-tree --tsv 2>"$err")" || rc=$?
     else
-        tsv="$(generate_traktor_playlist_from_history --list-playlist-tree --tsv 2>/dev/null)" || rc=$?
+        tsv="$(generate_dj_playlist_from_history --list-playlist-tree --tsv 2>/dev/null)" || rc=$?
     fi
     if [ "$rc" -ne 0 ]; then
         echo -e "\n${RED}$(cat "$err" 2>/dev/null || printf '%s' "$tsv")${NC}"
@@ -9400,46 +9463,46 @@ _traktor_load_tree() {
     done <<< "$tsv"
     return 0
 }
-_traktor_commit_artist_playlist() {
+_dj_commit_artist_playlist() {
     local artist="$1" playlist="$2" allow_suggest="${3:-1}"
     local result rc=0 reason message err sug_line sug_artist sug_count
     local -a sug_opts=() sug_names=()
     local sug_n=0
-    err="$(mktemp "${TMPDIR:-/tmp}/mp-traktor-artist.XXXXXX" 2>/dev/null)" || err=""
-    result="$(generate_traktor_playlist_from_history --artist "$artist" --playlist-name "$playlist" --json 2>"${err:-/dev/null}")" || rc=$?
-    reason="$(_traktor_json_field "$result" reason)"
-    message="$(_traktor_json_field "$result" message)"
+    err="$(mktemp "${TMPDIR:-/tmp}/mp-dj-artist.XXXXXX" 2>/dev/null)" || err=""
+    result="$(generate_dj_playlist_from_history --artist "$artist" --playlist-name "$playlist" --json 2>"${err:-/dev/null}")" || rc=$?
+    reason="$(_dj_json_field "$result" reason)"
+    message="$(_dj_json_field "$result" message)"
     if [ "$reason" = "running" ]; then
         echo -e "\n${YELLOW}${message}${NC}"
         local close_answer=""
-        read -r -p "Close Traktor now and write the playlist? [y/N]: " close_answer
+        read -r -p "Close DJ now and write the playlist? [y/N]: " close_answer
         if [[ ! "$close_answer" =~ ^[Yy]$ ]]; then
             [ -n "$err" ] && rm -f "$err"
             echo -e "${BLUE}Playlist was not written.${NC}"
             press_enter
             return 0
         fi
-        result="$(generate_traktor_playlist_from_history --artist "$artist" --playlist-name "$playlist" --close-traktor --json 2>"${err:-/dev/null}")" || rc=$?
-        reason="$(_traktor_json_field "$result" reason)"
-        message="$(_traktor_json_field "$result" message)"
+        result="$(generate_dj_playlist_from_history --artist "$artist" --playlist-name "$playlist" --close-dj --json 2>"${err:-/dev/null}")" || rc=$?
+        reason="$(_dj_json_field "$result" reason)"
+        message="$(_dj_json_field "$result" message)"
     fi
     if [ "$reason" = "no_match" ] && [ "$allow_suggest" = "1" ]; then
         while IFS=$'\t' read -r sug_artist sug_count || [ -n "${sug_artist:-}" ]; do
             [ -n "$sug_artist" ] || continue
             sug_n=$((sug_n + 1))
-            sug_opts+=("${sug_n}|$(_traktor_menu_label "$sug_artist")|(${sug_count} tracks)")
+            sug_opts+=("${sug_n}|$(_dj_menu_label "$sug_artist")|(${sug_count} tracks)")
             sug_names+=("$sug_artist")
-        done < <(generate_traktor_playlist_from_history --suggest-artists "$artist" --tsv 2>/dev/null)
+        done < <(generate_dj_playlist_from_history --suggest-artists "$artist" --tsv 2>/dev/null)
         echo -e "\n${YELLOW}${message:-No tracks use that exact artist name.}${NC}"
         if [ "$sug_n" -gt 0 ]; then
             sug_opts+=("0|Return|(or Esc / q)")
-            run_interactive_submenu "ARTIST NAMES FOUND IN THE TRAKTOR COLLECTION" "  ${DIM}No exact match. Choose an artist for playlist '${playlist}'.${NC}\n" sug_opts 0
+            run_interactive_submenu "ARTIST NAMES FOUND IN THE DJ COLLECTION" "  ${DIM}No exact match. Choose an artist for playlist '${playlist}'.${NC}\n" sug_opts 0
             case "$REPLY" in
                 0|[qQ]|[eE][xX][iI][tT]|ESC) [ -n "$err" ] && rm -f "$err"; return 0 ;;
             esac
             if [[ "$REPLY" =~ ^[0-9]+$ ]] && [ "$REPLY" -ge 1 ] && [ "$REPLY" -le "$sug_n" ]; then
                 [ -n "$err" ] && rm -f "$err"
-                _traktor_commit_artist_playlist "${sug_names[$((REPLY - 1))]}" "$playlist" 0
+                _dj_commit_artist_playlist "${sug_names[$((REPLY - 1))]}" "$playlist" 0
                 return $?
             fi
         fi
@@ -9464,12 +9527,12 @@ _traktor_commit_artist_playlist() {
         printf '%s\n' "$result"
         echo -e "${NC}"
     else
-        echo -e "\n${RED}The Traktor collection could not be updated.${NC}"
+        echo -e "\n${RED}The DJ collection could not be updated.${NC}"
     fi
     press_enter
     return 0
 }
-_traktor_create_artist_playlist() {
+_dj_create_artist_playlist() {
     local artist="" playlist=""
     echo ""
     read -r -e -p "Artist name: " artist
@@ -9488,18 +9551,18 @@ _traktor_create_artist_playlist() {
         sleep 0.8
         return 0
     fi
-    _traktor_commit_artist_playlist "$artist" "$playlist" 1
+    _dj_commit_artist_playlist "$artist" "$playlist" 1
 }
-_traktor_choose_playlist() {
+_dj_choose_playlist() {
     local title="$1"
-    _traktor_choose_playlist_level "" "$title"
+    _dj_choose_playlist_level "" "$title"
 }
-_traktor_choose_playlist_level() {
+_dj_choose_playlist_level() {
     local parent="$1" title="$2"
     while true; do
         local -a opts=() act_kind=() act_path=() act_name=()
         local n=0 i label hint folder_header=0 playlist_header=0
-        _traktor_load_tree || { press_enter; return 1; }
+        _dj_load_tree || { press_enter; return 1; }
         for i in "${!_TP_KIND[@]}"; do
             [ "${_TP_KIND[$i]}" = "FOLDER" ] || continue
             [ "${_TP_PARENT[$i]}" = "$parent" ] || continue
@@ -9508,7 +9571,7 @@ _traktor_choose_playlist_level() {
                 folder_header=1
             fi
             n=$((n + 1))
-            label="$(_traktor_menu_label "${_TP_NAME[$i]}")"
+            label="$(_dj_menu_label "${_TP_NAME[$i]}")"
             hint="${_TP_A[$i]} playlists"
             [ "${_TP_B[$i]}" != "0" ] && [ -n "${_TP_B[$i]}" ] && hint="${hint}, ${_TP_B[$i]} folders"
             opts+=("${n}|${label}|(${hint})")
@@ -9524,7 +9587,7 @@ _traktor_choose_playlist_level() {
                 playlist_header=1
             fi
             n=$((n + 1))
-            label="$(_traktor_menu_label "${_TP_NAME[$i]}")"
+            label="$(_dj_menu_label "${_TP_NAME[$i]}")"
             opts+=("${n}|${label}|(${_TP_A[$i]} tracks)")
             act_kind+=("PLAYLIST")
             act_path+=("${_TP_PATH[$i]}")
@@ -9543,7 +9606,7 @@ _traktor_choose_playlist_level() {
         if [[ "$REPLY" =~ ^[0-9]+$ ]] && [ "$REPLY" -ge 1 ] && [ "$REPLY" -le "$n" ]; then
             local idx=$((REPLY - 1))
             if [ "${act_kind[$idx]}" = "FOLDER" ]; then
-                _traktor_choose_playlist_level "${act_path[$idx]}" "TRAKTOR PLAYLISTS — ${act_name[$idx]}" && return 0
+                _dj_choose_playlist_level "${act_path[$idx]}" "DJ PLAYLISTS — ${act_name[$idx]}" && return 0
             else
                 _TP_CHOSEN_PATH="${act_path[$idx]}"
                 _TP_CHOSEN_NAME="${act_name[$idx]}"
@@ -9555,9 +9618,9 @@ _traktor_choose_playlist_level() {
         fi
     done
 }
-_traktor_rename_playlist() {
+_dj_rename_playlist() {
     local new_name="" confirm="" result reason message
-    _traktor_choose_playlist "RENAME A TRAKTOR PLAYLIST" || return 0
+    _dj_choose_playlist "RENAME A DJ PLAYLIST" || return 0
     echo ""
     echo -e "  ${BOLD}Selected:${NC} ${CYAN}${_TP_CHOSEN_NAME}${NC}"
     read -r -e -p "New playlist name: " new_name
@@ -9573,16 +9636,16 @@ _traktor_rename_playlist() {
         sleep 0.6
         return 0
     fi
-    result="$(generate_traktor_playlist_from_history --rename-playlist "$_TP_CHOSEN_PATH" --playlist-name "$new_name" --json 2>/dev/null)" || true
-    reason="$(_traktor_json_field "$result" reason)"
-    message="$(_traktor_json_field "$result" message)"
+    result="$(generate_dj_playlist_from_history --rename-playlist "$_TP_CHOSEN_PATH" --playlist-name "$new_name" --json 2>/dev/null)" || true
+    reason="$(_dj_json_field "$result" reason)"
+    message="$(_dj_json_field "$result" message)"
     if [ "$reason" = "running" ]; then
         echo -e "\n${YELLOW}${message}${NC}"
-        read -r -p "Close Traktor now and rename the playlist? [y/N]: " confirm
+        read -r -p "Close DJ now and rename the playlist? [y/N]: " confirm
         if [[ "$confirm" =~ ^[Yy]$ ]]; then
-            result="$(generate_traktor_playlist_from_history --rename-playlist "$_TP_CHOSEN_PATH" --playlist-name "$new_name" --close-traktor --json 2>/dev/null)" || true
-            reason="$(_traktor_json_field "$result" reason)"
-            message="$(_traktor_json_field "$result" message)"
+            result="$(generate_dj_playlist_from_history --rename-playlist "$_TP_CHOSEN_PATH" --playlist-name "$new_name" --close-dj --json 2>/dev/null)" || true
+            reason="$(_dj_json_field "$result" reason)"
+            message="$(_dj_json_field "$result" message)"
         else
             echo -e "${BLUE}Playlist was not renamed.${NC}"
             press_enter
@@ -9596,9 +9659,9 @@ _traktor_rename_playlist() {
     fi
     press_enter
 }
-_traktor_remove_playlist() {
+_dj_remove_playlist() {
     local confirm="" result reason message
-    _traktor_choose_playlist "REMOVE A TRAKTOR PLAYLIST" || return 0
+    _dj_choose_playlist "REMOVE A DJ PLAYLIST" || return 0
     echo ""
     read -r -p "Remove playlist '${_TP_CHOSEN_NAME}'? Audio files stay in the collection. [y/N]: " confirm
     if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
@@ -9606,16 +9669,16 @@ _traktor_remove_playlist() {
         sleep 0.6
         return 0
     fi
-    result="$(generate_traktor_playlist_from_history --remove-playlist "$_TP_CHOSEN_PATH" --json 2>/dev/null)" || true
-    reason="$(_traktor_json_field "$result" reason)"
-    message="$(_traktor_json_field "$result" message)"
+    result="$(generate_dj_playlist_from_history --remove-playlist "$_TP_CHOSEN_PATH" --json 2>/dev/null)" || true
+    reason="$(_dj_json_field "$result" reason)"
+    message="$(_dj_json_field "$result" message)"
     if [ "$reason" = "running" ]; then
         echo -e "\n${YELLOW}${message}${NC}"
-        read -r -p "Close Traktor now and remove the playlist? [y/N]: " confirm
+        read -r -p "Close DJ now and remove the playlist? [y/N]: " confirm
         if [[ "$confirm" =~ ^[Yy]$ ]]; then
-            result="$(generate_traktor_playlist_from_history --remove-playlist "$_TP_CHOSEN_PATH" --close-traktor --json 2>/dev/null)" || true
-            reason="$(_traktor_json_field "$result" reason)"
-            message="$(_traktor_json_field "$result" message)"
+            result="$(generate_dj_playlist_from_history --remove-playlist "$_TP_CHOSEN_PATH" --close-dj --json 2>/dev/null)" || true
+            reason="$(_dj_json_field "$result" reason)"
+            message="$(_dj_json_field "$result" message)"
         else
             echo -e "${BLUE}Playlist was not removed.${NC}"
             press_enter
@@ -9629,22 +9692,22 @@ _traktor_remove_playlist() {
     fi
     press_enter
 }
-_traktor_show_playlist() {
+_dj_show_playlist() {
     local path="$1" name="$2"
     clear
     echo -e "${BOLD}${MAGENTA}${S70}${NC}"
-    echo -e "${BOLD}${MAGENTA}  TRAKTOR PLAYLIST — ${name}${NC}"
+    echo -e "${BOLD}${MAGENTA}  DJ PLAYLIST — ${name}${NC}"
     echo -e "${BOLD}${MAGENTA}${S70}${NC}\n"
-    generate_traktor_playlist_from_history --show-playlist "$path" || echo -e "${RED}Could not read that playlist.${NC}"
+    generate_dj_playlist_from_history --show-playlist "$path" || echo -e "${RED}Could not read that playlist.${NC}"
     echo ""
     press_enter
 }
-_traktor_browse_playlist_level() {
+_dj_browse_playlist_level() {
     local parent="$1" title="$2"
     while true; do
         local -a opts=() act_kind=() act_path=() act_name=()
         local n=0 i label hint folder_header=0 playlist_header=0
-        _traktor_load_tree || { press_enter; return 1; }
+        _dj_load_tree || { press_enter; return 1; }
         for i in "${!_TP_KIND[@]}"; do
             [ "${_TP_KIND[$i]}" = "FOLDER" ] || continue
             [ "${_TP_PARENT[$i]}" = "$parent" ] || continue
@@ -9653,7 +9716,7 @@ _traktor_browse_playlist_level() {
                 folder_header=1
             fi
             n=$((n + 1))
-            label="$(_traktor_menu_label "${_TP_NAME[$i]}")"
+            label="$(_dj_menu_label "${_TP_NAME[$i]}")"
             hint="${_TP_A[$i]} playlists"
             [ "${_TP_B[$i]}" != "0" ] && [ -n "${_TP_B[$i]}" ] && hint="${hint}, ${_TP_B[$i]} folders"
             opts+=("${n}|${label}|(${hint})")
@@ -9669,7 +9732,7 @@ _traktor_browse_playlist_level() {
                 playlist_header=1
             fi
             n=$((n + 1))
-            label="$(_traktor_menu_label "${_TP_NAME[$i]}")"
+            label="$(_dj_menu_label "${_TP_NAME[$i]}")"
             opts+=("${n}|${label}|(${_TP_A[$i]} tracks)")
             act_kind+=("PLAYLIST")
             act_path+=("${_TP_PATH[$i]}")
@@ -9688,9 +9751,9 @@ _traktor_browse_playlist_level() {
         if [[ "$REPLY" =~ ^[0-9]+$ ]] && [ "$REPLY" -ge 1 ] && [ "$REPLY" -le "$n" ]; then
             local idx=$((REPLY - 1))
             if [ "${act_kind[$idx]}" = "FOLDER" ]; then
-                _traktor_browse_playlist_level "${act_path[$idx]}" "TRAKTOR PLAYLISTS — ${act_name[$idx]}"
+                _dj_browse_playlist_level "${act_path[$idx]}" "DJ PLAYLISTS — ${act_name[$idx]}"
             else
-                _traktor_show_playlist "${act_path[$idx]}" "${act_name[$idx]}"
+                _dj_show_playlist "${act_path[$idx]}" "${act_name[$idx]}"
             fi
         else
             echo -e "\n${RED}Invalid option!${NC}"
@@ -9698,53 +9761,53 @@ _traktor_browse_playlist_level() {
         fi
     done
 }
-generate_traktor_artist_playlist_menu() {
+generate_dj_artist_playlist_menu() {
     local hdr path running status
-    if ! resolve_traktor_playlist_generator >/dev/null; then
-        echo -e "\n${RED}Error: generate_traktor_playlist_from_history.py was not found in scripts/.${NC}"
+    if ! resolve_dj_playlist_generator >/dev/null; then
+        echo -e "\n${RED}Error: generate_dj_playlist_from_history.py was not found in scripts/.${NC}"
         press_enter
         return 1
     fi
     while true; do
-        status="$(generate_traktor_playlist_from_history --collection-status 2>/dev/null || true)"
+        status="$(generate_dj_playlist_from_history --collection-status 2>/dev/null || true)"
         path="$(printf '%s\n' "$status" | sed -n 's/^PATH: //p')"
         running="$(printf '%s\n' "$status" | sed -n 's/^RUNNING: //p')"
         if [ -n "$path" ]; then
             hdr="  ${BOLD}Collection:${NC} ${CYAN}${path}${NC}\n"
             if [ "$running" = "yes" ]; then
-                hdr+="  ${BOLD}Traktor:${NC}    ${YELLOW}Running — close it before a playlist is written${NC}\n"
+                hdr+="  ${BOLD}DJ:${NC}    ${YELLOW}Running — close it before a playlist is written${NC}\n"
             else
-                hdr+="  ${BOLD}Traktor:${NC}    ${GREEN}Not running${NC}\n"
+                hdr+="  ${BOLD}DJ:${NC}    ${GREEN}Not running${NC}\n"
             fi
         else
-            hdr="  ${YELLOW}collection.nml was not found. Set TRAKTOR_COLLECTION_PATH in config.env.${NC}\n"
+            hdr="  ${YELLOW}collection.nml was not found. Set DJ_COLLECTION_PATH in config.env.${NC}\n"
         fi
         local opts=(
             "1|Create Playlist from Artist Name|(Name in the artist field or the title. An existing playlist gains the missing tracks)"
-            "2|Rename a Traktor Playlist|(Open the folder, pick the playlist, type the new name)"
-            "3|Remove a Traktor Playlist|(Open the folder, then remove that playlist)"
+            "2|Rename a DJ Playlist|(Open the folder, pick the playlist, type the new name)"
+            "3|Remove a DJ Playlist|(Open the folder, then remove that playlist)"
             "4|View Playlist Folders|(Open a folder to see the playlists inside it)"
             "0|Return to Tracklist Menu|(or Esc / q)"
         )
-        run_interactive_submenu "Generate Traktor Playlist from Music Artist" "$hdr" opts 0
+        run_interactive_submenu "Generate DJ Playlist from Music Artist" "$hdr" opts 0
         case "$REPLY" in
-            1|create|artist) _traktor_create_artist_playlist ;;
-            2|rename) _traktor_rename_playlist ;;
-            3|remove|delete) _traktor_remove_playlist ;;
-            4|folders|view|browse) _traktor_browse_playlist_level "" "TRAKTOR PLAYLIST FOLDERS" ;;
+            1|create|artist) _dj_create_artist_playlist ;;
+            2|rename) _dj_rename_playlist ;;
+            3|remove|delete) _dj_remove_playlist ;;
+            4|folders|view|browse) _dj_browse_playlist_level "" "DJ PLAYLIST FOLDERS" ;;
             0|[qQ]|[eE][xX][iI][tT]|ESC) return 0 ;;
             *) echo -e "\n${RED}Invalid option!${NC}"; sleep 1 ;;
         esac
     done
 }
 manage_tracklist_suite() {
-local f py_exp="$SCRIPT_DIR/scripts/export_chapters.py" py_id="$SCRIPT_DIR/scripts/identify_mix_tracks.py"; while true; do local opts=("1|Tracklist Management Suite|(Browse, Search, View, Export HTML & PDF)" "2|Search for Mix & Auto-Play with Live Tracklist View|(MP Audio Player)" "3|Scan & Generate Missing Tracklists|(Check_Find_Tracklists.sh)" "4|Generate Master Tracklist HTML Index|(Generate_Master_Tracklist.sh)" "5|Launch MusicBrainz Picard Meta Tag Editor|(Auto-install if missing)" "6|Export YouTube & SoundCloud Chapters|(export_chapters.py - Timestamps / CUE / MD)" "7|Auto-Identify Unknown Tracks via Audio Fingerprinting|(identify_mix_tracks.py - AcoustID / Shazam)" "8|Extract Tracklist from Traktor History Files by Range|(Traktor .nml History)" "9|Read Tracklist Out Loud with MP Harmony Agent|(Stephen Hawking voice • saves audio to MP_TRACKLISTS_VOICED)" "10|Generate Traktor Playlist from Music Artist|(Scan the Traktor collection for one artist)" "0|Return to Main Menu|(or Esc / q)"); run_interactive_submenu "TRACKLIST MANAGEMENT, SCANNING & METADATA SUITE" "" opts 0; case "$REPLY" in 1) manage_tracklists ;; 2) search_and_play_mix ;; 3) echo -e "\n${BOLD}${YELLOW}Scanning & Generating Missing Tracklists...${NC}\n"; run_sub_script "Check_Find_Tracklists.sh"; press_enter ;; 4) echo -e "\n${BOLD}${YELLOW}Starting Master Tracklist HTML Generation...${NC}\n"; [ -f "$SCRIPT_DIR/Generate_Master_Tracklist.sh" ] && bash "$SCRIPT_DIR/Generate_Master_Tracklist.sh" || run_sub_script "Generate_Master_Tracklist.sh"; press_enter ;; 5) launch_or_install_picard ;; 6) echo -e "\n${BOLD}${BLUE}=== EXPORT YOUTUBE & SOUNDCLOUD CHAPTERS ===${NC}\n"; read -r -p "Enter path to tracklist .txt or .cue file: " f; f="${f#[\'\"]}"; f="${f%[\'\"]}"; [ -f "$f" ] && python3 "$py_exp" "$f" --format all --clipboard || echo -e "${RED}Error: File not found.${NC}"; press_enter ;; 7) echo -e "\n${BOLD}${BLUE}=== AUTO-IDENTIFY TRACKS VIA AUDIO FINGERPRINTING ===${NC}\n"; read -r -p "Enter path to mix audio file: " f; f="${f#[\'\"]}"; f="${f%[\'\"]}"; [ -f "$f" ] && python3 "$py_id" "$f" || echo -e "${RED}Error: File not found.${NC}"; press_enter ;; 8) extract_tracklist_from_traktor_history ;; 9|narrate|read-aloud|read-aloud-tracklist|tts) narrate_tracklist_with_harmony ;; 10|artist-playlist|traktor-artist|generate-traktor-artist) generate_traktor_artist_playlist_menu ;; 0|[qQ]|[eE][xX][iI][tT]|ESC) return 0 ;; *) echo -e "\n${RED}Invalid option!${NC}"; sleep 1 ;; esac; done
+local f py_exp="$SCRIPT_DIR/scripts/export_chapters.py" py_id="$SCRIPT_DIR/scripts/identify_mix_tracks.py"; while true; do local opts=("1|Tracklist Management Suite|(Browse, Search, View, Export HTML & PDF)" "2|Search for Mix & Auto-Play with Live Tracklist View|(MP Audio Player)" "3|Scan & Generate Missing Tracklists|(Check_Find_Tracklists.sh)" "4|Generate Master Tracklist HTML Index|(Generate_Master_Tracklist.sh)" "5|Launch MusicBrainz Picard Meta Tag Editor|(Auto-install if missing)" "6|Export YouTube & SoundCloud Chapters|(export_chapters.py - Timestamps / CUE / MD)" "7|Auto-Identify Unknown Tracks via Audio Fingerprinting|(identify_mix_tracks.py - AcoustID / Shazam)" "8|Extract Tracklist from DJ History Files by Range|(DJ .nml History)" "9|Read Tracklist Out Loud with MP Harmony Agent|(Stephen Hawking voice • saves audio to MP_TRACKLISTS_VOICED)" "10|Generate DJ Playlist from Music Artist|(Scan the DJ collection for one artist)" "0|Return to Main Menu|(or Esc / q)"); run_interactive_submenu "TRACKLIST MANAGEMENT, SCANNING & METADATA SUITE" "" opts 0; case "$REPLY" in 1) manage_tracklists ;; 2) search_and_play_mix ;; 3) echo -e "\n${BOLD}${YELLOW}Scanning & Generating Missing Tracklists...${NC}\n"; run_sub_script "Check_Find_Tracklists.sh"; press_enter ;; 4) echo -e "\n${BOLD}${YELLOW}Starting Master Tracklist HTML Generation...${NC}\n"; [ -f "$SCRIPT_DIR/Generate_Master_Tracklist.sh" ] && bash "$SCRIPT_DIR/Generate_Master_Tracklist.sh" || run_sub_script "Generate_Master_Tracklist.sh"; press_enter ;; 5) launch_or_install_picard ;; 6) echo -e "\n${BOLD}${BLUE}=== EXPORT YOUTUBE & SOUNDCLOUD CHAPTERS ===${NC}\n"; read -r -p "Enter path to tracklist .txt or .cue file: " f; f="${f#[\'\"]}"; f="${f%[\'\"]}"; [ -f "$f" ] && python3 "$py_exp" "$f" --format all --clipboard || echo -e "${RED}Error: File not found.${NC}"; press_enter ;; 7) echo -e "\n${BOLD}${BLUE}=== AUTO-IDENTIFY TRACKS VIA AUDIO FINGERPRINTING ===${NC}\n"; read -r -p "Enter path to mix audio file: " f; f="${f#[\'\"]}"; f="${f%[\'\"]}"; [ -f "$f" ] && python3 "$py_id" "$f" || echo -e "${RED}Error: File not found.${NC}"; press_enter ;; 8) extract_tracklist_from_dj_history ;; 9|narrate|read-aloud|read-aloud-tracklist|tts) narrate_tracklist_with_harmony ;; 10|artist-playlist|dj-artist|generate-dj-artist) generate_dj_artist_playlist_menu ;; 0|[qQ]|[eE][xX][iI][tT]|ESC) return 0 ;; *) echo -e "\n${RED}Invalid option!${NC}"; sleep 1 ;; esac; done
 }
 generate_archive_folder_playlists_menu() {
 ensure_playlists_generated_dirs; local p="$SCRIPT_DIR/scripts/generate_archive_folder_playlists.py"; [ -f "$p" ] || p="$SCRIPT_DIR/generate_archive_folder_playlists.py"; [ -f "$p" ] && python3 "$p" || { echo -e "${RED}Error: generate_archive_folder_playlists.py not found!${NC}"; press_enter; }
 }
 manage_playlists_and_history() {
-local t_ver rb py_rb="$SCRIPT_DIR/scripts/export_rekordbox_playlist.py"; t_ver="$(get_traktor_version_mac 2>/dev/null)"; t_ver="${t_ver//$'\r'/}"; t_ver="${t_ver//$'\n'/}"; while true; do local opts=("1|Custom Mix Playlists Suite|(.m3u / .m3u8 / .xspf - Create, Edit & Launch)" "2|Generate Mix Archive Folder Playlists|(.m3u / .m3u8 / .xspf ➔ PLAYLISTS_GENERATED)" "3|Generate Playlist from History Files on Traktor ${t_ver:-3}|(Key Sorted / Decks Ready)" "4|Export Favorites DJ Set|(Local folder / SMB + Tracklist + Traktor playlist)" "5|Listen to Your Top 5 Tracks Right Now|$(get_top_5_status_badge)" "6|Export Playlists / Traktor History to Pioneer Rekordbox XML|(export_rekordbox_playlist.py)" "7|Open a Playlist in the MP Audio Player|(.m3u / .m3u8 / .xspf / .pls / .json — from any folder, replaces the open list)" "8|Export the MP Audio Player Playlist|(M3U / M3U8 / XSPF / PLS / JSON — honours a search filter)" "0|Return to Main Menu|(or Esc / q)"); run_interactive_submenu "CUSTOM PLAYLISTS & TRAKTOR HISTORY SUITE" "" opts 0; case "$REPLY" in 1) manage_playlists_menu ;; 2) generate_archive_folder_playlists_menu ;; 3) generate_traktor_playlist_from_history ;; 4|fav|favorites|export-favorites|dj-set) export_favorites_dj_set; press_enter ;; 5|top5|top-5|top|special) manage_top_5_tracks ;; 6) echo -e "\n${BOLD}${BLUE}=== EXPORT TO PIONEER REKORDBOX XML ===${NC}\n"; read -r -p "Enter path to Traktor .nml, .m3u, or .m3u8 playlist: " rb; rb="${rb#[\'\"]}"; rb="${rb%[\'\"]}"; [ -f "$rb" ] && python3 "$py_rb" "$rb" || echo -e "${RED}Error: Playlist file not found.${NC}"; press_enter ;; 7|open-playlist|open) open_playlist_in_mp_player_cli ;; 8|export-playlist|export) export_playlist_from_mp_player_cli ;; 0|[qQ]|[eE][xX][iI][tT]|ESC) return 0 ;; *) echo -e "\n${RED}Invalid option!${NC}"; sleep 1 ;; esac; done
+local t_ver rb py_rb="$SCRIPT_DIR/scripts/export_rekordbox_playlist.py"; t_ver="$(get_dj_version_mac 2>/dev/null)"; t_ver="${t_ver//$'\r'/}"; t_ver="${t_ver//$'\n'/}"; while true; do local opts=("1|Custom Mix Playlists Suite|(.m3u / .m3u8 / .xspf - Create, Edit & Launch)" "2|Generate Mix Archive Folder Playlists|(.m3u / .m3u8 / .xspf ➔ PLAYLISTS_GENERATED)" "3|Generate Playlist from History Files on DJ ${t_ver:-3}|(Key Sorted / Decks Ready)" "4|Export Favorites DJ Set|(Local folder / SMB + Tracklist + DJ playlist)" "5|Listen to Your Top 5 Tracks Right Now|$(get_top_5_status_badge)" "6|Export Playlists / DJ History to Pioneer Rekordbox XML|(export_rekordbox_playlist.py)" "7|Open a Playlist in the MP Audio Player|(.m3u / .m3u8 / .xspf / .pls / .json — from any folder, replaces the open list)" "8|Export the MP Audio Player Playlist|(M3U / M3U8 / XSPF / PLS / JSON — honours a search filter)" "0|Return to Main Menu|(or Esc / q)"); run_interactive_submenu "CUSTOM PLAYLISTS & DJ HISTORY SUITE" "" opts 0; case "$REPLY" in 1) manage_playlists_menu ;; 2) generate_archive_folder_playlists_menu ;; 3) generate_dj_playlist_from_history ;; 4|fav|favorites|export-favorites|dj-set) export_favorites_dj_set; press_enter ;; 5|top5|top-5|top|special) manage_top_5_tracks ;; 6) echo -e "\n${BOLD}${BLUE}=== EXPORT TO PIONEER REKORDBOX XML ===${NC}\n"; read -r -p "Enter path to DJ .nml, .m3u, or .m3u8 playlist: " rb; rb="${rb#[\'\"]}"; rb="${rb%[\'\"]}"; [ -f "$rb" ] && python3 "$py_rb" "$rb" || echo -e "${RED}Error: Playlist file not found.${NC}"; press_enter ;; 7|open-playlist|open) open_playlist_in_mp_player_cli ;; 8|export-playlist|export) export_playlist_from_mp_player_cli ;; 0|[qQ]|[eE][xX][iI][tT]|ESC) return 0 ;; *) echo -e "\n${RED}Invalid option!${NC}"; sleep 1 ;; esac; done
 }
 export_favorites_dj_set() {
 local py="$SCRIPT_DIR/scripts/MP_Fav_Playlist_Track_Exporter.py"; local sh="$SCRIPT_DIR/scripts/MP_Fav_Playlist_Track_Exporter.sh"; [ ! -f "$py" ] && py="$SCRIPT_DIR/MP_Fav_Playlist_Track_Exporter.py"; if [ -f "$sh" ]; then bash "$sh" "$@"; elif [ -f "$py" ]; then python3 "$py" "$@"; else echo -e "\n${RED}Error: MP_Fav_Playlist_Track_Exporter was not found in scripts/!${NC}\n"; press_enter; return 1; fi
@@ -9757,13 +9820,13 @@ manage_top_5_tracks() {
 local f; for f in "$SCRIPT_DIR/scripts/top_5_tracks_manager.py" "$SCRIPT_DIR/top_5_tracks_manager.py"; do [ -f "$f" ] && { python3 "$f"; return; }; done; for f in "$SCRIPT_DIR/scripts/manage_top_5_tracks.sh" "$SCRIPT_DIR/manage_top_5_tracks.sh"; do [ -x "$f" ] && { bash "$f"; return; }; done; echo -e "\n${RED}Error: top_5_tracks_manager.py was not found in scripts/!${NC}\n"; press_enter
 }
 manage_daws_suite() {
-local opts=("1|Digital Audio Workstations (DAWs) Menu|(Reaper, Logic Pro, FL Studio, Traktor, Ardour, Bitwig...)" "2|Open Mix WAV/FLAC Audio File in DAW|(Direct Mix Search/Select & Dispatch)" "0|Return to Main Menu|(or Esc / q)"); while true; do run_interactive_submenu "DIGITAL AUDIO WORKSTATIONS (DAWS) SUITE" "" opts 0; case "$REPLY" in 1) manage_daws ;; 2) open_mix_in_daw ;; 0|[qQ]|[eE][xX][iI][tT]|ESC) return 0 ;; *) echo -e "\n${RED}Invalid option!${NC}"; sleep 1 ;; esac; done
+local opts=("1|Digital Audio Workstations (DAWs) Menu|(Reaper, Logic Pro, FL Studio, DJ, Ardour, Bitwig...)" "2|Open Mix WAV/FLAC Audio File in DAW|(Direct Mix Search/Select & Dispatch)" "0|Return to Main Menu|(or Esc / q)"); while true; do run_interactive_submenu "DIGITAL AUDIO WORKSTATIONS (DAWS) SUITE" "" opts 0; case "$REPLY" in 1) manage_daws ;; 2) open_mix_in_daw ;; 0|[qQ]|[eE][xX][iI][tT]|ESC) return 0 ;; *) echo -e "\n${RED}Invalid option!${NC}"; sleep 1 ;; esac; done
 }
-manage_traktor_s4_midi_menu() {
-save_config_setting "TRAKTOR_S4_NOTIFIED" "true"
-touch "$HOME/.config/mix-manager/traktor_s4_notified.flag" 2>/dev/null || true
-local py_s4="$SCRIPT_DIR/scripts/traktor_s4_midi.py"
-[ ! -f "$py_s4" ] && py_s4="$SCRIPT_DIR/traktor_s4_midi.py"
+manage_dj_s4_midi_menu() {
+save_config_setting "DJ_S4_NOTIFIED" "true"
+touch "$HOME/.config/mix-manager/dj_s4_notified.flag" 2>/dev/null || true
+local py_s4="$SCRIPT_DIR/scripts/dj_s4_midi.py"
+[ ! -f "$py_s4" ] && py_s4="$SCRIPT_DIR/dj_s4_midi.py"
 while true; do
 local det_port="" det_raw="" det_details=""
 if [ -f "$py_s4" ]; then
@@ -9778,7 +9841,7 @@ det_badge="${GREEN}Detected & Connected${NC}"
 port_badge="${CYAN}${det_port}${NC} ${DIM}(${det_raw:-rawmidi node missing})${NC}"
 fi
 local srv_badge="${RED}Disabled / Inactive${NC}" srv_pid=""
-local pid_file="$HOME/.config/mix-manager/traktor_s4_midi.pid"
+local pid_file="$HOME/.config/mix-manager/dj_s4_midi.pid"
 if [ -f "$pid_file" ]; then
 srv_pid="$(cat "$pid_file" 2>/dev/null || echo "")"
 if [ -n "$srv_pid" ] && kill -0 "$srv_pid" 2>/dev/null; then
@@ -9791,39 +9854,39 @@ local pl_badge="${DIM}Standby / Offline${NC}"
 if [ -f "$HOME/.config/mix-manager/mp_audio_player.sock" ] || [ -f "$HOME/.config/mix-manager/mp_audio_player.port" ]; then
 pl_badge="${GREEN}Connected to MP Audio Player${NC}"
 fi
-local s4_hdr="  • Hardware Unit         : ${BOLD}${WHITE}Native Instruments Traktor Kontrol S4${NC}\n"
+local s4_hdr="  • Hardware Unit         : ${BOLD}${WHITE}Native Instruments Kontrol S4${NC}\n"
 s4_hdr+="  • ALSA Hardware Port    : ${port_badge}\n"
 s4_hdr+="  • Hardware Status       : ${det_badge}\n"
 s4_hdr+="  • MIDI Service Daemon   : ${srv_badge}\n"
 s4_hdr+="  • Audio Player IPC      : ${pl_badge}\n"
 s4_hdr+="  • MIDI Mode Shortcut    : Hold ${BOLD}${YELLOW}SHIFT + BROWSE${NC} (MK1) or ${BOLD}${YELLOW}SHIFT + PREVIEW${NC} (MK2)\n"
-s4_hdr+="  • Supported in v0.5.4   : ${BOLD}${GREEN}Traktor Kontrol S4 Exclusively${NC}\n"
+s4_hdr+="  • Supported in v0.5.4   : ${BOLD}${GREEN}Kontrol S4 Exclusively${NC}\n"
 local s4_opts=(
-"1|Enable Traktor Kontrol S4 MIDI Mapping Support|(Start Background Service & Save Setting)"
-"2|Disable Traktor Kontrol S4 MIDI Mapping Support|(Stop Background Service & Save Setting)"
+"1|Enable Kontrol S4 MIDI Mapping Support|(Start Background Service & Save Setting)"
+"2|Disable Kontrol S4 MIDI Mapping Support|(Stop Background Service & Save Setting)"
 "3|Restart MIDI Controller Service / Rescan Port|(Re-detect the S4 card and reopen ALSA Rawmidi)"
 "4|Interactive Live MIDI Monitor & Packet Test|(Real-Time Pitch Sliders, Buttons & Encoders)"
-"5|View Traktor Kontrol S4 Getting Started User Guide|(Full Hardware Mapping Documentation)"
+"5|View Kontrol S4 Getting Started User Guide|(Full Hardware Mapping Documentation)"
 "6|Open Official Native Instruments PDF Manuals|(Controller Editor & S4 MK2 Guides)"
 "0|Return to Previous Menu|(or Esc / q)"
 )
-run_interactive_submenu "TRAKTOR KONTROL S4 MIDI HARDWARE CONTROL & MAPPING (v0.5.4)" "$s4_hdr" s4_opts 0
+run_interactive_submenu "DJ KONTROL S4 MIDI HARDWARE CONTROL & MAPPING (v0.5.4)" "$s4_hdr" s4_opts 0
 local opt="$REPLY"
 case "$opt" in
 1)
-echo -e "\n${BOLD}${CYAN}Starting Traktor Kontrol S4 MIDI Service...${NC}\n"
+echo -e "\n${BOLD}${CYAN}Starting Kontrol S4 MIDI Service...${NC}\n"
 [ -f "$py_s4" ] && python3 "$py_s4" --start
 save_config_setting "MIDI_CONTROL_ENABLED" "true"
-save_config_setting "TRAKTOR_S4_NOTIFIED" "true"
+save_config_setting "DJ_S4_NOTIFIED" "true"
 play_sound_effect "storage" 2>/dev/null || true
 sleep 1.5 ;;
 2)
-echo -e "\n${BOLD}${YELLOW}Stopping Traktor Kontrol S4 MIDI Service...${NC}\n"
+echo -e "\n${BOLD}${YELLOW}Stopping Kontrol S4 MIDI Service...${NC}\n"
 [ -f "$py_s4" ] && python3 "$py_s4" --stop
 save_config_setting "MIDI_CONTROL_ENABLED" "false"
 sleep 1.5 ;;
 3)
-echo -e "\n${BOLD}${CYAN}Restarting Traktor Kontrol S4 MIDI Service...${NC}\n"
+echo -e "\n${BOLD}${CYAN}Restarting Kontrol S4 MIDI Service...${NC}\n"
 [ -f "$py_s4" ] && python3 "$py_s4" --restart
 sleep 1.5 ;;
 4|monitor|test)
@@ -9844,16 +9907,16 @@ press_enter ;;
 clear
 if [ -f "$py_s4" ]; then
 python3 "$py_s4" --guide | ${PAGER:-less -R} 2>/dev/null || python3 "$py_s4" --guide
-elif [ -f "$SCRIPT_DIR/docs/TRAKTOR_KONTROL_S4_USER_GUIDE.md" ]; then
-cat "$SCRIPT_DIR/docs/TRAKTOR_KONTROL_S4_USER_GUIDE.md" | ${PAGER:-less -R} 2>/dev/null || cat "$SCRIPT_DIR/docs/TRAKTOR_KONTROL_S4_USER_GUIDE.md"
+elif [ -f "$SCRIPT_DIR/docs/KONTROL_S4_USER_GUIDE.md" ]; then
+cat "$SCRIPT_DIR/docs/KONTROL_S4_USER_GUIDE.md" | ${PAGER:-less -R} 2>/dev/null || cat "$SCRIPT_DIR/docs/KONTROL_S4_USER_GUIDE.md"
 fi
 press_enter ;;
 6|pdf|manuals)
-echo -e "\n${BOLD}${BLUE}=== OFFICIAL TRAKTOR KONTROL S4 PDF MANUALS ===${NC}\n"
+echo -e "\n${BOLD}${BLUE}=== OFFICIAL DJ KONTROL S4 PDF MANUALS ===${NC}\n"
 local m1="$SCRIPT_DIR/docs/Controller_Editor_Manual_English.pdf"
-local m2="$SCRIPT_DIR/docs/traktor_kontrol_s4_mk2_manual_english.pdf"
+local m2="$SCRIPT_DIR/docs/kontrol_s4_mk2_manual_english.pdf"
 echo -e "  ${BOLD}1)${NC} Native Instruments Controller Editor Manual (206 pages):\n     ${CYAN}${m1}${NC}"
-echo -e "  ${BOLD}2)${NC} Traktor Kontrol S4 MK2 Hardware & Setup Manual (233 pages):\n     ${CYAN}${m2}${NC}\n"
+echo -e "  ${BOLD}2)${NC} Kontrol S4 MK2 Hardware & Setup Manual (233 pages):\n     ${CYAN}${m2}${NC}\n"
 read -r -p "Select manual to open [1-2, or 0 to cancel]: " m_sel
 if [ "$m_sel" = "1" ] && [ -f "$m1" ]; then
 (xdg-open "$m1" &>/dev/null &) || echo "Path: $m1"
@@ -9964,7 +10027,7 @@ PY
 done
 }
 manage_studio_hardware_and_volume() {
-local opts=("1|Studio Hardware & Software Inspector|(PipeWire, ALSA, DAWs, MIDI Controllers & Surfaces)" "2|Toggle Audio Mute / Unmute & Master Volume Control|(Instant PipeWire/ALSA Mute)" "3|Traktor Kontrol S4 MIDI Hardware Control & Mapping|(Enable/Disable, Live Status, Auto-Detected Port, Pitch & Guide)" "4|Game Controllers: Xbox, PlayStation, Nintendo & Steam|(Connected pads & live button test)" "5|MP Mix Manager Audio Settings|(Choose the audio output device for MP Audio Player & the Liquid Player)" "0|Return to Main Menu|(or Esc / q)"); while true; do run_interactive_submenu "STUDIO HARDWARE, INTERFACES & VOLUME CONTROL" "" opts 0; case "$REPLY" in 1) inspect_audio_studio_menu ;; 2) toggle_audio_mute ;; 3|s4|midi|kontrol) manage_traktor_s4_midi_menu ;; 4|gamepad|gamepads|controller|controllers|xbox|playstation|nintendo|steam) manage_game_controllers_menu ;; 5|audio-settings|audio_settings|mp-audio-settings|output-device|output_device) manage_mp_audio_settings ;; 0|[qQ]|[eE][xX][iI][tT]|ESC) return 0 ;; *) echo -e "\n${RED}Invalid option!${NC}"; sleep 1 ;; esac; done
+local opts=("1|Studio Hardware & Software Inspector|(PipeWire, ALSA, DAWs, MIDI Controllers & Surfaces)" "2|Toggle Audio Mute / Unmute & Master Volume Control|(Instant PipeWire/ALSA Mute)" "3|Kontrol S4 MIDI Hardware Control & Mapping|(Enable/Disable, Live Status, Auto-Detected Port, Pitch & Guide)" "4|Game Controllers: Xbox, PlayStation, Nintendo & Steam|(Connected pads & live button test)" "5|MP Mix Manager Audio Settings|(Choose the audio output device for MP Audio Player & the Liquid Player)" "0|Return to Main Menu|(or Esc / q)"); while true; do run_interactive_submenu "STUDIO HARDWARE, INTERFACES & VOLUME CONTROL" "" opts 0; case "$REPLY" in 1) inspect_audio_studio_menu ;; 2) toggle_audio_mute ;; 3|s4|midi|kontrol) manage_dj_s4_midi_menu ;; 4|gamepad|gamepads|controller|controllers|xbox|playstation|nintendo|steam) manage_game_controllers_menu ;; 5|audio-settings|audio_settings|mp-audio-settings|output-device|output_device) manage_mp_audio_settings ;; 0|[qQ]|[eE][xX][iI][tT]|ESC) return 0 ;; *) echo -e "\n${RED}Invalid option!${NC}"; sleep 1 ;; esac; done
 }
 manage_game_controllers_menu() {
 local helper="$SCRIPT_DIR/scripts/gamepad_bridge.py"
@@ -10251,7 +10314,7 @@ manage_motd_and_tools() {
 local -A _MENU_ACT=([1]="manage_system_motd_menu" [2]="burn_iso_to_usb"); _m_loop "MOTD BANNER MANAGER & SYSTEM UTILITIES" "" "1|Dynamic System MOTD Banner Manager|(Last 3 Mixes, Date/Time, Size, Format & Specs)" "2|Burn ISO Image to USB Drive|(dd / diskutil with safety checks)" "0|Return to Main Menu|(or Esc / q)"
 }
 manage_settings_and_system() {
-local rb="systemctl reboot with confirmation"; case "$OS_TYPE" in macos) rb="macOS restart with confirmation" ;; windows|wsl) rb="Windows restart with confirmation" ;; freebsd) rb="FreeBSD restart with confirmation" ;; esac; local -A _MENU_ACT=([1]="manage_themes" [2]="manage_installation_and_config" [3]="configure_daily_reports_settings" [4]="manage_mix_reports_menu" [5]="run_bash_cli" [6]="reboot_system" [7]="configure_liquid_glass_backend"); _m_loop "MANAGER SETTINGS, THEMES & SYSTEM SHELL" "" "1|Manager Themes & Color Palette Switcher|(21 Themes: Dreamworlds, Blood Moon, Sensorium...)" "2|Manage Installation & Configuration|(Migrate Path, Backup, Export, Import & Reinstall)" "3|Automated Daily Reports & Continuous Telemetry Settings|(Schedule Time, On/Off, Catch-Up)" "4|Daily Mix Reports, Telemetry & Predictive Analytics Suite|(PDF Reports, Multi-Archive Stats, Math Models)" "5|Run Bash CLI Commands|(Interactive Shell & Direct Runner)" "6|Reboot System|(${rb})" "7|Configure Liquid Glass Player Backend|(OpenGL [Default • AMD Radeon/Intel/Older Cards] or Vulkan)" "0|Return to Main Menu|(or Esc / q)"
+local rb="systemctl reboot with confirmation"; case "$OS_TYPE" in macos) rb="macOS restart with confirmation" ;; windows|wsl) rb="Windows restart with confirmation" ;; freebsd) rb="FreeBSD restart with confirmation" ;; esac; local -A _MENU_ACT=([1]="manage_themes" [2]="manage_installation_and_config" [3]="configure_daily_reports_settings" [4]="manage_mix_reports_menu" [5]="run_bash_cli" [6]="reboot_system" [7]="configure_liquid_glass_backend" [8]="configure_visualizer_fps_cap"); _m_loop "MANAGER SETTINGS, THEMES & SYSTEM SHELL" "" "1|Manager Themes & Color Palette Switcher|(21 Themes: Dreamworlds, Blood Moon, Sensorium...)" "2|Manage Installation & Configuration|(Migrate Path, Backup, Export, Import & Reinstall)" "3|Automated Daily Reports & Continuous Telemetry Settings|(Schedule Time, On/Off, Catch-Up)" "4|Daily Mix Reports, Telemetry & Predictive Analytics Suite|(PDF Reports, Multi-Archive Stats, Math Models)" "5|Run Bash CLI Commands|(Interactive Shell & Direct Runner)" "6|Reboot System|(${rb})" "7|Configure Liquid Glass Player Backend|(OpenGL [Default • AMD Radeon/Intel/Older Cards] or Vulkan)" "8|MP Visualizer Frame-Rate Cap|(30 / 60 / 120 / 144 FPS, or follow the display)" "0|Return to Main Menu|(or Esc / q)"
 }
 # MP Gui paints each header value after a label colon truecolor white.
 # The label, through the colon, keeps its own colour. A │ or | ends the
@@ -10454,24 +10517,24 @@ if type mp_tty_audio_mode_active >/dev/null 2>&1 && mp_tty_audio_mode_active; th
 hdr+=$'\n\n  '"${BOLD}${RED}⚠️  Please be advised you have not configured your Mix Archive Folder,${NC}"$'\n  '"${BOLD}${RED}Please use Option 16 or 13 to Configure this now.${NC}"$'\n  '"${DIM}${YELLOW}(Currently using application root folder: ${SCRIPT_DIR}/MIX_ARCHIVE)${NC}"
 fi; local _mf_cnt=0 _mf_f="$HOME/.config/mix-manager/music_folders.json" _mf_line; if [ -f "$_mf_f" ]; then while IFS= read -r _mf_line; do [[ "$_mf_line" == *'"id":'* ]] && _mf_cnt=$((_mf_cnt + 1)); done < "$_mf_f"; fi; if [ "${_mf_cnt:-0}" -eq 0 ]; then
 hdr+=$'\n\n  '"${BOLD}${YELLOW}⚠️  Please be advised you have 0 MUSIC Folders configured.${NC}"$'\n  '"${BOLD}${YELLOW}Please use Option 2 to configure your music library folders now.${NC}"$'\n  '"${DIM}${YELLOW}(Support for local music libraries, external drives & network SMB shares)${NC}"
-fi; local _s4_conn=0; _s4_hardware_connected && _s4_conn=1; if [ "$_s4_conn" -eq 1 ] && [ "${TRAKTOR_S4_NOTIFIED:-false}" != "true" ] && [ ! -f "$HOME/.config/mix-manager/traktor_s4_notified.flag" ]; then
-hdr+=$'\n\n  '"${BOLD}${GREEN}🎛️  Traktor Kontrol S4 Hardware MIDI Device Detected (auto-detected ALSA port)!${NC}
-  ${BOLD}${CYAN}Please navigate to Option 19 (Studio Hardware & MIDI) to enable and configure Traktor Kontrol S4 MIDI Device Mapping Controls.${NC}
+fi; local _s4_conn=0; _s4_hardware_connected && _s4_conn=1; if [ "$_s4_conn" -eq 1 ] && [ "${DJ_S4_NOTIFIED:-false}" != "true" ] && [ ! -f "$HOME/.config/mix-manager/dj_s4_notified.flag" ]; then
+hdr+=$'\n\n  '"${BOLD}${GREEN}🎛️  Kontrol S4 Hardware MIDI Device Detected (auto-detected ALSA port)!${NC}
+  ${BOLD}${CYAN}Please navigate to Option 19 (Studio Hardware & MIDI) to enable and configure Kontrol S4 MIDI Device Mapping Controls.${NC}
   ${DIM}${GREEN}(Control player transport, mixer, and pitch sliders directly from your S4 hardware)${NC}"
 fi; fi; get_manager_uptime >/dev/null; hdr+=$'\n  '"${_MANAGER_UPTIME_LINE}"; if [ "${MP_GUI_SESSION:-0}" = "1" ] && type _whiten_header_data_fields >/dev/null 2>&1; then _whiten_header_data_fields hdr; fi; _fit_block_to_panel _RENDERED_MAIN_HEADER "$hdr" "$(( cur_box_w + 2 ))"; printf '%b\n' "$_RENDERED_MAIN_HEADER"
 }
-# True only when the Traktor application itself is running.
-# Do not search the full command line: traktor_s4_midi.py and traktor_monitor
+# True only when the DJ application itself is running.
+# Do not search the full command line: dj_s4_midi.py and dj_monitor
 # contain the same word. Do not grep for "true": AppleScript prints "false".
-traktor_app_is_running() {
-    if pgrep -x "Traktor" >/dev/null 2>&1 || pgrep -x "Traktor.exe" >/dev/null 2>&1; then
+dj_app_is_running() {
+    if pgrep -x "DJ" >/dev/null 2>&1 || pgrep -x "DJ.exe" >/dev/null 2>&1; then
         return 0
     fi
     if ! command -v osascript >/dev/null 2>&1; then
         return 1
     fi
     local running=""
-    running="$(osascript -e 'tell application "System Events" to (name of every process whose name contains "Traktor") is not {}' 2>/dev/null || true)"
+    running="$(osascript -e 'tell application "System Events" to (name of every process whose name contains "DJ") is not {}' 2>/dev/null || true)"
     running="${running//$'\r'/}"
     running="${running//$'\n'/}"
     [ "$running" = "true" ]
@@ -10502,11 +10565,11 @@ if [ -f "$SCRIPT_DIR/scripts/mp_scheduled_reporter.sh" ]; then
 (bash "$SCRIPT_DIR/scripts/mp_scheduled_reporter.sh" --daemon &>/dev/null &)
 fi
 if [ "${MIDI_CONTROL_ENABLED:-true}" = "true" ]; then
-local _s4_py="$SCRIPT_DIR/scripts/traktor_s4_midi.py"; [ ! -f "$_s4_py" ] && _s4_py="$SCRIPT_DIR/traktor_s4_midi.py"; [ -f "$_s4_py" ] && (python3 "$_s4_py" --start &>/dev/null &)
+local _s4_py="$SCRIPT_DIR/scripts/dj_s4_midi.py"; [ ! -f "$_s4_py" ] && _s4_py="$SCRIPT_DIR/dj_s4_midi.py"; [ -f "$_s4_py" ] && (python3 "$_s4_py" --start &>/dev/null &)
 fi
 if [ "${OS_TYPE:-}" = "macos" ] || [ "${UNAME_S:-}" = "Darwin" ] || [[ "${OSTYPE:-}" == darwin* ]]; then
-if traktor_app_is_running; then
-local _t_mon=""; if [ -x "$SCRIPT_DIR/scripts/traktor_monitor.sh" ]; then _t_mon="$SCRIPT_DIR/scripts/traktor_monitor.sh"; elif [ -x "$SCRIPT_DIR/traktor_monitor.sh" ]; then _t_mon="$SCRIPT_DIR/traktor_monitor.sh"; elif [ -f "$SCRIPT_DIR/scripts/traktor_monitor.py" ]; then _t_mon="python3 \"$SCRIPT_DIR/scripts/traktor_monitor.py\""; elif [ -f "$PWD/scripts/traktor_monitor.py" ]; then _t_mon="python3 \"$PWD/scripts/traktor_monitor.py\""; elif command -v traktor-monitor &>/dev/null; then _t_mon="$(command -v traktor-monitor)"; fi; [ -n "$_t_mon" ] && launch_in_terminal "Traktor Live Monitor" "$_t_mon" "tab" &>/dev/null &
+if dj_app_is_running; then
+local _t_mon=""; if [ -x "$SCRIPT_DIR/scripts/dj_monitor.sh" ]; then _t_mon="$SCRIPT_DIR/scripts/dj_monitor.sh"; elif [ -x "$SCRIPT_DIR/dj_monitor.sh" ]; then _t_mon="$SCRIPT_DIR/dj_monitor.sh"; elif [ -f "$SCRIPT_DIR/scripts/dj_monitor.py" ]; then _t_mon="python3 \"$SCRIPT_DIR/scripts/dj_monitor.py\""; elif [ -f "$PWD/scripts/dj_monitor.py" ]; then _t_mon="python3 \"$PWD/scripts/dj_monitor.py\""; elif command -v dj-monitor &>/dev/null; then _t_mon="$(command -v dj-monitor)"; fi; [ -n "$_t_mon" ] && launch_in_terminal "DJ Live Monitor" "$_t_mon" "tab" &>/dev/null &
 fi; fi
 }
 is_manager_already_open() {
@@ -10598,9 +10661,9 @@ if mp_tty_audio_mode_active && [ -z "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then :
 ensure_first_run_equalizer
 ensure_first_run_sample_track
 ensure_liquid_glass_first_run_reward
-_STOP_AUDIO_ON_EXIT=1; while true; do update_mp_bridge_menu "Main Console / Workstation Menu" "true"; update_terminal_geometry 0; _set_menu_box_width box_w "${_TERM_COLS:-80}"; main_header=""; main_opts=("SECTION|SECTION 1: Listen to Mixes & Tracks / Convert Audio / Import Mixes / Plus More|" "AI|Load MP Mix Manager AI Assistant (MP Harmony) (New)|(Shift+A • starts Ollama if needed • loads gpt-oss-pinned:latest)" "MP|MP GUI Mix Manager (New)|(Press G • Liquid Glass window • runs MP Gui)" "VR|Enter VR Mode with MP Liquid Player (BigScreen)|(Windows + Bigscreen VR • player centered on the primary desktop • music starts when it is placed)" "0|Run Any Desktop Shortcuts|(Games, Audio, Files, Tools, AI Servers — Linux/Windows/macOS)" "1|Play DJ Mixes (MP Audio Player - Mix Archive Mode)|(Built-in Player, Custom Animated EQ, FLAC/WAV/MP3)" "2|Play Tracks from MUSIC Folders using MP Audio Player|(Music Library • Local Drives & SMB Shares • Add / Remove Folders)" "3|MP Audio Player (Liquid Glass Mode)|(Liquid glass window • OpenGL [Default - All GPUs] or Vulkan • light theme reflections)" "4|Run Mix Conversion|(FLAC, MP3, WAV, or YouTube MP4)" "5|Audio Conversion, EBU R128 Mastering & CUE Sheets|(WAV, MP3, AAC, LUFS, CUE, Splitter)" "6|Retrieve Unconverted WAVs from Archive|(MOVE_NOT_CONVERTED_WAVS.sh)" "7|Search & Import Mixes from Local Drives & SMB|(search_and_import_mixes.sh / import_new_mixes.sh)" "8|Rename a Mix and Associated Assets|(FLAC, Tracklist, Spek)" "9|Find & Remove Duplicate Audio Files / Mixes|(Exact Content & Episode Match)" "10|Export / Copy Mixes to Specified Path|(Audio, Covers, Tracklists, Spek)" "11|Audio Integrity, Bit-Rot Scrub & FLAC Verification|(SHA-256, Bit-Rot Daemon, Fake FLAC)" "12|Cloud & Remote Backup Suite|(Google Drive, iCloud, Dropbox, Custom Folder)" "13|Storage Management & Multiple Mix Archives Setup|(Drive Space, Rescan, Configure Archives)" "SECTION|SECTION 2: STUDIO AUDIO, PLAYBACK, METADATA & VIDEO|" "14|Tracklist Management, Scanning & Metadata Suite|(Browse, Search, Picard, HTML Index)" "15|Audio Players & Retro Playback Suite|(cliamp, Strawberry, VLC, Audacity, Haruna, Winamp...)" "16|Configure Mix Archive Storage Locations|(Primary & Multiple Archives)" "17|Custom Mix Playlists & Traktor History Suite|(.m3u, .m3u8, .xspf, Traktor 3 Playlists)" "18|Digital Audio Workstations (DAWs) & Mix Dispatch|(Reaper, Logic, FL Studio, Ardour, Traktor)" "19|Studio Hardware, Audio Interfaces & Master Volume Control|(PipeWire, ALSA, MIDI, Mute)" "20|Spectrogram Generation & Audio Frequency Analysis|(Single & Multiple Spek, SoX, Praat)" "21|Morning Alarm Clock & DJ Mix Playback Suite|(Steam Games, Wake-Up Mixes, Scheduler)" "22|YouTube Video Suite|(Generate 4K/1080p Videos & Shorts Promos)" "23|Visual Media, Cover Art & Companion Video Suite|(Cut/Split Video, Converters, PPM, Launchers)" "24|Record Video of DJ Mix using GPU Screen Recorder (Linux)|(New Desktop Window)" "25|Listen to Your Top 5 Tracks Right Now (Pre-Selected - Special Option)|${_CACHED_TOP_5_BADGE:-[Ready]}" "SECTION|SECTION 3: SYSTEM, NETWORK, AI & SETTINGS|" "26|Live Session, Stream & Transfer Monitors Suite|(Tracklist, Traktor, Transfers, Uploads, Tasks)" "27|System & Hardware Process Monitors Suite|(btop, nvtop, top)" "28|MP Reporter Suite & Automated Reports Management|(Daily, Weekly, Monthly, Yearly, 12-Month Calendar & Email)" "29|Promotional Outreach, Syndication & Music Shopping|(Emails, RSS/Podcasts, Beatport/Bandcamp)" "30|Network Services, Congen & Internet Control|(SSH, Samba, FTP, Congen, Restart MP Web Audio Companion)" "31|Desktop Display Settings, Audio Routing & App Control|(Wayland/X11/macOS/Windows, Close Apps)" "32|Universal System Maintenance & Cleanup|(Drive space, OS Updates, Package Clean, Logs)" "33|Monitor System Processes and Bash Commands with System Info|(MP_Monitor_Bash.sh, new Terminal tab)" "34|Dynamic MOTD Banner Manager & Drive Burner|(Last 3 Mixes, Netpbm, ISO USB Burner)" "35|Manager Settings, Themes, Shell CLI & Reboot|(Themes, Migration, Reinstall/Reset, Bash CLI, Reboot)" "36|MP Mix Manager GUI|(Liquid Glass window • MP Liquid Player interface • Retro Linux Memories and built-in themes)" "SEP|SEP|"); if [ "${OS_TYPE:-}" = "linux" ]; then main_opts+=("37|Linux TTY Desktop Switcher (MP Mix Manager TTY Audio Mode)|(Text console • enables MP Mix Manager TTY Audio Mode)"); fi; main_opts+=("38|Exit Manager|(or q / exit)"); if [ -n "$CLI_INITIAL_ACTION" ]; then run_deferred_startup; choice="$CLI_INITIAL_ACTION"; CLI_INITIAL_ACTION=""; else run_interactive_submenu "" "$main_header" main_opts 0; choice="$REPLY"; fi; case $choice in AI|ai|"Load MP Mix Manager AI Assistant (MP Harmony) (New)"*) launch_mp_harmony_from_menu ;; MP|"MP GUI Mix Manager (New)"*) launch_mp_gui_from_menu ;; VR|vr|"Enter VR Mode with MP Liquid Player (BigScreen)"*|vr-mode|bigscreen|bigscreen-vr) enter_bigscreen_vr_mode ;; 1|p|P|play|Play|player|mp_player|mp-player|mpplayer|mp|"Play DJ Mixes (MP Audio Player - Mix Archive Mode)"*|"Play Mix/Audio File (MP Audio Player)"*)
+_STOP_AUDIO_ON_EXIT=1; while true; do update_mp_bridge_menu "Main Console / Workstation Menu" "true"; update_terminal_geometry 0; _set_menu_box_width box_w "${_TERM_COLS:-80}"; main_header=""; main_opts=("SECTION|SECTION 1: Listen to Mixes & Tracks / Convert Audio / Import Mixes / Plus More|" "AI|Load MP Mix Manager AI Assistant (MP Harmony) (New)|(Shift+A • starts Ollama if needed • loads gpt-oss-pinned:latest)" "MP|MP GUI Mix Manager (New)|(Press G • Liquid Glass window • runs MP Gui)" "VR|Enter VR Mode with MP Liquid Player (BigScreen)|(Windows + Bigscreen VR • player centered on the primary desktop • music starts when it is placed)" "0|Run Any Desktop Shortcuts|(Games, Audio, Files, Tools, AI Servers — Linux/Windows/macOS)" "1|Play DJ Mixes (MP Audio Player - Mix Archive Mode)|(Built-in Player, Custom Animated EQ, FLAC/WAV/MP3)" "2|Play Tracks from MUSIC Folders using MP Audio Player|(Music Library • Local Drives & SMB Shares • Add / Remove Folders)" "3|MP Audio Player (Liquid Glass Mode)|(Liquid glass window • OpenGL [Default - All GPUs] or Vulkan • light theme reflections)" "4|Run Mix Conversion|(FLAC, MP3, WAV, or YouTube MP4)" "5|Audio Conversion, EBU R128 Mastering & CUE Sheets|(WAV, MP3, AAC, LUFS, CUE, Splitter)" "6|Retrieve Unconverted WAVs from Archive|(MOVE_NOT_CONVERTED_WAVS.sh)" "7|Search & Import Mixes from Local Drives & SMB|(search_and_import_mixes.sh / import_new_mixes.sh)" "8|Rename a Mix and Associated Assets|(FLAC, Tracklist, Spek)" "9|Find & Remove Duplicate Audio Files / Mixes|(Exact Content & Episode Match)" "10|Export / Copy Mixes to Specified Path|(Audio, Covers, Tracklists, Spek)" "11|Audio Integrity, Bit-Rot Scrub & FLAC Verification|(SHA-256, Bit-Rot Daemon, Fake FLAC)" "12|Cloud & Remote Backup Suite|(Google Drive, iCloud, Dropbox, Custom Folder)" "13|Storage Management & Multiple Mix Archives Setup|(Drive Space, Rescan, Configure Archives)" "SECTION|SECTION 2: STUDIO AUDIO, PLAYBACK, METADATA & VIDEO|" "14|Tracklist Management, Scanning & Metadata Suite|(Browse, Search, Picard, HTML Index)" "15|Audio Players & Retro Playback Suite|(cliamp, Strawberry, VLC, Audacity, Haruna, Winamp...)" "16|Configure Mix Archive Storage Locations|(Primary & Multiple Archives)" "17|Custom Mix Playlists & DJ History Suite|(.m3u, .m3u8, .xspf, DJ 3 Playlists)" "18|Digital Audio Workstations (DAWs) & Mix Dispatch|(Reaper, Logic, FL Studio, Ardour, DJ)" "19|Studio Hardware, Audio Interfaces & Master Volume Control|(PipeWire, ALSA, MIDI, Mute)" "20|Spectrogram Generation & Audio Frequency Analysis|(Single & Multiple Spek, SoX, Praat)" "21|Morning Alarm Clock & DJ Mix Playback Suite|(Steam Games, Wake-Up Mixes, Scheduler)" "22|YouTube Video Suite|(Generate 4K/1080p Videos & Shorts Promos)" "23|Visual Media, Cover Art & Companion Video Suite|(Cut/Split Video, Converters, PPM, Launchers)" "24|Record Video of DJ Mix using GPU Screen Recorder (Linux)|(New Desktop Window)" "25|Listen to Your Top 5 Tracks Right Now (Pre-Selected - Special Option)|${_CACHED_TOP_5_BADGE:-[Ready]}" "SECTION|SECTION 3: SYSTEM, NETWORK, AI & SETTINGS|" "26|Live Session, Stream & Transfer Monitors Suite|(Tracklist, DJ, Transfers, Uploads, Tasks)" "27|System & Hardware Process Monitors Suite|(btop, nvtop, top)" "28|MP Reporter Suite & Automated Reports Management|(Daily, Weekly, Monthly, Yearly, 12-Month Calendar & Email)" "29|Promotional Outreach, Syndication & Music Shopping|(Emails, RSS/Podcasts, Beatport/Bandcamp)" "30|Network Services, Congen & Internet Control|(SSH, Samba, FTP, Congen, Restart MP Web Audio Companion)" "31|Desktop Display Settings, Audio Routing & App Control|(Wayland/X11/macOS/Windows, Close Apps)" "32|Universal System Maintenance & Cleanup|(Drive space, OS Updates, Package Clean, Logs)" "33|Monitor System Processes and Bash Commands with System Info|(MP_Monitor_Bash.sh, new Terminal tab)" "34|Dynamic MOTD Banner Manager & Drive Burner|(Last 3 Mixes, Netpbm, ISO USB Burner)" "35|Manager Settings, Themes, Shell CLI & Reboot|(Themes, Migration, Reinstall/Reset, Bash CLI, Reboot)" "36|MP Mix Manager GUI|(Liquid Glass window • MP Liquid Player interface • Retro Linux Memories and built-in themes)" "SEP|SEP|"); if [ "${OS_TYPE:-}" = "linux" ]; then main_opts+=("37|Linux TTY Desktop Switcher (MP Mix Manager TTY Audio Mode)|(Text console • enables MP Mix Manager TTY Audio Mode)"); fi; main_opts+=("38|Exit Manager|(or q / exit)"); if [ -n "$CLI_INITIAL_ACTION" ]; then run_deferred_startup; choice="$CLI_INITIAL_ACTION"; CLI_INITIAL_ACTION=""; else run_interactive_submenu "" "$main_header" main_opts 0; choice="$REPLY"; fi; case $choice in AI|ai|"Load MP Mix Manager AI Assistant (MP Harmony) (New)"*) launch_mp_harmony_from_menu ;; MP|"MP GUI Mix Manager (New)"*) launch_mp_gui_from_menu ;; VR|vr|"Enter VR Mode with MP Liquid Player (BigScreen)"*|vr-mode|bigscreen|bigscreen-vr) enter_bigscreen_vr_mode ;; 1|p|P|play|Play|player|mp_player|mp-player|mpplayer|mp|"Play DJ Mixes (MP Audio Player - Mix Archive Mode)"*|"Play Mix/Audio File (MP Audio Player)"*)
 manage_mp_audio_player --mix-archive-mode ;; 2|music|MUSIC|"Play Tracks from MUSIC Folders using MP Audio Player"*|"NEW Feature - Play Tracks from MUSIC Folders using MP Audio Player"*)
 manage_music_folders_menu ;; 3|liquid|liquid-glass|glass|"MP Audio Player (Liquid Glass Mode)"*) launch_liquid_glass_from_menu ;; liquid-config|glass-config|liquid-backend|glass-backend) configure_liquid_glass_backend ;; 4|convert|mix-conversion|flac-conversion|"Run Mix Conversion"*)
 manage_mix_conversion ;; 5) manage_audio_conversion ;; 6) echo -e "\n${BOLD}${YELLOW}Retrieving unconverted WAV files...${NC}\n"; run_sub_script "MOVE_NOT_CONVERTED_WAVS.sh"; press_enter; ;; 7) manage_mix_search_and_import ;; 8) rename_mix; press_enter ;; 9) find_duplicate_audio_mixes; ;; 10) export_mixes_to_path ;; 11) manage_integrity_and_verification; ;; 12|backup|cloud-backup) manage_cloud_backup_suite ;; 13) play_sound_effect "storage"; manage_storage_and_archive_config ;;
-14) manage_tracklist_suite; ;; 15|manage-audio-players|players) manage_audio_players ;; 16|config-archive|archive-dir|archive-folder) play_sound_effect "storage"; configure_mix_archive_folder ;; specs|metadata|inspect) inspect_playing_audio_file; ;; 17) manage_playlists_and_history ;; 18) manage_daws_suite; ;; 19|studio|midi|hardware) manage_studio_hardware_and_volume ;; s4|kontrol|kontrol-s4|traktor-s4|traktor_s4) manage_traktor_s4_midi_menu ;; 20) manage_spek_generation; ;; 21) manage_mix_scheduler ;; 22) generate_youtube_video; ;; 23|manage-visual-media|visual-launchers|video-launchers) manage_visual_media_suite ;; 24|gpu-screen-recorder|record-mix) launch_gpu_screen_recorder; press_enter ;; 25|top5|top-5|top_5|mystery|special) manage_top_5_tracks; ;; 26|manage-live-monitors|live-monitors) manage_live_monitors ;; 27|manage-process-monitors|process-monitors) manage_system_process_monitors; ;; 28|reports|daily-reports|report|mp-reporter|reporter) manage_mix_reports_menu ;; 29) manage_promo_and_syndication ;; 30) manage_network_and_internet; ;; 31) manage_desktop_and_display ;; 32) manage_system_maintenance; ;; 33|monitor|mp-monitor|bash-monitor) manage_process_and_bash_monitor ;; infinite-talk*|inftlk*|stephen-hawking*|infinite-talker*) run_wan2gp_infinite_talker ;; open-webui|openwebui|webui|web-chat) manage_open_webui ;; harmony|mp-harmony|mp_harmony|harmony-agent|ha) manage_harmony_agent; ;; 34) manage_motd_and_tools ;; 35) manage_settings_and_system; ;; 36|mp-gui|gui|MP_Gui|g|G|"MP Mix Manager GUI"*) launch_mp_gui_from_menu ;; ESC) [ "${MP_GUI_SESSION:-0}" = "1" ] && exit_mix_manager ;; 37|tty|tty-mode|tty-audio|desktop-cli|"Linux TTY Desktop Switcher (MP Mix Manager TTY Audio Mode)"*) manage_linux_tty_desktop_switch ;; 38|77|[qQ]|[eE][xX][iI][tT]) exit_mix_manager ;; audacious|audacious-launch) launch_audacious; ;; audacity|audacity-launch) launch_audacity ;; strawberry|strawberry-launch) launch_strawberry; ;; vlc|vlc-launch) launch_vlc ;; haruna|haruna-launch) launch_haruna; ;; kodi|kodi-launch) launch_kodi ;; gimp|gimp-launch) launch_gimp; ;; electricsheep|screensaver) launch_electricsheep ;; geexlab|geexlab-launch) launch_geexlab_demos; ;; btop|btop-launch) echo -e "\n${BOLD}${YELLOW}Launching btop Resource Monitor (Press 'q' to exit)...${NC}\n"; sleep 0.5; if command -v btop &>/dev/null; then _sync_btop_theme "$CURRENT_THEME"; btop; else echo -e "${RED}Error: btop command not found!${NC}"; press_enter; fi ;; nvtop|nvtop-launch) echo -e "\n${BOLD}${YELLOW}Launching nvtop GPU Monitor (Press 'q' to exit)...${NC}\n"; sleep 0.5; trap ':' INT; if command -v nvtop &>/dev/null; then nvtop; else echo -e "${RED}Error: nvtop command not found!${NC}"; press_enter; fi; trap 'exit_mix_manager' INT; ;; top|top-launch) echo -e "\n${BOLD}${YELLOW}Launching top Process Monitor (Press 'q' to exit)...${NC}\n"; sleep 0.5; trap ':' INT; if command -v top &>/dev/null; then top; else echo -e "${RED}Error: top command not found!${NC}"; press_enter; fi; trap 'exit_mix_manager' INT ;; split-flac|split_flac) split_flac_audio; press_enter ;; split-video|split_video|split-mp4|split_mp4) split_video_clip; press_enter ;; cut-video|cut_video) cut_video_clip; press_enter ;; beszel|beszel-start|beszel_start|beszel-hub|beszel-agent) manage_beszel; press_enter ;; ollama|ollama-serve|ollama_serve|ollama-start|ollama_start) manage_ollama; press_enter ;;  alarm|alarm-clock|alarm_clock|alarm.sh) manage_mix_scheduler; ;; congen|kdeconnect|congen-launch) manage_congen ;; block-internet|--block-internet|block_internet) block_internet; ;; unblock-internet|--unblock-internet|unblock_internet) unblock_internet ;; 0|[Ss]|shortcuts|desktop-shortcuts|ds|kioclient|run-shortcuts|desktop_shortcuts) manage_desktop_shortcuts; ;; " ") toggle_mp_audio_player ;; [mM]) _mp_key_m ;; [lL]) launch_mp_audio_player_liquid_glass ;; [cC]) cycle_menu_theme ;; [zZ]|visualizer|liquid-visualizer|mp-visualizer|mp_liquid_visualizer) launch_mp_liquid_visualizer ;; visualizer-preset|visualizer-presets) manage_mp_liquid_visualizer_presets ;; [xX]|mixer|liquid-mixer|mp-liquid-mixer|mp_liquid_mixer) launch_mp_liquid_mixer ;; K) mp_stop_audio_players; _CACHED_PLAYER_CHECK_TIME=0; _CACHED_PLAYER_ACTIVE_RES=1; MP_PLAYER_RUNNING=0; MP_PLAYER_STATE="stopped" ;; *) case "$choice" in ""|A|B|"[A"|"[B"|OA|OB|UP|DOWN|UNKNOWN|SECTION|SEP) ;; *) echo -e "\n${RED}Invalid option! Please enter a number between 0 and 38, or q to exit.${NC}"; sleep 2 ;; esac ;; esac; done
+14) manage_tracklist_suite; ;; 15|manage-audio-players|players) manage_audio_players ;; 16|config-archive|archive-dir|archive-folder) play_sound_effect "storage"; configure_mix_archive_folder ;; specs|metadata|inspect) inspect_playing_audio_file; ;; 17) manage_playlists_and_history ;; 18) manage_daws_suite; ;; 19|studio|midi|hardware) manage_studio_hardware_and_volume ;; s4|kontrol|kontrol-s4|dj-s4|dj_s4) manage_dj_s4_midi_menu ;; 20) manage_spek_generation; ;; 21) manage_mix_scheduler ;; 22) generate_youtube_video; ;; 23|manage-visual-media|visual-launchers|video-launchers) manage_visual_media_suite ;; 24|gpu-screen-recorder|record-mix) launch_gpu_screen_recorder; press_enter ;; 25|top5|top-5|top_5|mystery|special) manage_top_5_tracks; ;; 26|manage-live-monitors|live-monitors) manage_live_monitors ;; 27|manage-process-monitors|process-monitors) manage_system_process_monitors; ;; 28|reports|daily-reports|report|mp-reporter|reporter) manage_mix_reports_menu ;; 29) manage_promo_and_syndication ;; 30) manage_network_and_internet; ;; 31) manage_desktop_and_display ;; 32) manage_system_maintenance; ;; 33|monitor|mp-monitor|bash-monitor) manage_process_and_bash_monitor ;; infinite-talk*|inftlk*|stephen-hawking*|infinite-talker*) run_wan2gp_infinite_talker ;; open-webui|openwebui|webui|web-chat) manage_open_webui ;; harmony|mp-harmony|mp_harmony|harmony-agent|ha) manage_harmony_agent; ;; 34) manage_motd_and_tools ;; 35) manage_settings_and_system; ;; 36|mp-gui|gui|MP_Gui|g|G|"MP Mix Manager GUI"*) launch_mp_gui_from_menu ;; ESC) [ "${MP_GUI_SESSION:-0}" = "1" ] && exit_mix_manager ;; 37|tty|tty-mode|tty-audio|desktop-cli|"Linux TTY Desktop Switcher (MP Mix Manager TTY Audio Mode)"*) manage_linux_tty_desktop_switch ;; 38|77|[qQ]|[eE][xX][iI][tT]) exit_mix_manager ;; audacious|audacious-launch) launch_audacious; ;; audacity|audacity-launch) launch_audacity ;; strawberry|strawberry-launch) launch_strawberry; ;; vlc|vlc-launch) launch_vlc ;; haruna|haruna-launch) launch_haruna; ;; kodi|kodi-launch) launch_kodi ;; gimp|gimp-launch) launch_gimp; ;; electricsheep|screensaver) launch_electricsheep ;; geexlab|geexlab-launch) launch_geexlab_demos; ;; btop|btop-launch) echo -e "\n${BOLD}${YELLOW}Launching btop Resource Monitor (Press 'q' to exit)...${NC}\n"; sleep 0.5; if command -v btop &>/dev/null; then _sync_btop_theme "$CURRENT_THEME"; btop; else echo -e "${RED}Error: btop command not found!${NC}"; press_enter; fi ;; nvtop|nvtop-launch) echo -e "\n${BOLD}${YELLOW}Launching nvtop GPU Monitor (Press 'q' to exit)...${NC}\n"; sleep 0.5; trap ':' INT; if command -v nvtop &>/dev/null; then nvtop; else echo -e "${RED}Error: nvtop command not found!${NC}"; press_enter; fi; trap 'exit_mix_manager' INT; ;; top|top-launch) echo -e "\n${BOLD}${YELLOW}Launching top Process Monitor (Press 'q' to exit)...${NC}\n"; sleep 0.5; trap ':' INT; if command -v top &>/dev/null; then top; else echo -e "${RED}Error: top command not found!${NC}"; press_enter; fi; trap 'exit_mix_manager' INT ;; split-flac|split_flac) split_flac_audio; press_enter ;; split-video|split_video|split-mp4|split_mp4) split_video_clip; press_enter ;; cut-video|cut_video) cut_video_clip; press_enter ;; beszel|beszel-start|beszel_start|beszel-hub|beszel-agent) manage_beszel; press_enter ;; ollama|ollama-serve|ollama_serve|ollama-start|ollama_start) manage_ollama; press_enter ;;  alarm|alarm-clock|alarm_clock|alarm.sh) manage_mix_scheduler; ;; congen|kdeconnect|congen-launch) manage_congen ;; block-internet|--block-internet|block_internet) block_internet; ;; unblock-internet|--unblock-internet|unblock_internet) unblock_internet ;; 0|[Ss]|shortcuts|desktop-shortcuts|ds|kioclient|run-shortcuts|desktop_shortcuts) manage_desktop_shortcuts; ;; " ") toggle_mp_audio_player ;; [mM]) _mp_key_m ;; [lL]) launch_mp_audio_player_liquid_glass ;; [cC]) cycle_menu_theme ;; [zZ]|visualizer|liquid-visualizer|mp-visualizer|mp_liquid_visualizer) launch_mp_liquid_visualizer ;; visualizer-preset|visualizer-presets) manage_mp_liquid_visualizer_presets ;; [xX]|mixer|liquid-mixer|mp-liquid-mixer|mp_liquid_mixer) launch_mp_liquid_mixer ;; K) mp_stop_audio_players; _CACHED_PLAYER_CHECK_TIME=0; _CACHED_PLAYER_ACTIVE_RES=1; MP_PLAYER_RUNNING=0; MP_PLAYER_STATE="stopped" ;; *) case "$choice" in ""|A|B|"[A"|"[B"|OA|OB|UP|DOWN|UNKNOWN|SECTION|SEP) ;; *) echo -e "\n${RED}Invalid option! Please enter a number between 0 and 38, or q to exit.${NC}"; sleep 2 ;; esac ;; esac; done
 fi

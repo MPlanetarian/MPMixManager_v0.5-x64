@@ -75,16 +75,114 @@ def _section(grid: Any, row: int, title: str) -> int:
     return row + 2
 
 
+def _css_rgb(color: Tuple[int, int, int], alpha: float = 1.0) -> str:
+    return "rgba(%d,%d,%d,%.3f)" % (int(color[0]), int(color[1]), int(color[2]), float(alpha))
+
+
+def _install_theme_css(dialog: Any, theme: str, colors: Any, field: Any, ink: Any) -> None:
+    """Paint the dialog in the mixer's active theme.
+
+    The Settings window is part of the mixer, so it uses the same palette the
+    main window paints with: the theme's field as the surface, its accent for
+    the section rules and the default button, and its ink for text. A theme
+    without a palette (a link to the filler table) still gets a readable
+    dialog rather than a crash.
+    """
+    from gi.repository import Gdk, Gtk
+    try:
+        accent, secondary, tertiary = colors(theme)
+    except Exception:
+        accent, secondary, tertiary = (166, 77, 255), (247, 37, 133), (0, 229, 255)
+    try:
+        surface = field(theme)
+    except Exception:
+        surface = (196, 204, 221)
+    try:
+        text = ink(theme)
+    except Exception:
+        text = (24, 28, 32)
+    luma = (0.2126 * surface[0] + 0.7152 * surface[1] + 0.0722 * surface[2]) / 255.0
+    dark = luma < 0.55
+    panel = tuple(int(round(c * (0.62 if dark else 1.05))) for c in surface)
+    panel = tuple(max(0, min(255, c)) for c in panel)
+    text = text if not dark else tuple(max(c, 210) for c in text)
+    css = f"""
+    dialog, .background {{ background-color: {_css_rgb(surface)}; color: {_css_rgb(text)}; }}
+    label {{ color: {_css_rgb(text)}; }}
+    .dim-label {{ color: {_css_rgb(text, 0.62)}; }}
+    headerbar {{ background-color: {_css_rgb(panel)}; color: {_css_rgb(text)}; }}
+    grid {{ background-color: {_css_rgb(surface)}; }}
+    separator {{ background-color: {_css_rgb(accent, 0.55)}; }}
+    button {{
+        background-image: none;
+        background-color: {_css_rgb(panel)};
+        color: {_css_rgb(text)};
+        border: 1px solid {_css_rgb(accent, 0.65)};
+        border-radius: 7px;
+    }}
+    button:hover {{ background-color: {_css_rgb(accent, 0.22)}; }}
+    button.suggested-action {{
+        background-color: {_css_rgb(accent, 0.30)};
+        border: 1px solid {_css_rgb(accent, 0.95)};
+        color: {_css_rgb(text)};
+    }}
+    entry, combobox button, spinbutton {{
+        background-color: {_css_rgb(panel)};
+        color: {_css_rgb(text)};
+        border: 1px solid {_css_rgb(accent, 0.45)};
+        border-radius: 6px;
+    }}
+    combobox arrow {{ color: {_css_rgb(accent)}; }}
+    scrolledwindow, viewport {{ background-color: {_css_rgb(surface)}; }}
+    checkbutton {{ color: {_css_rgb(text)}; }}
+    checkbutton check {{ border: 1px solid {_css_rgb(accent, 0.75)}; }}
+    checkbutton check:checked {{
+        background-color: {_css_rgb(accent, 0.85)};
+        color: {_css_rgb(surface)};
+    }}
+    """
+    provider = Gtk.CssProvider()
+    try:
+        provider.load_from_data(css.encode("utf-8"))
+    except Exception:
+        return
+    screen = None
+    try:
+        screen = dialog.get_screen()
+    except Exception:
+        try:
+            screen = Gdk.Screen.get_default()
+        except Exception:
+            screen = None
+    if screen is not None:
+        try:
+            Gtk.StyleContext.add_provider_for_screen(
+                screen, provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+        except Exception:
+            pass
+
+
 def show_settings_dialog(parent: Any, settings: "mixer_settings.Settings",
                          sinks: Optional[List[Dict[str, Any]]] = None,
-                         themes: Optional[List[Tuple[str, str]]] = None) -> Optional["mixer_settings.Settings"]:
+                         themes: Optional[List[Tuple[str, str]]] = None,
+                         theme: str = "",
+                         on_cycle_theme: Optional[Callable[[], str]] = None,
+                         theme_colors: Optional[Callable[[str], Any]] = None,
+                         theme_label: Optional[Callable[[str], str]] = None,
+                         theme_field: Optional[Callable[[str], Any]] = None,
+                         theme_ink: Optional[Callable[[str], Any]] = None) -> Optional["mixer_settings.Settings"]:
     """Run the modal Settings window; returns the new Settings or None.
 
     ``sinks`` and ``themes`` are passed in by the mixer so the dialog does not
     re-probe the sound server or the palette when its caller already did. A
     missing list is fetched here, which keeps the dialog usable on its own.
+
+    ``theme`` is the mixer's live theme and ``on_cycle_theme`` is the mixer's
+    own C handler. The dialog installs themed CSS for that theme and calls the
+    callback on C, so the Settings window follows the same cycle the main
+    window uses instead of keeping a stale palette while the mixer repaints.
     """
-    from gi.repository import Gtk
+    from gi.repository import Gdk, Gtk
 
     sinks = list(sinks if sinks is not None else mixer_settings.list_audio_sinks(force=True))
     themes = list(themes if themes is not None else mixer_settings.theme_options())
@@ -94,7 +192,11 @@ def show_settings_dialog(parent: Any, settings: "mixer_settings.Settings",
     dialog.set_default_size(760, 760)
     dialog.set_resizable(True)
     dialog.add_button("Cancel", Gtk.ResponseType.CANCEL)
-    dialog.add_button("Save Settings", Gtk.ResponseType.OK)
+    save_button = dialog.add_button("Save Settings", Gtk.ResponseType.OK)
+    try:
+        save_button.get_style_context().add_class("suggested-action")
+    except Exception:
+        pass
     dialog.set_default_response(Gtk.ResponseType.OK)
 
     # A light scroller keeps every section reachable on a small screen.
@@ -227,16 +329,17 @@ def show_settings_dialog(parent: Any, settings: "mixer_settings.Settings",
     def _refresh_devices(_button=None) -> None:
         fresh = mixer_settings.list_audio_sinks(force=True)
         labels = [(str(item.get("name")), mixer_settings.sink_label(item)) for item in fresh]
-        combo = master_combo
-        chosen = combo.get_active_id() or ""
-        combo.remove_all()
-        combo.append("__empty__", "System default")
-        for value, text in labels:
-            combo.append(value, text)
-        if chosen and chosen != "__empty__" and not any(value == chosen for value, _t in labels):
-            combo.append(chosen, f"{chosen}  (not currently connected)")
-        combo.set_active_id(chosen if chosen in [value for value, _t in labels]
-                            or chosen == "__empty__" else "__empty__")
+        for combo in (master_combo, monitor_combo):
+            chosen = combo.get_active_id() or ""
+            combo.remove_all()
+            combo.append("__empty__", "System default" if combo is master_combo
+                         else "Same as master (no split)")
+            for value, text in labels:
+                combo.append(value, text)
+            if chosen and chosen != "__empty__" and not any(value == chosen for value, _t in labels):
+                combo.append(chosen, f"{chosen}  (not currently connected)")
+            combo.set_active_id(chosen if chosen in [value for value, _t in labels]
+                                or chosen == "__empty__" else "__empty__")
 
     refresh_button.connect("clicked", _refresh_devices)
 
@@ -290,6 +393,57 @@ def show_settings_dialog(parent: Any, settings: "mixer_settings.Settings",
     grid.attach(_label("Applied to both decks when the mixer opens. Moving a mixer "
                        "EQ knob afterwards overrides it for that deck.", dim=True), 1, row, 1, 1)
     row += 1
+
+    # The live theme line, so C visibly changes something in this window.
+    live_theme = _label("", bold=True)
+    grid.attach(live_theme, 1, row, 1, 1)
+
+    def _paint_theme(name: str) -> None:
+        label = theme_label(name) if theme_label is not None else name
+        try:
+            live_theme.set_markup(
+                f"<b>{label}</b>   —   press C to change the theme")
+        except Exception:
+            live_theme.set_text(f"{label}   -   press C to change the theme")
+        if theme_colors and theme_field and theme_ink:
+            _install_theme_css(dialog, name, theme_colors, theme_field, theme_ink)
+
+    current_theme = theme or ""
+    if current_theme:
+        _paint_theme(current_theme)
+
+    def _on_key(_widget=None, event=None) -> bool:
+        # C cycles the mixer's theme through the same handler the main window
+        # uses, then repaints this dialog in the new palette. The modal window
+        # swallows keys, so without this the mixer's own handler never runs
+        # while Settings is open.
+        from gi.repository import Gdk as _Gdk
+        # Called as a GTK signal handler it gets (widget, event); called
+        # directly it may be handed the event alone.
+        if event is None:
+            event = _widget
+        try:
+            keyval = event.keyval
+        except AttributeError:
+            return False
+        if keyval in (_Gdk.KEY_c, _Gdk.KEY_C, ord("c")):
+            if on_cycle_theme is None:
+                return False
+            try:
+                name = on_cycle_theme()
+            except Exception:
+                return False
+            if name:
+                _paint_theme(name)
+                theme_combo.set_active_id(name)
+            return True
+        return False
+
+    # The handler is kept on the dialog (unbound, so a caller can pass any
+    # widget) so a test can invoke the same C handling without synthesising a
+    # GdkEvent GTK would reject.
+    dialog._settings_theme_key_handler = _on_key
+    dialog.connect("key-press-event", _on_key)
 
     grid.show_all()
     dialog.show_all()

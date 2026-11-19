@@ -21,7 +21,7 @@ class FakeDevice:
 
     def __init__(self, values=None, maximum=4095):
         self.path = "/dev/input/event-test"
-        self.name = "Traktor Kontrol S4"
+        self.name = "Kontrol S4"
         self._values = dict(values or {})
         self._max = maximum
 
@@ -94,10 +94,12 @@ class TestApplyAction(unittest.TestCase):
         self.assertTrue(mixer_evdev.apply_action(model, "channel:A", 0.25))
         self.assertAlmostEqual(model.channel_gain("A"), 0.25, places=6)
 
-    def test_inactive_channels_are_stored_not_applied(self):
+    def test_all_four_channel_faders_are_applied(self):
         model = mixer_core.MixerModel()
-        self.assertFalse(mixer_evdev.apply_action(model, "channel:C", 0.1))
-        self.assertFalse(mixer_evdev.apply_action(model, "channel:D", 0.1))
+        self.assertTrue(mixer_evdev.apply_action(model, "channel:C", 0.10))
+        self.assertTrue(mixer_evdev.apply_action(model, "channel:D", 0.20))
+        self.assertAlmostEqual(model.channel_gain("C"), 0.10, places=6)
+        self.assertAlmostEqual(model.channel_gain("D"), 0.20, places=6)
 
     def test_crossfader(self):
         model = mixer_core.MixerModel(gains={"A": 1.0, "B": 1.0})

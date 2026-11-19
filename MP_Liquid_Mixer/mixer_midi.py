@@ -167,19 +167,30 @@ def read_saved_profile() -> str:
 
 def load_mapping(path: Optional[Path] = None,
                  profile: Optional[str] = None) -> Tuple[Dict[int, str], Dict[int, str]]:
-    """The profile's default map plus any user overrides for that profile."""
-    chosen = normalize_profile(profile if profile is not None else read_saved_profile())
-    notes = dict(PROFILE_MAPS[chosen][0])
-    cc = dict(PROFILE_MAPS[chosen][1])
+    """The profile's default map plus any user overrides for that profile.
+
+    The profile comes from the caller, from a ``"profile"`` key in the file, or
+    (with no file given) from the saved selection; otherwise it is profile A.
+    """
     if path is not None:
         target = Path(path)
         try:
             payload = json.loads(target.read_text(encoding="utf-8"))
         except (OSError, ValueError, TypeError):
-            return notes, cc
+            payload = {}
     else:
         payload = _payload()
     if not isinstance(payload, dict):
+        payload = {}
+    # An explicit file is the whole answer: it must not silently inherit the
+    # profile saved for the live mixer, or two callers reading different files
+    # would disagree about the map.
+    fallback = DEFAULT_PROFILE if path is not None else read_saved_profile()
+    chosen = normalize_profile(profile if profile is not None
+                               else payload.get("profile") or fallback)
+    notes = dict(PROFILE_MAPS[chosen][0])
+    cc = dict(PROFILE_MAPS[chosen][1])
+    if not payload:
         return notes, cc
     # Overrides are namespaced per profile, so switching profiles cannot apply
     # the other controller's map by accident. A bare "notes"/"cc" block is the
@@ -308,11 +319,11 @@ def find_midi_devices(profile: Optional[str] = None,
 
 
 # Historical names, kept for callers written before the profile split.
-def find_traktor_sequencer_ports() -> List[Dict[str, str]]:
+def find_dj_sequencer_ports() -> List[Dict[str, str]]:
     return find_sequencer_ports("A")
 
 
-def find_traktor_devices(proc_root: Path | str = "/proc/asound",
+def find_dj_devices(proc_root: Path | str = "/proc/asound",
                          dev_root: Path | str = "/dev/snd") -> List[Dict[str, str]]:
     return find_midi_devices("A", proc_root, dev_root)
 
@@ -395,9 +406,13 @@ class CoreMidiReader:
         cm.MIDIObjectGetStringProperty.restype = ctypes.c_int32
         cm.MIDIObjectGetStringProperty.argtypes = [
             ctypes.c_uint32, ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+        # MIDIClientCreate(name, notifyProc, notifyRefCon, *clientRef).
+        # The name is a CFStringRef: passing a c_char_p here is the classic
+        # ctypes trap and aborts the call with an ArgumentError.
         cm.MIDIClientCreate.restype = ctypes.c_int32
         cm.MIDIClientCreate.argtypes = [
             ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint32)]
+        # MIDIInputPortCreate(client, name, readProc, connRefCon, *portRef).
         cm.MIDIInputPortCreate.restype = ctypes.c_int32
         cm.MIDIInputPortCreate.argtypes = [
             ctypes.c_uint32, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p,
@@ -428,9 +443,21 @@ class CoreMidiReader:
             return False
         return True
 
+    def _cfstring(self, text: str) -> int:
+        """A CFStringRef for ``text`` (0 when the framework cannot make one)."""
+        try:
+            cf = self._cf
+            cf.CFStringCreateWithCString.restype = ctypes.c_void_p
+            cf.CFStringCreateWithCString.argtypes = [
+                ctypes.c_void_p, ctypes.c_char_p, ctypes.c_uint32]
+            return int(cf.CFStringCreateWithCString(None, text.encode(), 0x08000100) or 0)
+        except Exception:
+            return 0
+
     def _source_name(self, source: int) -> str:
         value = ctypes.c_void_p()
-        status = self._cm.MIDIObjectGetStringProperty(source, self._name_key, ctypes.byref(value))
+        status = self._cm.MIDIObjectGetStringProperty(
+            ctypes.c_uint32(source), self._name_key, ctypes.byref(value))
         if status != 0 or not value:
             return ""
         buffer = ctypes.create_string_buffer(256)
@@ -447,8 +474,14 @@ class CoreMidiReader:
         if not sys.platform.startswith("darwin") or not self._load():
             return False
         if not self.client.value:
-            name = ctypes.c_char_p(b"MP Liquid Mixer")
-            status = self._cm.MIDIClientCreate(None, None, None, name, ctypes.byref(self.client))
+            name = self._cfstring("MP Liquid Mixer")
+            status = self._cm.MIDIClientCreate(
+                ctypes.c_void_p(name), None, None, ctypes.byref(self.client))
+            if name:
+                try:
+                    self._cf.CFRelease(name)
+                except Exception:
+                    pass
             if status != 0:
                 self.client = ctypes.c_uint32(0)
                 return False
@@ -571,6 +604,426 @@ class CoreMidiCallbackReader(CoreMidiReader):
         with self._lock:
             events, self._pending = self._pending, []
         return events
+
+
+class KontrolHidReader:
+    """Read a Kontrol surface over IOKit HID, for macOS.
+
+    macOS publishes the four-channel Kontrol as a vendor-defined HID device with
+    no CoreMIDI port, so the MIDI map cannot reach it there. The report
+    descriptor declares two input collections:
+
+        Report 1  the button surface, one bit per control
+        Report 2  every analog control, seven 7-bit fields and twenty-four
+                  16-bit fields, all 0-4095
+
+    A background thread runs a CFRunLoop, registers the input report callback
+    and posts the counter handshake the surface needs before it streams. The
+    callback translates changed fields into the same ``(action, value)`` calls
+    the MIDI path produces, so the mixer does not know which transport a
+    controller is using.
+    """
+
+    VENDOR_ID = 0x17CC
+    PRODUCT_IDS = {"B": 0x1900, "A": 0x1700}
+
+    def __init__(self, profile: str = DEFAULT_PROFILE,
+                 on_message: Optional[Callable[[int, int, int], None]] = None,
+                 on_hid: Optional[Callable[[int, int, int], None]] = None) -> None:
+        self.profile = normalize_profile(profile)
+        self.on_message = on_message
+        self.on_hid = on_hid
+        self.device_name = ""
+        self.sources: List[Tuple[int, str]] = []
+        self._iok = None
+        self._cf = None
+        self._mgr = None
+        self._dev = None
+        self._runloop = None
+        self._thread: Optional[threading.Thread] = None
+        self._running = False
+        self._callback = None
+        self._buffer = None
+        self._last: Dict[int, int] = {}
+        self._lock = threading.Lock()
+        self._ready = threading.Event()
+
+    def _load(self) -> bool:
+        if self._iok is not None:
+            return True
+        try:
+            self._iok = ctypes.CDLL("/System/Library/Frameworks/IOKit.framework/IOKit")
+            self._cf = ctypes.CDLL("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")
+        except OSError:
+            return False
+        iok, cf = self._iok, self._cf
+        cf.CFStringCreateWithCString.restype = ctypes.c_void_p
+        cf.CFStringCreateWithCString.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_uint32]
+        cf.CFNumberCreate.restype = ctypes.c_void_p
+        cf.CFNumberCreate.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p]
+        cf.CFDictionaryCreate.restype = ctypes.c_void_p
+        cf.CFDictionaryCreate.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p),
+                                          ctypes.POINTER(ctypes.c_void_p), ctypes.c_long,
+                                          ctypes.c_void_p, ctypes.c_void_p]
+        cf.CFSetGetCount.restype = ctypes.c_long
+        cf.CFSetGetCount.argtypes = [ctypes.c_void_p]
+        cf.CFSetGetValues.restype = None
+        cf.CFSetGetValues.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+        cf.CFRunLoopGetCurrent.restype = ctypes.c_void_p
+        cf.CFRunLoopRun.restype = None
+        cf.CFRunLoopRun.argtypes = []
+        cf.CFRunLoopStop.restype = None
+        cf.CFRunLoopStop.argtypes = [ctypes.c_void_p]
+        iok.IOHIDManagerCreate.restype = ctypes.c_void_p
+        iok.IOHIDManagerCreate.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+        iok.IOHIDManagerSetDeviceMatching.restype = None
+        iok.IOHIDManagerSetDeviceMatching.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        iok.IOHIDManagerOpen.restype = ctypes.c_int
+        iok.IOHIDManagerOpen.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+        iok.IOHIDManagerCopyDevices.restype = ctypes.c_void_p
+        iok.IOHIDManagerCopyDevices.argtypes = [ctypes.c_void_p]
+        iok.IOHIDManagerScheduleWithRunLoop.restype = None
+        iok.IOHIDManagerScheduleWithRunLoop.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
+        iok.IOHIDDeviceOpen.restype = ctypes.c_int
+        iok.IOHIDDeviceOpen.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+        iok.IOHIDDeviceScheduleWithRunLoop.restype = None
+        iok.IOHIDDeviceScheduleWithRunLoop.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
+        iok.IOHIDDeviceUnscheduleFromRunLoop.restype = None
+        iok.IOHIDDeviceUnscheduleFromRunLoop.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
+        iok.IOHIDDeviceRegisterInputReportCallback.restype = None
+        iok.IOHIDDeviceRegisterInputReportCallback.argtypes = [
+            ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint8), ctypes.c_long,
+            ctypes.c_void_p, ctypes.c_void_p]
+        iok.IOHIDDeviceSetReport.restype = ctypes.c_int
+        iok.IOHIDDeviceSetReport.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_long,
+                                             ctypes.POINTER(ctypes.c_uint8), ctypes.c_long]
+        iok.IOHIDDeviceGetProperty.restype = ctypes.c_void_p
+        iok.IOHIDDeviceGetProperty.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        return True
+
+    def _cfstring(self, text: str) -> int:
+        try:
+            return int(self._cf.CFStringCreateWithCString(
+                None, text.encode(), 0x08000100) or 0)
+        except Exception:
+            return 0
+
+    def _cfnumber(self, value: int) -> int:
+        try:
+            raw = ctypes.c_int32(int(value))
+            return int(self._cf.CFNumberCreate(None, 4, ctypes.byref(raw)) or 0)
+        except Exception:
+            return 0
+
+    def _property(self, key: str) -> str:
+        value = self._iok.IOHIDDeviceGetProperty(self._dev, ctypes.c_void_p(self._cfstring(key)))
+        if not value:
+            return ""
+        buffer = ctypes.create_string_buffer(256)
+        if not self._cf.CFStringGetCString(value, buffer, 256, 0x08000100):
+            return ""
+        try:
+            self._cf.CFRelease(value)
+        except Exception:
+            pass
+        return buffer.value.decode(errors="replace")
+
+    def _matching_dict(self) -> int:
+        keys = (ctypes.c_void_p * 2)(self._cfstring("VendorID"), self._cfstring("ProductID"))
+        product = self.PRODUCT_IDS.get(self.profile, self.PRODUCT_IDS["A"])
+        values = (ctypes.c_void_p * 2)(self._cfnumber(self.VENDOR_ID), self._cfnumber(product))
+        return int(self._cf.CFDictionaryCreate(
+            None, keys, values, 2, None, None) or 0)
+
+    def _first_device(self):
+        manager = self._iok.IOHIDManagerCreate(None, 0)
+        if not manager:
+            return None
+        self._iok.IOHIDManagerSetDeviceMatching(manager, ctypes.c_void_p(self._matching_dict()))
+        if self._iok.IOHIDManagerOpen(manager, 0) != 0:
+            return None
+        devices = self._iok.IOHIDManagerCopyDevices(manager)
+        if not devices:
+            return None
+        count = int(self._cf.CFSetGetCount(devices))
+        if count <= 0:
+            return None
+        array = (ctypes.c_void_p * count)()
+        self._cf.CFSetGetValues(devices, array)
+        self._mgr = manager
+        return array[0]
+
+    def _on_report(self, _ref, _result, _sender, _rtype, report_id, report, length) -> None:
+        """Translate one report and publish only what actually changed.
+
+        The surface streams its full state continuously, so without change
+        detection a held Play button fires every few milliseconds and a
+        resting fader floods the mixer with identical values. Buttons are
+        edge-triggered (a press is one event; shift also reports its release)
+        and analog fields are dead-banded.
+        """
+        raw = bytes(report[i] for i in range(int(length)))
+        # IOKit hands the report id back as the first byte; the field offsets
+        # below are relative to the data that follows it.
+        rid = int(report_id)
+        if raw and raw[0] == rid:
+            raw = raw[1:]
+        for action, value in decode_hid_report(rid, raw, self.profile):
+            previous = self._last.get(action)
+            if action.startswith("shift:"):
+                if previous == value:
+                    continue
+            elif previous is not None:
+                if action.startswith(("channel:", "filter:", "pitch:", "crossfader",
+                                      "master_volume", "monitor_volume",
+                                      "trim:", "eq:")):
+                    if abs(float(previous) - float(value)) < 0.004:
+                        continue
+                elif value and previous:
+                    continue
+            self._last[action] = value
+            if self.on_hid is not None:
+                try:
+                    self.on_hid(action, value)
+                except Exception:
+                    pass
+            if self.on_message is not None:
+                try:
+                    self.on_message(action, value)
+                except Exception:
+                    pass
+
+    def open(self) -> bool:
+        """Start the HID reader thread; True once it owns the device.
+
+        IOKit ties a manager, a device and the run loop it is scheduled on to
+        one thread. Creating the manager here and scheduling it from the pump
+        thread aborts the process, so the whole sequence (matching, open,
+        schedule, register, run) happens on the reader thread and this call
+        only waits for its verdict.
+        """
+        if not sys.platform.startswith("darwin"):
+            return False
+        self._running = True
+        self._ready = threading.Event()
+        self._thread = threading.Thread(target=self._pump, name="mixer-hid", daemon=True)
+        self._thread.start()
+        self._ready.wait(timeout=5.0)
+        return bool(self._runloop) and self._running
+
+    def _pump(self) -> None:
+        try:
+            if not self._load():
+                return
+            device = self._first_device()
+            if not device:
+                return
+            self._dev = device
+            self._callback = ctypes.CFUNCTYPE(
+                None, ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p,
+                ctypes.c_void_p, ctypes.c_int, ctypes.POINTER(ctypes.c_uint8),
+                ctypes.c_long)(self._on_report)
+            self._buffer = (ctypes.c_uint8 * 64)()
+            self._iok.IOHIDDeviceOpen(device, 0)
+            # The surface streams nothing until the host writes its zeroed
+            # 0xD0 feature report: that is the documented "put the controls in
+            # their normal state" handshake. Skip it and every read stays
+            # silent until another program initialises the device.
+            try:
+                feature = (ctypes.c_uint8 * 83)()
+                self._iok.IOHIDDeviceSetReport(device, 2, 0xD0, feature, 83)
+            except Exception:
+                pass
+            self._iok.IOHIDDeviceRegisterInputReportCallback(
+                device, self._buffer, 64, self._callback, None)
+            runloop = self._cf.CFRunLoopGetCurrent()
+            mode = ctypes.c_void_p(self._cfstring("kCFRunLoopDefaultMode"))
+            self._iok.IOHIDManagerScheduleWithRunLoop(self._mgr, runloop, mode)
+            self._iok.IOHIDDeviceScheduleWithRunLoop(device, runloop, mode)
+            # The IOKit objects belong to this thread; reading a property with
+            # CFStringGetCString from a second thread aborts the process. Use
+            # the profile's own label, which names the same controller.
+            self.device_name = PROFILE_LABELS[self.profile]
+            self._runloop = runloop
+            self._ready.set()
+            self._cf.CFRunLoopRun()
+        except Exception as exc:
+            _log(f"HID run loop failed: {exc!r}")
+        finally:
+            self._runloop = None
+            self._ready.set()
+
+    def close(self) -> None:
+        self._running = False
+        runloop, self._runloop = self._runloop, None
+        if runloop and self._cf is not None:
+            try:
+                self._cf.CFRunLoopStop(ctypes.c_void_p(runloop))
+            except Exception:
+                pass
+        thread, self._thread = self._thread, None
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=1.5)
+        self._dev = None
+        self._mgr = None
+        self._callback = None
+        self._buffer = None
+
+
+def _u16(payload: bytes, offset: int) -> Optional[int]:
+    """Little-endian 12-bit field at ``offset``, or None when it is absent."""
+    if offset + 1 >= len(payload):
+        return None
+    return payload[offset] | (payload[offset + 1] << 8)
+
+
+def _unit(raw: int) -> float:
+    return max(0.0, min(1.0, raw / 4095.0))
+
+
+def _eq_db(raw: int) -> float:
+    """A 12-bit centre-detented EQ knob to -12..+12 dB (2047 = flat)."""
+    return round(max(-12.0, min(12.0, (raw / 4095.0) * 24.0 - 12.0)), 1)
+
+
+def _pitch_percent(raw: int) -> float:
+    percent = (_unit(raw) - 0.5) * 40.0
+    return 0.0 if abs(percent) < 0.4 else round(percent, 1)
+
+
+def decode_hid_report(report_id: int, payload: bytes,
+                      profile: str = DEFAULT_PROFILE) -> List[Tuple[str, float]]:
+    """Translate one Kontrol HID input report into mixer actions.
+
+    The byte offsets are the ones the surface's own report descriptor and the
+    widely used Mixxx HID script agree on: report 1 is a bitmap of buttons
+    (``byte, mask`` per control) and report 2 is 16-bit analog data (a 12-bit
+    value little-endian at each offset). Only the fields the mixer implements
+    are claimed; an unknown report or a short payload is ignored rather than
+    guessed at.
+    """
+    profile = normalize_profile(profile)
+    actions: List[Tuple[str, float]] = []
+    # Tolerate a payload that still starts with its own report id.
+    if payload and payload[0] == report_id and report_id in (1, 2):
+        payload = payload[1:]
+    if report_id == 1:
+        return decode_hid_buttons(payload, profile)
+    if report_id != 2:
+        return actions
+    for offset, action, kind in HID_ANALOG.get(profile, ()):
+        raw = _u16(payload, offset)
+        if raw is None or not action:
+            continue
+        if kind == "unit":
+            actions.append((action, _unit(raw)))
+        elif kind == "eq":
+            actions.append((action, _eq_db(raw)))
+        elif kind == "pitch":
+            actions.append((action, _pitch_percent(raw)))
+    return actions
+
+
+def decode_hid_buttons(payload: bytes, profile: str = DEFAULT_PROFILE) -> List[Tuple[str, float]]:
+    """Report 1's ``byte, mask`` button table to pressed/released actions."""
+    actions: List[Tuple[str, float]] = []
+    for offset, mask, action in HID_BUTTONS.get(normalize_profile(profile), ()):
+        if not action or offset >= len(payload):
+            continue
+        pressed = bool(payload[offset] & mask)
+        if action.startswith("shift:") or action.startswith("monitor:") \
+                or action.startswith("effect-toggle:") or action.startswith("effect-slot:"):
+            actions.append((action, 1.0 if pressed else 0.0))
+        elif pressed:
+            actions.append((action, 1.0))
+    return actions
+
+
+# Report 2: (payload byte offset, action, unit). Offsets are the descriptor's
+# 16-bit fields, in the order the surface sends them.
+HID_ANALOG: Dict[str, Tuple[Tuple[int, str, str], ...]] = {
+    "A": (),
+    "B": (
+        # Offsets are relative to the data after the report id byte (the
+        # surface's own tables count from the packet start, so each is one
+        # lower here).
+        # Tempo faders (left deck, then right deck).
+        (0x00, "pitch:A", "pitch"),
+        (0x0C, "pitch:B", "pitch"),
+        # Channel faders. The physical order is C, A, B, D.
+        (0x02, "channel:C", "unit"),
+        (0x04, "channel:A", "unit"),
+        (0x06, "channel:B", "unit"),
+        (0x08, "channel:D", "unit"),
+        (0x0A, "crossfader", "unit"),
+        # Gain (pregain) knobs, centre-detented at unity.
+        (0x0E, "trim:C", "unit"),
+        (0x10, "trim:A", "unit"),
+        (0x12, "trim:B", "unit"),
+        (0x14, "trim:D", "unit"),
+        # The master and headphone knobs on this surface also drive the unit's
+        # own sound card, and they read as zero when the host has not set them,
+        # so they are deliberately left unmapped: claiming them would pin the
+        # mixer's master trim at silence.
+        (0x16, "", "unit"),
+        (0x1A, "", "unit"),
+        # Three-band EQ, one column per channel. Offsets are the surface's
+        # own order: parameter3 (high), parameter2 (mid), parameter1 (low).
+        (0x1E, "eq:C:high", "eq"), (0x20, "eq:C:mid", "eq"), (0x22, "eq:C:low", "eq"),
+        (0x24, "eq:A:high", "eq"), (0x26, "eq:A:mid", "eq"), (0x28, "eq:A:low", "eq"),
+        (0x2A, "eq:B:high", "eq"), (0x2C, "eq:B:mid", "eq"), (0x2E, "eq:B:low", "eq"),
+        (0x30, "eq:D:high", "eq"), (0x32, "eq:D:mid", "eq"), (0x34, "eq:D:low", "eq"),
+        # The FX knob directly under each channel's EQ stack: this is the
+        # filter knob on the mixer and the depth of the selected effect.
+        (0x36, "filter:C", "unit"),
+        (0x38, "filter:A", "unit"),
+        (0x3A, "filter:B", "unit"),
+        (0x3C, "filter:D", "unit"),
+    ),
+}
+
+# Report 1: (payload byte offset, bit mask, action). The channel faders own
+# the volume, the FX knobs own the filter; these are the buttons around them.
+HID_BUTTONS: Dict[str, Tuple[Tuple[int, int, str], ...]] = {
+    "A": (),
+    "B": (
+        # Offsets are payload indices, i.e. the report id is not included.
+        # Left physical deck: Shift / Cue / Play / Sync.
+        (0x00, 0x01, "shift:A"),
+        (0x01, 0x80, ""),            # cue
+        (0x02, 0x01, "play:A"),
+        (0x01, 0x08, "sync:A"),
+        # Right physical deck.
+        (0x03, 0x02, "shift:B"),
+        (0x05, 0x01, ""),            # cue
+        (0x05, 0x02, "play:B"),
+        (0x04, 0x10, "sync:B"),
+        # Deck switches: the left pair chooses A/C, the right pair B/D.
+        (0x01, 0x02, "deck:A"),
+        (0x01, 0x04, "deck:C"),
+        (0x04, 0x04, "deck:B"),
+        (0x04, 0x08, "deck:D"),
+        # Headphone cue, one per channel.
+        (0x07, 0x01, "monitor:A"),
+        (0x07, 0x02, "monitor:B"),
+        (0x06, 0x80, "monitor:C"),
+        (0x07, 0x04, "monitor:D"),
+        # FX enable, one per channel.
+        (0x06, 0x10, "effect-toggle:A"),
+        (0x06, 0x20, "effect-toggle:B"),
+        (0x06, 0x08, "effect-toggle:C"),
+        (0x06, 0x40, "effect-toggle:D"),
+        # FX select: the four numbered squares, then the filter slot.
+        (0x07, 0x08, "effect-slot:1"),
+        (0x07, 0x10, "effect-slot:2"),
+        (0x07, 0x20, "effect-slot:3"),
+        (0x07, 0x40, "effect-slot:4"),
+        (0x07, 0x80, ""),            # filter slot
+        # Load buttons, left and right.
+        (0x08, 0x01, "load"),
+        (0x08, 0x08, "load"),
+    ),
+}
 
 
 def split_midi_bytes(data: bytes) -> List[Tuple[int, int, int]]:
@@ -729,10 +1182,19 @@ class MixerMidiListener:
             backoff = 1.0
 
     def _run_coremidi(self, profile: str) -> None:
+        # The four-channel Kontrol publishes no CoreMIDI port on macOS: it is a
+        # vendor-defined HID surface. Try MIDI first (so a controller that does
+        # expose it keeps the shared map), then fall back to HID.
+        # A Mac with a Kontrol surface is handled over HID straight away: the
+        # four-channel unit publishes no CoreMIDI port, and creating a client
+        # for a port that will never appear is wasted work (and a run-loop
+        # owner that has to be torn down again).
+        if self._hid_available(profile):
+            self._run_hid(profile)
+            return
         reader = CoreMidiCallbackReader(profile, on_message=self._dispatch)
         if not reader.open():
-            self.status = f"waiting for {PROFILE_LABELS[profile]} MIDI"
-            time.sleep(1.0)
+            self._run_hid(profile)
             return
         self._core = reader
         names = ", ".join(name for _src, name in reader.sources)
@@ -749,6 +1211,50 @@ class MixerMidiListener:
                 pass
         reader.close()
         self._core = None
+
+    def _hid_available(self, profile: str) -> bool:
+        """True when the IOKit HID device for this profile is present."""
+        try:
+            if not sys.platform.startswith("darwin"):
+                return False
+            probe = KontrolHidReader(profile)
+            return bool(probe._load() and probe._first_device())
+        except Exception:
+            return False
+
+    def _run_hid(self, profile: str) -> None:
+        """Read the Kontrol surface directly over IOKit HID (macOS only)."""
+        reader = KontrolHidReader(profile, on_message=self._dispatch_hid)
+        if not reader.open():
+            self.status = f"waiting for {PROFILE_LABELS[profile]} (MIDI/HID)"
+            time.sleep(1.0)
+            return
+        self._core = reader
+        self.device_name = reader.device_name or PROFILE_LABELS[profile]
+        self.device_path = "hid"
+        self.status = f"mapped {self.device_name} (hid)"
+        self.last_message = "mapped"
+        _log(f"mapped {self.device_name} over HID ({profile})")
+        while self._running and self._profile == profile:
+            time.sleep(0.2)
+        reader.close()
+        self._core = None
+
+    def _dispatch_hid(self, action: str, value: float) -> None:
+        """Publish one HID-derived action (already translated by the reader)."""
+        if action.startswith("filter:"):
+            self._emit(action, value, "hid filter")
+            return
+        if action.startswith("pitch:"):
+            self._emit(action, value, "hid pitch")
+            return
+        if action.startswith(("channel:", "monitor:", "trim:", "eq:")):
+            self._emit(action, value, "hid fader")
+            return
+        if action in ("crossfader", "master_volume", "monitor_volume"):
+            self._emit(action, value, "hid")
+            return
+        self._emit(action, value, "hid button")
 
     def _run_sequencer(self, port: Dict[str, str]) -> None:
         """Read the ALSA sequencer port; multiple listeners may share it."""
@@ -951,4 +1457,4 @@ class MixerMidiListener:
 
 
 # Historical name: the mixer imported this class before the profile split.
-TraktorMidiListener = MixerMidiListener
+DJMidiListener = MixerMidiListener

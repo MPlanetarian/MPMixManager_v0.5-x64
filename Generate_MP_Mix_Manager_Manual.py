@@ -235,7 +235,7 @@ def build_pdf(filename="MPlanetarian_MP_Mix_Manager_v0.3_Manual.pdf"):
     story.append(Paragraph("System Architecture & Highlights", h1_style))
     story.append(HRFlowable(width="100%", thickness=1, color=c_accent, spaceBefore=2, spaceAfter=8))
     story.append(Paragraph(
-        f"<b>MP Mix Archive Manager (MP_Mix_Manager_v{VERSION})</b> is a professional workstation orchestration console designed for high-resolution audio mastering, multi-hour DJ recording curation, Traktor Pro library management, live stream monitoring, and local AI workflow automation across Linux, macOS, Windows, and FreeBSD.",
+        f"<b>MP Mix Archive Manager (MP_Mix_Manager_v{VERSION})</b> is a professional workstation orchestration console designed for high-resolution audio mastering, multi-hour DJ recording curation, DJ Pro library management, live stream monitoring, and local AI workflow automation across Linux, macOS, Windows, and FreeBSD.",
         body_style
     ))
     story.append(Spacer(1, 10))
@@ -264,19 +264,19 @@ def build_pdf(filename="MPlanetarian_MP_Mix_Manager_v0.3_Manual.pdf"):
     story.append(t_alarm)
     story.append(Spacer(1, 10))
 
-    # Spotlight 2: Traktor Harmonic Prep Box
-    traktor_box_data = [[
+    # Spotlight 2: DJ Harmonic Prep Box
+    dj_box_data = [[
         Paragraph(
-            "<b>SPOTLIGHT: Traktor Pro Live Session History to 4-Deck Prep</b><br/>"
-            "&bull; <b>Automated Discovery:</b> Automatically locates and reads <code>collection.nml</code> and <code>History.nml</code> across Traktor 3 and Traktor Pro 4 without manual path setup.<br/>"
+            "<b>SPOTLIGHT: DJ Pro Live Session History to 4-Deck Prep</b><br/>"
+            "&bull; <b>Automated Discovery:</b> Automatically locates and reads <code>collection.nml</code> and <code>History.nml</code> across DJ 3 and DJ Pro 4 without manual path setup.<br/>"
             "&bull; <b>Harmonic Key Sorting:</b> Reconstructs past live setlists in ascending Camelot musical key order (1A&ndash;12B) to guarantee compatible initial transitions.<br/>"
-            "&bull; <b>Root Collection Injection:</b> Generates a verified NML playlist directly into Traktor's root library tree (<code>$ROOT</code>).<br/>"
-            "&bull; <b>Full-Screen Stage Launch:</b> Brings Traktor Pro to the foreground in full-screen mode and pre-loads Decks A, B, C, and D with the first four tracks ready to mix.",
+            "&bull; <b>Root Collection Injection:</b> Generates a verified NML playlist directly into DJ's root library tree (<code>$ROOT</code>).<br/>"
+            "&bull; <b>Full-Screen Stage Launch:</b> Brings DJ Pro to the foreground in full-screen mode and pre-loads Decks A, B, C, and D with the first four tracks ready to mix.",
             callout_style
         )
     ]]
-    t_traktor = Table(traktor_box_data, colWidths=[printable_width])
-    t_traktor.setStyle(TableStyle([
+    t_dj = Table(dj_box_data, colWidths=[printable_width])
+    t_dj.setStyle(TableStyle([
         ('BACKGROUND', (0,0), (-1,-1), colors.HexColor("#F8FAFC")),
         ('BOX', (0,0), (-1,-1), 1, colors.HexColor("#CBD5E1")),
         ('LINEBEFORE', (0,0), (0,-1), 4, colors.HexColor("#059669")),
@@ -285,7 +285,7 @@ def build_pdf(filename="MPlanetarian_MP_Mix_Manager_v0.3_Manual.pdf"):
         ('LEFTPADDING', (0,0), (-1,-1), 10),
         ('RIGHTPADDING', (0,0), (-1,-1), 10),
     ]))
-    story.append(t_traktor)
+    story.append(t_dj)
     story.append(Spacer(1, 14))
 
     # ---------------------------------------------------------
@@ -313,7 +313,7 @@ def build_pdf(filename="MPlanetarian_MP_Mix_Manager_v0.3_Manual.pdf"):
         ("Section 2: Tracklist, Metadata & Promotion", [
             ("14", "Tracklist Suite", "Browses, searches, and exports tracklists to styled HTML and printable vector PDF documents."),
             ("15", "Mix Search & Live Playback", "Searches archive catalog, initiates cliamp playback, and displays live setlists in the console."),
-            ("16", "Scan Missing Tracklists", "Parses Traktor Pro collection.nml history files to generate timestamped text tracklists."),
+            ("16", "Scan Missing Tracklists", "Parses DJ Pro collection.nml history files to generate timestamped text tracklists."),
             ("17", "Master Tracklist Index", "Compiles all individual tracklists into a single, unified searchable HTML index file."),
             ("18", "MusicBrainz Picard", "Launches Picard audio tagger; automatically installs missing dependencies across platforms."),
             ("19", "Promo & Outreach Emailer", "Formats and delivers promotional emails to labels, publishers, and club promoters with artwork and cue attachments."),
@@ -321,7 +321,7 @@ def build_pdf(filename="MPlanetarian_MP_Mix_Manager_v0.3_Manual.pdf"):
             ("21", "Music Store Quick-Launch", "Parallel browser dispatcher for Beatport, Apple Music, and Bandcamp store portals.")
         ]),
         ("Section 3: Audio Playback, DAWs & Sound Suite", [
-            ("22", "DAWs Launch Hub", "Unified launcher for REAPER, Logic Pro, FL Studio, Traktor Pro, GarageBand, Ardour, LMMS, Bitwig, and Bespoke Synth."),
+            ("22", "DAWs Launch Hub", "Unified launcher for REAPER, Logic Pro, FL Studio, DJ Pro, GarageBand, Ardour, LMMS, Bitwig, and Bespoke Synth."),
             ("23", "Open Mix in DAW", "Searches mixes by keyword and opens stems directly in REAPER, Logic Pro, FL Studio, or Audacity."),
             ("24", "Spectrogram Analysis Suite", "Renders in-place acoustic spectrograms using Spek, SoX 24-bit colormaps, Sonic Visualiser, and Praat."),
             ("25", "Audacity Audio Editor", "Launches Audacity or installs via Homebrew, Flatpak, winget, or native package managers."),
@@ -332,7 +332,7 @@ def build_pdf(filename="MPlanetarian_MP_Mix_Manager_v0.3_Manual.pdf"):
             ("30", "Archive Playlists Suite", "Builds, synchronizes, and exports .m3u8 and .xspf playlists to Strawberry, VLC, mpv, or Kodi."),
             ("31", "Strawberry Music Player", "Opens Strawberry Music Player in a separate desktop window."),
             ("32", "VLC Media Player", "Launches VLC audio/video media player."),
-            ("33", "Traktor Harmonic Prep / Haruna", "macOS: Sorts Traktor session history into harmonic Camelot keys (1A-12B), injects into root, and pre-loads Decks A-D. Linux: Launches Haruna."),
+            ("33", "DJ Harmonic Prep / Haruna", "macOS: Sorts DJ session history into harmonic Camelot keys (1A-12B), injects into root, and pre-loads Decks A-D. Linux: Launches Haruna."),
             ("34", "Kodi Media Center", "Launches Kodi home theater software."),
             ("35", "Connected USB MIDI Devices", "Enumerates connected MIDI synthesizers, DJ controllers, and hardware control surfaces."),
             ("36", "Studio Hardware Diagnostics", "Probes active PipeWire/ALSA audio sinks, sample rates, buffer latencies, and connected studio interfaces."),
@@ -354,7 +354,7 @@ def build_pdf(filename="MPlanetarian_MP_Mix_Manager_v0.3_Manual.pdf"):
         ]),
         ("Section 5: Live Monitors & System Diagnostics", [
             ("50", "Live Tracklist Monitor", "Real-time console display tracking Strawberry MPRIS and cliamp playback progress."),
-            ("51", "Traktor Live Monitor", "Cross-platform monitor displaying Traktor CPU %, RAM, deck states, active recording file locks, and AppleScript triggers."),
+            ("51", "DJ Live Monitor", "Cross-platform monitor displaying DJ CPU %, RAM, deck states, active recording file locks, and AppleScript triggers."),
             ("52", "Live File Transfer Monitor", "Inspects transfer speeds, byte positions, and percentage for huge multi-gigabyte files."),
             ("53", "Chrome Upload Monitor", "Monitors web browser upload processes (Apple Podcasts Connect, YouTube Studio) in real time."),
             ("54", "Advanced Archive Statistics", "Calculates total audio duration, file counts, storage footprint, and tracklist completeness."),

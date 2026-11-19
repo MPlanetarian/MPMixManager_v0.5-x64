@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Unit tests for Main Menu selector breathing animation and macOS Traktor auto-launch:
+Unit tests for Main Menu selector breathing animation and macOS DJ auto-launch:
 - highlight_menu_line supports breath_factor parameter (100 down to 15)
 - highlight_menu_line scales background RGB and pointer RGB smoothly
 - Mix_Archive_Manager.sh contains the 10-second idle breathing trigger logic
-- run_deferred_startup contains macOS Traktor detection and console tab launch
+- run_deferred_startup contains macOS DJ detection and console tab launch
 """
 
 import unittest
@@ -16,7 +16,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 MGR_SH = BASE_DIR / "Mix_Archive_Manager.sh"
 
 
-class TestMenuBreathingAndTraktor(unittest.TestCase):
+class TestMenuBreathingAndDJ(unittest.TestCase):
     def test_highlight_menu_line_breathing_scaling(self):
         """Verifies that highlight_menu_line produces scaled RGB escape codes when breath_factor is changed."""
         bash_cmd = f"""
@@ -63,21 +63,21 @@ class TestMenuBreathingAndTraktor(unittest.TestCase):
         # Check condition: idle time >= 10
         self.assertTrue(re.search(r'\[\s*"\$_idle_time"\s*-ge\s*10\s*\]', content))
 
-    def test_macos_traktor_startup_tab_launch_present(self):
-        """Startup opens the Traktor monitor tab only when the Traktor app is running."""
+    def test_macos_dj_startup_tab_launch_present(self):
+        """Startup opens the DJ monitor tab only when the DJ app is running."""
         content = MGR_SH.read_text(encoding="utf-8", errors="replace")
-        self.assertIn("traktor_app_is_running", content)
-        self.assertIn('launch_in_terminal "Traktor Live Monitor"', content)
+        self.assertIn("dj_app_is_running", content)
+        self.assertIn('launch_in_terminal "DJ Live Monitor"', content)
         self.assertIn('"tab"', content)
         self.assertNotIn('grep -qi "true"', content)
 
-    def test_traktor_app_is_running_ignores_closed_app_and_helper_scripts(self):
-        """AppleScript 'false' and traktor_*.py processes are not the Traktor app."""
+    def test_dj_app_is_running_ignores_closed_app_and_helper_scripts(self):
+        """AppleScript 'false' and dj_*.py processes are not the DJ app."""
         script = r"""
         set -e
-        eval "$(sed -n '/^traktor_app_is_running() {/,/^}/p' Mix_Archive_Manager.sh)"
+        eval "$(sed -n '/^dj_app_is_running() {/,/^}/p' Mix_Archive_Manager.sh)"
         check() {
-            if traktor_app_is_running; then echo "$1:YES"; else echo "$1:NO"; fi
+            if dj_app_is_running; then echo "$1:YES"; else echo "$1:NO"; fi
         }
         pgrep() { return 1; }
         osascript() { printf '%s\n' "false"; }
@@ -86,13 +86,13 @@ class TestMenuBreathingAndTraktor(unittest.TestCase):
         check open
         osascript() { printf '%s\n' "false"; }
         pgrep() {
-            # Helper scripts contain the word Traktor, but they are not the app.
+            # Helper scripts contain the word DJ, but they are not the app.
             if [ "$1" = "-f" ]; then return 0; fi
             return 1
         }
         check helper
         pgrep() {
-            if [ "$1" = "-x" ] && [ "$2" = "Traktor" ]; then return 0; fi
+            if [ "$1" = "-x" ] && [ "$2" = "DJ" ]; then return 0; fi
             return 1
         }
         check process

@@ -9,7 +9,7 @@
 #  - MP_Audio_Player_Liquid_Glass*.py (Liquid Glass OpenGL/Vulkan/Metal players)
 #  - launch_liquid_glass.sh / launch-liquid-glass
 #  - MP_Liquid_Visualizer.py / mp_liquid_visualizer_vulkan.py
-#  - traktor_s4_midi.py (MIDI controller companion)
+#  - dj_s4_midi.py (MIDI controller companion)
 #  - Bluetooth pactl subscribe monitors spawned by player
 # Cleans up lock, socket, PID, and state files.
 # ==============================================================================
@@ -85,7 +85,7 @@ PID_FILE="${CONFIG_DIR}/mp_player.pid"
 PORT_FILE="${CONFIG_DIR}/mp_audio_player.port"
 SOCK_FILE="${CONFIG_DIR}/mp_audio_player.sock"
 STATE_FILE="${CONFIG_DIR}/mp_player_state.json"
-S4_PID_FILE="${CONFIG_DIR}/traktor_s4_midi.pid"
+S4_PID_FILE="${CONFIG_DIR}/dj_s4_midi.pid"
 
 # ------------------------------------------------------------------------------
 # 1. Attempt graceful IPC stop if socket or port is active
@@ -149,7 +149,7 @@ if [ -f "$PID_FILE" ]; then
     fi
 fi
 
-# Known PID from Traktor S4 MIDI file
+# Known PID from DJ S4 MIDI file
 if [ -f "$S4_PID_FILE" ]; then
     S4_PID=""
     IFS= read -r S4_PID < "$S4_PID_FILE" 2>/dev/null || true
@@ -169,7 +169,7 @@ if [[ ! "$UNAME_S" =~ (MINGW|MSYS|CYGWIN) ]]; then
         "launch_liquid_glass"
         "launch-liquid-glass"
         "launch_liquid_visualizer"
-        "traktor_s4_midi\.py"
+        "dj_s4_midi\.py"
         "get_mp_audio_player_file"
     )
 
@@ -208,7 +208,7 @@ KILLED_COUNT=0
 # ------------------------------------------------------------------------------
 if [[ "$UNAME_S" =~ (MINGW|MSYS|CYGWIN) ]]; then
     # Windows native termination
-    powershell.exe -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { \$_.CommandLine -like '*MP_Audio_Player*' -or \$_.CommandLine -like '*Liquid_Glass*' -or \$_.CommandLine -like '*Liquid_Visualizer*' -or \$_.CommandLine -like '*traktor_s4_midi*' } | ForEach-Object { Stop-Process -Id \$_.ProcessId -Force }" &>/dev/null || true
+    powershell.exe -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { \$_.CommandLine -like '*MP_Audio_Player*' -or \$_.CommandLine -like '*Liquid_Glass*' -or \$_.CommandLine -like '*Liquid_Visualizer*' -or \$_.CommandLine -like '*dj_s4_midi*' } | ForEach-Object { Stop-Process -Id \$_.ProcessId -Force }" &>/dev/null || true
     taskkill.exe /F /FI "WINDOWTITLE eq MP Audio Player*" &>/dev/null || true
     taskkill.exe /F /FI "WINDOWTITLE eq MP Mini Audio Player*" &>/dev/null || true
     taskkill.exe /F /FI "WINDOWTITLE eq MP Micro Audio Player*" &>/dev/null || true
@@ -242,7 +242,7 @@ else
     pkill -9 -f "mp_liquid_visualizer_vulkan" 2>/dev/null || true
     pkill -9 -f "launch[-_]liquid[-_]glass" 2>/dev/null || true
     pkill -9 -f "launch_liquid_visualizer" 2>/dev/null || true
-    pkill -9 -f "traktor_s4_midi\.py" 2>/dev/null || true
+    pkill -9 -f "dj_s4_midi\.py" 2>/dev/null || true
 
     # Clean up orphaned pactl subscribe processes spawned by bluetooth router
     pkill -9 -f "pactl subscribe" 2>/dev/null || true

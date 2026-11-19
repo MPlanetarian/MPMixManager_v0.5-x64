@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Unit and integration tests for:
-1. Traktor History Range Extraction (Option 13 > Option 8 / scripts/extract_traktor_history_range.py)
+1. DJ History Range Extraction (Option 13 > Option 8 / scripts/extract_dj_history_range.py)
 2. Mix Search & MP Audio Player integration (Option 13 > Option 2)
 """
 
@@ -15,12 +15,12 @@ from pathlib import Path
 REPO_DIR = Path(__file__).resolve().parent.parent
 SCRIPT_DIR = REPO_DIR / "scripts"
 MANAGER_SCRIPT = REPO_DIR / "Mix_Archive_Manager.sh"
-EXTRACT_SCRIPT = SCRIPT_DIR / "extract_traktor_history_range.py"
+EXTRACT_SCRIPT = SCRIPT_DIR / "extract_dj_history_range.py"
 
 
-class TestTraktorHistoryRangeExtraction(unittest.TestCase):
+class TestDJHistoryRangeExtraction(unittest.TestCase):
     def setUp(self):
-        self.test_dir = tempfile.mkdtemp(prefix="mp_test_traktor_")
+        self.test_dir = tempfile.mkdtemp(prefix="mp_test_dj_")
         self.mock_nml = Path(self.test_dir) / "history_2026y07m20d_08h01m28s.nml"
 
         # Create a mock NML with 150 entries to test slicing and extraction
@@ -131,9 +131,9 @@ class TestTraktorHistoryRangeExtraction(unittest.TestCase):
         self.assertNotEqual(res.returncode, 0)
         self.assertIn("cannot be greater than end track", res.stderr)
 
-    def test_real_traktor_history_file_if_available(self):
-        """Verifies parsing the actual real Traktor history file if present on disk."""
-        real_nml = Path("/run/media/mplanetarian/WD BLACK B/MIX_ARCHIVE/Traktor 3.11.1/History/history_2026y07m20d_08h01m28s.nml")
+    def test_real_dj_history_file_if_available(self):
+        """Verifies parsing the actual real DJ history file if present on disk."""
+        real_nml = Path("/run/media/mplanetarian/WD BLACK B/MIX_ARCHIVE/DJ 3.11.1/History/history_2026y07m20d_08h01m28s.nml")
         if not real_nml.is_file():
             self.skipTest("Real history file not mounted")
 
@@ -162,7 +162,7 @@ class TestTraktorHistoryRangeExtraction(unittest.TestCase):
 
 class TestTracklistSuiteMenuIntegration(unittest.TestCase):
     def test_option13_menu_has_option8_and_mp_player_label(self):
-        """Verifies the Tracklist suite (option 14) presents option 8 for the Traktor
+        """Verifies the Tracklist suite (option 14) presents option 8 for the DJ
         history range and option 2 labelled MP Audio Player."""
         piped_input = "14\n0\n38\n"
         env = dict(os.environ, TERM="xterm-256color", LINES="35", COLUMNS="110",
@@ -178,8 +178,8 @@ class TestTracklistSuiteMenuIntegration(unittest.TestCase):
         self.assertEqual(res.returncode, 0)
         self.assertIn("Search for Mix & Auto-Play with Live Tracklist View", res.stdout)
         self.assertIn("MP Audio Player", res.stdout)
-        self.assertIn("Extract Tracklist from Traktor History Files by Range", res.stdout)
-        self.assertIn("Traktor .nml History", res.stdout)
+        self.assertIn("Extract Tracklist from DJ History Files by Range", res.stdout)
+        self.assertIn("DJ .nml History", res.stdout)
         # Ensure cliamp is NOT shown in option 2
         self.assertNotIn("(cliamp Window)", res.stdout)
 

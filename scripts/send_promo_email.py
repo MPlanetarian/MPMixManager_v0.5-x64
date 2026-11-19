@@ -68,7 +68,7 @@ def load_config():
         ),
         "PROMO_TECH_RIDER": (
             "Standard Rider: 3x Pioneer CDJ-3000 / CDJ-2000NXS2 + 1x Pioneer DJM-A9 / DJM-900NXS2 mixer linked via Ethernet hub; "
-            "or Traktor Pro 3/4 setup with Native Instruments Traktor Kontrol X1/Z2 + stereo audio interface. High-grade booth monitors."
+            "or DJ Pro 3/4 setup with Native Instruments DJ Kontrol X1/Z2 + stereo audio interface. High-grade booth monitors."
         )
     }
 

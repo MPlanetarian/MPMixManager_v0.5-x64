@@ -27,7 +27,7 @@ What began on September 13, 2026, as a collection of scattered shell utilities a
 ```
 2026-09-13 [Initial Codebase Creation] ──────────► MP_Mix_Manager_v0.1 & Git Setup
 2026-09-14 [v0.2 Feature Explosion]   ──────────► 69 Ops: Publishing, Spectrograms, PPM Art
-2026-09-14 [Workstation HUD & Traktor] ──────────► KWin HUD, Latency Banner, Traktor Monitor (72 Ops)
+2026-09-14 [Workstation HUD & DJ] ──────────► KWin HUD, Latency Banner, DJ Monitor (72 Ops)
 2026-09-15 [Playlists & Strawberry]    ──────────► Playlist-to-FLAC, Strawberry MPRIS Integration
 2026-09-16 [Audio/Video Splitting]    ──────────► Split_FLAC_File.sh, Split_Video_File.sh
 2026-09-17 [AI Hub & Beszel]           ──────────► Beszel Hub/Agent (Opt 57), Ollama Serve (Opt 58)
@@ -78,7 +78,7 @@ What began on September 13, 2026, as a collection of scattered shell utilities a
      - Automated Apple Podcasts compliant RSS feed generator (`podcast_feed.xml`) and RFC 5545 iCalendar (`.ics`) exporter.
   7. **Studio Hardware & Software Diagnostics (`inspect_audio_studio.py` / `.sh`)**:
      - Audits active audio architecture (PipeWire, PulseAudio, ALSA), hardware buffer latency, and detected MIDI controllers (AKAI MPKmini2, Arturia MiniLab mkII, Valve).
-     - Scans installed digital audio workstations: REAPER, Logic Pro, FL Studio, Traktor Pro, Audacity, Ardour, Bitwig, Picard, Spek, cliamp, VLC, Haruna, and Kodi.
+     - Scans installed digital audio workstations: REAPER, Logic Pro, FL Studio, DJ Pro, Audacity, Ardour, Bitwig, Picard, Spek, cliamp, VLC, Haruna, and Kodi.
   8. **Synchronized Companion Video Daemon (`sync_video_companion.py` / `.sh`)**:
      - Background daemon detecting currently playing audio via MPRIS, finding matching video companions (`.mp4`, `.mkv`), launching them in VLC/Haruna/MPV, and killing video playback when audio ceases.
   9. **Custom Playlist Creator (`manage_playlists.py` / `.sh`)**:
@@ -91,21 +91,21 @@ What began on September 13, 2026, as a collection of scattered shell utilities a
 - **Git Commits**:
   - `4b3ac96` — *Add audio converter, tracklist HTML/PDF docs, duplicate cleaner, checksums, cover compressor, and 56-operation categorized menu*
   - `47b687b` — *Add YouTube 4K & 720p video generation, default audio player configuration, and startup mix autoplay with cover & tracklist display*
-  - `2cea384` — *Add Logic Pro, Traktor, Winamp, Foobar2000, GarageBand & FL Studio support, Open WAV in DAW, Spek generator, and FreeBSD platform support*
+  - `2cea384` — *Add Logic Pro, DJ, Winamp, Foobar2000, GarageBand & FL Studio support, Open WAV in DAW, Spek generator, and FreeBSD platform support*
   - `0be50ef` — *Add promotional & publisher outreach email system for podcast enquiries, club promoters, radio & labels*
   - `9e45702` — *Add installation path migration, config backup/export/import suite, and universal mix search & importer for local drives and SMB*
   - `522bac5` — *feat(v0.2): release v0.2 with publishing calendar, studio diagnostics, PPM art, audio control & 69 operations*
 
 ---
 
-### Phase 3: Workstation HUD, Audio Latency & Traktor Pro Integration (2026-09-14 02:00 – 03:30)
+### Phase 3: Workstation HUD, Audio Latency & DJ Pro Integration (2026-09-14 02:00 – 03:30)
 
-#### Session 3: Plasma 6 KWin Alignment, Latency Banner & Live Traktor Recorder
-- **Primary Request**: Integrate live Traktor Pro monitoring, create a borderless floating tracklist HUD on Bazzite Linux, align cover art and tracklist side-by-side, probe live sound card latency on startup, and add weather conditions.
+#### Session 3: Plasma 6 KWin Alignment, Latency Banner & Live DJ Recorder
+- **Primary Request**: Integrate live DJ Pro monitoring, create a borderless floating tracklist HUD on Bazzite Linux, align cover art and tracklist side-by-side, probe live sound card latency on startup, and add weather conditions.
 - **Engineering Accomplished**:
-  1. **Traktor Pro Live Monitor & Audio Recorder Control (`traktor_monitor.py` / `.sh`, Option 48)**:
-     - Merged Traktor monitoring engine from remote macOS workstation (`192.0.2.20`) into core repo.
-     - Built comprehensive Windows 10/11 support (`Traktor.exe`, `Traktor Pro 3.exe`, `Traktor Pro 4.exe` detection, `msvcrt` hotkey handling, PowerShell CIM queries, and `WScript.Shell` recording toggle automation).
+  1. **DJ Pro Live Monitor & Audio Recorder Control (`dj_monitor.py` / `.sh`, Option 48)**:
+     - Merged DJ monitoring engine from remote macOS workstation (`192.0.2.20`) into core repo.
+     - Built comprehensive Windows 10/11 support (`DJ.exe`, `DJ Pro 3.exe`, `DJ Pro 4.exe` detection, `msvcrt` hotkey handling, PowerShell CIM queries, and `WScript.Shell` recording toggle automation).
      - Linux `/proc/$pid/fd` live file growth tracking and macOS AppleScript menu clicking.
   2. **Technical Audio Specification Inspector (`inspect_playing_audio.py` / `.sh`, Option 28)**:
      - Real-time technical stream analysis: Container, exact bit depth (`24-Bit`, `16-Bit`, `32-Bit Float`), sample rate (`48.0 kHz`, `96.0 kHz`), duration, file size, bitrate, FLAC compression ratio, and companion asset status.
@@ -126,7 +126,7 @@ What began on September 13, 2026, as a collection of scattered shell utilities a
   - `ed1aeb4` — *feat(tracklist): add borderless console tracklist viewer for Bazzite Linux and default OS consoles*
   - `e74702f` — *Add centered mix HUD alignment, live meteorological weather, music shopping, video launcher & YouTube autoplay*
   - `d70d748` — *feat: add audio specification inspector (Option 28) and live audio interface & latency banner*
-  - `747fa48` — *feat: integrate cross-platform Traktor Live Monitor & Audio Recorder (Option 48)*
+  - `747fa48` — *feat: integrate cross-platform DJ Live Monitor & Audio Recorder (Option 48)*
   - `3eded5f` — *fix(install): ensure Bash 3.2 compatibility on macOS for dependency probe*
   - `cee169c` — *fix(install): define DIM ANSI color sequence*
 
@@ -261,7 +261,7 @@ What began on September 13, 2026, as a collection of scattered shell utilities a
 | **05** | `verify_flac_integrity` | Verify Archive FLAC Audio Bitstream Integrity & Decodability |
 | **06** | `find_duplicate_mixes` | Detect & Remove Duplicate Mixes & Redundant Masters |
 | **07** | `manage_checksums` | Compute & Verify SHA-256 / MD5 Master Audio Checksums |
-| **08** | `parse_traktor_history` | Parse Native Instruments Traktor History & Export Cue Sheet |
+| **08** | `parse_dj_history` | Parse Native Instruments DJ History & Export Cue Sheet |
 | **09** | `manage_audio_tags` | Inspect & Batch Tag FLAC Metadata (ID3v2, Vorbis Comments) |
 | **10** | `compress_archive_covers` | Batch Optimize & Compress Cover Art Artwork (PNG / JPEG) |
 
@@ -282,7 +282,7 @@ What began on September 13, 2026, as a collection of scattered shell utilities a
 ### Section 3: Digital Audio Workstations & Studio Production (21 - 30)
 | Option | Identifier | Description |
 | :---: | :--- | :--- |
-| **21** | `manage_daws` | Digital Audio Workstations Hub (REAPER, Logic, FL Studio, Traktor) |
+| **21** | `manage_daws` | Digital Audio Workstations Hub (REAPER, Logic, FL Studio, DJ) |
 | **22** | `generate_spek` | Acoustic Spectrogram Suite (Spek, Sonic Visualiser, SoX, Praat) |
 | **23** | `manage_picard` | Launch MusicBrainz Picard Automated Audio Tagger |
 | **24** | `open_wav_in_daw` | Select Archive WAV File & Launch Directly in Studio DAW |
@@ -317,7 +317,7 @@ What began on September 13, 2026, as a collection of scattered shell utilities a
 | **45** | `view_active_transfers` | Monitor Background Rclone & Rsync File Synchronizations |
 | **46** | `monitor_system_resources`| Open System Hardware Performance Monitor (Btop / Nvtop / Htop) |
 | **47** | `view_playing_cover` | Open Currently Playing Mix High-Resolution Cover Art Window |
-| **48** | `manage_traktor_monitor` | Traktor Pro Live Monitor & Audio Recorder Control Suite |
+| **48** | `manage_dj_monitor` | DJ Pro Live Monitor & Audio Recorder Control Suite |
 | **49** | `view_storage_breakdown` | Inspect Archive Disks Space & Mount Point Utilization |
 | **50** | `view_recent_render_logs`| Inspect Background FFmpeg Video Rendering & Conversion Logs |
 
@@ -368,7 +368,7 @@ What began on September 13, 2026, as a collection of scattered shell utilities a
 | [`scripts/beszel.sh`](file:///home/mplanetarian/MP_Mix_Manager_v0.3/scripts/beszel.sh) | Bash | Beszel Hub & Beszel Agent container management |
 | [`scripts/Split_FLAC_File.sh`](file:///home/mplanetarian/MP_Mix_Manager_v0.3/scripts/Split_FLAC_File.sh) | Bash | Sample-accurate lossless FLAC audio divider |
 | [`scripts/Split_Video_File.sh`](file:///home/mplanetarian/MP_Mix_Manager_v0.3/scripts/Split_Video_File.sh) | Bash | Lossless stream-copy / re-encode MP4 video divider |
-| [`scripts/traktor_monitor.py`](file:///home/mplanetarian/MP_Mix_Manager_v0.3/scripts/traktor_monitor.py) | Python 3 | Cross-platform Traktor Pro real-time recorder & monitor |
+| [`scripts/dj_monitor.py`](file:///home/mplanetarian/MP_Mix_Manager_v0.3/scripts/dj_monitor.py) | Python 3 | Cross-platform DJ Pro real-time recorder & monitor |
 | [`scripts/inspect_playing_audio.py`](file:///home/mplanetarian/MP_Mix_Manager_v0.3/scripts/inspect_playing_audio.py) | Python 3 | Technical audio specification & stream inspector |
 | [`scripts/get_audio_interface.py`](file:///home/mplanetarian/MP_Mix_Manager_v0.3/scripts/get_audio_interface.py) | Python 3 | Sub-120ms hardware buffer latency and audio card probe |
 | [`scripts/align_mix_windows.py`](file:///home/mplanetarian/MP_Mix_Manager_v0.3/scripts/align_mix_windows.py) | Python 3 | KDE Plasma 6 KWin DBus side-by-side HUD alignment |
@@ -468,7 +468,7 @@ What began on September 13, 2026, as a collection of scattered shell utilities a
 | `8d31fc4` | 2026-09-17 00:23:54 | MPlanetarian | `feat: add logic to prevent launching cliamp if audio player is running` |
 | `cee169c` | 2026-09-14 03:19:38 | MPlanetarian | `fix(install): define DIM ANSI color sequence` |
 | `3eded5f` | 2026-09-14 03:19:18 | MPlanetarian | `fix(install): ensure Bash 3.2 compatibility on macOS for dependency probe` |
-| `747fa48` | 2026-09-14 03:17:55 | MPlanetarian | `feat: integrate cross-platform Traktor Live Monitor & Audio Recorder (Option 48)` |
+| `747fa48` | 2026-09-14 03:17:55 | MPlanetarian | `feat: integrate cross-platform DJ Live Monitor & Audio Recorder (Option 48)` |
 | `d70d748` | 2026-09-14 02:47:47 | MPlanetarian | `feat: add audio specification inspector (Option 28) and live audio interface & latency banner` |
 | `e74702f` | 2026-09-14 02:39:23 | MPlanetarian | `Add centered mix HUD alignment, live meteorological weather, music shopping, video launcher & YouTube autoplay` |
 | `ed1aeb4` | 2026-09-14 02:28:17 | MPlanetarian | `feat(tracklist): add borderless console tracklist viewer for Bazzite Linux and default OS consoles` |
@@ -477,7 +477,7 @@ What began on September 13, 2026, as a collection of scattered shell utilities a
 | `522bac5` | 2026-09-14 01:45:49 | MPlanetarian | `feat(v0.2): release v0.2 with publishing calendar, studio diagnostics, PPM art, audio control & 69 operations` |
 | `9e45702` | 2026-09-14 01:33:45 | MPlanetarian | `Add installation path migration, config backup/export/import suite, and universal mix search & importer for local drives and SMB` |
 | `0be50ef` | 2026-09-14 01:18:24 | MPlanetarian | `Add promotional & outreach email system for podcast enquiries, club promoters, radio & labels` |
-| `2cea384` | 2026-09-14 01:13:53 | MPlanetarian | `Add Logic Pro, Traktor, Winamp, Foobar2000, GarageBand & FL Studio support, Open WAV in DAW, Spek generator, and FreeBSD platform support` |
+| `2cea384` | 2026-09-14 01:13:53 | MPlanetarian | `Add Logic Pro, DJ, Winamp, Foobar2000, GarageBand & FL Studio support, Open WAV in DAW, Spek generator, and FreeBSD platform support` |
 | `47b687b` | 2026-09-14 01:05:45 | MPlanetarian | `Add YouTube 4K & 720p video generation, default audio player configuration, and startup mix autoplay with cover & tracklist display` |
 | `4b3ac96` | 2026-09-14 01:01:15 | MPlanetarian | `Add audio converter, tracklist HTML/PDF docs, duplicate cleaner, checksums, cover compressor, and 56-operation categorized menu` |
 | `0c497f0` | 2026-09-14 00:30:02 | MPlanetarian | `ui: update top banner title to Mix Archive Manager (MP_Mix_Manager_v0.1)` |

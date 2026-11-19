@@ -29,6 +29,8 @@ from typing import Dict, List, Optional, Tuple
 
 __all__ = [
     "is_raspberry_pi",
+    "visualizer_supported",
+    "visualizer_unsupported_reason",
     "is_arm_linux",
     "pi_model",
     "pi_generation",
@@ -106,6 +108,31 @@ def is_raspberry_pi() -> bool:
     if override in ("0", "false", "no", "off"):
         return False
     return bool(pi_model())
+
+
+def visualizer_supported() -> bool:
+    """False on Raspberry Pi, where the MP Visualizer is not offered at all.
+
+    A Pi's VideoCore GPU cannot raymarch the twelve-scene SDF at a usable rate
+    no matter how the quality is tuned, and the window competes with audio
+    decoding for the same SoC. Rather than ship a control that opens a window
+    the board cannot drive, the visualizer is refused on this platform in every
+    launcher (console, MP Gui, the Liquid Player, the mixer, the Web Companion
+    and the tray).
+
+    Set ``MP_FORCE_VISUALIZER_ON_PI=1`` to override it for a deliberate test of
+    the renderer on that hardware; it is not documented as a user setting.
+    """
+    if (os.environ.get("MP_FORCE_VISUALIZER_ON_PI") or "").strip().lower() in ("1", "true", "yes", "on"):
+        return True
+    return not is_raspberry_pi()
+
+
+def visualizer_unsupported_reason() -> str:
+    """One sentence a launcher can show instead of opening the window."""
+    return ("The MP Visualizer is not available on Raspberry Pi: the VideoCore GPU "
+            "cannot run the 3D raymarch at a usable frame rate. Every other MP app "
+            "works normally.")
 
 
 def pi_generation() -> int:
@@ -436,7 +463,9 @@ def visualizer_fps_cap() -> int:
     enough for the visualizer and leaves headroom for audio decoding.
 
     ``MP_VISUALIZER_FPS_CAP`` overrides it (``0`` disables the cap). The value
-    is clamped to 10..120 so a typo cannot freeze the window.
+    is clamped to 10..240 so a typo cannot freeze the window, while still
+    allowing the 30 / 60 / 120 / 144 choices the Settings menu offers and a
+    240 Hz panel.
     """
     explicit = (os.environ.get("MP_VISUALIZER_FPS_CAP") or "").strip()
     if explicit:
@@ -446,7 +475,7 @@ def visualizer_fps_cap() -> int:
             value = -1
         if value <= 0:
             return 0
-        return max(10, min(120, value))
+        return max(10, min(240, value))
     return 30 if should_cap_frame_rate() else 0
 
 

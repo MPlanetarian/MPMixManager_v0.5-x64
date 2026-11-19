@@ -222,7 +222,7 @@ def interactive_ui():
         print(f"  {BOLD}{CYAN} E){NC} Edit / Re-order Tracks in Existing Playlist")
         print(f"  {BOLD}{CYAN} D){NC} Delete a Playlist")
         if sys.platform == "darwin":
-            print(f"  {BOLD}{CYAN} T){NC} Generate Traktor Playlist from History Files (macOS)")
+            print(f"  {BOLD}{CYAN} T){NC} Generate DJ Playlist from History Files (macOS)")
         print(f"\n  {BOLD}{CYAN} 0){NC} Return to Main Menu {DIM}(or 'q'){NC}")
         print(f"{BOLD}{BLUE}──────────────────────────────────────────────────────────────────────{NC}")
         
@@ -242,11 +242,11 @@ def interactive_ui():
                 print(f"{RED}Error: generate_archive_folder_playlists.py not found!{NC}")
                 time.sleep(1)
         elif cmd.lower() == 't' and sys.platform == "darwin":
-            traktor_script = get_base_dir() / "generate_traktor_playlist_from_history.py"
-            if traktor_script.is_file():
-                subprocess.run([sys.executable, str(traktor_script)])
+            dj_script = get_base_dir() / "generate_dj_playlist_from_history.py"
+            if dj_script.is_file():
+                subprocess.run([sys.executable, str(dj_script)])
             else:
-                print(f"{RED}Error: generate_traktor_playlist_from_history.py not found!{NC}")
+                print(f"{RED}Error: generate_dj_playlist_from_history.py not found!{NC}")
                 time.sleep(1)
         elif cmd.lower() == 'l':
             if not playlists:

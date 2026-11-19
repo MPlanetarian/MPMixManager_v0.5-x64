@@ -1,32 +1,32 @@
 #!/usr/bin/env python3
 """
-traktor_playlist_importer.py - Import Traktor playlists into the MP Audio Player
+dj_playlist_importer.py - Import DJ playlists into the MP Audio Player
 
-Traktor stores every playlist inside collection.nml. This module reads that
-database and turns each Traktor playlist into an MP Audio Player playlist
+DJ stores every playlist inside collection.nml. This module reads that
+database and turns each DJ playlist into an MP Audio Player playlist
 (.json + .m3u8) inside PLAYLISTS_GENERATED, so the player can open it in
 MUSIC mode.
 
 Rules enforced here:
   * Music Folders must be configured first (local drives or SMB shares).
-  * Every Traktor playlist is pre-generated in advance; a playlist that has
+  * Every DJ playlist is pre-generated in advance; a playlist that has
     not been generated cannot be used by the player.
   * Every file path is resolved against the configured Music Folders and
     validated before it is written to a playlist. Missing tracks are counted
     and never added.
-  * Traktor records the volume and directory it saw. When the library lives
+  * DJ records the volume and directory it saw. When the library lives
     on a different drive or mount point, the user must map the Music Folder
     to the folder that holds the same audio tree. Files are matched by their
     relative path (and then by file name), so a renamed mount point still
     resolves.
 
 Interactive:
-    python3 scripts/traktor_playlist_importer.py
+    python3 scripts/dj_playlist_importer.py
 
 Headless:
-    python3 scripts/traktor_playlist_importer.py --generate-all
-    python3 scripts/traktor_playlist_importer.py --list
-    python3 scripts/traktor_playlist_importer.py --generate "My Playlist"
+    python3 scripts/dj_playlist_importer.py --generate-all
+    python3 scripts/dj_playlist_importer.py --list
+    python3 scripts/dj_playlist_importer.py --generate "My Playlist"
 """
 
 from __future__ import annotations
@@ -50,8 +50,8 @@ CYAN = "\033[38;2;0;229;255m"
 PURPLE = "\033[38;2;176;88;255m"
 LINE = "  --------------------------------------------------------------------"
 BANNER = "======================================================================"
-PREVIEW_PREFIX = "TRAKTOR_"
-CATALOG_NAME = "TRAKTOR_PLAYLISTS.json"
+PREVIEW_PREFIX = "DJAPP_"
+CATALOG_NAME = "DJAPP_PLAYLISTS.json"
 
 
 def _app_dir() -> Path:
@@ -69,12 +69,12 @@ def _scripts_dir() -> Path:
 APP_DIR = _app_dir()
 SCRIPT_DIR = _scripts_dir()
 
-# The Traktor discovery helpers already exist for the history generator and
+# The DJ discovery helpers already exist for the history generator and
 # are reused here so one config file drives both features.
 try:
-    import generate_traktor_playlist_from_history as traktor_history
+    import generate_dj_playlist_from_history as dj_history
 except Exception:  # pragma: no cover - the module is always shipped
-    traktor_history = None
+    dj_history = None
 
 try:
     import music_folders_manager as mfm
@@ -143,7 +143,7 @@ def ensure_music_folder_indexes(interactive: bool = True, auto_scan: bool = Fals
     for name in missing:
         print(f"  {DIM}• {name}{NC}")
     print(
-        "\nScanned folder indexes are required to match Traktor files to your "
+        "\nScanned folder indexes are required to match DJ files to your "
         "library. Generating them now uses the normal Music Folders scan."
     )
     if interactive and not ask_yes("Generate the Music Folder playlists now? [Y/n]: "):
@@ -228,18 +228,18 @@ def _slugify(name: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Traktor collection parsing
+# DJ collection parsing
 # ---------------------------------------------------------------------------
 def find_collection_path(cfg: Optional[Dict[str, str]] = None) -> Optional[Path]:
-    if traktor_history is not None:
+    if dj_history is not None:
         try:
-            found = traktor_history.find_collection_path(cfg)
+            found = dj_history.find_collection_path(cfg)
             if found:
                 return Path(found)
         except Exception:
             pass
     # Fall back to the configured path without the history helper.
-    for key in ("TRAKTOR_COLLECTION_PATH",):
+    for key in ("DJ_COLLECTION_PATH",):
         value = os.path.expanduser(os.path.expandvars(os.environ.get(key, "")))
         if value and Path(value).is_file():
             return Path(value).resolve()
@@ -251,7 +251,7 @@ def find_collection_path(cfg: Optional[Dict[str, str]] = None) -> Optional[Path]
     for root in search_roots:
         if not root.is_dir():
             continue
-        for match in root.glob("Traktor*/collection.nml"):
+        for match in root.glob("DJ*/collection.nml"):
             return match.resolve()
     return None
 
@@ -292,7 +292,7 @@ def _track_metadata(entry: ET.Element) -> Dict[str, Any]:
 def _track_from_pkey(key: str) -> Dict[str, Any]:
     """Rebuild a LOCATION record from a PRIMARYKEY when it is not in COLLECTION.
 
-    Traktor writes keys as VOLUME + DIR + FILE, where DIR uses '/:' separators.
+    DJ writes keys as VOLUME + DIR + FILE, where DIR uses '/:' separators.
     An empty volume leaves a leading '/:' (macOS), while a Windows drive is
     'C:/:...'. Splitting on '/:' therefore keeps one volume chunk whenever the
     key does not start with the separator.
@@ -325,18 +325,18 @@ def _track_from_pkey(key: str) -> Dict[str, Any]:
     }
 
 
-def _dir_parts(traktor: Dict[str, Any]) -> List[str]:
-    """Traktor writes DIR with '/:' separators on macOS and Windows."""
-    directory = str(traktor.get("dir") or "").replace("/:", "/").replace("\\:", "/")
+def _dir_parts(dj: Dict[str, Any]) -> List[str]:
+    """DJ writes DIR with '/:' separators on macOS and Windows."""
+    directory = str(dj.get("dir") or "").replace("/:", "/").replace("\\:", "/")
     directory = directory.replace("\\", "/")
     return [part for part in directory.split("/") if part and part != ":"]
 
 
-def _direct_candidates(traktor: Dict[str, Any]) -> List[str]:
-    """Filesystem paths Traktor itself would use on this platform."""
-    volume = str(traktor.get("volume") or "")
-    parts = _dir_parts(traktor)
-    filename = str(traktor.get("file") or "")
+def _direct_candidates(dj: Dict[str, Any]) -> List[str]:
+    """Filesystem paths DJ itself would use on this platform."""
+    volume = str(dj.get("volume") or "")
+    parts = _dir_parts(dj)
+    filename = str(dj.get("file") or "")
     if not filename:
         return []
     tail = os.path.join(*parts) if parts else ""
@@ -386,7 +386,7 @@ def _playlist_names(root: ET.Element) -> List[Tuple[str, List[str]]]:
     return found
 
 
-def load_traktor_database(collection_path: Path) -> Tuple[Dict[str, Dict[str, Any]], List[Tuple[str, List[str]]]]:
+def load_dj_database(collection_path: Path) -> Tuple[Dict[str, Dict[str, Any]], List[Tuple[str, List[str]]]]:
     root = ET.parse(str(collection_path)).getroot()
     by_key: Dict[str, Dict[str, Any]] = {}
     collection = root.find("COLLECTION")
@@ -398,8 +398,8 @@ def load_traktor_database(collection_path: Path) -> Tuple[Dict[str, Dict[str, An
     return by_key, _playlist_names(root)
 
 
-def list_traktor_playlists(collection_path: Path) -> List[Dict[str, Any]]:
-    by_key, playlists = load_traktor_database(collection_path)
+def list_dj_playlists(collection_path: Path) -> List[Dict[str, Any]]:
+    by_key, playlists = load_dj_database(collection_path)
     rows: List[Dict[str, Any]] = []
     for name, keys in playlists:
         resolved_keys = [key for key in keys if key in by_key]
@@ -467,9 +467,9 @@ def _folder_index_tracks() -> List[Dict[str, Any]]:
     return tracks
 
 
-def _suffix_score(traktor_parts: Sequence[str], library_parts: Sequence[str]) -> int:
+def _suffix_score(dj_parts: Sequence[str], library_parts: Sequence[str]) -> int:
     score = 0
-    for left, right in zip(reversed(list(traktor_parts)), reversed(list(library_parts))):
+    for left, right in zip(reversed(list(dj_parts)), reversed(list(library_parts))):
         if left.casefold() != right.casefold():
             break
         score += 1
@@ -521,8 +521,8 @@ def ensure_track_playable(path: str) -> bool:
     return False
 
 
-class TraktorMatcher:
-    """Resolve Traktor LOCATION records to files that exist on this machine."""
+class DJMatcher:
+    """Resolve DJ LOCATION records to files that exist on this machine."""
 
     def __init__(self, library: Sequence[Dict[str, Any]]):
         self.library = list(library)
@@ -530,15 +530,15 @@ class TraktorMatcher:
         for track in self.library:
             self.by_basename.setdefault(track["basename"], []).append(track)
 
-    def resolve(self, traktor: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], str]:
-        traktor_parts = _dir_parts(traktor)
-        basename = str(traktor.get("basename") or "")
+    def resolve(self, dj: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], str]:
+        dj_parts = _dir_parts(dj)
+        basename = str(dj.get("basename") or "")
         candidates = self.by_basename.get(basename, [])
 
         best: Optional[Dict[str, Any]] = None
         best_score = -1
         for track in candidates:
-            score = _suffix_score(traktor_parts, track["parts"])
+            score = _suffix_score(dj_parts, track["parts"])
             if score > best_score:
                 best, best_score = track, score
         if best is not None and (best_score > 0 or len(candidates) == 1):
@@ -549,12 +549,12 @@ class TraktorMatcher:
                 # file exists on the share even while the mount is offline.
                 return best, "library-index-remote"
 
-        for candidate in _direct_candidates(traktor):
+        for candidate in _direct_candidates(dj):
             if validate_track_path(candidate):
-                return self._library_row_for(candidate, traktor), "direct-path"
+                return self._library_row_for(candidate, dj), "direct-path"
         return None, "not-found"
 
-    def _library_row_for(self, path: str, traktor: Dict[str, Any]) -> Dict[str, Any]:
+    def _library_row_for(self, path: str, dj: Dict[str, Any]) -> Dict[str, Any]:
         for track in self.library:
             if os.path.normcase(track["path"]) == os.path.normcase(path):
                 return track
@@ -562,7 +562,7 @@ class TraktorMatcher:
         return {
             "path": path,
             "name": name,
-            "title": str(traktor.get("title") or os.path.splitext(name)[0]),
+            "title": str(dj.get("title") or os.path.splitext(name)[0]),
             "folder": "",
             "ext": os.path.splitext(name)[1].lstrip(".").upper(),
             "duration_fmt": "00:00",
@@ -597,7 +597,7 @@ def _write_playlist(name: str, slug: str, tracks: Sequence[Dict[str, Any]]) -> T
     tmp = json_path.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(list(tracks), indent=2, ensure_ascii=False), encoding="utf-8")
     tmp.replace(json_path)
-    lines = ["#EXTM3U", f"#PLAYLIST:Traktor - {name}"]
+    lines = ["#EXTM3U", f"#PLAYLIST:DJ - {name}"]
     for track in tracks:
         lines.append(f"#EXTINF:-1,{track.get('title') or track.get('name')}")
         lines.append(str(track.get("path") or ""))
@@ -637,32 +637,32 @@ def _load_catalog_rows() -> List[Dict[str, Any]]:
 def generate_all(collection_path: Optional[Path] = None, interactive: bool = True) -> Dict[str, Any]:
     ready, reason = music_folders_ready()
     if not ready:
-        print(f"\n{RED}✖ Traktor import is disabled.{NC}\n  {reason}")
+        print(f"\n{RED}✖ DJ import is disabled.{NC}\n  {reason}")
         return {"ok": False, "reason": "no_music_folders", "message": reason}
 
     collection = Path(collection_path) if collection_path else find_collection_path()
     if not collection or not Path(collection).is_file():
         message = (
-            "Traktor collection.nml was not found. Set TRAKTOR_COLLECTION_PATH in "
-            "config.env to the collection.nml that Traktor uses."
+            "DJ collection.nml was not found. Set DJ_COLLECTION_PATH in "
+            "config.env to the collection.nml that DJ uses."
         )
         print(f"\n{RED}✖ {message}{NC}")
         return {"ok": False, "reason": "no_collection", "message": message}
 
     if not ensure_music_folder_indexes(interactive=interactive, auto_scan=not interactive):
-        message = "Music Folder playlists were not generated, so Traktor files cannot be matched."
+        message = "Music Folder playlists were not generated, so DJ files cannot be matched."
         print(f"\n{AMBER}{message}{NC}")
         return {"ok": False, "reason": "no_folder_index", "message": message}
 
     try:
-        by_key, playlists = load_traktor_database(collection)
+        by_key, playlists = load_dj_database(collection)
     except Exception as exc:
         message = f"Could not parse {collection}: {exc}"
         print(f"\n{RED}✖ {message}{NC}")
         return {"ok": False, "reason": "parse", "message": message}
 
     print(f"\n{BOLD}{PURPLE}{BANNER}{NC}")
-    print(f"{BOLD}{PURPLE}     IMPORTING EVERY TRAKTOR PLAYLIST INTO MP AUDIO PLAYER        {NC}")
+    print(f"{BOLD}{PURPLE}     IMPORTING EVERY DJ PLAYLIST INTO MP AUDIO PLAYER        {NC}")
     print(f"{BOLD}{PURPLE}{BANNER}{NC}")
     print(f"  {BOLD}Collection:{NC} {collection}")
     print(f"  {BOLD}Playlists :{NC} {len(playlists)}")
@@ -670,9 +670,9 @@ def generate_all(collection_path: Optional[Path] = None, interactive: bool = Tru
     print(f"{CYAN}{LINE}{NC}\n", flush=True)
 
     library = _folder_index_tracks()
-    matcher = TraktorMatcher(library)
+    matcher = DJMatcher(library)
     # A full regeneration rebuilds the catalog from the current collection, so a
-    # playlist deleted in Traktor stops being offered by the player.
+    # playlist deleted in DJ stops being offered by the player.
     by_slug: Dict[str, Dict[str, Any]] = {}
 
     generated = 0
@@ -680,7 +680,7 @@ def generate_all(collection_path: Optional[Path] = None, interactive: bool = Tru
     used_slugs: Dict[str, int] = {}
     run_slugs: set = set()
     for index, (name, keys) in enumerate(playlists, 1):
-        # Two Traktor playlists can normalise to the same slug ("House/Dub"
+        # Two DJ playlists can normalise to the same slug ("House/Dub"
         # and "House Dub"). Keep both files instead of overwriting one.
         base_slug = _slugify(name)
         count = used_slugs.get(base_slug, 0) + 1
@@ -691,11 +691,11 @@ def generate_all(collection_path: Optional[Path] = None, interactive: bool = Tru
         seen: set = set()
         missing = 0
         for key in keys:
-            traktor = by_key.get(key) or _track_from_pkey(key)
-            if not traktor:
+            dj = by_key.get(key) or _track_from_pkey(key)
+            if not dj:
                 missing += 1
                 continue
-            row, _how = matcher.resolve(traktor)
+            row, _how = matcher.resolve(dj)
             if row is None:
                 missing += 1
                 continue
@@ -705,10 +705,10 @@ def generate_all(collection_path: Optional[Path] = None, interactive: bool = Tru
                 continue
             seen.add(norm)
             track = _player_track(row)
-            track["title"] = str(traktor.get("title") or track["title"])
+            track["title"] = str(dj.get("title") or track["title"])
             track["name"] = os.path.basename(path)
-            if traktor.get("duration_sec") and not track.get("duration_sec"):
-                track["duration_sec"] = traktor["duration_sec"]
+            if dj.get("duration_sec") and not track.get("duration_sec"):
+                track["duration_sec"] = dj["duration_sec"]
             resolved.append(track)
 
         totals["tracks"] += len(keys)
@@ -737,9 +737,9 @@ def generate_all(collection_path: Optional[Path] = None, interactive: bool = Tru
 
     rows = sorted(by_slug.values(), key=lambda r: str(r.get("name", "")).casefold())
     _save_catalog(rows)
-    # Remove playlists that no longer exist in Traktor. A playlist that exists
+    # Remove playlists that no longer exist in DJ. A playlist that exists
     # but produced no valid files this run keeps its previous files: its share
-    # may simply be offline. Only files with the importer's own TRAKTOR_ prefix
+    # may simply be offline. Only files with the importer's own DJ_ prefix
     # are considered, so nothing else in PLAYLISTS_GENERATED is touched.
     keep = {row.get("json") for row in rows} | {row.get("m3u8") for row in rows}
     for path in playlists_dir().glob(f"{PREVIEW_PREFIX}*"):
@@ -765,7 +765,7 @@ def generate_all(collection_path: Optional[Path] = None, interactive: bool = Tru
     if totals["missing"]:
         print(
             f"  {AMBER}If a whole playlist is missing, map the Music Folder that holds the "
-            f"same audio tree Traktor used. Traktor expects the same volume and folder "
+            f"same audio tree DJ used. DJ expects the same volume and folder "
             f"path; a different drive or mount point must be added as that Music Folder.{NC}"
         )
     return {
@@ -782,29 +782,29 @@ def generate_all(collection_path: Optional[Path] = None, interactive: bool = Tru
 def generate_one(name: str, collection_path: Optional[Path] = None) -> Dict[str, Any]:
     ready, reason = music_folders_ready()
     if not ready:
-        print(f"\n{RED}✖ Traktor import is disabled.{NC}\n  {reason}")
+        print(f"\n{RED}✖ DJ import is disabled.{NC}\n  {reason}")
         return {"ok": False, "reason": "no_music_folders", "message": reason}
     collection = Path(collection_path) if collection_path else find_collection_path()
     if not collection or not Path(collection).is_file():
         return {"ok": False, "reason": "no_collection", "message": "collection.nml was not found."}
-    by_key, playlists = load_traktor_database(collection)
+    by_key, playlists = load_dj_database(collection)
     wanted = str(name or "").strip().casefold()
     match = next(((n, k) for n, k in playlists if n.casefold() == wanted or _slugify(n) == _slugify(name)), None)
     if match is None:
-        return {"ok": False, "reason": "not_found", "message": f"Playlist '{name}' was not found in Traktor."}
+        return {"ok": False, "reason": "not_found", "message": f"Playlist '{name}' was not found in DJ."}
     if not ensure_music_folder_indexes(interactive=True):
         return {"ok": False, "reason": "no_folder_index", "message": "Music Folders were not scanned."}
     playlist_name, keys = match
-    matcher = TraktorMatcher(_folder_index_tracks())
+    matcher = DJMatcher(_folder_index_tracks())
     resolved: List[Dict[str, Any]] = []
     missing = 0
     seen: set = set()
     for key in keys:
-        traktor = by_key.get(key) or _track_from_pkey(key)
-        if not traktor:
+        dj = by_key.get(key) or _track_from_pkey(key)
+        if not dj:
             missing += 1
             continue
-        row, _how = matcher.resolve(traktor)
+        row, _how = matcher.resolve(dj)
         if row is None:
             missing += 1
             continue
@@ -812,7 +812,7 @@ def generate_one(name: str, collection_path: Optional[Path] = None) -> Dict[str,
             continue
         seen.add(os.path.normcase(row["path"]))
         track = _player_track(row)
-        track["title"] = str(traktor.get("title") or track["title"])
+        track["title"] = str(dj.get("title") or track["title"])
         track["name"] = os.path.basename(row["path"])
         resolved.append(track)
     if not resolved:
@@ -847,9 +847,9 @@ def generate_one(name: str, collection_path: Optional[Path] = None) -> Dict[str,
 # ---------------------------------------------------------------------------
 def _print_warning_banner(collection: Optional[Path]) -> None:
     print(f"{BOLD}{PURPLE}{BANNER}{NC}")
-    print(f"{BOLD}{PURPLE}      IMPORT TRAKTOR PLAYLISTS INTO MP AUDIO PLAYER              {NC}")
+    print(f"{BOLD}{PURPLE}      IMPORT DJ PLAYLISTS INTO MP AUDIO PLAYER              {NC}")
     print(f"{BOLD}{PURPLE}{BANNER}{NC}")
-    print(f"  {BOLD}Traktor collection:{NC} {collection or 'not found'}")
+    print(f"  {BOLD}DJ collection:{NC} {collection or 'not found'}")
     folders = load_folders()
     print(f"  {BOLD}Music Folders     :{NC} {len(folders)} configured")
     for folder in folders:
@@ -860,10 +860,10 @@ def _print_warning_banner(collection: Optional[Path]) -> None:
             shown = folder.get("path", "")
         print(f"    {DIM}[{kind:<5}] {str(folder.get('name') or folder.get('id'))[:18]:<20} {shown}{NC}")
     generated = generated_playlists()
-    print(f"  {BOLD}Generated         :{NC} {len(generated)} Traktor playlist(s) ready in the player")
+    print(f"  {BOLD}Generated         :{NC} {len(generated)} DJ playlist(s) ready in the player")
     print(f"{CYAN}{LINE}{NC}")
     print(
-        f"  {AMBER}Important:{NC} Traktor records the volume and folder path it used. The audio "
+        f"  {AMBER}Important:{NC} DJ records the volume and folder path it used. The audio "
         f"files must\n  exist under the configured Music Folders. If they live on a different "
         f"drive or\n  mount point, add that folder as a Music Folder so the same audio tree is "
         f"mapped."
@@ -872,7 +872,7 @@ def _print_warning_banner(collection: Optional[Path]) -> None:
 
 
 def launch_generated_playlist(row: Dict[str, Any]) -> bool:
-    """Open one generated Traktor playlist in the MP Audio Player."""
+    """Open one generated DJ playlist in the MP Audio Player."""
     json_path = str(row.get("json_path") or "")
     if not json_path or not Path(json_path).is_file():
         print(f"{RED}✖ That playlist has not been generated yet.{NC}")
@@ -927,10 +927,10 @@ def interactive_main() -> int:
             pause()
             return 1
         print(f"{BOLD}Choose an option:{NC}")
-        print(f"  {BOLD}{CYAN}1){NC} Pre-generate ALL Traktor playlists in advance {DIM}(recommended){NC}")
-        print(f"  {BOLD}{CYAN}2){NC} Generate one Traktor playlist")
+        print(f"  {BOLD}{CYAN}1){NC} Pre-generate ALL DJ playlists in advance {DIM}(recommended){NC}")
+        print(f"  {BOLD}{CYAN}2){NC} Generate one DJ playlist")
         print(f"  {BOLD}{CYAN}3){NC} List playlists already generated for the player")
-        print(f"  {BOLD}{CYAN}4){NC} Change / detect the Traktor collection.nml")
+        print(f"  {BOLD}{CYAN}4){NC} Change / detect the DJ collection.nml")
         print(f"  {BOLD}{CYAN}r){NC} Rescan Music Folders, then regenerate every playlist")
         print(f"  {BOLD}{CYAN}0){NC} Return\n")
         choice = ask("Enter choice: ").strip()
@@ -941,16 +941,16 @@ def interactive_main() -> int:
             pause()
         elif choice == "2":
             if not collection:
-                pause("Set the Traktor collection path first.")
+                pause("Set the DJ collection path first.")
                 continue
             try:
-                playlists = list_traktor_playlists(collection)
+                playlists = list_dj_playlists(collection)
             except Exception as exc:
                 print(f"{RED}Could not read the collection: {exc}{NC}")
                 pause()
                 continue
             if not playlists:
-                pause("Traktor has no playlists in this collection.")
+                pause("DJ has no playlists in this collection.")
                 continue
             for index, row in enumerate(playlists, 1):
                 ready = any(g.get("name") == row["name"] for g in generated)
@@ -971,7 +971,7 @@ def interactive_main() -> int:
             pause()
         elif choice == "3":
             if not generated:
-                pause("No Traktor playlists have been generated yet. Choose option 1 first.")
+                pause("No DJ playlists have been generated yet. Choose option 1 first.")
                 continue
             print()
             for index, row in enumerate(generated, 1):
@@ -1012,11 +1012,11 @@ def interactive_main() -> int:
 
 
 def mutating_main(argv: Optional[Sequence[str]] = None) -> int:
-    parser = argparse.ArgumentParser(description="Import Traktor playlists into MP Audio Player")
-    parser.add_argument("--generate-all", action="store_true", help="Pre-generate every Traktor playlist")
-    parser.add_argument("--generate", metavar="NAME", help="Generate one Traktor playlist by name")
-    parser.add_argument("--list", action="store_true", help="List generated Traktor playlists as JSON")
-    parser.add_argument("--list-traktor", action="store_true", help="List playlists in collection.nml as JSON")
+    parser = argparse.ArgumentParser(description="Import DJ playlists into MP Audio Player")
+    parser.add_argument("--generate-all", action="store_true", help="Pre-generate every DJ playlist")
+    parser.add_argument("--generate", metavar="NAME", help="Generate one DJ playlist by name")
+    parser.add_argument("--list", action="store_true", help="List generated DJ playlists as JSON")
+    parser.add_argument("--list-dj", action="store_true", help="List playlists in collection.nml as JSON")
     parser.add_argument("--collection", metavar="PATH", help="Path to collection.nml")
     parser.add_argument("--json", action="store_true", help="Machine-readable output")
     args = parser.parse_args(argv)
@@ -1030,12 +1030,12 @@ def mutating_main(argv: Optional[Sequence[str]] = None) -> int:
             for row in rows:
                 print(f"{row.get('name')}\t{row.get('tracks')} tracks\t{row.get('json_path')}")
         return 0
-    if args.list_traktor:
+    if args.list_dj:
         path = collection or find_collection_path()
         if not path or not Path(path).is_file():
             print("collection.nml was not found.", file=sys.stderr)
             return 1
-        rows = list_traktor_playlists(Path(path))
+        rows = list_dj_playlists(Path(path))
         if args.json:
             print(json.dumps(rows, indent=2))
         else:

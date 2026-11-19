@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Shift+T in the terminal player opens the Traktor importer, and every
+"""Shift+T in the terminal player opens the DJ importer, and every
 playlist path is validated before the engine opens it."""
 
 import os
@@ -16,7 +16,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
 import MP_Audio_Player as player
 
 
-class TestTraktorShortcut(unittest.TestCase):
+class TestDJShortcut(unittest.TestCase):
     def _ui(self):
         scanner = MagicMock()
         scanner.get_mixes.return_value = []
@@ -28,13 +28,13 @@ class TestTraktorShortcut(unittest.TestCase):
     def test_shift_t_is_separate_from_lowercase_tracklist(self):
         ui = self._ui()
         with patch.object(ui, "_view_selected_tracklist") as tracklist, \
-             patch.object(ui, "_traktor_picker_open") as importer:
+             patch.object(ui, "_dj_picker_open") as importer:
             ui._process_key(b"t")
             tracklist.assert_called_once()
             importer.assert_not_called()
         ui = self._ui()
         with patch.object(ui, "_view_selected_tracklist") as tracklist, \
-             patch.object(ui, "_traktor_picker_open") as importer, \
+             patch.object(ui, "_dj_picker_open") as importer, \
              patch.object(player.sys.stdin, "isatty", return_value=True):
             ui._process_key(b"T")
             importer.assert_called_once()
@@ -42,29 +42,29 @@ class TestTraktorShortcut(unittest.TestCase):
 
     def test_picker_lists_only_generated_playlists_and_refuses_empty(self):
         ui = self._ui()
-        with patch.object(player, "_traktor_importer_module") as module:
+        with patch.object(player, "_dj_importer_module") as module:
             module.return_value.music_folders_ready.return_value = (True, "ok")
             module.return_value.generated_playlists.return_value = []
-            ui._traktor_picker_open()
-        self.assertTrue(ui.traktor_picker_active)
-        self.assertIn("generated", ui.traktor_picker_error.lower())
+            ui._dj_picker_open()
+        self.assertTrue(ui.dj_picker_active)
+        self.assertIn("generated", ui.dj_picker_error.lower())
         box = "\n".join(ui._favorites_decision_box(100))
-        self.assertIn("TRAKTOR PLAYLIST IMPORT", box)
+        self.assertIn("DJ PLAYLIST IMPORT", box)
         self.assertIn("[G] pre-generate", box)
 
     def test_import_is_refused_when_music_folders_are_missing(self):
         ui = self._ui()
         fake = MagicMock()
         fake.music_folders_ready.return_value = (False, "No Music Folders are configured.")
-        with patch.object(player, "_traktor_importer_module", return_value=fake):
-            ui._traktor_import_start()
+        with patch.object(player, "_dj_importer_module", return_value=fake):
+            ui._dj_import_start()
         self.assertIn("No Music Folders", ui.notification_msg)
         fake.interactive_main.assert_not_called()
 
     def test_import_is_not_offered_in_liquid_glass_mode(self):
         ui = self._ui()
         with patch.dict(os.environ, {"MP_LIQUID_GLASS": "1"}), \
-             patch.object(ui, "_traktor_picker_open") as importer:
+             patch.object(ui, "_dj_picker_open") as importer:
             ui._process_key(b"T")
         importer.assert_not_called()
         self.assertIn("CLI mode", ui.notification_msg)
@@ -74,19 +74,19 @@ class TestTraktorShortcut(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             good = Path(tmp) / "good.flac"
             good.write_bytes(b"audio")
-            playlist = Path(tmp) / "TRAKTOR_Test.json"
+            playlist = Path(tmp) / "DJ_Test.json"
             playlist.write_text(__import__("json").dumps([
                 {"name": "good.flac", "path": str(good), "ext": "FLAC"},
                 {"name": "gone.flac", "path": str(Path(tmp) / "gone.flac"), "ext": "FLAC"},
             ]), encoding="utf-8")
-            ui.traktor_picker_rows = [
+            ui.dj_picker_rows = [
                 {"name": "Test", "json_path": str(playlist), "tracks": 2}
             ]
-            ui.traktor_picker_active = True
-            ui.traktor_picker_row = 0
-            ui._traktor_picker_activate()
-        self.assertFalse(ui.traktor_picker_active)
-        self.assertIsInstance(ui.scanner, player._TraktorPlaylistScanner)
+            ui.dj_picker_active = True
+            ui.dj_picker_row = 0
+            ui._dj_picker_activate()
+        self.assertFalse(ui.dj_picker_active)
+        self.assertIsInstance(ui.scanner, player._DJPlaylistScanner)
         self.assertEqual([t["path"] for t in ui.scanner.mixes], [str(good)])
         self.assertIn("1 unavailable", ui.notification_msg)
 

@@ -43,37 +43,37 @@ get_abs_path() { local t="$1" r=""; if [ "$_HAS_REALPATH" -eq 1 ]; then r="$(rea
 get_str_hash() { local s="$1" r=""; if [ "$_HAS_MD5SUM" -eq 1 ]; then r="$(printf '%s' "$s" | md5sum)"; r="${r%% *}"; elif [ "$_HAS_MD5" -eq 1 ]; then r="$(md5 -q -s "$s")"; elif [ "$_HAS_PY3" -eq 1 ]; then r="$(python3 -c "import hashlib,sys;print(hashlib.md5(sys.argv[1].encode('utf-8')).hexdigest())" "$s")"; else r="$(printf '%s' "$s" | cksum)"; r="${r%% *}"; fi; printf "%s" "${r%$'\r'}"; }
 safe_mktemp() { local e="${1:+_${1}}" s="${1:+.${1}}"; mktemp "${TMPDIR:-/tmp}/sof${e}_XXXXXX${s}" 2>/dev/null || mktemp -t "sof${e}_XXXXXX${s}" 2>/dev/null || mktemp "/tmp/sof${e}_XXXXXX${s}"; }
 file_size_bytes() { local sz=""; if [ "$_STAT_MODE" -eq 1 ]; then sz=$(stat -c %s "$1" 2>/dev/null || echo 0); elif [ "$_STAT_MODE" -eq 2 ]; then sz=$(stat -f %z "$1" 2>/dev/null || echo 0); else sz=$(wc -c < "$1" 2>/dev/null || echo 0); fi; echo "${sz//[[:space:]]/}"; }
-sync_missing_traktor_history() {
-local dest="$1" cred="" remote_raw="" smb_err="" remote_dir smb_target list_cmd get_cmd copied=0 smb_rc=0 h missing_list=() smb_host="${TRAKTOR_SMB_HOST:-}" smb_share="${TRAKTOR_SMB_SHARE:-}" smb_user="${TRAKTOR_SMB_USER:-}" smb_pass="${TRAKTOR_SMB_PASSWORD:-}"
+sync_missing_dj_history() {
+local dest="$1" cred="" remote_raw="" smb_err="" remote_dir smb_target list_cmd get_cmd copied=0 smb_rc=0 h missing_list=() smb_host="${DJ_SMB_HOST:-}" smb_share="${DJ_SMB_SHARE:-}" smb_user="${DJ_SMB_USER:-}" smb_pass="${DJ_SMB_PASSWORD:-}"
 if [ -z "$smb_host" ] && [ -n "${MUSIC_SMB_HOST:-}" ]; then smb_host="$MUSIC_SMB_HOST"; fi
 if [ -z "$smb_host" ] && [ -n "${SMB_DEFAULT_HOST:-}" ]; then smb_host="$SMB_DEFAULT_HOST"; fi
 if [ -z "$smb_user" ] && [ -n "${MUSIC_SMB_USER:-}" ]; then smb_user="$MUSIC_SMB_USER"; fi
 if [ -z "$smb_pass" ] && [ -n "${MUSIC_SMB_PASSWORD:-}" ]; then smb_pass="$MUSIC_SMB_PASSWORD"; fi
 local _smb_missing=()
-if [ -z "$smb_host" ]; then _smb_missing+=("TRAKTOR_SMB_HOST"); fi
-if [ -z "$smb_share" ]; then _smb_missing+=("TRAKTOR_SMB_SHARE"); fi
-if [ -z "$smb_user" ]; then _smb_missing+=("TRAKTOR_SMB_USER"); fi
-if [ -z "$smb_pass" ]; then _smb_missing+=("TRAKTOR_SMB_PASSWORD"); fi
-if [ "${#_smb_missing[@]}" -gt 0 ]; then echo " -> Traktor history sync skipped (not set in config.env: ${_smb_missing[*]})."; return 0; fi
-if ! command -v smbclient >/dev/null 2>&1; then echo " -> WARNING: smbclient is not installed. Continuing with the local Traktor history only."; return 0; fi
-if [ -z "$dest" ]; then echo " -> WARNING: No local Traktor history directory is configured. Skipping history sync."; return 0; fi
-if [ ! -d "$dest" ]; then mkdir -p "$dest" 2>/dev/null || { echo " -> WARNING: Could not create Traktor history directory: $dest"; return 0; }; fi
-remote_dir="${TRAKTOR_SMB_HISTORY_DIR:-Documents/Native Instruments/Traktor 3.11.1/History}"; smb_target="//${smb_host}/${smb_share}"; umask 077
+if [ -z "$smb_host" ]; then _smb_missing+=("DJ_SMB_HOST"); fi
+if [ -z "$smb_share" ]; then _smb_missing+=("DJ_SMB_SHARE"); fi
+if [ -z "$smb_user" ]; then _smb_missing+=("DJ_SMB_USER"); fi
+if [ -z "$smb_pass" ]; then _smb_missing+=("DJ_SMB_PASSWORD"); fi
+if [ "${#_smb_missing[@]}" -gt 0 ]; then echo " -> DJ history sync skipped (not set in config.env: ${_smb_missing[*]})."; return 0; fi
+if ! command -v smbclient >/dev/null 2>&1; then echo " -> WARNING: smbclient is not installed. Continuing with the local DJ history only."; return 0; fi
+if [ -z "$dest" ]; then echo " -> WARNING: No local DJ history directory is configured. Skipping history sync."; return 0; fi
+if [ ! -d "$dest" ]; then mkdir -p "$dest" 2>/dev/null || { echo " -> WARNING: Could not create DJ history directory: $dest"; return 0; }; fi
+remote_dir="${DJ_SMB_HISTORY_DIR:-Documents/Native Instruments/DJ 3.11.1/History}"; smb_target="//${smb_host}/${smb_share}"; umask 077
 cred=$(safe_mktemp smb); remote_raw=$(safe_mktemp dir); smb_err=$(safe_mktemp err); printf 'username=%s\npassword=%s\n' "$smb_user" "$smb_pass" > "$cred"
-echo " -> Checking Traktor history on ${smb_target} ..."; list_cmd="cd \"${remote_dir}\"; dir"
+echo " -> Checking DJ history on ${smb_target} ..."; list_cmd="cd \"${remote_dir}\"; dir"
 if command -v timeout >/dev/null 2>&1; then timeout 40 smbclient "$smb_target" -A "$cred" -t 20 -c "$list_cmd" > "$remote_raw" 2>"$smb_err" || smb_rc=$?; else smbclient "$smb_target" -A "$cred" -t 20 -c "$list_cmd" > "$remote_raw" 2>"$smb_err" || smb_rc=$?; fi
-if [ "$smb_rc" -ne 0 ]; then echo " -> WARNING: Could not read the Traktor history share. Continuing with local files."; if [ -s "$smb_err" ]; then sed -n '1,3p' "$smb_err" | sed 's/^/    /'; fi; rm -f "$cred" "$remote_raw" "$smb_err" 2>/dev/null || true; return 0; fi
+if [ "$smb_rc" -ne 0 ]; then echo " -> WARNING: Could not read the DJ history share. Continuing with local files."; if [ -s "$smb_err" ]; then sed -n '1,3p' "$smb_err" | sed 's/^/    /'; fi; rm -f "$cred" "$remote_raw" "$smb_err" 2>/dev/null || true; return 0; fi
 while IFS= read -r h; do if [ -n "$h" ] && [ ! -f "$dest/$h" ]; then missing_list+=("$h"); fi; done < <(awk '{for(i=1;i<=NF;i++)if($i~/^history_.*\.nml$/){print $i;break}}' "$remote_raw" | sort -u)
-if [ "${#missing_list[@]}" -eq 0 ]; then echo " -> Traktor history files are already available locally. Nothing to copy."; rm -f "$cred" "$remote_raw" "$smb_err" 2>/dev/null || true; return 0; fi
-echo " -> Copying ${#missing_list[@]} Traktor history file(s) that are not on this machine..."; get_cmd="cd \"${remote_dir}\"; prompt OFF;"; for h in "${missing_list[@]}"; do get_cmd+=" get \"${h}\";"; done
+if [ "${#missing_list[@]}" -eq 0 ]; then echo " -> DJ history files are already available locally. Nothing to copy."; rm -f "$cred" "$remote_raw" "$smb_err" 2>/dev/null || true; return 0; fi
+echo " -> Copying ${#missing_list[@]} DJ history file(s) that are not on this machine..."; get_cmd="cd \"${remote_dir}\"; prompt OFF;"; for h in "${missing_list[@]}"; do get_cmd+=" get \"${h}\";"; done
 if ( cd "$dest" && smbclient "$smb_target" -A "$cred" -t 30 -c "$get_cmd" >"$remote_raw" 2>"$smb_err" ); then
-for h in "${missing_list[@]}"; do if [ -f "$dest/$h" ]; then copied=$((copied + 1)); else echo " -> WARNING: Failed to copy ${h}"; fi; done; echo " -> Copied ${copied} Traktor history file(s)."
-else echo " -> WARNING: Copy from the Traktor history share failed. Continuing with local files."; if [ -s "$smb_err" ]; then sed -n '1,3p' "$smb_err" | sed 's/^/    /'; fi; fi
+for h in "${missing_list[@]}"; do if [ -f "$dest/$h" ]; then copied=$((copied + 1)); else echo " -> WARNING: Failed to copy ${h}"; fi; done; echo " -> Copied ${copied} DJ history file(s)."
+else echo " -> WARNING: Copy from the DJ history share failed. Continuing with local files."; if [ -s "$smb_err" ]; then sed -n '1,3p' "$smb_err" | sed 's/^/    /'; fi; fi
 rm -f "$cred" "$remote_raw" "$smb_err" 2>/dev/null || true; return 0
 }
-LOCAL_HISTORY_DIR="${TRAKTOR_HISTORY_DIR:-}"
+LOCAL_HISTORY_DIR="${DJ_HISTORY_DIR:-}"
 if [ -z "$LOCAL_HISTORY_DIR" ] || [ ! -d "$LOCAL_HISTORY_DIR" ]; then
-for cand in "${MIX_ARCHIVE_DIR:-$PWD}/Traktor 3.11.1/History" "./Traktor 3.11.1/History" "/run/media/$USER/WD BLACK B/MIX_ARCHIVE/Traktor 3.11.1/History" "/run/media/mplanetarian/WD BLACK B/MIX_ARCHIVE/Traktor 3.11.1/History" "/Volumes/WD BLACK B/MIX_ARCHIVE/Traktor 3.11.1/History" "/Volumes/MIX_ARCHIVE/Traktor 3.11.1/History" "/Volumes/DATAMAC3/MIX_ARCHIVE/Traktor 3.11.1/History" "/d/MIX_ARCHIVE/Traktor 3.11.1/History" "D:/MIX_ARCHIVE/Traktor 3.11.1/History" "/mnt/d/MIX_ARCHIVE/Traktor 3.11.1/History" "$HOME/Documents/Native Instruments/Traktor 3.11.1/History" "$HOME/Native Instruments/Traktor 3.11.1/History"; do if [ -d "$cand" ]; then LOCAL_HISTORY_DIR="$cand"; break; fi; done
+for cand in "${MIX_ARCHIVE_DIR:-$PWD}/DJ 3.11.1/History" "./DJ 3.11.1/History" "/run/media/$USER/WD BLACK B/MIX_ARCHIVE/DJ 3.11.1/History" "/run/media/mplanetarian/WD BLACK B/MIX_ARCHIVE/DJ 3.11.1/History" "/Volumes/WD BLACK B/MIX_ARCHIVE/DJ 3.11.1/History" "/Volumes/MIX_ARCHIVE/DJ 3.11.1/History" "/Volumes/DATAMAC3/MIX_ARCHIVE/DJ 3.11.1/History" "/d/MIX_ARCHIVE/DJ 3.11.1/History" "D:/MIX_ARCHIVE/DJ 3.11.1/History" "/mnt/d/MIX_ARCHIVE/DJ 3.11.1/History" "$HOME/Documents/Native Instruments/DJ 3.11.1/History" "$HOME/Native Instruments/DJ 3.11.1/History"; do if [ -d "$cand" ]; then LOCAL_HISTORY_DIR="$cand"; break; fi; done
 fi
 load_conversion_theme() {
 local mgr="" cand fn_src saved_theme="dreamworlds_ultra"
@@ -457,7 +457,7 @@ tracklist_found=false; matched_history=""
 if [ -d "$LOCAL_HISTORY_DIR" ]; then
 if [[ "$base" == *"081"* && "$base" =~ [Jj]orn ]] || [[ "$ref_name" == *"2026-10-14_12h31m53"* ]] || [[ "$base" == *"2026-10-14_12h31m53"* ]]; then matched_history="$LOCAL_HISTORY_DIR/history_2026y10m14d_14h59m14s.nml"; fi
 local _hist_files=""; if [ -z "$matched_history" ]; then _hist_files=$(find "$LOCAL_HISTORY_DIR" -maxdepth 2 -type f \( -name "*.nml" -o -name "*.xml" -o -name "*.txt" \) 2>/dev/null || true); fi
-if [ -z "$matched_history" ] && [ -n "$traktor_pattern" ] && [ -n "$_hist_files" ]; then matched_history=$(grep -i -- "$traktor_pattern" <<< "$_hist_files" | head -n 1 || true); fi
+if [ -z "$matched_history" ] && [ -n "$dj_pattern" ] && [ -n "$_hist_files" ]; then matched_history=$(grep -i -- "$dj_pattern" <<< "$_hist_files" | head -n 1 || true); fi
 if [ -z "$matched_history" ] && [ -n "$session_date" ] && [ -n "$session_hour" ] && [ -n "$session_min" ]; then
 matched_history=$(python3 -c '
 import os, re, sys, xml.etree.ElementTree as ET
@@ -503,8 +503,8 @@ if [ -z "$matched_history" ] && [ -n "$fallback_pattern" ] && [ -n "$_hist_files
 if [ -z "$matched_history" ] && [ -n "$session_date" ] && [ -n "$_hist_files" ]; then matched_history=$(grep -i -- "$session_date" <<< "$_hist_files" | sort | tail -n 1 || true); fi
 matched_history="${matched_history%$'\r'}"
 if [ -n "$matched_history" ] && [ -f "$matched_history" ]; then
-echo " -> Matched Traktor history file: ${matched_history##*/}"
-_write_tracklist_header "TRACKLIST (Extracted from Traktor Database)" > "$tracklist_path"
+echo " -> Matched DJ history file: ${matched_history##*/}"
+_write_tracklist_header "TRACKLIST (Extracted from DJ Database)" > "$tracklist_path"
 python3 -c '
 import re, sys, xml.etree.ElementTree as ET
 from datetime import datetime, timedelta
@@ -551,11 +551,11 @@ try:
  for i, t in enumerate(et, 1): print(f"{i:02d}. {t}")
 except Exception: sys.exit(1)
 ' "$matched_history" "$ref_name" >> "$tracklist_path"
-if grep -q "TRACKLIST (Extracted from Traktor Database)" "$tracklist_path" && grep -qE "^[0-9]{2}\. " "$tracklist_path"; then tracklist_found=true; fi
+if grep -q "TRACKLIST (Extracted from DJ Database)" "$tracklist_path" && grep -qE "^[0-9]{2}\. " "$tracklist_path"; then tracklist_found=true; fi
 fi
 fi
 if [ "$tracklist_found" = false ]; then
-echo " -> NOTICE: No matching Traktor history file found for session '$base'. Generating standalone tracklist..."
+echo " -> NOTICE: No matching DJ history file found for session '$base'. Generating standalone tracklist..."
 { _write_tracklist_header "TRACKLIST (Automatic Fallback)"; echo "01. Live Mix Session - $readable_title"; } > "$tracklist_path"
 else echo " -> Tracklist verified successfully ($tracklist_filename)."; fi
 }
@@ -572,19 +572,19 @@ if [ ! -s "$path" ]; then cp "$backup" "$path"; echo "The edit was empty, so the
 }
 review_converted_tracklist() {
 show_tracklist_file; if [ "$tracklist_found" = true ]; then return 0; fi
-echo "ALERT: No tracklist was found in the Traktor history for this mix." >/dev/tty
+echo "ALERT: No tracklist was found in the DJ history for this mix." >/dev/tty
 echo "The text above is a placeholder, not the tracks that were played." >/dev/tty
 if ! has_interactive_tty; then return 0; fi
 local tl_opts=(
-"1|Generate tracklist again from Traktor history|(Rescan Traktor SMB / local logs)"
+"1|Generate tracklist again from DJ history|(Rescan DJ SMB / local logs)"
 "2|Update the tracklist manually|(Open in text editor)"
 "0|Continue with the current tracklist|(Keep placeholder and continue)"
 )
 while true; do
 local track_choice=""
-select_menu_option "REVIEW CONVERTED TRACKLIST" "No Traktor history was found for this mix. Choose an action:" tl_opts 0 track_choice
+select_menu_option "REVIEW CONVERTED TRACKLIST" "No DJ history was found for this mix. Choose an action:" tl_opts 0 track_choice
 case "$track_choice" in
-1) sync_missing_traktor_history "$LOCAL_HISTORY_DIR"; build_session_tracklist; show_tracklist_file; if [ "$tracklist_found" = true ]; then echo "Tracklist generated from Traktor history and saved." >/dev/tty; return 0; fi; echo "ALERT: Traktor history still has no tracklist for this mix." >/dev/tty ;;
+1) sync_missing_dj_history "$LOCAL_HISTORY_DIR"; build_session_tracklist; show_tracklist_file; if [ "$tracklist_found" = true ]; then echo "Tracklist generated from DJ history and saved." >/dev/tty; return 0; fi; echo "ALERT: DJ history still has no tracklist for this mix." >/dev/tty ;;
 2) edit_tracklist_and_save "$tracklist_path"; show_tracklist_file; return 0 ;;
 0|ESC|[qQ]) echo "Continuing with the tracklist saved at: $tracklist_path" >/dev/tty; return 0 ;;
 *) echo "Choose 1, 2, or 0." >/dev/tty ;;
@@ -616,7 +616,7 @@ elif [ -n "$line" ] && [[ ! "$line" =~ [a-z] ]]; then printf '%b\n' "  ${BOLD}${
 else printf '%b\n' "  ${line}"; fi
 done < "$path"
 }
-display_conversion_tracklist() { echo ""; if [ "${tracklist_found:-false}" = true ]; then themed_header "♫  NOW CONVERTING - TRACKLIST FOUND IN TRAKTOR HISTORY" "$GREEN"; else themed_header "♫  NOW CONVERTING - NO TRAKTOR TRACKLIST FOUND (placeholder, review after conversion)" "$YELLOW"; fi; render_themed_tracklist "$tracklist_path"; echo ""; }
+display_conversion_tracklist() { echo ""; if [ "${tracklist_found:-false}" = true ]; then themed_header "♫  NOW CONVERTING - TRACKLIST FOUND IN DJ HISTORY" "$GREEN"; else themed_header "♫  NOW CONVERTING - NO DJ TRACKLIST FOUND (placeholder, review after conversion)" "$YELLOW"; fi; render_themed_tracklist "$tracklist_path"; echo ""; }
 fmt_bytes() { awk -v b="${1:-0}" 'BEGIN { split("B KB MB GB TB", u, " "); i = 1; while (b >= 1024 && i < 5) { b /= 1024; i++ }; if (i == 1) printf "%d %s", b, u[i]; else printf "%.1f %s", b, u[i] }'; }
 fmt_hms() { local s="${1:-0}"; s="${s%%.*}"; if ! [[ "$s" =~ ^-?[0-9]+$ ]]; then s=0; fi; if [ "$s" -lt 0 ]; then s=0; fi; printf '%02d:%02d:%02d' $((s / 3600)) $((s % 3600 / 60)) $((s % 60)); }
 probe_duration_seconds() { ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$1" 2>/dev/null | awk 'NR==1{d=$0}END{printf "%d",(d+0>0)?d+0.5:0}'; }
@@ -886,11 +886,11 @@ if [ "$SOB_BATCH_ALL" -eq 1 ]; then printf '%s\n%s conversion started at: %s (%d
 else printf '%s\n%s conversion started at: %s\n%s\n' "$S50" "$OUTPUT_LABEL" "$START_TIME" "$S50"; fi
 sob_status_line
 sob_show_previous_stats
-if [ -d "$LOCAL_HISTORY_DIR" ]; then echo " -> Traktor History directory located successfully at: $LOCAL_HISTORY_DIR"
-elif [ -n "${TRAKTOR_HISTORY_DIR:-}" ]; then LOCAL_HISTORY_DIR="$TRAKTOR_HISTORY_DIR"; echo " -> WARNING: Traktor History directory was missing. It will be created if the share can be reached."
-else echo " -> WARNING: Traktor History directory not found at specified path!"; fi
-sync_missing_traktor_history "$LOCAL_HISTORY_DIR"
-if [ -d "$LOCAL_HISTORY_DIR" ]; then echo " -> Traktor History directory ready at: $LOCAL_HISTORY_DIR"; fi
+if [ -d "$LOCAL_HISTORY_DIR" ]; then echo " -> DJ History directory located successfully at: $LOCAL_HISTORY_DIR"
+elif [ -n "${DJ_HISTORY_DIR:-}" ]; then LOCAL_HISTORY_DIR="$DJ_HISTORY_DIR"; echo " -> WARNING: DJ History directory was missing. It will be created if the share can be reached."
+else echo " -> WARNING: DJ History directory not found at specified path!"; fi
+sync_missing_dj_history "$LOCAL_HISTORY_DIR"
+if [ -d "$LOCAL_HISTORY_DIR" ]; then echo " -> DJ History directory ready at: $LOCAL_HISTORY_DIR"; fi
 if [ -n "${CUSTOM_COVER_IMAGE:-}" ] && [ -f "$CUSTOM_COVER_IMAGE" ]; then COVER_ART="$CUSTOM_COVER_IMAGE"
 elif [ ! -f "$COVER_ART" ]; then
 for _c in "$SCRIPT_DIR/assets/Cover.png" "$SCRIPT_DIR/Cover.png" "$PARENT_DIR/Cover.png"; do if [ -f "$_c" ]; then COVER_ART="$_c"; break; fi; done
@@ -999,7 +999,7 @@ if [[ "$ref_name" =~ [0-9]{4}-([0-9]{2})-([0-9]{2}) ]]; then if [ -z "$session_m
 if [[ "$ref_name" =~ ([0-9]{1,2})h ]]; then session_hour="${BASH_REMATCH[1]}"; if [ ${#session_hour} -eq 1 ]; then session_hour="0${session_hour}"; fi; fi
 if [[ "$ref_name" =~ ([0-9]{2})m ]]; then session_min="${BASH_REMATCH[1]}"; fi
 if [ -n "$session_year" ] && [ -n "$session_month" ] && [ -n "$session_day" ]; then session_date="${session_year}-${session_month}-${session_day}"; fallback_pattern="history_${session_year}y${session_month}m${session_day}d"; else session_date=""; fallback_pattern=""; fi
-if [ -n "$fallback_pattern" ] && [ -n "$session_hour" ] && [ -n "$session_min" ]; then traktor_pattern="history_${session_year}y${session_month}m${session_day}d_${session_hour}h${session_min}"; else traktor_pattern=""; fi
+if [ -n "$fallback_pattern" ] && [ -n "$session_hour" ] && [ -n "$session_min" ]; then dj_pattern="history_${session_year}y${session_month}m${session_day}d_${session_hour}h${session_min}"; else dj_pattern=""; fi
 build_session_tracklist
 first_wav="${current_wavs[0]}"; wav_dir="${first_wav%/*}"; wav_name="${first_wav##*/}"; wav_base="${wav_name%.*}"; specific_cover="${wav_dir}/${wav_base}.png"; selected_cover="$COVER_ART"
 if [ -n "${CUSTOM_COVER_IMAGE:-}" ] && [ -f "$CUSTOM_COVER_IMAGE" ]; then echo " -> Using custom selected cover art: $CUSTOM_COVER_IMAGE"; selected_cover="$CUSTOM_COVER_IMAGE"

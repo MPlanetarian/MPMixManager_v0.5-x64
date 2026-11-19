@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 MP Mix Manager v0.3 - Streaming & Platform Chapters Exporter
-Parses tracklists (.txt), CUE sheets (.cue), and Traktor session histories (.nml)
+Parses tracklists (.txt), CUE sheets (.cue), and DJ session histories (.nml)
 and generates standardized YouTube Chapters, SoundCloud/Mixcloud timestamps,
 and Markdown/HTML tracklists with duration verification.
 """

@@ -50,7 +50,7 @@ PAGES = [
     "manage_network_services",
     "manage_system_maintenance",
     "launch_ai_session",
-    "launch_traktor_monitor_window",
+    "launch_dj_monitor_window",
     "manage_promo_outreach",
     "manage_bluetooth_audio",
     "manage_visualizer_screensaver",

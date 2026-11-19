@@ -149,12 +149,12 @@ ${BOLD}AVAILABLE MENU OPTIONS (INTERACTIVE & DIRECT SHORTCUTS):${NC}
        Launch cliamp, Audacious, Strawberry, VLC, Haruna, Kodi, Audacity, and platform players.
   ${BOLD}${CYAN}16${NC}   ${BOLD}Configure Mix Archive Storage Locations${NC}
        Set the primary mix folder and extra archive drives.
-  ${BOLD}${CYAN}17${NC}   ${BOLD}Custom Mix Playlists & Traktor History Suite${NC}
-       Build playlists, read Traktor history, and export Rekordbox XML.
+  ${BOLD}${CYAN}17${NC}   ${BOLD}Custom Mix Playlists & DJ History Suite${NC}
+       Build playlists, read DJ history, and export Rekordbox XML.
   ${BOLD}${CYAN}18${NC}   ${BOLD}Digital Audio Workstations (DAWs) & Mix Dispatch${NC}
        Launch REAPER, Logic, FL Studio, Ardour, and other installed DAWs.
   ${BOLD}${CYAN}19${NC}   ${BOLD}Studio Hardware, Audio Interfaces & Master Volume Control${NC}
-       PipeWire, ALSA, MIDI, and the Traktor Kontrol S4 menu (also: s4).
+       PipeWire, ALSA, MIDI, and the Kontrol S4 menu (also: s4).
   ${BOLD}${CYAN}20${NC}   ${BOLD}Spectrogram Generation & Audio Frequency Analysis${NC}
        Spek, SoX, and Praat analysis for one file or a folder.
   ${BOLD}${CYAN}21${NC}   ${BOLD}Morning Alarm Clock & DJ Mix Playback Suite${NC}
@@ -170,7 +170,7 @@ ${BOLD}AVAILABLE MENU OPTIONS (INTERACTIVE & DIRECT SHORTCUTS):${NC}
 
   ${BOLD}${BLUE}─── [ SECTION 3: SYSTEM, NETWORK, AI & SETTINGS ] ────────────────────────────${NC}
   ${BOLD}${CYAN}26${NC}   ${BOLD}Live Session, Stream & Transfer Monitors Suite${NC}
-       Tracklist, Traktor, conversion output, transfers, and upload monitors.
+       Tracklist, DJ, conversion output, transfers, and upload monitors.
   ${BOLD}${CYAN}27${NC}   ${BOLD}System & Hardware Process Monitors Suite${NC}
        btop, nvtop, and top.
   ${BOLD}${CYAN}28${NC}   ${BOLD}MP Reporter Suite & Automated Reports${NC}

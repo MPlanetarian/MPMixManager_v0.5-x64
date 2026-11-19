@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for the Traktor-only MIDI auto-mapper."""
+"""Tests for the MIDI DJ Mixer Profiles (Kontrol S4 and Kontrol S3)."""
 
 import json
 import sys
@@ -28,40 +28,40 @@ class TestDetection(unittest.TestCase):
             (dev / f"midiC{card}D{sub}").write_text("", encoding="utf-8")
         return root, dev
 
-    def test_only_a_traktor_port_is_returned(self):
+    def test_only_a_dj_port_is_returned(self):
         with tempfile.TemporaryDirectory() as tmp:
             root, dev = self._proc(tmp, {
-                1: ("Traktor Kontrol S4", 0),
+                1: ("Kontrol S4", 0),
                 2: ("MPKmini2", 0),
             })
-            found = mixer_midi.find_traktor_devices(root, dev)
-            self.assertEqual([item["name"] for item in found], ["Traktor Kontrol S4"])
+            found = mixer_midi.find_dj_devices(root, dev)
+            self.assertEqual([item["name"] for item in found], ["Kontrol S4"])
             self.assertTrue(found[0]["path"].endswith("midiC1D0"))
 
-    def test_a_non_traktor_device_maps_nothing(self):
+    def test_a_non_dj_device_maps_nothing(self):
         with tempfile.TemporaryDirectory() as tmp:
             root, dev = self._proc(tmp, {2: ("MPKmini2", 0)})
-            self.assertEqual(mixer_midi.find_traktor_devices(root, dev), [])
+            self.assertEqual(mixer_midi.find_dj_devices(root, dev), [])
 
-    def test_a_traktor_name_without_a_rawmidi_node_is_skipped(self):
+    def test_a_dj_name_without_a_rawmidi_node_is_skipped(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root, dev = self._proc(tmp, {1: ("Traktor Kontrol S4", 0)})
+            root, dev = self._proc(tmp, {1: ("Kontrol S4", 0)})
             (dev / "midiC1D0").unlink()
-            self.assertEqual(mixer_midi.find_traktor_devices(root, dev), [])
+            self.assertEqual(mixer_midi.find_dj_devices(root, dev), [])
 
 
 class TestSequencer(unittest.TestCase):
-    def test_the_sequencer_list_ignores_non_traktor_ports(self):
+    def test_the_sequencer_list_ignores_non_dj_ports(self):
         from types import SimpleNamespace
         output = (
             " Port    Client name                      Port name\n"
-            " 20:0    Traktor Kontrol S4               Traktor Kontrol S4\n"
+            " 20:0    Kontrol S4               Kontrol S4\n"
             " 24:0    MPKmini2                         MPKmini2 MIDI 1\n"
         )
         with patch("mixer_midi.shutil.which", return_value="/usr/bin/aseqdump"), \
              patch("mixer_midi.subprocess.run", return_value=SimpleNamespace(stdout=output)):
-            ports = mixer_midi.find_traktor_sequencer_ports()
-        self.assertEqual(ports, [{"name": "Traktor Kontrol S4", "path": "20:0", "backend": "sequencer"}])
+            ports = mixer_midi.find_dj_sequencer_ports()
+        self.assertEqual(ports, [{"name": "Kontrol S4", "path": "20:0", "backend": "sequencer"}])
 
     def test_sequencer_events_are_parsed(self):
         self.assertEqual(
@@ -110,7 +110,7 @@ class TestMapping(unittest.TestCase):
 class TestMessages(unittest.TestCase):
     def setUp(self):
         self.events = []
-        self.listener = mixer_midi.TraktorMidiListener(
+        self.listener = mixer_midi.DJMidiListener(
             on_change=lambda action, value: self.events.append((action, value)),
             mapping_path=Path("/does/not/exist.json"),
         )
@@ -154,17 +154,17 @@ class TestMessages(unittest.TestCase):
         self.assertEqual(self.events[1], ("pitch:B", 20.0))
 
     def test_a_generic_midi_controller_has_no_map(self):
-        # The listener itself only receives bytes from a Traktor port. A note
-        # outside the Traktor map is simply ignored, never assigned by guess.
+        # The listener itself only receives bytes from a DJ port. A note
+        # outside the DJ map is simply ignored, never assigned by guess.
         self.send(0x90, 99, 127)
         self.assertEqual(self.events, [])
 
 
 class TestMixerWiring(unittest.TestCase):
-    def test_start_midi_constructs_the_traktor_listener(self):
+    def test_start_midi_constructs_the_profile_listener(self):
         import MP_Liquid_Mixer as app
         mixer = app.LiquidMixer()
-        with patch.object(app.mixer_midi, "TraktorMidiListener") as listener:
+        with patch.object(app.mixer_midi, "MixerMidiListener") as listener:
             mixer._start_midi()
         listener.assert_called_once()
         listener.return_value.start.assert_called_once()
@@ -187,18 +187,65 @@ class TestMixerWiring(unittest.TestCase):
             mixer._apply_s4("play:A", 1.0)
         toggle.assert_called_once()
 
-    def test_status_reports_traktor_midi_when_mapped(self):
+    def test_status_reports_the_mapped_controller(self):
         import MP_Liquid_Mixer as app
         mixer = app.LiquidMixer()
         listener = MagicMock()
         listener.connected = True
-        listener.device_name = "Traktor Kontrol S4"
+        listener.device_name = "Kontrol S3"
         listener.last_event = 0.0
         listener.last_message = "mapped"
         mixer.midi_listener = listener
+        mixer.profile = "B"
         text, _color = mixer._s4_status()
-        self.assertIn("Traktor MIDI", text)
-        self.assertIn("Traktor Kontrol S4", text)
+        self.assertIn("DJ MIXER", text)
+        self.assertIn("Kontrol S3", text)
+
+
+class TestProfiles(unittest.TestCase):
+    def test_the_two_profiles_bind_their_own_controller(self):
+        self.assertTrue(mixer_midi.name_matches_profile("Kontrol S4 MIDI", "A"))
+        self.assertFalse(mixer_midi.name_matches_profile("Kontrol S3 MIDI", "A"))
+        self.assertTrue(mixer_midi.name_matches_profile("Kontrol S3 MIDI", "B"))
+        self.assertFalse(mixer_midi.name_matches_profile("MPKmini2", "B"))
+
+    def test_the_s3_map_reaches_all_four_channels(self):
+        self.assertEqual(mixer_midi.S3_CC[8], "channel:A")
+        self.assertEqual(mixer_midi.S3_CC[11], "channel:D")
+        self.assertEqual(mixer_midi.S3_CC[16], "pitch:C")
+        self.assertEqual(mixer_midi.S3_CC[23], "filter:D")
+        self.assertEqual(mixer_midi.S3_CC[12], "crossfader")
+
+    def test_the_s4_profile_keeps_its_original_map(self):
+        self.assertEqual(mixer_midi.PROFILE_MAPS["A"][0], mixer_midi.S4_NOTES)
+        self.assertEqual(mixer_midi.PROFILE_MAPS["A"][1], mixer_midi.S4_CC)
+
+    def test_a_switched_listener_loads_the_other_map(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "map.json"
+            listener = mixer_midi.MixerMidiListener(mapping_path=path, profile="A")
+            self.assertEqual(listener.cc.get(8), "channel:A")
+            listener.set_profile("B")
+            self.assertEqual(listener.profile, "B")
+            self.assertEqual(listener.cc.get(11), "channel:D")
+            self.assertNotIn(19, listener.cc)
+
+    def test_profile_overrides_are_namespaced(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "map.json"
+            path.write_text(json.dumps({
+                "profile": "B",
+                "overrides": {"B": {"cc": {"70": "master_volume"}}},
+            }), encoding="utf-8")
+            notes_b, cc_b = mixer_midi.load_mapping(path, "B")
+            notes_a, cc_a = mixer_midi.load_mapping(path, "A")
+        self.assertEqual(cc_b.get(70), "master_volume")
+        self.assertNotIn(70, cc_a)
+        self.assertEqual(notes_a, mixer_midi.S4_NOTES)
+
+    def test_bytes_split_into_channel_messages(self):
+        events = mixer_midi.split_midi_bytes(b"\x90\x00\x7f\xb0\x08\x40")
+        self.assertEqual(events, [(0x90, 0, 127), (0xB0, 8, 64)])
 
 
 if __name__ == "__main__":

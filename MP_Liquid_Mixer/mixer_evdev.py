@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Traktor Kontrol S4 native fader input for MP Liquid Mixer 0.0.1.
+"""Kontrol S4 native fader input for MP Liquid Mixer 0.0.1.
 
 The S4 does not need MIDI mode for its faders. The snd-usb-caiaq driver
 publishes them as absolute axes on the controller's evdev node, which is
@@ -15,7 +15,7 @@ readable while the device stays in its normal native mode:
 0 is bottom/left. The mapping can be overridden per control, and each control
 can be inverted, in ~/.config/mix-manager/liquid_mixer_s4.json.
 
-Reading evdev is shared: the standalone Traktor MIDI service, Traktor itself,
+Reading evdev is shared: the standalone DJ MIDI service, DJ itself,
 and this mixer can all open the node at the same time. Nothing has to be
 stopped, and MIDI mode is irrelevant here.
 """
@@ -36,7 +36,7 @@ CONFIG_DIR = Path.home() / ".config" / "mix-manager"
 MAPPING_PATH = CONFIG_DIR / "liquid_mixer_s4.json"
 LOG_PATH = CONFIG_DIR / "liquid_mixer_s4.log"
 
-DEVICE_NAME = "Traktor Kontrol S4"
+DEVICE_NAME = "Kontrol S4"
 
 # From the S4 MK1 driver's Slider.cpp. The physical channels are not in axis
 # order: the USB report lists channel D first and channel A third.

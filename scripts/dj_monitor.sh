@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# MP_Mix_Manager_v0.3 - Traktor Pro Live Monitor & Audio Recorder Control
+# MP_Mix_Manager_v0.3 - DJ Pro Live Monitor & Audio Recorder Control
 # Cross-platform: macOS, Windows 10 & 11, and Linux
 # Supports:
-#   • CPU % & RSS RAM memory tracking for Traktor processes
+#   • CPU % & RSS RAM memory tracking for DJ processes
 #   • Loaded / playing track detection across decks (file handles & history)
 #   • Real-time recording file status & file-size growth detector
 #   • Audio interface hardware query (sample rate, latency, buffer size)
@@ -37,17 +37,17 @@ if ! command -v python3 >/dev/null 2>&1; then
     fi
 fi
 
-# Locate traktor_monitor.py
-MONITOR_PY="$SCRIPT_DIR/traktor_monitor.py"
+# Locate dj_monitor.py
+MONITOR_PY="$SCRIPT_DIR/dj_monitor.py"
 if [ ! -f "$MONITOR_PY" ]; then
-    if [ -f "$SCRIPT_DIR/scripts/traktor_monitor.py" ]; then
-        MONITOR_PY="$SCRIPT_DIR/scripts/traktor_monitor.py"
-    elif [ -f "$PWD/scripts/traktor_monitor.py" ]; then
-        MONITOR_PY="$PWD/scripts/traktor_monitor.py"
-    elif [ -f "$PWD/traktor_monitor.py" ]; then
-        MONITOR_PY="$PWD/traktor_monitor.py"
+    if [ -f "$SCRIPT_DIR/scripts/dj_monitor.py" ]; then
+        MONITOR_PY="$SCRIPT_DIR/scripts/dj_monitor.py"
+    elif [ -f "$PWD/scripts/dj_monitor.py" ]; then
+        MONITOR_PY="$PWD/scripts/dj_monitor.py"
+    elif [ -f "$PWD/dj_monitor.py" ]; then
+        MONITOR_PY="$PWD/dj_monitor.py"
     else
-        echo "Error: traktor_monitor.py not found in $SCRIPT_DIR or subdirectories." >&2
+        echo "Error: dj_monitor.py not found in $SCRIPT_DIR or subdirectories." >&2
         exit 1
     fi
 fi

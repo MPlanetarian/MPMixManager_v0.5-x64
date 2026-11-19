@@ -51,7 +51,7 @@ CHANNELS = ("A", "B", "C", "D")
 # model (the S4 has the faders) but nothing drives them yet: the mixer opens
 # with two decks, and channel_active() must say so or the window tries to spawn
 # two players that have no playlist and no window.
-ACTIVE_CHANNELS = ("A", "B")
+ACTIVE_CHANNELS = CHANNELS
 # Channels the crossfader blends. C and D are extra inputs that always play at
 # their own fader level, so a crossfade never mutes them.
 CROSSFADE_CHANNELS = ("A", "B")
@@ -69,15 +69,27 @@ EQ_MIN, EQ_MAX = -12.0, 12.0
 EQ_BANDS = ("low", "mid", "high")
 EQ_GROUPS = {"low": (0, 1, 2), "mid": (3, 4, 5, 6), "high": (7, 8, 9)}
 PITCH_MIN, PITCH_MAX = -20.0, 20.0
-# Per-channel multi-effect, driven by the extra FILTER knob below LOW. The
-# filter knob is the effect's depth; the effects button arms or bypasses the
-# whole insert for that channel.
+# Per-channel multi-effect, driven by the extra FILTER knob below LOW.
+#
+# The knob has five switches above it: four effect selectors and an orange
+# Filter switch. The four effect squares keep their colours on every theme
+# (red / blue / yellow / green) because they are a fixed hardware-style legend
+# rather than themed chrome. The orange square switches the knob to a plain
+# resonant filter sweep, which is the classic DJ filter position.
 DEFAULT_FILTER = 0.0
-EFFECT_MODES = ("FLANGER", "DELAY", "REVERB", "GATER")
+EFFECT_MODES = ("FLANGER", "REVERB", "DELAY", "GATER")
 DEFAULT_EFFECT = "FLANGER"
 DEFAULT_EFFECT_SLOTS = list(EFFECT_MODES)
-# Slot colours from the requirement: red, yellow, blue, orange.
-EFFECT_SLOT_COLORS = ((235, 64, 72), (250, 205, 90), (72, 149, 239), (255, 150, 40))
+# Slot colours: Flanger red, Reverb blue, Delay yellow, Gater green.
+EFFECT_SLOT_COLORS = ((235, 64, 72), (72, 149, 239), (250, 205, 90), (60, 220, 120))
+# The Filter switch under the four effect squares.
+FILTER_SLOT_COLOR = (255, 150, 40)
+# Meter zone thresholds, from the bottom of the ladder upward.
+METER_ZONES = ((0.00, (235, 215, 70)),    # starts yellow
+               (0.35, (60, 220, 120)),    # green through the middle
+               (0.70, (250, 205, 90)),    # yellow again at three quarters
+               (0.90, (235, 64, 72)))     # red at the top
+METER_MIN_DB, METER_MAX_DB = -60.0, 0.0
 DEFAULT_MASTER_VOLUME = 1.0
 DEFAULT_MONITOR_VOLUME = 0.85
 # The one theme the mixer always opens in, whatever the user selected last.
@@ -263,7 +275,7 @@ class MixerModel:
         self.effect_enabled: Dict[str, bool] = {ch: False for ch in CHANNELS}
         for ch in CHANNELS:
             slot = str((effect_slots or {}).get(ch) or "").strip().upper()
-            if slot in EFFECT_MODES:
+            if slot in EFFECT_MODES or slot == "FILTER":
                 self.effect_slots[ch] = slot
         if isinstance(effect_enabled, dict):
             for ch, value in effect_enabled.items():
@@ -406,11 +418,22 @@ class MixerModel:
     def effect_mode(self, channel: str) -> str:
         return self.effect_slots.get(channel, DEFAULT_EFFECT)
 
+    def filter_mode(self, channel: str) -> bool:
+        """True when the knob drives the plain filter instead of an effect."""
+        return self.effect_slots.get(channel) == "FILTER"
+
+    def set_filter_mode(self, channel: str) -> bool:
+        """Switch one channel's knob to the plain filter sweep."""
+        if channel not in self.effect_slots:
+            return False
+        self.effect_slots[channel] = "FILTER"
+        return True
+
     def set_effect_mode(self, channel: str, mode: str) -> bool:
         if channel not in self.effect_slots:
             return False
         name = str(mode or "").strip().upper()
-        if name not in EFFECT_MODES:
+        if name not in EFFECT_MODES and name != "FILTER":
             return False
         self.effect_slots[channel] = name
         return True
@@ -437,6 +460,18 @@ class MixerModel:
             "amount": round(self.filter_value(channel), 4),
             "enabled": self.effect_on(channel),
         }
+
+    # -- meters ----------------------------------------------------------
+    def meter_fraction(self, channel: str, db: float) -> float:
+        """A peak in dBFS as 0.0-1.0 of the meter ladder's height."""
+        try:
+            level = float(db)
+        except (TypeError, ValueError):
+            return 0.0
+        if level <= METER_MIN_DB:
+            return 0.0
+        span = METER_MAX_DB - METER_MIN_DB
+        return clamp01((level - METER_MIN_DB) / span)
 
     # -- master and monitor levels ----------------------------------------
     def set_master_volume(self, value: float) -> None:
@@ -469,6 +504,11 @@ class MixerModel:
         by the equal-power crossfader, C and D are not. EXTERNAL hands every
         deck to the house mixer at unity, so the software faders and the
         crossfader are bypassed (and drawn dimmed) instead of fighting it.
+
+        MASTER trims the whole mix. MONITOR trims a cued channel: with a
+        second interface configured, its headphone button moves that deck's
+        stream to the monitor output, so the monitor knob is the level of what
+        the DJ hears rather than a second copy of the room mix.
         """
         if self.external:
             return 100
@@ -477,7 +517,10 @@ class MixerModel:
         if channel in CROSSFADE_CHANNELS:
             gain_a, gain_b = self.crossfade_gains()
             gain *= gain_a if channel == "A" else gain_b
-        return max(0, min(100, int(round(100.0 * gain * trim * self.master_volume))))
+        level = gain * trim * self.master_volume
+        if self.headphone(channel):
+            level *= self.monitor_volume
+        return max(0, min(100, int(round(100.0 * level))))
 
     def channel_volumes(self) -> Dict[str, int]:
         return {ch: self.channel_volume(ch) for ch in CHANNELS}
@@ -1335,16 +1378,16 @@ def layout(width: int = DESIGN_W, height: int = DESIGN_H) -> Dict[str, Tuple[flo
         "deck_c_term": rect(36, 138, 762, 838),
         "deck_d_term": rect(1122, 138, 762, 838),
         "mixer": rect(842, 88, 236, 900),
-        "browse_button": rect(852, 760, 216, 28),
-        "mode_button": rect(852, 794, 216, 40),
-        "record_button": rect(852, 856, 216, 40),
-        "format_button": rect(852, 830, 104, 26),
-        "bitdepth_button": rect(964, 830, 104, 26),
-        "credit_button": rect(852, 900, 216, 30),
-        "clock_button": rect(852, 934, 216, 40),
-        "export_button": rect(852, 976, 216, 26),
-        "verify_button": rect(852, 686, 216, 22),
-        "xfader": rect(852, 710, 216, 46),
+        "verify_button": rect(852, 660, 216, 22),
+        "xfader": rect(852, 688, 216, 46),
+        "browse_button": rect(852, 740, 216, 26),
+        "mode_button": rect(852, 772, 216, 34),
+        "format_button": rect(852, 812, 104, 22),
+        "bitdepth_button": rect(964, 812, 104, 22),
+        "record_button": rect(852, 840, 216, 34),
+        "credit_button": rect(852, 880, 216, 24),
+        "clock_button": rect(852, 910, 216, 34),
+        "export_button": rect(852, 950, 216, 24),
         "pitch_a": rect(796, 150, 26, 420),
         "pitch_b": rect(1098, 150, 26, 420),
         "sync_a": rect(620, 94, 70, 28),
@@ -1361,26 +1404,31 @@ def layout(width: int = DESIGN_W, height: int = DESIGN_H) -> Dict[str, Tuple[flo
         "trance_button": rect(540, 14, 300, 36),
         "settings_button": rect(1150, 14, 144, 36),
         "close_button": rect(1836, 14, 48, 36),
-        "profile_button": rect(852, 64, 216, 26),
+        "profile_button": rect(864, 14, 240, 36),
     }
-    # Channel strips. The FILTER knob is 1.5x an EQ knob, so the fader column
-    # sits below it with room for the cue button and the channel letter.
+    # Channel strips: FX button, headphone cue, letter, fader, meter. The FX
+    # button arms the channel's filter-knob effect, the cue button routes the
+    # deck to the monitor output, and the meter is the narrow ladder beside
+    # the fader.
     strip_y, strip_h, strip_w, strip_gap = 512.0, 110.0, 48.0, 8.0
     start_x = 842 + (236 - (4 * strip_w + 3 * strip_gap)) / 2.0
     for i, channel in enumerate(CHANNELS):
         x = start_x + i * (strip_w + strip_gap)
         boxes[f"strip_{channel}"] = rect(x, strip_y, strip_w, strip_h)
-        boxes[f"strip_{channel}_label"] = rect(x, strip_y - 24, strip_w, 18)
+        boxes[f"strip_{channel}_label"] = rect(x, strip_y - 22, strip_w, 16)
         boxes[f"strip_{channel}_value"] = rect(x, strip_y + strip_h + 4, strip_w, 16)
-        # The headphone-cue button above each fader: presses route that one
-        # channel to the monitor output.
-        boxes[f"monitor_{channel}"] = rect(x + 2, strip_y - 46, strip_w - 4, 18)
+        boxes[f"monitor_{channel}"] = rect(x + 2, strip_y - 40, strip_w - 4, 16)
+        boxes[f"fx_{channel}"] = rect(x + 2, strip_y - 58, strip_w - 4, 16)
+        # The meter runs the fader's full height, just right of the track.
+        boxes[f"meter_{channel}"] = rect(x + strip_w - 9, strip_y + 2, 6, strip_h - 4)
 
     # Four rows of four knobs: GAIN, TREBLE, MID, LOW, plus the bigger FILTER
     # knob below LOW. The EQ rows carry no left-hand legend any more, so the
     # knob columns line up exactly with the channel faders below them.
     row_centres = {"gain": 178.0, "high": 222.0, "mid": 266.0, "low": 310.0}
-    knob_x, knob_w, knob_gap = 886.0, 40.0, 4.0
+    # The knob columns share the fader columns' centres (strip_x + 24), so the
+    # grid lines up with the four channel faders below it.
+    knob_x, knob_w, knob_gap = 856.0, 40.0, 16.0
     for row in ("gain", "high", "mid", "low"):
         centre = row_centres[row]
         for i, channel in enumerate(CHANNELS):
@@ -1396,16 +1444,24 @@ def layout(width: int = DESIGN_W, height: int = DESIGN_H) -> Dict[str, Tuple[flo
         boxes[f"knob_filter_{channel}_value"] = rect(x - 4, filter_centre + filter_d / 2,
                                                      filter_d + 8, 12)
 
-    # Effect controls, one column beneath the filter row: the four numbered
-    # slot squares and the enable/bypass button per channel.
-    effect_y, effect_w, effect_h = 406.0, 8.0, 8.0
+    # Effect controls, one column per channel beneath the filter knob: a row of
+    # four effect squares (Flanger / Reverb / Delay / Gater) and the orange
+    # Filter square under them. They are fixed colours, not themed.
+    slot_w, slot_gap = 8.0, 1.2
+    row1_y, row2_y, slot_h = 400.0, 410.0, 8.0
     for i, channel in enumerate(CHANNELS):
-        column_x = knob_x + i * (knob_w + knob_gap) + (knob_w - (4 * effect_w + 3 * 1.0)) / 2.0
-        for slot, _name in enumerate(EFFECT_MODES):
+        column_x = knob_x + i * (knob_w + knob_gap) + (knob_w - (4 * slot_w + 3 * slot_gap)) / 2.0
+        for slot in range(4):
             boxes[f"effect_slot_{slot + 1}_{channel}"] = rect(
-                column_x + slot * (effect_w + 1.0), effect_y, effect_w, effect_h)
-        boxes[f"effect_toggle_{channel}"] = rect(column_x - 2, effect_y + effect_h + 3,
-                                                 (4 * effect_w + 3.0) + 4, 11)
+                column_x + slot * (slot_w + slot_gap), row1_y, slot_w, slot_h)
+        boxes[f"effect_filter_{channel}"] = rect(column_x + (4 * slot_w + 3 * slot_gap) / 2.0 - 6.0,
+                                                 row2_y, 12.0, slot_h)
+
+    # Master output meter and its volume slider, in the bottom bar's free
+    # left-hand band (the transparency track starts at x=192). The slider is
+    # the software master level and the meter is the summed output.
+    boxes["master_meter"] = rect(48, 1024, 136, 10)
+    boxes["master_slider"] = rect(48, 1040, 136, 16)
     return boxes
 
 

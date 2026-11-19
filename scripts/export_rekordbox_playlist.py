@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 MP Mix Manager v0.3 - Multi-Platform DJ Exporter (Pioneer Rekordbox XML)
-Converts Traktor .nml histories/collections, CUE sheets, and M3U playlists
+Converts DJ .nml histories/collections, CUE sheets, and M3U playlists
 into standard Pioneer Rekordbox XML format (rekordbox.xml) for instant import
 into Rekordbox 5/6/7 and export to CDJ USB drives.
 """
@@ -44,8 +44,8 @@ def parse_m3u(filepath):
     return tracks
 
 
-def parse_traktor_nml(filepath):
-    """Parse Traktor .nml collection or history file."""
+def parse_dj_nml(filepath):
+    """Parse DJ .nml collection or history file."""
     tracks = []
     tree = ET.parse(filepath)
     root = tree.getroot()
@@ -128,8 +128,8 @@ def create_rekordbox_xml(playlist_name, tracks, output_xml):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Export Playlists / Traktor Histories to Pioneer Rekordbox XML")
-    parser.add_argument("input_file", help="Path to Traktor .nml, .m3u, or .m3u8 playlist")
+    parser = argparse.ArgumentParser(description="Export Playlists / DJ Histories to Pioneer Rekordbox XML")
+    parser.add_argument("input_file", help="Path to DJ .nml, .m3u, or .m3u8 playlist")
     parser.add_argument("--name", "-n", help="Playlist name inside Rekordbox (default: filename stem)", default=None)
     parser.add_argument("--output", "-o", help="Output .xml file path", default=None)
 
@@ -145,7 +145,7 @@ def main():
 
     ext = input_path.suffix.lower()
     if ext == ".nml":
-        tracks = parse_traktor_nml(input_path)
+        tracks = parse_dj_nml(input_path)
     elif ext in [".m3u", ".m3u8"]:
         tracks = parse_m3u(input_path)
     else:

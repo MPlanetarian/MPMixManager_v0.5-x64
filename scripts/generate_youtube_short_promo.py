@@ -111,7 +111,7 @@ def build_slides(tmpdir, cover_path):
         ("📼 STREAMING & CDJ EXPORT", "YOUTUBE CHAPTERS", "& Rekordbox XML Export", [
             ("YouTube Video Chapters", "Exact format (00:00:00 Artist - Title) ready for uploads", CYAN),
             ("SoundCloud & Mixcloud", "Formatted descriptions with duration validation", PINK),
-            ("Pioneer Rekordbox XML", "Converts Traktor / M3U into standard rekordbox.xml", GOLD),
+            ("Pioneer Rekordbox XML", "Converts DJ / M3U into standard rekordbox.xml", GOLD),
             ("CDJ Stage Prep", "Load ascending harmonic keys straight onto USB drives", CYAN)]),
         ("🎛️ AUDIO MASTERING AUDIT", "STUDIO HEALTH CHECK", "True Peak & Phase Analysis", [
             ("True Peak (ISP) Check", "Flags clipping distortion before lossy MP3 encoding", CYAN),

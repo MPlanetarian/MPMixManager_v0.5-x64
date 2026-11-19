@@ -3797,6 +3797,17 @@ def run_visualizer(preset_name: Optional[str] = None, max_seconds: Optional[floa
                    span_bounds: Optional[Tuple[int, int, int, int]] = None,
                    span_role: str = "",
                    stop_flag: Optional[Dict[str, bool]] = None) -> int:
+    # One choke point for every launcher: the console menu, MP Gui, the Liquid
+    # Player, the mixer, the Web Companion's Visualizer button and the tray all
+    # end up here. A Raspberry Pi cannot drive this renderer, so it is refused
+    # before a window is created rather than opened at an unusable frame rate.
+    try:
+        import mp_raspberry_pi as _pi
+        if not _pi.visualizer_supported():
+            print(_pi.visualizer_unsupported_reason(), file=sys.stderr)
+            return 1
+    except Exception:
+        pass
     signal.signal(signal.SIGTERM, _exit_when_player_closes)
     # Windows has no SIGHUP. Registering it aborted the visualizer before the window opened.
     hangup = getattr(signal, "SIGHUP", None)

@@ -45,7 +45,7 @@ APP_STATE = {
         "perf_display.cache",
         "perf_display.stamp",
         "s4_conn.cache",
-        "traktor_s4_notified.flag",
+        "dj_s4_notified.flag",
     ),
     "gui": (
         "liquid_gui_window.json",

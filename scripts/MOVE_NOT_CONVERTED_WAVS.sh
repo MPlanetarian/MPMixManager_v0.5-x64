@@ -132,7 +132,7 @@ get_session_base_name() {
     name="${name%.[Ff][Ll][Aa][Cc]}"
     name="${name%.[Mm][Pp]3}"
 
-    # 1. Traktor split chunks: session timestamp + split duration offset (e.g. _4h53m32_03h02m02 or _14h00m00_0h52m07)
+    # 1. DJ split chunks: session timestamp + split duration offset (e.g. _4h53m32_03h02m02 or _14h00m00_0h52m07)
     # Strip only the trailing split duration offset, preserving the session timestamp
     if [[ "$name" =~ ^(.*_[0-9]{1,2}h[0-9]{2}m[0-9]{2}s?)_[0-9]{1,2}h[0-9]{2}m[0-9]{2}s?$ ]]; then
         echo "${BASH_REMATCH[1]}"

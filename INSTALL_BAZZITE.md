@@ -95,7 +95,7 @@ flatpak install -y flathub org.audacityteam.Audacity
 
 ## 5. Step 4: Python Environment & Vision AI Dependencies
 
-MP Mix Archive Manager utilizes Python 3 for Traktor history XML parsing, YouTube video generation, file transfer monitoring, and YOLOv8 object detection.
+MP Mix Archive Manager utilizes Python 3 for DJ history XML parsing, YouTube video generation, file transfer monitoring, and YOLOv8 object detection.
 
 Install required Python dependencies:
 
@@ -238,8 +238,8 @@ nano config.env
 # Defaults to current directory if not found
 MIX_ARCHIVE_DIR="/run/media/$USER/WD BLACK B/MIX_ARCHIVE"
 
-# Directory where Traktor saves session playlists
-TRAKTOR_HISTORY_DIR="/run/media/$USER/WD BLACK B/MIX_ARCHIVE/Traktor 3.11.1/History"
+# Directory where DJ saves session playlists
+DJ_HISTORY_DIR="/run/media/$USER/WD BLACK B/MIX_ARCHIVE/DJ 3.11.1/History"
 
 # Google Drive remote configured in rclone
 GDRIVE_REMOTE="gdrive:MIX_ARCHIVE/FLAC_CONVERTED_OUTPUTS"

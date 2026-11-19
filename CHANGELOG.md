@@ -59,7 +59,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **A live system clock** shows the date and `HH:MM:SS` in the mixer panel. It is read from the system when the mixer is constructed and refreshed from `datetime.now()` once a second by the existing UI tick; it does not depend on playback.
   - **Launch keys.** With the mixer chrome focused, `M` opens MP Mix Manager in a new Konsole (`Mix_Archive_Manager.sh`), `Z` opens the MP Liquid Visualizer, `W` opens a dedicated MP Black Glass pane at the mixer's size (its own `W`, `R`, `Z`, `G`, `L` and `M` keys are documented in `scripts/black_glass_window.py`), `L` opens MP Liquid Player, and `G` opens MP Gui. Each runs detached through the same launchers the shortcuts and tray use; a focused deck keeps its own player keys.
   - **EXPORT MIXES to the primary MIX_ARCHIVE.** The new button moves every finished `.wav` to the archive root and every `.flac` to `<MIX_ARCHIVE>/FLAC_CONVERTED_OUTPUTS`, creating that folder when needed. It scans both the archive's `MP_AUDIOWAV_REC_OUTPUT` and the install-tree fallback, so older recordings are included, and never overwrites an existing file. The primary folder comes from `MIX_ARCHIVE_DIR` (environment, then `config.env`). With no setting the button scans and moves **nothing** and the MP Tray posts a setup reminder; a configured path that is not currently a directory is reported instead of guessed. Success posts an MP Tray notification naming the archive path and the WAV/FLAC counts. A live recording must be stopped first, so the open part cannot be moved while it is being written.
-  - **Traktor MIDI-mode buttons map automatically — and only Traktor.** `MP_Liquid_Mixer/mixer_midi.py` watches Traktor ports and maps the S4 MIDI note/CC layout to the mixer's existing actions: Play A/B, Sync A/B, Shift, Browse push/turn, Load, Record, channel volume and deck pitch. A generic controller (MPK mini and the like) is never opened or mapped. It prefers the ALSA sequencer (`aseqdump`), which can be shared with the standalone Traktor service, and falls back to rawmidi. Mapping follows hot-plug, a user override file (`liquid_mixer_midi.json`) can change individual notes/CCs, and the native evdev path still works; duplicate button presses seen by both paths within 80 ms are coalesced. The top-bar status now reports `Traktor MIDI <name>` when mapped.
+  - **DJ MIDI-mode buttons map automatically — and only DJ.** `MP_Liquid_Mixer/mixer_midi.py` watches DJ ports and maps the S4 MIDI note/CC layout to the mixer's existing actions: Play A/B, Sync A/B, Shift, Browse push/turn, Load, Record, channel volume and deck pitch. A generic controller (MPK mini and the like) is never opened or mapped. It prefers the ALSA sequencer (`aseqdump`), which can be shared with the standalone DJ service, and falls back to rawmidi. Mapping follows hot-plug, a user override file (`liquid_mixer_midi.json`) can change individual notes/CCs, and the native evdev path still works; duplicate button presses seen by both paths within 80 ms are coalesced. The top-bar status now reports `DJ MIDI <name>` when mapped.
 - **MP Liquid Mixer desktop shortcut and the Exit_MP_Video.mp4 launch/exit bracket** (`MP_Liquid_Mixer.desktop`, `scripts/launch_liquid_mixer.sh`, `MP_Liquid_Mixer/MP_Liquid_Mixer.py`, `scripts/install_desktop_shortcuts.py`, `install.sh`, `scripts/uninstall_apps.py`):
   - **Shortcut style matches the suite.** Linux gets **MP Liquid Mixer** on the Desktop and in the application menu, written by `install_desktop_shortcuts.py` with the same `mp-desktop-exec` resolution, icon, categories and `Terminal=false` as MP Liquid Player. The launcher resolves the install tree, picks the GTK/PyGObject interpreter and the bundled VTE typelib, drops another window's deck identity, then `exec`s `MP_Liquid_Mixer/run.sh`.
   - **The installer creates it.** Every Linux selection except "none" writes the mixer shortcut beside the four selectable apps; macOS, Windows and WSL never do, because the mixer is an X11/XWayland, VTE and ALSA host. The uninstaller keeps it while any app remains and removes it with the last one.
@@ -402,8 +402,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Option 4** turns controller support off or on and saves `MP_MANAGER_GAMEPAD` to `config.env`.
 
 ### Changed
-- **Sensorium's pane is light coral** (`themes/Sensorium_MP_Mix_Manager.theme`, `Mix_Archive_Manager.sh`, `scripts/mp_theme_palette.py`, `scripts/liquid_glass_opengl.py`, `MP_Audio_Player.py`, `scripts/mix_web_companion.py`, `scripts/traktor_monitor.py`, `scripts/view_tracklist_console.sh`):
-  - The console pane moves from deep oxblood `#1e080c` to light coral `#f08080` in btop, the shared background table, the CLI manager, the Web Companion and Traktor Monitor. The btop window, accents and graph colours are darkened so the palette stays readable on the lighter pane.
+- **Sensorium's pane is light coral** (`themes/Sensorium_MP_Mix_Manager.theme`, `Mix_Archive_Manager.sh`, `scripts/mp_theme_palette.py`, `scripts/liquid_glass_opengl.py`, `MP_Audio_Player.py`, `scripts/mix_web_companion.py`, `scripts/dj_monitor.py`, `scripts/view_tracklist_console.sh`):
+  - The console pane moves from deep oxblood `#1e080c` to light coral `#f08080` in btop, the shared background table, the CLI manager, the Web Companion and DJ Monitor. The btop window, accents and graph colours are darkened so the palette stays readable on the lighter pane.
   - Text and menu ink are now deep maroon `#2b0a10`, with dark tangerine/chartreuse/azure/crimson variants for the accents. The bright chartreuse stays as the selection-bar fill with black text, so the theme keeps its identity without putting light ink on a light pane.
   - The terminal player detects light console panes from the shared background table and uses the theme's dark body ink for unselected playlist rows. Liquid Glass hosts keep their white rows because their pane comes from the shader, not the console background.
 - **The MP Visualizer `Z` cycle returns to the window you actually had, and half means half the MP Liquid Player** (`scripts/visualizer_z_cycle.py`, `scripts/mp_liquid_visualizer_vulkan.py`, `scripts/mp_liquid_visualizer_metal.py`, `scripts/liquid_player_visualizer.py`, `tests/test_visualizer_z_cycle.py`):
@@ -414,15 +414,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **The Metal renderer starts in the right mode.** `--fullscreen` used to leave `window_mode == "default"`, so the first `Z` read as "leave fullscreen" and did not enter it. It now follows `fullscreen_on_start` like the Vulkan renderer, and leaving fullscreen goes through `glfwSetWindowMonitor(NULL, …)` instead of a plain resize.
   - **The companion is untouched.** The window the Liquid Player starts by itself (the backdrop that appears automatically behind it) is locked: it is never bonded to the cycle, never taken fullscreen and never shrunk. It keeps sitting at the player's exact rectangle. Only a window the user opened with `Z`, the shortcut, or a plain `MP_Liquid_Visualizer.py` run cycles.
   - **A chosen shape survives the per-frame size lock.** The half and restored sizes are written to `_default_windowed_size` / `_half_windowed_size`, which is what the Vulkan poll would otherwise use to force the window back to its opening size.
-- **Three Liquid Glass Skin themes removed; Sensorium replaces Sensorium Interface** (`MP_Audio_Player.py`, `Mix_Archive_Manager.sh`, `scripts/mp_theme_palette.py`, `scripts/liquid_glass_opengl.py`, `scripts/mix_web_companion.py`, `scripts/traktor_monitor.py`, `scripts/view_tracklist_console.sh`, `themes/Sensorium_MP_Mix_Manager.theme`):
+- **Three Liquid Glass Skin themes removed; Sensorium replaces Sensorium Interface** (`MP_Audio_Player.py`, `Mix_Archive_Manager.sh`, `scripts/mp_theme_palette.py`, `scripts/liquid_glass_opengl.py`, `scripts/mix_web_companion.py`, `scripts/dj_monitor.py`, `scripts/view_tracklist_console.sh`, `themes/Sensorium_MP_Mix_Manager.theme`):
   - Cosmic Dreamworlds Radioactive, Cosmic Dreamworlds and Orbital Void Reflux are gone from every picker, alias map, btop palette and companion surface. The old `sensorium_interface` theme id is retired.
-  - **Sensorium** is a new 15th theme: bright tangerine `#ff7a18`, acid chartreuse `#c8ff3d` and electric azure `#3a86ff`, with a deep oxblood console pane `#1e080c`. The palette mix turns the Liquid Glass pane champagne gold and gives the equaliser a tangerine-to-chartreuse-to-azure gradient. It works in MP Audio Player, MP Gui, the OpenGL/Vulkan/Metal Liquid Glass players, the tracklist viewer, Traktor Monitor, the Web Companion and btop.
+  - **Sensorium** is a new 15th theme: bright tangerine `#ff7a18`, acid chartreuse `#c8ff3d` and electric azure `#3a86ff`, with a deep oxblood console pane `#1e080c`. The palette mix turns the Liquid Glass pane champagne gold and gives the equaliser a tangerine-to-chartreuse-to-azure gradient. It works in MP Audio Player, MP Gui, the OpenGL/Vulkan/Metal Liquid Glass players, the tracklist viewer, DJ Monitor, the Web Companion and btop.
   - `sensorium` (and the legacy `sensorium_interface`) resolve to the new theme, so existing `~/.config/mix-manager/theme` files keep working.
-- **Dreamworlds Ultra is the first-run default** (`install.sh`, `Mix_Archive_Manager.sh`, `MP_Gui.sh`, `MP_Audio_Player.py`, `scripts/mp_theme_palette.py`, `scripts/mix_web_companion.py`, `scripts/traktor_monitor.py`, `scripts/view_tracklist_console.sh`):
-  - A fresh install writes `dreamworlds_ultra` to `~/.config/mix-manager/theme`. The CLI manager, MP Gui, the Liquid Player, the standalone audio player, the tracklist viewer, the Web Companion and Traktor Monitor all fall back to Ultra when no theme has been saved.
+- **Dreamworlds Ultra is the first-run default** (`install.sh`, `Mix_Archive_Manager.sh`, `MP_Gui.sh`, `MP_Audio_Player.py`, `scripts/mp_theme_palette.py`, `scripts/mix_web_companion.py`, `scripts/dj_monitor.py`, `scripts/view_tracklist_console.sh`):
+  - A fresh install writes `dreamworlds_ultra` to `~/.config/mix-manager/theme`. The CLI manager, MP Gui, the Liquid Player, the standalone audio player, the tracklist viewer, the Web Companion and DJ Monitor all fall back to Ultra when no theme has been saved.
   - Existing users keep the theme they picked; the installer never overwrites a saved choice.
   - The theme picker now marks Dreamworlds Ultra as **[Default]** and MPlanetarian Dreamworlds as a normal option.
-- **Dreamworlds Ultra text is light purple and its pane is a lighter royal purple** (`scripts/liquid_glass_opengl.py`, `Mix_Archive_Manager.sh`, `themes/Dreamworlds_Ultra_MP_Mix_Manager.theme`, `scripts/mix_web_companion.py`, `scripts/traktor_monitor.py`, `scripts/view_tracklist_console.sh`):
+- **Dreamworlds Ultra text is light purple and its pane is a lighter royal purple** (`scripts/liquid_glass_opengl.py`, `Mix_Archive_Manager.sh`, `themes/Dreamworlds_Ultra_MP_Mix_Manager.theme`, `scripts/mix_web_companion.py`, `scripts/dj_monitor.py`, `scripts/view_tracklist_console.sh`):
   - Player body text and menu option ink are now `#d8b4fe` (216,180,254) instead of the deep `#a514ff` / `#b743ff`.
   - The console pane moves from `#16062e` (22,6,46) to a light grayish purple `#554a6b` (85,74,107), with the btop and Web Companion backgrounds matching. Menu numbers follow the same light purple; the vivid `#a64dff` hot purple stays on borders and the navigation bar.
   - A standalone MP Audio Player now emits OSC 11 from the shared `theme_background()` table at startup and whenever the theme changes, so its terminal pane is the theme colour instead of the terminal profile's black. Liquid Glass hosts skip it and stay transparent.
@@ -648,7 +648,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **The close now runs off the GUI thread.** `dispatch()` starts a worker thread and a GUI-thread `QTimer` watches it, so the icon and menu keep responding for the whole movie and `app.quit()` runs only after the windows are actually gone. `QTimer.singleShot` from the worker was rejected on purpose: a timer created on a thread with no event loop never fires, which would have left the tray running forever — that case is now pinned by a test.
   - **The sweep covers everything the tray can see.** New `suite_pids()` signals every classified role (manager, MP Gui, MP Liquid Player) **plus** the visualizer, terminal player/daemon and MIDI companion, so a Close All no longer depends on the kill script's patterns or on how a window was launched.
   - **A verify pass makes the close trustworthy.** After the first sweep, `shutdown_suite()` re-reads the process table for up to 4 s; if anything MP is still there it re-runs the kill script and SIGKILLs the survivors, then confirms. A clean close costs nothing extra — the loop exits on the first empty read.
-  - **The same two fixes are in the Windows tray.** `Invoke-MpTrayAction` now runs the movie and teardown in a background runspace with a winforms timer posting the quit, instead of blocking the message loop; `Stop-MpSuite` loops until nothing matches and gained the `mix-archive-manager`, `launch-manager` and `traktor_s4_midi` patterns. The macOS menu bar already dispatched on `DispatchQueue.global` and is unchanged apart from a test that pins it.
+  - **The same two fixes are in the Windows tray.** `Invoke-MpTrayAction` now runs the movie and teardown in a background runspace with a winforms timer posting the quit, instead of blocking the message loop; `Stop-MpSuite` loops until nothing matches and gained the `mix-archive-manager`, `launch-manager` and `dj_s4_midi` patterns. The macOS menu bar already dispatched on `DispatchQueue.global` and is unchanged apart from a test that pins it.
   - Proven end to end in a PID namespace (so the patterns could not touch the live session): five stand-in windows — including a manager behind the wrapper and a visualizer and player that a deliberately useless kill script could not stop — are all gone afterwards, and the real Qt tray stayed responsive (91 UI ticks during the close) with the icon still live.
 - **A damaged mix no longer stops the stream: the Web Companion skips to the next one** (`scripts/mix_web_companion.py`, `tests/test_web_companion_unplayable_skip.py`, `tests/test_web_audio_tray.py`):
   - **Symptom:** playing `MPlanetarian - Stream of Frequency 006.wav` on a phone showed *"This mix cannot be played on this device … it is empty or damaged on this computer — pick another mix or re-export it."* The mix after it played fine, but the listener had to reach for the playlist by hand. If every mix in a playlist was damaged, there was no way forward at all.
@@ -892,9 +892,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - The format list is generated from `scripts/audio_conversion_suite.py` instead of a hand-written five-entry picker, so all 21 advertised formats are reachable, plus a **Convert to EVERY Format** batch row, a **Show All Output Formats** table, a **Converted Output Folders** browser and a **Conversion Statistics & History** page.
   - Runs stage into a temp tree and publish into `*_CONVERTED_OUTPUTS` only after every requested format finishes, so a cancelled or failed batch leaves no half-made folder. The encoder is driven from the registry too (`command --argv` emits NUL-separated ffmpeg argv).
   - Metadata gains saved presets, custom fields, back cover, disc image and disc-number tags, plus a "skip the rest of the batch" escape on the per-file prompt; formats that cannot carry artwork warn instead of failing the encode.
-- **Traktor playlists open in the player (`Shift+T`)** (`MP_Audio_Player.py`, `scripts/traktor_playlist_importer.py`, `tests/test_traktor_player_shortcut.py`):
+- **DJ playlists open in the player (`Shift+T`)** (`MP_Audio_Player.py`, `scripts/dj_playlist_importer.py`, `tests/test_dj_player_shortcut.py`):
   - `Shift+T` opens a generated-playlist picker over the playlist area. It lists only the `.json` + `.m3u8` pairs in `PLAYLISTS_GENERATED`, refuses with an explanation when no Music Folders are configured, and validates every path before it reaches the engine, reporting how many tracks were unavailable.
-  - `_TraktorPlaylistScanner` presents the imported tracks through the same `get_mixes()`/`playlist_path` interface the player's own scanner uses, so no other code needed a special case. `AudioEngine.load_track` refuses a missing file before it moves the cursor, and `_ensure_playable_path` rejects zero-byte files as well as missing ones.
+  - `_DJPlaylistScanner` presents the imported tracks through the same `get_mixes()`/`playlist_path` interface the player's own scanner uses, so no other code needed a special case. `AudioEngine.load_track` refuses a missing file before it moves the cursor, and `_ensure_playable_path` rejects zero-byte files as well as missing ones.
 - **Two Dynamic Waves presets and a screen saver that tours them** (`shaders/mp_liquid_visualizer.frag`, `shaders/presets/p11.frag.spv`, `shaders/presets/p12.frag.spv`, `shaders/presets/manifest.json`, `scripts/mp_liquid_visualizer_vulkan.py`, `scripts/liquid_player_visualizer.py`, `scripts/pid_stream.py`, `scripts/mp_visualizer_idle_saver.py`, `tests/test_sof_dynamic_waves.py`):
   - **Presets 12 and 13** are the horizontal and vertical Stream of Frequency rivers, drawn as full-frame accent sweeps on a paper-white page rather than raymarched vessels. Shipped SPIR-V was rebuilt for all 13 presets and the manifest digest updated, because the old manifest was stale and every preset was falling back to a module built from a different shader revision.
   - `pid_stream` gained a demo mode and `stream_vector()`, which owns one event driver per window so two visualizer windows cannot share an event clock; the saver drives it from new Linux PIDs and the player drives it from beats.
@@ -1103,13 +1103,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Replies are **spoken on the phone**, not the host: `/api/assistant/speech` synthesizes the WAV through the agent's `/v1/audio/speech` and falls back to a local `espeak-ng` Hawking profile if the agent is down. One shared, `playsinline` `<audio>` element unlocked inside the Send tap keeps iOS playback working.
   - The default voice is **Stephen Hawking** (`stephen_hawking_matrix`) unless changed with **`/voice`**. `/voice` lists all eleven Matrix/Hawking presets, `/voice hawking` restores the default, `/voice speed 1.15` adjusts the rate, and aliases such as `smith`, `neo` and `trinity` resolve to real ids. The choice persists per browser and is mirrored into `~/.harmony_voice` so the CLI agrees.
   - The stream gate overlay now belongs to the player tab only, so the new tab bar stays reachable before the first audio gesture, and a **Start Agent** button launches `manage_harmony_agent.sh start` when the agent is offline.
-- **Import Traktor playlists into the MP Audio Player playlist** (`scripts/traktor_playlist_importer.py`, `scripts/traktor_playlist_importer.sh`, `scripts/music_folders_manager.py`, `Mix_Archive_Manager.sh`, `MP_Audio_Player.py`, `tests/test_traktor_playlist_import.py`, `tests/test_traktor_player_shortcut.py`):
-  - Reads **every playlist in `collection.nml`**, including playlists nested inside Traktor folders, and pre-generates them all as `TRAKTOR_<name>.json` + `.m3u8` in `PLAYLISTS_GENERATED`. A playlist must be generated before the player can open it; `TRAKTOR_PLAYLISTS.json` is the catalog the player reads.
+- **Import DJ playlists into the MP Audio Player playlist** (`scripts/dj_playlist_importer.py`, `scripts/dj_playlist_importer.sh`, `scripts/music_folders_manager.py`, `Mix_Archive_Manager.sh`, `MP_Audio_Player.py`, `tests/test_dj_playlist_import.py`, `tests/test_dj_player_shortcut.py`):
+  - Reads **every playlist in `collection.nml`**, including playlists nested inside DJ folders, and pre-generates them all as `DJ_<name>.json` + `.m3u8` in `PLAYLISTS_GENERATED`. A playlist must be generated before the player can open it; `DJ_PLAYLISTS.json` is the catalog the player reads.
   - **Music Folders are a hard gate.** The importer refuses to run when no local drive or SMB share is mapped, and offers to run the existing Music Folders scan first so there is an index to match against.
-  - **Traktor paths are resolved, not trusted.** A LOCATION record is matched to the scanned library by folder suffix then file name, so a library that moved to another drive or mount point still resolves after that folder is added as a Music Folder. The menu explains this and warns when Traktor's volume/path must be recreated.
+  - **DJ paths are resolved, not trusted.** A LOCATION record is matched to the scanned library by folder suffix then file name, so a library that moved to another drive or mount point still resolves after that folder is added as a Music Folder. The menu explains this and warns when DJ's volume/path must be recreated.
   - **Every path is validated before it is written or played.** Missing files are counted and skipped, a playlist with no valid files is not generated, and loading a playlist (menu or player) re-checks each file, offering to open only the available ones.
-  - Entry points: Manager > **Custom Playlists & Traktor History Suite > 7**, Music Folders menu > **9**, `--import-traktor`, or `python3 scripts/traktor_playlist_importer.py` (`--generate-all`, `--generate NAME`, `--list`, `--list-traktor`).
-  - **MP Audio Player CLI shortcut: `Shift+T`.** It opens a Traktor playlist menu over the player (generated lists only, arrows + Enter, `G` pre-generates all, `I` opens the full import menu). Audio keeps playing while an external menu is open, and lowercase `t` still opens the selected tracklist. Liquid Glass reports that the feature is CLI-only.
+  - Entry points: Manager > **Custom Playlists & DJ History Suite > 7**, Music Folders menu > **9**, `--import-dj`, or `python3 scripts/dj_playlist_importer.py` (`--generate-all`, `--generate NAME`, `--list`, `--list-dj`).
+  - **MP Audio Player CLI shortcut: `Shift+T`.** It opens a DJ playlist menu over the player (generated lists only, arrows + Enter, `G` pre-generates all, `I` opens the full import menu). Audio keeps playing while an external menu is open, and lowercase `t` still opens the selected tracklist. Liquid Glass reports that the feature is CLI-only.
   - **All playback paths are validated.** `AudioEngine.load_track` now refuses a missing or empty file, and SMB paths get one mount attempt, so a broken playlist entry can no longer be loaded as a silent track.
 - **21 audio output formats in the Mix Conversion suite** (`scripts/audio_conversion_suite.py`, `Make_SOF_FLAC_CONVERSION.sh`, `Mix_Archive_Manager.sh`, `tests/test_audio_conversion_suite.py`, `tests/test_conversion_menu_and_output_rule.py`):
   - The converter now writes **FLAC, WAV, Wave64, AIFF, CAF, AU, MP3, OGG, Opus, M4A/AAC, ALAC, WMA, WavPack, TTA, Matroska-FLAC, AC-3, E-AC-3, DTS, MP2, VOC and AMR**, every one at its high-quality preset (FLAC `-compression_level 12`, MP3 320k CBR, Vorbis Q10, Opus 256k, AAC 320k, WavPack/TTA level 8, AC-3/E-AC-3 640k, DTS 1536k).
@@ -1131,10 +1131,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The manager header now shows **Audio Output Formats Available**, and option **4** lists every format, the batch mode, the folder browser, the statistics and the format table.
 
 ### Fixed
-- **Traktor S4 MIDI daemon crashed on FreeBSD at every start** (`scripts/traktor_s4_midi.py`, `tests/test_traktor_s4_midi.py`):
-  - FreeBSD has no ALSA: there is no `amidi` binary and no `/dev/snd/midi*` tree, only `umidi(4)` character devices (`/dev/umidi*`, `/dev/midi*`). The daemon always fell through to `run_amidi_stream()`, which unconditionally spawned `amidi -p hw:0,0 --dump`, so every manager launch wrote a `FileNotFoundError: [Errno 2] ... 'amidi'` traceback into `~/.config/mix-manager/traktor_s4_midi.log` and the MIDI service died instantly.
+- **DJ S4 MIDI daemon crashed on FreeBSD at every start** (`scripts/dj_s4_midi.py`, `tests/test_dj_s4_midi.py`):
+  - FreeBSD has no ALSA: there is no `amidi` binary and no `/dev/snd/midi*` tree, only `umidi(4)` character devices (`/dev/umidi*`, `/dev/midi*`). The daemon always fell through to `run_amidi_stream()`, which unconditionally spawned `amidi -p hw:0,0 --dump`, so every manager launch wrote a `FileNotFoundError: [Errno 2] ... 'amidi'` traceback into `~/.config/mix-manager/dj_s4_midi.log` and the MIDI service died instantly.
   - `run_amidi_stream()` now detects a missing `amidi` and holds in a clean **standby** loop instead of raising, recording `status: "standby"` plus the reason in the state file. Hardware detection skips `amidi -l` when the binary is absent and scans the FreeBSD `umidi(4)` devices instead; `--status` prints a **MIDI Port** row pointing at `/dev/umidi*` rather than claiming an ALSA port.
-  - Verified on FreeBSD 15.1-RELEASE-p6: `--start` reports "Active & Running" in standby with no traceback, and `tests/test_traktor_s4_midi.py` passes 17/17 on both FreeBSD and Linux.
+  - Verified on FreeBSD 15.1-RELEASE-p6: `--start` reports "Active & Running" in standby with no traceback, and `tests/test_dj_s4_midi.py` passes 17/17 on both FreeBSD and Linux.
 - **MP Visualizer was very dark when launched from its desktop shortcut** (`scripts/liquid_player_visualizer.py`, `tests/test_liquid_player_visualizer_mode.py`):
   - The standalone OpenGL window drew through the same `PlayerVisualizerLayer` as the **in-player** background, and that layer always switched on the text guard (`uTextGuard = 1.0`). The guard exists to keep the player's terminal text readable: it lifts dark glyphs and washes the whole frame toward a near-black pane (`col *= mix(0.92, 0.42, ...)` plus a 20 % mix toward `vec3(0.015, 0.020, 0.034)`). With no text on top, all it did was crush the picture — on the default preset the mean brightness fell from **126/255 to 57/255**, which is what made the window look almost black.
   - The layer now reads `state["text_guard"]`, defaulting to **on** so the in-player background and any older state file behave exactly as before. The standalone renderer passes `False`, so the shortcut window draws the preset at full brightness again and now matches the Vulkan backend (126.3 vs 126.4 mean luma on the same preset).
@@ -1153,7 +1153,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.4.3 Stable (Liquid)] - 2026-11-12
 
-Released November 12, 2026. This release finishes the visualizer work started in 0.4.2 (preset 11, the desktop screen saver, multi-monitor spans, OpenGL/Vulkan parity), adds BigScreen VR mode, the PID-driven Stream of Frequency Dynamic Waves screen saver, the Favorites DJ Set exporter, MP Harmony tracklist narration, the Web Companion launch pad, a reinstall/factory-reset flow, the Web Companion system service, uniform menus with mouse support, three rainbow EQ effects, the arm64/amd64 package builder, tracklist HTML/TEXT export, the instance cap, and the Web Companion Favorites library. It also fixes the player banner layout, the Theme navbars, the tracklist viewer, Traktor history sync, and the visualizer detaching from the player in Mini and Micro mode.
+Released November 12, 2026. This release finishes the visualizer work started in 0.4.2 (preset 11, the desktop screen saver, multi-monitor spans, OpenGL/Vulkan parity), adds BigScreen VR mode, the PID-driven Stream of Frequency Dynamic Waves screen saver, the Favorites DJ Set exporter, MP Harmony tracklist narration, the Web Companion launch pad, a reinstall/factory-reset flow, the Web Companion system service, uniform menus with mouse support, three rainbow EQ effects, the arm64/amd64 package builder, tracklist HTML/TEXT export, the instance cap, and the Web Companion Favorites library. It also fixes the player banner layout, the Theme navbars, the tracklist viewer, DJ history sync, and the visualizer detaching from the player in Mini and Micro mode.
 
 ### Added
 - **"Play Anything" in MP Harmony: a random track straight to MP Audio Player** (`scripts/mix_web_companion.py`, `MP_Audio_Player.sh`, `scripts/resolve_mp_python.sh`, `MP_Harmony_Agent.py`, `tests/test_play_anything.py`, `tests/test_web_companion_playlist.py`, `tests/test_resolve_mp_python.py`):  - Say **"Play Anything"** (or "play something", "play a random track") to the MP Harmony Agent and it plays one randomly chosen entry from the playlist the listener is actually streaming, immediately, in **MP Audio Player**.
@@ -1214,15 +1214,15 @@ Released November 12, 2026. This release finishes the visualizer work started in
   - Mounted music folders inside `~/.config/mix-manager/mounts` are detected with `mountpoint`/`df` and left mounted instead of being recursively removed.
   - macOS also removes `~/.local/share/mp-mix-manager` (the generated Python environment and menu-bar bundle) and unloads the `com.mplanetarian.mp-mix-manager-tray` LaunchAgent. Windows stops the `MP Mix Manager.exe` and PowerShell tray processes first. Linux, WSL, and FreeBSD stop the player, tray, and visualizer so no open file survives the wipe.
   - The helper reports exit code `10` when the user aborts at the `REINSTALL` confirmation, so the installer can exit cleanly without reinstalling anything.
-- **Favorites DJ Set Exporter** (`scripts/MP_Fav_Playlist_Track_Exporter.py`, `scripts/MP_Fav_Playlist_Track_Exporter.sh`, `MP_Audio_Player.py`, `Mix_Archive_Manager.sh`, `scripts/generate_traktor_playlist_from_history.py`, `config.env.example`, `tests/test_favorites_dj_export.py`):
+- **Favorites DJ Set Exporter** (`scripts/MP_Fav_Playlist_Track_Exporter.py`, `scripts/MP_Fav_Playlist_Track_Exporter.sh`, `MP_Audio_Player.py`, `Mix_Archive_Manager.sh`, `scripts/generate_dj_playlist_from_history.py`, `config.env.example`, `tests/test_favorites_dj_export.py`):
   - Open **Favorites** in MP Audio Player and press **Shift+J** (or **Export DJ Set** in the Favorites footer) to copy the playlist for DJ set preparation. At least one favorite is required; an empty playlist refuses to run and says so.
-  - Choose **1** for a folder on the local drive or **2** for the SMB share. SMB uses `smbclient` with the configured `FAV_EXPORT_SMB_*` credentials (falling back to `TRAKTOR_SMB_*` / `MUSIC_SMB_*`), or copies straight into `FAV_EXPORT_SMB_MOUNT` when that mount exists.
+  - Choose **1** for a folder on the local drive or **2** for the SMB share. SMB uses `smbclient` with the configured `FAV_EXPORT_SMB_*` credentials (falling back to `DJ_SMB_*` / `MUSIC_SMB_*`), or copies straight into `FAV_EXPORT_SMB_MOUNT` when that mount exists.
   - Every copy is size-checked. For SMB the first copied file is fetched back from the share and probed, and at least one file must decode as audio before the export is reported successful; truncated or unreadable copies fail the export instead of silently passing.
   - A tracklist in the existing MP Mix Manager format (`RELEASE INFO & SOURCE MANIFEST` / `TRACKLIST`, numbered `01. Artist - Title`) and an `.m3u8` playlist are written into the same folder. The default name is the date plus a random 12-character playlist ID, e.g. `MP_Fav_Set_2026-11-12_A1B2C3D4E5F6`; a custom tracklist name can be typed instead.
-  - When Traktor history and `collection.nml` are available, the exporter offers to create a Traktor playlist, asks for the playlist name and an optional history file ID, and matches the export against that session (falling back to the full collection) in Key Field Ascending order.
+  - When DJ history and `collection.nml` are available, the exporter offers to create a DJ playlist, asks for the playlist name and an optional history file ID, and matches the export against that session (falling back to the full collection) in Key Field Ascending order.
   - **Clearing Favorites now uses a decision window.** Pressing **D** / Delete in the Favorites playlist opens a confirmation panel; **Y** clears the playlist and any other key or Esc keeps it. Audio files are never deleted. Other libraries keep the existing two-step arm/confirm.
   - Manager menu **17 → 4. Export Favorites DJ Set** launches the same exporter.
-  - `scripts/generate_traktor_playlist_from_history.py` was implemented (it was a stub) and now also supports headless `--history-id`, `--playlist-name`, `--track`, `--list-history --json` and `--version-only`, which the exporter and the Manager use. Writes back up `collection.nml` first and restore it if the write fails.
+  - `scripts/generate_dj_playlist_from_history.py` was implemented (it was a stub) and now also supports headless `--history-id`, `--playlist-name`, `--track`, `--list-history --json` and `--version-only`, which the exporter and the Manager use. Writes back up `collection.nml` first and restore it if the write fails.
 - **In-window MP Visualizer on the Vulkan backend** (`scripts/liquid_glass_vulkan.py`, `MP_Audio_Player_Liquid_Glass.py`, `tests/test_visualizer_backend_parity.py`):
   - The visualizer used to appear behind the terminal text only on the OpenGL player host. Choosing `LIQUID_GLASS_BACKEND=vulkan` silently lost the background and showed plain glass.
   - Added `VisualizerBackground`, the Vulkan counterpart of `liquid_player_visualizer.PlayerVisualizerLayer`. It runs the same preset shader and the same telemetry bridge over the glass swapchain, so a preset looks the same on either backend.
@@ -1309,7 +1309,7 @@ Released November 12, 2026. This release finishes the visualizer work started in
   - The shared `RandomPresetMixin` owns only the on/off state and the dwell clock; each host supplies `preset` and `switch_preset()`, so the **Vulkan and OpenGL** renderers behave identically. `RANDOM_PRESET_INTERVAL` is 60 seconds.
 - **Uniform navigation and mouse support on every menu page** (`Mix_Archive_Manager.sh`, `tests/test_uniform_navigation.py`):
   - 30 pages still used plain `echo` lists with `read -r -p "Enter choice"`: no arrow keys, no `/` search, and no consistent Esc/0/q. They are all converted to `run_interactive_submenu()`, so every navigable page now shares one navigation contract.
-  - Converted pages include Video Cut/Split, Process Monitors, Bash CLI, Visual Launchers, Live Monitors, Video Playlists, the Spek Suite, Cover Converter, Duplicate Detector, Search & Import, Liquid Glass Backend, Weather/Ephemeris, Daily Reports, Audio Players, Audio Player & Startup config (with its three nested sub-pages), Visualizer Presets, Screen Saver, cliamp, DAWs, Network Services, System Maintenance (all four OS variants), Traktor Monitor, Promo Outreach, Bluetooth, Audio Checksums, Open Mix in DAW, Export Mixes, and the Morning Alarm/DJ Scheduler.
+  - Converted pages include Video Cut/Split, Process Monitors, Bash CLI, Visual Launchers, Live Monitors, Video Playlists, the Spek Suite, Cover Converter, Duplicate Detector, Search & Import, Liquid Glass Backend, Weather/Ephemeris, Daily Reports, Audio Players, Audio Player & Startup config (with its three nested sub-pages), Visualizer Presets, Screen Saver, cliamp, DAWs, Network Services, System Maintenance (all four OS variants), DJ Monitor, Promo Outreach, Bluetooth, Audio Checksums, Open Mix in DAW, Export Mixes, and the Morning Alarm/DJ Scheduler.
   - Wide `=====` banners became menu header text, so status information stays visible above the options in the scrolling viewport. Every page keeps its original option set; only the presentation and numbering changed (`14) return` becomes `0) return`).
   - **Mouse support** with SGR reporting (`1000`/`1006`), enabled only for the duration of a menu: single click moves the highlight, a double click on the same row within 600 ms activates it through the same path as Enter, and the wheel steps the highlight one row. Reporting is switched off in `cleanup_submenu_screen()` and `exit_mix_manager()`, so the terminal is never left capturing the pointer. `MP_MANAGER_MOUSE=false` opts out to keep native text selection.
   - `tests/test_uniform_navigation.py` adds 12 tests, including one that walks the call graph from the main loop and fails if any reachable page prompts outside the nav system.
@@ -1396,12 +1396,12 @@ Released November 12, 2026. This release finishes the visualizer work started in
   - Row text picks black or white from the theme hue's luminance, so light palettes (Stream of Frequency, Phosphor, Solarized, Emerald, Retro Linux Memories) stay readable instead of drawing white on yellow.
   - The MP Liquid Player and MP Audio Player playlist selection bar no longer uses a fixed `48;2;70;70;70` grey in the console or reverse video in Liquid Glass. It uses the active theme's highlight colour in both hosts through the new `_selection_bar_ansi()` helper, with the same luminance contrast rule.
   - `test_menu_number_theme_color.py` now asserts a filled bar in the theme hue; the previous test still expected the unfilled row from an earlier revision and failed on `main`. `test_playlist_theme_highlight.py` gained `test_selected_playlist_row_uses_theme_colour`, which checks both hosts across five themes.
-- **Traktor history sync skipped from Mix Archive Manager** (`Make_SOF_FLAC_CONVERSION.sh`, `scripts/Make_SOF_FLAC_CONVERSION.sh`, `config.env`, `config.env.example`, `scripts/top_5_tracks_manager.py`):
-  - `sync_missing_traktor_history()` required `TRAKTOR_SMB_HOST` and `TRAKTOR_SMB_SHARE`, but neither key existed in `config.env` or `config.env.example`, so the sync always reported "SMB host, share, user, or password is not set" even when the user and password were set.
-  - Added `TRAKTOR_SMB_HOST`, `TRAKTOR_SMB_SHARE`, and `TRAKTOR_SMB_HISTORY_DIR` to `config.env.example`.
+- **DJ history sync skipped from Mix Archive Manager** (`Make_SOF_FLAC_CONVERSION.sh`, `scripts/Make_SOF_FLAC_CONVERSION.sh`, `config.env`, `config.env.example`, `scripts/top_5_tracks_manager.py`):
+  - `sync_missing_dj_history()` required `DJ_SMB_HOST` and `DJ_SMB_SHARE`, but neither key existed in `config.env` or `config.env.example`, so the sync always reported "SMB host, share, user, or password is not set" even when the user and password were set.
+  - Added `DJ_SMB_HOST`, `DJ_SMB_SHARE`, and `DJ_SMB_HISTORY_DIR` to `config.env.example`.
   - The skip message now names the exact keys that are missing instead of listing all four.
-  - Host, user, and password fall back to `MUSIC_SMB_HOST` / `MUSIC_SMB_USER` / `MUSIC_SMB_PASSWORD` / `SMB_DEFAULT_HOST` when the Traktor-specific keys are empty.
-  - Traktor Top 5 Tracks config screen (option 5) gained rows 7-11 for the history sync host, share, user, password (hidden input), and history folder.
+  - Host, user, and password fall back to `MUSIC_SMB_HOST` / `MUSIC_SMB_USER` / `MUSIC_SMB_PASSWORD` / `SMB_DEFAULT_HOST` when the DJ-specific keys are empty.
+  - DJ Top 5 Tracks config screen (option 5) gained rows 7-11 for the history sync host, share, user, password (hidden input), and history folder.
 - **Preset specialization never folded the scene** (`scripts/liquid_player_visualizer.py`). `specialize_visualizer_source()` only replaced the `u_preset.x` spelling, but the Vulkan shader uses `u.preset.x`, so every per-preset SPIR-V module was byte-identical to the full library and none of the other scenes were compiled out. Both spellings are now folded, cutting the per-preset modules substantially (e.g. preset 10 is 265 KB against 843 KB for the full shader).
 - **Invalid hollow shell in the plasma-cocoon sequence.** Subtracting one ellipsoid from another produced an invalid distance field that collapsed into a solid glowing blob; the cocoon is now built from genuine torus rings and capsule tendrils.
 
@@ -1437,7 +1437,7 @@ Released November 12, 2026. This release finishes the visualizer work started in
 - `tests/test_tracklist_narration.py` — 18 tests: file discovery, the Stephen Hawking default voice, the meta-commentary fallback that still produces a recording, long-tracklist splitting and joining, the saved `.wav`/`.txt`/`.json` trio, and the offline espeak-ng fallback.
 - `tests/test_web_companion_launchpad.py` — 15 tests: the four buttons plus Close All, pressed-state polling, focus-instead-of-relaunch, the tray keepalive marker, and `DISPLAY` resolution from the systemd user environment.
 - `tests/test_reinstall.py` — the reinstall/factory-reset flow: the three preserve prompts, `--yes`/`--fresh`/`--dry-run`, staging and restoring preserved keys, the protected converted-audio paths, and the exit code 10 abort.
-- `tests/test_favorites_dj_export.py` — the Favorites DJ Set exporter: empty-playlist refusal, local and SMB copy with size and decode verification, tracklist and `.m3u8` output, the decision window when clearing Favorites, and the Traktor playlist hand-off.
+- `tests/test_favorites_dj_export.py` — the Favorites DJ Set exporter: empty-playlist refusal, local and SMB copy with size and decode verification, tracklist and `.m3u8` output, the decision window when clearing Favorites, and the DJ playlist hand-off.
 - `tests/test_resolve_mp_python.py` — 6 tests: capability-based interpreter selection prefers an interpreter that can import `gi`/`numpy`, honours `MP_PYTHON` and `MP_PYTHON_CANDIDATES`, and never picks a Python that lacks the modules a GTK host needs.
 - `tests/test_uniform_navigation.py` — 12 tests: every reachable page routes through `run_interactive_submenu()`, mouse reporting is enabled and torn down correctly, and click/double-click/wheel map to the same selection path as the keyboard.
 - `tests/test_visualizer_backend_parity.py` — 23 tests: the Vulkan in-window background matches the OpenGL layer, preset and cover re-upload on change, the standalone renderer resolves auto/OpenGL/Vulkan, and every launcher forwards the chosen backend.
@@ -1473,7 +1473,7 @@ Previous release. `0.4.1 Stable (Liquid)` was the in-tree version label before t
   - The GUI starts on Retro Linux Memories. `--keep-theme` leaves `~/.config/mix-manager/theme` unchanged. `--theme NAME` writes another theme.
   - A second launch focuses the window titled `MP Mix Manager (Liquid Glass`. The Liquid Player can stay open beside it.
   - Closing the GUI stops playback and force-closes the MP Liquid Visualizer. Startup autoplay does not open the player from a GUI session. **`L`** from the GUI opens the player in its own window.
-- **Retro Linux Memories theme** (`themes/Retro_Linux_Memories_MP_Mix_Manager.theme`, `scripts/liquid_glass_opengl.py`, `scripts/liquid_glass_vulkan.py`, `scripts/liquid_glass_metal.py`, `shaders/liquid_glass_gl.frag`, `scripts/mix_web_companion.py`, `scripts/traktor_monitor.py`, `scripts/view_tracklist_console.sh`):
+- **Retro Linux Memories theme** (`themes/Retro_Linux_Memories_MP_Mix_Manager.theme`, `scripts/liquid_glass_opengl.py`, `scripts/liquid_glass_vulkan.py`, `scripts/liquid_glass_metal.py`, `shaders/liquid_glass_gl.frag`, `scripts/mix_web_companion.py`, `scripts/dj_monitor.py`, `scripts/view_tracklist_console.sh`):
   - Dark slate field `#2d2d2d`, selection `#15539e`, chrome `#1a1e21`, sampled from the classic VeraCrypt GTK look.
   - Theme menu option **22**. The names `veracrypt`, `charcoal_vault`, `charcoal`, `vault`, `dark_vault`, and `veracrypt_dark` select this theme. There is no separate Charcoal Vault menu row.
   - **`C`** on the main menu cycles the same theme list as the Liquid Player and saves the choice.
@@ -1600,7 +1600,7 @@ Previous release. `0.4.1 Stable (Liquid)` was the in-tree version label before t
 - **Menu status line** (`Mix_Archive_Manager.sh`):
   - Uptime is read from `kern.boottime`.
   - Output volume is read from `osascript`.
-  - The Traktor Kontrol S4 probe is cached.
+  - The Kontrol S4 probe is cached.
   - The music-folder count is read in the shell from `music_folders.json`.
 - **Console theme background** (`Mix_Archive_Manager.sh`, `tests/test_cli_theme_background.py`):
   - Each theme has its own dark console pane.
@@ -1613,7 +1613,7 @@ Previous release. `0.4.1 Stable (Liquid)` was the in-tree version label before t
 ## [0.4.0 Stable] - 2026-10-24
 
 ### Added
-- **New "Retro Linux Memories" Theme inspired by Classic Linux VeraCrypt GTK Styling** (`Mix_Archive_Manager.sh`, `MP_Audio_Player.py`, `scripts/liquid_glass_opengl.py`, `scripts/liquid_glass_vulkan.py`, `scripts/liquid_glass_metal.py`, `scripts/mix_web_companion.py`, `scripts/traktor_monitor.py`, `scripts/view_tracklist_console.sh`, `.probe_mgr.sh`, `themes/Retro_Linux_Memories_MP_Mix_Manager.theme`, `tests/test_retro_linux_memories_theme.py`):
+- **New "Retro Linux Memories" Theme inspired by Classic Linux VeraCrypt GTK Styling** (`Mix_Archive_Manager.sh`, `MP_Audio_Player.py`, `scripts/liquid_glass_opengl.py`, `scripts/liquid_glass_vulkan.py`, `scripts/liquid_glass_metal.py`, `scripts/mix_web_companion.py`, `scripts/dj_monitor.py`, `scripts/view_tracklist_console.sh`, `.probe_mgr.sh`, `themes/Retro_Linux_Memories_MP_Mix_Manager.theme`, `tests/test_retro_linux_memories_theme.py`):
   - **Authentic Retro Linux GTK Palette**: Accurately sampled and adapted directly from the classic VeraCrypt Linux UI screenshot (`Screenshot_20261108_040035.png`):
     - Dark Slate Gray Window Background & Wells (`#2d2d2d` / `#353535` / `#1a1e21`)
     - Classic VeraCrypt Royal Selection Blue (`#15539e` / `rgb(21, 83, 158)`)
@@ -1776,7 +1776,7 @@ Previous release. `0.4.1 Stable (Liquid)` was the in-tree version label before t
   - **Hit Testing & Terminal Docking**: Updated inner well geometry, window resize/restore handlers, top bezel drag regions, and close button hit areas to match the streamlined 7px bezel.
 
 ### Added
-- **New "Retro Linux Memories" Theme inspired by Classic Linux VeraCrypt GTK Styling** (`Mix_Archive_Manager.sh`, `MP_Audio_Player.py`, `scripts/liquid_glass_opengl.py`, `scripts/liquid_glass_vulkan.py`, `scripts/liquid_glass_metal.py`, `scripts/mix_web_companion.py`, `scripts/traktor_monitor.py`, `scripts/view_tracklist_console.sh`, `.probe_mgr.sh`, `themes/Retro_Linux_Memories_MP_Mix_Manager.theme`, `tests/test_retro_linux_memories_theme.py`):
+- **New "Retro Linux Memories" Theme inspired by Classic Linux VeraCrypt GTK Styling** (`Mix_Archive_Manager.sh`, `MP_Audio_Player.py`, `scripts/liquid_glass_opengl.py`, `scripts/liquid_glass_vulkan.py`, `scripts/liquid_glass_metal.py`, `scripts/mix_web_companion.py`, `scripts/dj_monitor.py`, `scripts/view_tracklist_console.sh`, `.probe_mgr.sh`, `themes/Retro_Linux_Memories_MP_Mix_Manager.theme`, `tests/test_retro_linux_memories_theme.py`):
   - **Authentic Retro Linux GTK Palette**: Accurately sampled and adapted directly from the classic VeraCrypt Linux UI screenshot (`Screenshot_20261108_040035.png`):
     - Dark Slate Gray Window Background & Wells (`#2d2d2d` / `#353535` / `#1a1e21`)
     - Classic VeraCrypt Royal Selection Blue (`#15539e` / `rgb(21, 83, 158)`)
@@ -1800,11 +1800,11 @@ Previous release. `0.4.1 Stable (Liquid)` was the in-tree version label before t
   - **Equalizer Preset ("Sensorium Interface")**: Added custom 10-band DSP graphic equalizer preset tuned for deep IDM sub-bass weight, controlled mids, and sparkling crystalline highs (`[+4.5, +4.0, +1.5, -1.0, +0.5, +1.5, +2.5, +3.5, +4.0, +3.0] dB`), selectable via `--eq-preset "Sensorium Interface"` and interactive Equalizer HUD cycling.
   - **Runtime Preset Switching & Hotkeys**: Integrated hotkey `[5]`, CLI flags `--preset 5`, `--preset sensorium_interface`, `--set-preset`, `--list-presets`, and updated `Mix_Archive_Manager.sh` preset management menu with dynamic active indicators (`★`).
   - **Full Test Suite Verification**: Unit tests added to `tests/test_mp_liquid_visualizer.py`, `tests/test_liquid_glass_skin.py`, and `tests/test_equalizer_presets.py`.
-- **New Skin for MP Liquid Glass Player: "Cosmic Dreamworlds"** (`assets/skins/cosmic_dreamworlds.png`, `assets/cosmic_dreamworlds_cover.jpg`, `MP_Audio_Player.py`, `scripts/liquid_glass_opengl.py`, `scripts/liquid_glass_vulkan.py`, `scripts/liquid_glass_metal.py`, `Mix_Archive_Manager.sh`, `scripts/traktor_monitor.py`, `mix_web_companion.py`, `scripts/mix_web_companion.py`, `tests/test_liquid_glass_skin.py`):
+- **New Skin for MP Liquid Glass Player: "Cosmic Dreamworlds"** (`assets/skins/cosmic_dreamworlds.png`, `assets/cosmic_dreamworlds_cover.jpg`, `MP_Audio_Player.py`, `scripts/liquid_glass_opengl.py`, `scripts/liquid_glass_vulkan.py`, `scripts/liquid_glass_metal.py`, `Mix_Archive_Manager.sh`, `scripts/dj_monitor.py`, `mix_web_companion.py`, `scripts/mix_web_companion.py`, `tests/test_liquid_glass_skin.py`):
   - **Cover-Wrapped Liquid Glass Skin Image**: Generated 1280x820 RGBA skin image `assets/skins/cosmic_dreamworlds.png` from `assets/cosmic_dreamworlds_cover.jpg` cropped to the native 1280x820 liquid glass player window geometry.
   - **Crystal-Clear Liquid Refraction & Cosmic Glow**: Full integration with the OpenGL liquid glass pipeline with cover texture sampling, fluid wave refraction, and specular highlight caustics.
   - **Cosmic Palette & Spectrum**: Styled with vivid Cosmic Magenta (`#e80d68`), Crystalline Turquoise/Cyan (`#00f5d4`), and Nebula Violet (`#b058ff`), with multi-stop dynamic equalizer color mapping.
-  - **Theme Cycling & Suite Integration**: Cycleable via `[C]` key in `MP_Audio_Player.py` under the display name `Cosmic Dreamworlds (Liquid Glass Skin)`, selectable as Option 18 in `Mix_Archive_Manager.sh`, and synchronized across the Web Companion and Traktor Monitor.
+  - **Theme Cycling & Suite Integration**: Cycleable via `[C]` key in `MP_Audio_Player.py` under the display name `Cosmic Dreamworlds (Liquid Glass Skin)`, selectable as Option 18 in `Mix_Archive_Manager.sh`, and synchronized across the Web Companion and DJ Monitor.
   - **Unit Test Coverage**: Full test verification in `tests/test_liquid_glass_skin.py`.
 - **MP_Liquid_Visualizer — Native Vulkan 3D Audio-Reactive Visualizer (`Cosmic Dreamworlds (Liquid)` Preset 1)** (`MP_Liquid_Visualizer.py`, `scripts/mp_liquid_visualizer_vulkan.py`, `scripts/launch_liquid_visualizer.sh`, `shaders/mp_liquid_visualizer.vert`, `shaders/mp_liquid_visualizer.frag`, `shaders/mp_liquid_visualizer.vert.spv`, `shaders/mp_liquid_visualizer.frag.spv`, `assets/cosmic_dreamworlds_cover.jpg`, `COVERS/Cosmic_Dreamworlds_Liquid_Preset.png`, `MP_Audio_Player.py`, `Mix_Archive_Manager.sh`, `tests/test_mp_liquid_visualizer.py`):
   - **Built from the Ground Up in Vulkan**: Native Vulkan 1.x graphics pipeline (`libvulkan` + `GLFW`) featuring a UBO (`VisualizerUBO`, `binding = 0`) + combined 2D GPU image sampler (`binding = 1`) uploading the preset's cover art (`1024x1024` RGBA8) to GPU device-local memory.
@@ -1875,10 +1875,10 @@ Previous release. `0.4.1 Stable (Liquid)` was the in-tree version label before t
 - **Automatic & Comprehensive Process Termination of All MP Audio Players on Manager Exit** (`Mix_Archive_Manager.sh`, `MP_Audio_Player.py`, `tests/test_manager_exit_stops_audio_player.py`):
   - **Fail-Safe Cleanup on Exit & Signal Traps**: Updated `exit_mix_manager()`, `_cleanup_mix_manager_exit()`, and `_stop_mp_audio_daemon()` to unconditionally terminate all running MP Audio Player instances (daemon, interactive window, mini/micro player, shell launchers, and Liquid Glass Mode) whenever the Manager exits via menu Option 37 (`q`/`exit`) or receives signals (`SIGINT`, `SIGTERM`, `SIGHUP`, `EXIT`).
   - **Graceful Followed by Force-Kill (`SIGTERM` -> `SIGKILL`)**: First delivers IPC `stop` command and `SIGTERM` to allow active audio streams to flush state and release sound cards cleanly, followed by a guaranteed `SIGKILL` (`kill -9` / `pkill -9`) for any surviving or hung processes.
-  - **Traktor S4 MIDI Service & Window Cleanup**: Automatically terminates the Traktor Kontrol S4 MIDI controller background service daemon (`traktor_s4_midi.pid`), cleans up all socket/PID runtime files, and closes lingering player terminal windows via `wmctrl` / `taskkill`.
+  - **DJ S4 MIDI Service & Window Cleanup**: Automatically terminates the Kontrol S4 MIDI controller background service daemon (`dj_s4_midi.pid`), cleans up all socket/PID runtime files, and closes lingering player terminal windows via `wmctrl` / `taskkill`.
   - **Dedicated Helper Function**: Added `kill_all_mp_audio_players()` as an exportable bash function for explicit shutdown.
   - **Interactive Terminal Signal Handling**: Added clean `SIGTERM`/`SIGINT`/`SIGHUP` handlers to `TerminalPlayerUI` in `MP_Audio_Player.py` to restore terminal cursor modes and exit immediately upon manager shutdown.
-  - **Expanded Automated Unit Tests**: Extended `tests/test_manager_exit_stops_audio_player.py` with multi-instance mock process termination and Traktor S4 PID cleanup tests.
+  - **Expanded Automated Unit Tests**: Extended `tests/test_manager_exit_stops_audio_player.py` with multi-instance mock process termination and DJ S4 PID cleanup tests.
 - **10-Band Graphic Equalizer & Electronic Music Presets (`MP_Audio_Player.py`)**:
   - **Genre-Specific Presets**: Curated electronic music equalizer curves designed around standard 10-band ISO center frequencies (31Hz, 62Hz, 125Hz, 250Hz, 500Hz, 1kHz, 2kHz, 4kHz, 8kHz, 16kHz):
     - **Flat (Default)**: Neutral bit-perfect passthrough (0.0 dB across all bands).
@@ -1904,8 +1904,8 @@ Previous release. `0.4.1 Stable (Liquid)` was the in-tree version label before t
     - IPC commands: `get_eq`, `set_eq_preset`, `set_eq_band`, `set_eq_bands`, `save_eq_preset`, `delete_eq_preset`, `reset_eq`.
   - **Unit Test Suite (`tests/test_equalizer_presets.py`)**:
     - 11 automated unit tests verifying preset curves, EqualizerManager loading/aliases, slider adjustments/clamping, custom preset persistence, EqualizerFilter DSP audio processing, and interactive UI HUD key events.
-- **Traktor Kontrol S4 Hardware MIDI Controller Support (`hw:0,0` / `/dev/snd/midiC0D0`)**:
-  - Exclusively supports Native Instruments Traktor Kontrol S4 via ALSA rawmidi hardware port `hw:0,0` and `amidi`.
+- **Kontrol S4 Hardware MIDI Controller Support (`hw:0,0` / `/dev/snd/midiC0D0`)**:
+  - Exclusively supports Native Instruments Kontrol S4 via ALSA rawmidi hardware port `hw:0,0` and `amidi`.
   - **Dual-Deck Real-Time Pitch Controls**: Physical pitch faders on either side of the unit (Deck A and Deck B) smoothly control MP Audio Player playback pitch between **-20% and +20%**, featuring automatic deadband snapping at center detent (`0.0%`).
   - **Pitch Nudge & Sync**: Pitch bend buttons (`+` / `-`) for ±1% micro-adjustments; SYNC button for instant pitch reset to 0% (Left) or shuffle mode toggle (Right).
   - **Intelligent Transport & Navigation Mapping**:
@@ -1919,23 +1919,23 @@ Previous release. `0.4.1 Stable (Liquid)` was the in-tree version label before t
     - `Channel Faders (A, B, C, D) & Master Level`: Dynamic volume control (0%–100%).
     - `Headphone Cue Buttons`: Instant audio output mute / unmute.
     - `Loop Recorder REC / PLAY`: Toggle live session recording to WAV / toggle playback.
-- **Traktor S4 MIDI Service Daemon (`scripts/traktor_s4_midi.py` / `traktor_s4_midi.sh`)**:
+- **DJ S4 MIDI Service Daemon (`scripts/dj_s4_midi.py` / `dj_s4_midi.sh`)**:
   - Lightweight background daemon supporting `--start`, `--stop`, `--restart`, `--status`, `--daemon`, `--guide`, and interactive `--monitor`.
   - IPC client communicating directly with MP Audio Player daemon (`send_ipc_command`).
 - **Studio Hardware & MIDI Menu Integration (Option 18)**:
-  - Option 3 in Option 18 menu: `Traktor Kontrol S4 Hardware MIDI Control & Mapping`.
+  - Option 3 in Option 18 menu: `Kontrol S4 Hardware MIDI Control & Mapping`.
   - Submenu for enabling/disabling MIDI support, status badge, restarting service, launching live MIDI packet monitor, viewing user guide, and opening official PDF manuals.
-  - Direct main console shortcut aliases: `s4`, `midi`, `kontrol`, `traktor-s4`.
+  - Direct main console shortcut aliases: `s4`, `midi`, `kontrol`, `dj-s4`.
 - **First-Time Detection Notification on Manager Main Page**:
-  - Automatically notifies user at the top of the Main Page upon first detecting a connected Traktor Kontrol S4:
-    `🎛️ Traktor Kontrol S4 Hardware MIDI Device Detected [hw:0,0]! Please navigate to Option 18 (Studio Hardware & MIDI) to enable and configure Traktor Kontrol S4 MIDI Device Mapping Controls.`
-  - Flag persisted in `config.env` (`TRAKTOR_S4_NOTIFIED`) and `~/.config/mix-manager/traktor_s4_notified.flag`.
+  - Automatically notifies user at the top of the Main Page upon first detecting a connected Kontrol S4:
+    `🎛️ Kontrol S4 Hardware MIDI Device Detected [hw:0,0]! Please navigate to Option 18 (Studio Hardware & MIDI) to enable and configure Kontrol S4 MIDI Device Mapping Controls.`
+  - Flag persisted in `config.env` (`DJ_S4_NOTIFIED`) and `~/.config/mix-manager/dj_s4_notified.flag`.
 - **MUSIC Folders Configuration Notification**:
   - Alerts the user at the top of the Main Page if 0 MUSIC folders are configured, prompting navigation to Option 1.
 - **Documentation & Official Manuals**:
-  - `docs/TRAKTOR_KONTROL_S4_USER_GUIDE.md`: Comprehensive user guide with hardware MIDI mode toggle (`SHIFT + BROWSE` / `PREVIEW`), ALSA setup, and mapping tables.
-  - Official downloaded manuals: `docs/Controller_Editor_Manual_English.pdf` and `docs/traktor_kontrol_s4_mk2_manual_english.pdf`.
-- **Unit Test Suite (`tests/test_traktor_s4_midi.py`)**:
+  - `docs/KONTROL_S4_USER_GUIDE.md`: Comprehensive user guide with hardware MIDI mode toggle (`SHIFT + BROWSE` / `PREVIEW`), ALSA setup, and mapping tables.
+  - Official downloaded manuals: `docs/Controller_Editor_Manual_English.pdf` and `docs/kontrol_s4_mk2_manual_english.pdf`.
+- **Unit Test Suite (`tests/test_dj_s4_midi.py`)**:
   - 14 automated unit tests verifying ALSA port detection, pitch CC scaling, 14-bit pitch bend decoding, deadband snapping, note/CC parsing, and player IPC command dispatching.
 
 
@@ -1953,11 +1953,11 @@ Previous release. `0.4.1 Stable (Liquid)` was the in-tree version label before t
   - **Configurable Settings**: Added `SHOW_LOADER_VIDEO="true"` and `LOADER_VIDEO_FILE="MP_loader.mp4"` settings across `config.env` and `config.env.example`.
   - **Automated Unit Tests**: Added `tests/test_loader_video.py` verifying video path discovery, already-open manager process detection, skip overrides, configuration toggles, and player dispatching.
 
-- **macOS Traktor Auto-Launch, 64-Bit Windows Executable Launcher & Main Menu Selector Breathing Animation** (`Mix_Archive_Manager.sh`, `scripts/windows_launcher.c`, `scripts/windows_launcher.rc`, `MP_Mix_Manager.exe`, `manager.exe`, `tests/test_windows_launcher_exe.py`, `tests/test_menu_selector_breathing.py`):
-  - **macOS Traktor Monitor Auto-Launch in Console Tab**: Updated `run_deferred_startup()` in `Mix_Archive_Manager.sh` so that when starting up on macOS with Traktor Pro loaded and running (`pgrep -i -f "Traktor"` or AppleScript), it automatically spawns the Traktor Live Monitor in a dedicated new console tab via `launch_in_terminal`.
+- **macOS DJ Auto-Launch, 64-Bit Windows Executable Launcher & Main Menu Selector Breathing Animation** (`Mix_Archive_Manager.sh`, `scripts/windows_launcher.c`, `scripts/windows_launcher.rc`, `MP_Mix_Manager.exe`, `manager.exe`, `tests/test_windows_launcher_exe.py`, `tests/test_menu_selector_breathing.py`):
+  - **macOS DJ Monitor Auto-Launch in Console Tab**: Updated `run_deferred_startup()` in `Mix_Archive_Manager.sh` so that when starting up on macOS with DJ Pro loaded and running (`pgrep -i -f "DJ"` or AppleScript), it automatically spawns the DJ Live Monitor in a dedicated new console tab via `launch_in_terminal`.
   - **Native 64-Bit Windows `.EXE` Launcher (`MP_Mix_Manager.exe` / `manager.exe`)**: Built a native PE32+ (x86-64) Windows console launcher written in C (`scripts/windows_launcher.c` + `scripts/windows_launcher.rc`) compiled with `x86_64-w64-mingw32-gcc`. Automatically enables console virtual terminal processing (`ENABLE_VIRTUAL_TERMINAL_PROCESSING`), detects Git Bash / MSYS2 / WSL2 environments, and seamlessly launches `Mix_Archive_Manager.sh` with argument passthrough.
   - **10-Second Idle Menu Selector Breathing Animation**: Implemented an automated breathing effect on the Main Menu selector in `run_interactive_submenu()`. When the user stops moving the cursor for 10 seconds, the active selector highlight gently pulses and fades in and out slowly over a 3.2-second sinusoidal cycle, automatically restoring full crisp brightness as soon as any navigation or selection key is pressed.
-  - **Automated Verification**: Added `tests/test_windows_launcher_exe.py` (validating PE32+ 64-bit headers, architecture, and resources) and `tests/test_menu_selector_breathing.py` (testing RGB scaling, 10s idle trigger, and macOS Traktor launch hooks).
+  - **Automated Verification**: Added `tests/test_windows_launcher_exe.py` (validating PE32+ 64-bit headers, architecture, and resources) and `tests/test_menu_selector_breathing.py` (testing RGB scaling, 10s idle trigger, and macOS DJ launch hooks).
 
 - **Mix Queue Option (`Q` / `q`) in MP Audio Player** (`MP_Audio_Player.py`, `tests/test_player_queue.py`):
   - **Press `Q` / `q` to Queue Mixes**: Added playback queueing support to MP Audio Player. Users can select any mix or music track in the playlist and press `Q` or `q` to immediately enqueue it to play next in order.
@@ -2109,7 +2109,7 @@ Previous release. `0.4.1 Stable (Liquid)` was the in-tree version label before t
 - **Audio Fingerprinting & Track Identifier** (`scripts/identify_mix_tracks.py`, `identify_mix_tracks.sh`):
   - Slices audio snippets at transition intervals to query AcoustID / Chromaprint (`fpcalc`) or online recognition endpoints to auto-identify unknown tracks in live recordings.
 - **Pioneer Rekordbox XML Playlist Exporter** (`scripts/export_rekordbox_playlist.py`, `export_rekordbox_playlist.sh`):
-  - Converts Traktor `.nml` histories/collections, CUE sheets, and M3U playlists into standard Pioneer Rekordbox XML (`DJ_PLAYLISTS.xml`), ready for CDJ USB export.
+  - Converts DJ `.nml` histories/collections, CUE sheets, and M3U playlists into standard Pioneer Rekordbox XML (`DJ_PLAYLISTS.xml`), ready for CDJ USB export.
 - **Audio Mastering Quality & Health Audit** (`scripts/verify_audio_mastering.py`, `verify_audio_mastering.sh`):
   - Multi-stage diagnostic checking True Peak / Inter-Sample Peaks (ISP), EBU R128 integrated loudness & LRA, stereo phase correlation (mono cancellation protection), and leading silence.
 - **Mobile Web Companion Server for DJ Booth & Studio** (`scripts/mix_web_companion.py`, `mix_web_companion.sh`):
@@ -2159,7 +2159,7 @@ Previous release. `0.4.1 Stable (Liquid)` was the in-tree version label before t
     - Two-pass transparent linear normalization targeting Streaming (-14 LUFS / -1.0 dBTP for Spotify/YouTube/Apple), Podcasts (-16 LUFS), Broadcast (-23 LUFS EBU R128), and DJ/Club (-10.5 LUFS / -0.3 dBTP).
     - Preserves metadata tags, sample rate fidelity, and dynamic expression without pumping or distortion.
   - **Standard Red Book CUE Sheet Engine & Splitter** (`scripts/generate_cue_sheet.py`, `generate_cue_sheet.sh`):
-    - Generates 100% compliant CDRWIN / EAC Red Book `.cue` sheet files from text tracklists, timestamps, or Traktor `.nml` history.
+    - Generates 100% compliant CDRWIN / EAC Red Book `.cue` sheet files from text tracklists, timestamps, or DJ `.nml` history.
     - Frame-accurate CDDA timecode indexing (`MM:SS:FF` at 75 frames/second).
     - Built-in audio splitter to cleanly cut full mixes into individual tagged FLAC/WAV tracks.
   - **Lossless Legitimacy & Spectral Cutoff Inspector** (`scripts/verify_lossless_spectral.py`, `verify_lossless_spectral.sh`):
@@ -2205,11 +2205,11 @@ Previous release. `0.4.1 Stable (Liquid)` was the in-tree version label before t
 
 - **Listen to Your Top 5 Tracks Right Now (Pre-Selected - Special Option) [Unlock Mystery / Ready]**:
   - Added dedicated Main Menu Option 22 in Section 2 with dynamic custom menu status badge (`[Unlock Mystery]` vs `[Ready]`).
-  - Added Option 4 to Custom Mix Playlists & Traktor History Suite (Option 14).
+  - Added Option 4 to Custom Mix Playlists & DJ History Suite (Option 14).
   - Requirement Gates & Alert: Requires Master HTML Tracklist (`master_tracklists.html`) and at least one processed mix in the archive. Automatically alerts user upon completing their first mix conversion in `Make_SOF_FLAC_CONVERSION.sh` about unlocking this special feature.
   - Top 5 Tracks Selector: Intelligently parses `master_tracklists.html` across all combined archives (1,033+ plays, 656+ unique tracks) with search by artist, title, and mix source.
-  - Traktor Database & Multi-Protocol Remote Mac Import: Searches Traktor collections (`collection.nml` and `History/*.nml`) for exact `AUDIO_ID`, title, and artist matches. Resolves and transfers physical audio tracks from local drives, SMB network shares, NFS mounts, or remote macOS workstations via SSH/rsync into `TOP_5_TRACKS/`.
-  - Instant Playlist & Immediate Playback: Automatically generates `Mix_Archive_Top_5_Tracks_Traktor_Playlist.m3u8`, `.m3u`, and `.xspf` in `PLAYLISTS_GENERATED/` and immediately triggers Track #1 playback in the configured audio player (`audacious`, `strawberry`, `cliamp`, `vlc`, etc.).
+  - DJ Database & Multi-Protocol Remote Mac Import: Searches DJ collections (`collection.nml` and `History/*.nml`) for exact `AUDIO_ID`, title, and artist matches. Resolves and transfers physical audio tracks from local drives, SMB network shares, NFS mounts, or remote macOS workstations via SSH/rsync into `TOP_5_TRACKS/`.
+  - Instant Playlist & Immediate Playback: Automatically generates `Mix_Archive_Top_5_Tracks_DJ_Playlist.m3u8`, `.m3u`, and `.xspf` in `PLAYLISTS_GENERATED/` and immediately triggers Track #1 playback in the configured audio player (`audacious`, `strawberry`, `cliamp`, `vlc`, etc.).
   - Continuous Joined Mix Export Suite: Joins the 5 tracks into a continuous mix file with custom artist, title, and cover image metadata, automatically named `Mix_Archive_Top_5_Tracks_[Date]_Auto_Generated_by_MP_Mix.FLAC`. Generates matching master WAV, 320kbps MP3 with embedded artwork, high-resolution Spek spectrogram PNG, and timestamped Tracklist (.txt) & Cue sheet (.cue).
   - CLI and Fast-Path Dispatch: Added `--top5`, `--top-5`, and `top5` shortcuts to `Mix_Archive_Manager.sh`, `bin/mix-archive-manager`, and created `scripts/manage_top_5_tracks.sh`.
 
@@ -2422,24 +2422,24 @@ Previous release. `0.4.1 Stable (Liquid)` was the in-tree version label before t
 
 ## [0.2.0] - 2026-09-14
 
-- **Cross-Platform Traktor Pro Live Monitor & Audio Recorder Control (Option 48)**:
-  - Downloaded and upgraded Traktor monitor suite from remote macOS host (`192.0.2.20`) into core repository (`scripts/traktor_monitor.py`, `scripts/traktor_monitor.sh`, `traktor_monitor.sh`, `bin/traktor-monitor`).
+- **Cross-Platform DJ Pro Live Monitor & Audio Recorder Control (Option 48)**:
+  - Downloaded and upgraded DJ monitor suite from remote macOS host (`192.0.2.20`) into core repository (`scripts/dj_monitor.py`, `scripts/dj_monitor.sh`, `dj_monitor.sh`, `bin/dj-monitor`).
   - Upgraded engine with comprehensive **Microsoft Windows 10 & 11** native support:
-    - Multi-process detection for `Traktor.exe`, `Traktor Pro 3.exe`, and `Traktor Pro 4.exe` via `tasklist` and PowerShell CIM/WMI queries.
+    - Multi-process detection for `DJ.exe`, `DJ Pro 3.exe`, and `DJ Pro 4.exe` via `tasklist` and PowerShell CIM/WMI queries.
     - Real-time CPU % load and RSS RAM memory footprint profiling.
     - Native Windows console non-blocking hotkey input using `msvcrt.kbhit()` and `msvcrt.getch()`.
-    - Active deck audio tracking via Traktor session history XML (`history_*.nml`) parsing and file handle inspection.
+    - Active deck audio tracking via DJ session history XML (`history_*.nml`) parsing and file handle inspection.
     - Real-time recording file status and multi-directory file size growth detector (`RECORDING_DIRS`) to identify active mix recordings and standby files.
     - Upgraded recording monitor dashboard to display the last 3 recordings ordered by newest at the top, showing real-time file size, modification date, live write badge (`[● LIVE: Growing]`), and storage path.
-    - Added automatic application launch check (`ensure_traktor_running`): if Traktor Pro is not running when the monitor is launched, it automatically opens Traktor, waits for process initialization, and immediately begins displaying the live monitor.
-    - Traktor recording control via Windows `WScript.Shell` / `AppActivate("Traktor")` automation and keyboard shortcuts.
-    - Native double-clickable Windows launchers: `traktor_monitor.bat` and `traktor_monitor.ps1`.
-  - Maintained full macOS support (`traktor_monitor_macos.command`) with AppleScript System Events menu clicking and CoreAudio queries.
+    - Added automatic application launch check (`ensure_dj_running`): if DJ Pro is not running when the monitor is launched, it automatically opens DJ, waits for process initialization, and immediately begins displaying the live monitor.
+    - DJ recording control via Windows `WScript.Shell` / `AppActivate("DJ")` automation and keyboard shortcuts.
+    - Native double-clickable Windows launchers: `dj_monitor.bat` and `dj_monitor.ps1`.
+  - Maintained full macOS support (`dj_monitor_macos.command`) with AppleScript System Events menu clicking and CoreAudio queries.
   - Native Linux support with `/proc/$pid/fd` inspection, PipeWire audio endpoint probe, and Wine/Proton path detection.
   - Interactive hotkeys: `[S]` Start Recording, `[X]` Stop Recording, `[T]` Toggle Recording, `[R]` Refresh, `[Q]` Quit.
   - Integrated into `Mix_Archive_Manager.sh` as dedicated **Option 48** in Section 5 (Live Monitors) launching in a new terminal window (`launch_in_terminal` in Konsole, Terminal.app, Windows Terminal `wt.exe`, Alacritty, Foot, XTerm).
   - Added companion launch option in Section 3 Digital Audio Workstations (`manage_daws`).
-  - Added process tracking in `view_tasks` for `traktor_monitor` and `Traktor`.
+  - Added process tracking in `view_tasks` for `dj_monitor` and `DJ`.
   - Added minimal pending OS updates status indicator (`get_os_update_status`) to main menu system info banner (cross-platform: macOS SoftwareUpdate, Linux rpm-ostree/update-notifier, Windows reboot-required).
   - Expanded master operations to **72 operations** across 7 logical sections.
 
@@ -2521,7 +2521,7 @@ Previous release. `0.4.1 Stable (Liquid)` was the in-tree version label before t
   - Added `inspect_audio_studio.py` and `inspect_audio_studio.sh` (Option 33).
   - Complete audio architecture detection: PipeWire, PulseAudio, and ALSA cards, sinks, sources, active sample rates, and buffer latencies.
   - Hardware MIDI surface and controller detection (AKAI MPKmini2, Arturia MiniLab mkII, Valve controllers, synthesizers).
-  - Software audit scanning installed DAWs and audio software (REAPER, Logic Pro, FL Studio, Traktor, Audacity, Ardour, Bitwig, Picard, Spek, cliamp, VLC, Haruna, Kodi).
+  - Software audit scanning installed DAWs and audio software (REAPER, Logic Pro, FL Studio, DJ, Audacity, Ardour, Bitwig, Picard, Spek, cliamp, VLC, Haruna, Kodi).
 
 - **Master Audio Control & Instant Mute Toggle**:
   - Added `toggle_audio_mute` and `get_audio_volume_and_mute` (Option 34).
@@ -2583,10 +2583,10 @@ Previous release. `0.4.1 Stable (Liquid)` was the in-tree version label before t
 - **Audio Ingestion & 32-bit FLAC Conversion**: Multi-part WAV concatenation, 32-bit sample depth FLAC encoding (`Make_SOF_FLAC_CONVERSION.sh`), embedded artwork, and 1080p spectrogram generation.
 - **Audio Format & Bit Depth Conversion**: Universal conversion between WAV, MP3, Ogg Vorbis, Opus, AAC, ALAC, and bit depths (32-bit float, 32-bit int, 24-bit, 16-bit).
 - **Duplicate Audio Finder**: Content-based hashing and episode duplicate detection (`find_duplicate_mixes.py`).
-- **Traktor Pro History Integration**: Automatic parsing of Traktor history XML (`collection.nml`) to generate timestamped cue tracklists.
+- **DJ Pro History Integration**: Automatic parsing of DJ history XML (`collection.nml`) to generate timestamped cue tracklists.
 - **HTML & PDF Tracklist Documentation**: Master HTML index and printable vector PDF tracklists (`generate_tracklist_docs.py`).
 - **Promotional Outreach Suite**: HTML and Plaintext email pitcher for promoters, publishers, radio stations, and record labels (`send_promo_email.py`).
-- **DAW Integration**: One-click dispatch to REAPER, Logic Pro, FL Studio, Traktor Pro, GarageBand, Audacity, Ardour, and Bitwig.
+- **DAW Integration**: One-click dispatch to REAPER, Logic Pro, FL Studio, DJ Pro, GarageBand, Audacity, Ardour, and Bitwig.
 - **cliamp Terminal Music Player**: Integrated retro music player with MPRIS monitoring, clipboard copy, and real-time path resolution.
 - **YouTube Video Synthesis**: Hardware-accelerated 4K UHD, 1080p Full HD, and 720p HD video generation with audio fading.
 - **Cloud & Network Sync**: Google Drive rclone synchronization and SMB network share importer (`search_and_import_mixes.sh`).

@@ -186,7 +186,7 @@ class TestImportsAreDeclared(unittest.TestCase):
             # allowed to fail their own way (each prints its own install hint).
             "torch", "cv2", "openai", "psycopg2", "dbus", "cairo",
             "prompt_toolkit", "filling", "shared", "mplanetarian",
-            "the", "traktor",
+            "the", "dj",
             # Piper is the local neural TTS engine behind the spoken reports and
             # the Infinite Talker. Every call site is `from piper import ...`
             # inside a try/except that falls back to the macOS `say` voice, so

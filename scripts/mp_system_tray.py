@@ -167,7 +167,7 @@ SUITE_HELPER_SCRIPTS = (
     "mp_liquid_visualizer_metal.py",
     "MP_Audio_Player.py",
     "MP_Audio_Player.sh",
-    "traktor_s4_midi.py",
+    "dj_s4_midi.py",
     "launch_liquid_visualizer",
     "launch_liquid_visualizer.sh",
     "launch-liquid-glass",

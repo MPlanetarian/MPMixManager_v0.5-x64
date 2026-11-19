@@ -50,13 +50,13 @@ class TestEqualPower(unittest.TestCase):
 
 
 class TestMixerModel(unittest.TestCase):
-    def test_defaults_are_two_safe_decks(self):
+    def test_defaults_are_four_live_decks(self):
         model = mixer_core.MixerModel()
         self.assertEqual(model.mode, "INTERNAL")
-        self.assertTrue(model.channel_active("A"))
-        self.assertTrue(model.channel_active("B"))
-        self.assertFalse(model.channel_active("C"))
-        self.assertFalse(model.channel_active("D"))
+        for channel in ("A", "B", "C", "D"):
+            self.assertTrue(model.channel_active(channel))
+        self.assertEqual(model.deck_for_side("L"), "A")
+        self.assertEqual(model.deck_for_side("R"), "B")
 
     def test_centre_blend_applies_both_channel_gains(self):
         model = mixer_core.MixerModel(gains={"A": 1.0, "B": 1.0}, crossfade=0.5)
@@ -73,13 +73,38 @@ class TestMixerModel(unittest.TestCase):
         model = mixer_core.MixerModel(gains={"A": 0.5, "B": 1.0}, crossfade=0.0)
         self.assertEqual(model.deck_volumes(), (50, 0))
 
-    def test_inactive_channels_store_but_do_not_move_a_deck(self):
+    def test_every_channel_fader_moves_its_own_deck(self):
         model = mixer_core.MixerModel(gains={"A": 1.0, "B": 1.0}, crossfade=0.0)
-        before = model.deck_volumes()
-        self.assertFalse(model.set_channel("C", 0.0))
-        self.assertFalse(model.set_channel("D", 1.0))
-        self.assertEqual(model.deck_volumes(), before)
-        self.assertEqual(model.channel_gain("C"), mixer_core.DEFAULT_GAIN)
+        self.assertTrue(model.set_channel("C", 0.25))
+        self.assertTrue(model.set_channel("D", 0.5))
+        self.assertAlmostEqual(model.channel_gain("C"), 0.25, places=6)
+        self.assertAlmostEqual(model.channel_gain("D"), 0.5, places=6)
+        # C and D are not crossfaded, so their fader is the whole level.
+        self.assertEqual(model.volume_for("C"), 25)
+        self.assertEqual(model.volume_for("D"), 50)
+
+    def test_side_switch_toggles_between_its_two_decks(self):
+        model = mixer_core.MixerModel()
+        self.assertEqual(model.toggle_side_deck("L"), "C")
+        self.assertEqual(model.deck_for_side("L"), "C")
+        self.assertEqual(model.toggle_side_deck("L"), "A")
+        self.assertEqual(model.toggle_side_deck("R"), "D")
+        self.assertEqual(model.deck_for_side("R"), "D")
+        self.assertEqual(model.deck_of("D"), "R")
+        self.assertEqual(model.deck_of("A"), "L")
+        # Hidden decks belong to no visible playlist window.
+        self.assertIsNone(model.deck_of("C"))
+
+    def test_side_decks_survive_a_reload(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.json"
+            model = mixer_core.MixerModel()
+            model.toggle_side_deck("L")
+            model.toggle_side_deck("R")
+            model.save(path)
+            loaded = mixer_core.MixerModel.load(path)
+        self.assertEqual(loaded.deck_for_side("L"), "C")
+        self.assertEqual(loaded.deck_for_side("R"), "D")
 
     def test_external_mode_is_unity(self):
         model = mixer_core.MixerModel(gains={"A": 0.1, "B": 0.2}, crossfade=0.0)
@@ -500,24 +525,54 @@ class TestLayout(unittest.TestCase):
         gap = boxes["deck_b"][0] - (boxes["deck_a"][0] + boxes["deck_a"][2])
         self.assertAlmostEqual(gap, 300 * 2, places=3)
 
-    def test_knob_grid_runs_gain_treble_mid_low(self):
+    def test_knob_grid_runs_gain_treble_mid_low_then_filter(self):
         boxes = mixer_core.layout(1920, 1080)
         mixer = boxes["mixer"]
-        rows = ("gain", "high", "mid", "low")
+        rows = ("gain", "high", "mid", "low", "filter")
         for row in rows:
-            self.assertIn(f"knob_{row}_label", boxes)
+            # No row carries a left-hand legend any more: the columns align
+            # with the channel faders instead of being pushed right.
+            self.assertNotIn(f"knob_{row}_label", boxes)
             for channel in mixer_core.CHANNELS:
                 box = boxes[f"knob_{row}_{channel}"]
                 self.assertGreaterEqual(box[0], mixer[0])
                 self.assertLessEqual(box[0] + box[2], mixer[0] + mixer[2])
         for upper, lower in zip(rows, rows[1:]):
             self.assertLess(boxes[f"knob_{upper}_A"][1], boxes[f"knob_{lower}_A"][1])
+        # The filter knob is 1.5x the size of the EQ knobs.
+        self.assertAlmostEqual(boxes["knob_filter_A"][2], boxes["knob_low_A"][2] * 1.5, places=3)
 
-    def test_volume_faders_are_a_quarter_of_the_old_height(self):
+    def test_knob_columns_line_up_with_the_faders(self):
         boxes = mixer_core.layout(1920, 1080)
-        self.assertAlmostEqual(boxes["strip_A"][3], 140.0, places=3)
-        # The knob values sit above the fader labels.
-        self.assertLess(boxes["knob_low_A_value"][1] + boxes["knob_low_A_value"][3],
+        for channel in mixer_core.CHANNELS:
+            fader_centre = boxes[f"strip_{channel}"][0] + boxes[f"strip_{channel}"][2] / 2
+            knob_centre = boxes[f"knob_low_{channel}"][0] + boxes[f"knob_low_{channel}"][2] / 2
+            self.assertAlmostEqual(knob_centre, fader_centre, places=3)
+
+    def test_each_channel_has_effect_squares_fx_and_monitor_buttons(self):
+        boxes = mixer_core.layout(1920, 1080)
+        for channel in mixer_core.CHANNELS:
+            for slot in (1, 2, 3, 4):
+                self.assertIn(f"effect_slot_{slot}_{channel}", boxes)
+            self.assertIn(f"effect_filter_{channel}", boxes)
+            fx = boxes[f"fx_{channel}"]
+            cue = boxes[f"monitor_{channel}"]
+            # FX sits above the cue button, and both above the fader.
+            self.assertLess(fx[1] + fx[3], cue[1])
+            self.assertLess(cue[1] + cue[3], boxes[f"strip_{channel}"][1])
+            self.assertIn(f"meter_{channel}", boxes)
+
+    def test_master_and_monitor_trims_sit_in_the_top_bar(self):
+        boxes = mixer_core.layout(1920, 1080)
+        self.assertEqual(boxes["master_knob"][3], 44.0)
+        self.assertEqual(boxes["monitor_knob"][3], 44.0)
+        self.assertLess(boxes["profile_button"][1] + boxes["profile_button"][3],
+                        boxes["mixer"][1] + 10)
+
+    def test_volume_faders_sit_below_the_filter_knobs(self):
+        boxes = mixer_core.layout(1920, 1080)
+        self.assertGreaterEqual(boxes["strip_A"][3], 100)
+        self.assertLess(boxes["knob_filter_A_value"][1] + boxes["knob_filter_A_value"][3],
                         boxes["strip_A_label"][1])
 
     def test_pitch_sliders_flank_the_mixer(self):

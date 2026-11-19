@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-scripts/traktor_monitor.py - Ultra High-Performance Cross-Platform Traktor Live Monitor & Recorder Control
+scripts/dj_monitor.py - Ultra High-Performance Cross-Platform DJ Live Monitor & Recorder Control
 Optimized for low-spec / slow systems with zero subprocess churn, /proc direct I/O, and aggressive caching.
 """
 from __future__ import annotations
@@ -29,35 +29,35 @@ if IS_WINDOWS:
     except Exception:
         pass
 
-TRAKTOR_PROC = "Traktor"
-TRAKTOR_BUNDLE_ID = "com.native-instruments.Traktor"
+DJ_PROC = "DJ"
+DJ_BUNDLE_ID = "com.native-instruments.DJ"
 AUDIO_EXTS = (".mp3", ".flac", ".aiff", ".aif", ".wav", ".m4a", ".stem.mp4", ".ogg", ".aac")
 THEME_CONFIG_FILE = Path.home() / ".config/mix-manager/theme"
 
 SETTINGS_CANDIDATES = [
-    Path.home() / f"Documents/Native Instruments/Traktor {v}/Traktor Settings.tsi"
+    Path.home() / f"Documents/Native Instruments/DJ {v}/DJ Settings.tsi"
     for v in ("3.11.1", "3", "Pro 3", "Pro 4", "3.10.0", "2")
 ]
 
 RECORDING_DIRS = [
-    Path.home() / "Documents/MPlanetarian/Documents/TRAKTOR_RECORDINGS",
+    Path.home() / "Documents/MPlanetarian/Documents/DJ_RECORDINGS",
     Path.home() / "Documents/MPlanetarian/M_PRODUCTION/STREAM_OF_FREQUENCY_RECORDINGS_TRAKTOR_2026",
-    Path.home() / "Music/Traktor/Recordings",
-    *(Path.home() / f"Documents/Native Instruments/Traktor {v}/Recordings" for v in ("3.11.1", "3", "Pro 3", "Pro 4")),
-    Path.home() / "Documents/Native Instruments/Traktor 3.11.1",
+    Path.home() / "Music/DJ/Recordings",
+    *(Path.home() / f"Documents/Native Instruments/DJ {v}/Recordings" for v in ("3.11.1", "3", "Pro 3", "Pro 4")),
+    Path.home() / "Documents/Native Instruments/DJ 3.11.1",
 ]
 if os.environ.get("MIX_ARCHIVE_DIR"):
     _ea = Path(os.environ["MIX_ARCHIVE_DIR"])
     RECORDING_DIRS.extend([_ea / "CONVERTED_WAV_FILES", _ea])
 
 RECORD_START_MENU_CANDIDATES: list[tuple[str, str]] = [
-    (m, "Start Recording") for m in ("File", "Deck", "View", "Traktor")
+    (m, "Start Recording") for m in ("File", "Deck", "View", "DJ")
 ] + [("File", "Start Audio Recording"), ("File", "Record")] + [
     (m, "Audio Recorder On") for m in ("File", "Deck", "View")
 ]
 
 RECORD_STOP_MENU_CANDIDATES: list[tuple[str, str]] = [
-    (m, "Stop Recording") for m in ("File", "Deck", "View", "Traktor")
+    (m, "Stop Recording") for m in ("File", "Deck", "View", "DJ")
 ] + [("File", "Stop Audio Recording")] + [
     (m, "Audio Recorder On") for m in ("File", "Deck", "View")
 ]
@@ -136,7 +136,7 @@ def get_theme(theme_id: Optional[str] = None, no_color: bool = False) -> ThemeCo
     return ThemeColors(tid, enabled=color_enabled)
 
 def load_saved_theme() -> str:
-    for ev in ("TRAKTOR_MONITOR_THEME", "CURRENT_THEME", "MIX_MANAGER_THEME"):
+    for ev in ("DJ_MONITOR_THEME", "CURRENT_THEME", "MIX_MANAGER_THEME"):
         v = os.environ.get(ev, "").strip()
         if v: return resolve_theme_id(v)
     try:
@@ -154,13 +154,13 @@ def save_active_theme(tid: str) -> bool:
 
 def print_theme_list():
     act = load_saved_theme()
-    print(f"\n\033[1m🎛️  Traktor Live Monitor — Available Color Themes ({len(THEMES)} Themes):\033[0m\n")
+    print(f"\n\033[1m🎛️  DJ Live Monitor — Available Color Themes ({len(THEMES)} Themes):\033[0m\n")
     for tid, tinfo in THEMES.items():
         t = get_theme(tid)
         sample = f"{t.primary}■■■ {t.secondary}■■■ {t.accent}■■■ {t.green}■■■ {t.red}■■■{t.reset}"
         mark = f" \033[1m{t.green}★ ACTIVE\033[0m" if tid == act else ""
         print(f"  \033[1m{t.secondary}{tid:<18}\033[0m  {sample}  \033[1m{t.text}{tinfo[0]}\033[0m{mark}\n  {' '*18}  {t.text_dim}{tinfo[1]}\033[0m\n")
-    print("Switch themes live using the \033[1;36m[C]\033[0m key in Traktor Monitor, or launch with: \033[1;32m--theme <name>\033[0m\n")
+    print("Switch themes live using the \033[1;36m[C]\033[0m key in DJ Monitor, or launch with: \033[1;32m--theme <name>\033[0m\n")
 
 @dataclass
 class RecordingItem:
@@ -188,7 +188,7 @@ class Snapshot:
     recording_active: bool = False
     recording_prefix: str = ""
     recent_recordings: list[RecordingItem] = field(default_factory=list)
-    device_traktor: str = ""
+    device_dj: str = ""
     sample_rate: str = ""
     latency: str = ""
     driver: str = ""
@@ -223,20 +223,20 @@ _SETTINGS_DATA_CACHE: tuple[float, dict] = (0.0, {})
 _AUDIO_DEFAULTS_CACHE: tuple[float, tuple[str, str]] = (0.0, ("", ""))
 _RECORDINGS_SCAN_CACHE: tuple[float, list[Path], Optional[str], Optional[int], Optional[bool], list[RecordingItem]] = (0.0, [], None, None, None, [])
 
-def find_traktor_pid() -> Optional[int]:
+def find_dj_pid() -> Optional[int]:
     global _CACHED_PID
     my_pid = os.getpid()
     if _CACHED_PID:
         try:
             if IS_WINDOWS:
                 out = run(["tasklist", "/fi", f"PID eq {_CACHED_PID}", "/fo", "csv", "/nh"], timeout=1.0)
-                if "traktor" in out.lower(): return _CACHED_PID
+                if "dj" in out.lower(): return _CACHED_PID
             else:
                 os.kill(_CACHED_PID, 0)
                 if IS_LINUX and os.path.exists(f"/proc/{_CACHED_PID}/cmdline"):
                     with open(f"/proc/{_CACHED_PID}/cmdline", "rb") as f:
                         cmd = f.read().replace(b"\x00", b" ").decode("utf-8", "ignore").lower()
-                        if "traktor" in cmd and "traktor_monitor" not in cmd: return _CACHED_PID
+                        if "dj" in cmd and "dj_monitor" not in cmd: return _CACHED_PID
                 elif IS_MACOS:
                     return _CACHED_PID
         except OSError:
@@ -251,7 +251,7 @@ def find_traktor_pid() -> Optional[int]:
                     try:
                         with open(f"/proc/{p}/cmdline", "rb") as f:
                             raw = f.read().replace(b"\x00", b" ").decode("utf-8", "ignore").lower()
-                        if "traktor" in raw and "traktor_monitor" not in raw:
+                        if "dj" in raw and "dj_monitor" not in raw:
                             _CACHED_PID = p
                             return p
                     except OSError:
@@ -260,21 +260,21 @@ def find_traktor_pid() -> Optional[int]:
             pass
 
     if IS_MACOS:
-        for cmd in (["pgrep", "-f", "Traktor.app/Contents/MacOS/Traktor$"], ["pgrep", "-i", "-f", "Traktor"]):
+        for cmd in (["pgrep", "-f", "DJ.app/Contents/MacOS/DJ$"], ["pgrep", "-i", "-f", "DJ"]):
             for line in run(cmd).splitlines():
                 if line.strip().isdigit() and int(line.strip()) != my_pid:
                     _CACHED_PID = int(line.strip())
                     return _CACHED_PID
 
     if IS_WINDOWS:
-        for img in ("Traktor.exe", "Traktor Pro 3.exe", "Traktor Pro 4.exe", "Traktor Pro.exe"):
+        for img in ("DJ.exe", "DJ Pro 3.exe", "DJ Pro 4.exe", "DJ Pro.exe"):
             for line in run(["tasklist", "/fi", f"imagename eq {img}", "/fo", "csv", "/nh"], timeout=1.5).splitlines():
                 parts = [p.strip('"') for p in line.split('","')]
                 if len(parts) >= 2 and parts[1].isdigit():
                     _CACHED_PID = int(parts[1])
                     return _CACHED_PID
         try:
-            cmd = ["powershell.exe", "-NoProfile", "-Command", "(Get-Process -Name Traktor* -ErrorAction SilentlyContinue | Select-Object -First 1).Id"]
+            cmd = ["powershell.exe", "-NoProfile", "-Command", "(Get-Process -Name DJ* -ErrorAction SilentlyContinue | Select-Object -First 1).Id"]
             out = run(cmd, timeout=2.5).strip()
             if out.isdigit():
                 _CACHED_PID = int(out)
@@ -283,50 +283,50 @@ def find_traktor_pid() -> Optional[int]:
             pass
     return None
 
-def open_traktor() -> bool:
+def open_dj() -> bool:
     if IS_MACOS:
-        for p in ("/Applications/Native Instruments/Traktor Pro 3/Traktor.app", "/Applications/Native Instruments/Traktor Pro 4/Traktor.app", "/Applications/Traktor Pro 3.app", "/Applications/Traktor.app"):
+        for p in ("/Applications/Native Instruments/DJ Pro 3/DJ.app", "/Applications/Native Instruments/DJ Pro 4/DJ.app", "/Applications/DJ Pro 3.app", "/Applications/DJ.app"):
             if os.path.exists(p):
                 try: subprocess.Popen(["open", p]); return True
                 except Exception: pass
-        for cmd in (["open", "-b", TRAKTOR_BUNDLE_ID], *(["open", "-a", a] for a in ("Traktor Pro 3", "Traktor Pro 4", "Traktor"))):
+        for cmd in (["open", "-b", DJ_BUNDLE_ID], *(["open", "-a", a] for a in ("DJ Pro 3", "DJ Pro 4", "DJ"))):
             try:
                 if subprocess.run(cmd, capture_output=True, timeout=2.0).returncode == 0: return True
             except Exception: pass
         return False
     if IS_WINDOWS:
-        for p in (r"C:\Program Files\Native Instruments\Traktor Pro 4\Traktor.exe", r"C:\Program Files\Native Instruments\Traktor Pro 3\Traktor.exe", r"C:\Program Files\Native Instruments\Traktor 2\Traktor.exe"):
+        for p in (r"C:\Program Files\Native Instruments\DJ Pro 4\DJ.exe", r"C:\Program Files\Native Instruments\DJ Pro 3\DJ.exe", r"C:\Program Files\Native Instruments\DJ 2\DJ.exe"):
             if os.path.isfile(p):
                 try: os.startfile(p); return True
                 except Exception:
                     try: subprocess.Popen([p]); return True
                     except Exception: pass
-        try: subprocess.Popen(["cmd.exe", "/c", "start", "", "Traktor.exe"]); return True
+        try: subprocess.Popen(["cmd.exe", "/c", "start", "", "DJ.exe"]); return True
         except Exception: return False
     if IS_LINUX:
-        for cmd in ("traktor", "Traktor"):
+        for cmd in ("dj", "DJ"):
             if shutil.which(cmd):
                 try: subprocess.Popen([cmd]); return True
                 except Exception: pass
     return False
 
-def ensure_traktor_running(timeout: float = 12.0) -> Optional[int]:
-    pid = find_traktor_pid()
+def ensure_dj_running(timeout: float = 12.0) -> Optional[int]:
+    pid = find_dj_pid()
     if pid: return pid
-    print("\n🎛️  Traktor Pro is not currently running.\n🚀 Launching Native Instruments Traktor Pro...")
-    if not open_traktor():
-        print("⚠️  Could not automatically launch Traktor. Waiting for manual start...\n")
+    print("\n🎛️  DJ Pro is not currently running.\n🚀 Launching Native Instruments DJ Pro...")
+    if not open_dj():
+        print("⚠️  Could not automatically launch DJ. Waiting for manual start...\n")
     start_t = time.time()
     while time.time() - start_t < timeout:
         time.sleep(1.0)
-        pid = find_traktor_pid()
+        pid = find_dj_pid()
         if pid:
-            print(f"✓ Traktor Pro detected (PID: {pid}). Initializing live monitoring...")
+            print(f"✓ DJ Pro detected (PID: {pid}). Initializing live monitoring...")
             time.sleep(1.5)
             return pid
-        print(f"⏳ Waiting for Traktor Pro to initialize ({int(time.time() - start_t)}s)...", end="\r", flush=True)
+        print(f"⏳ Waiting for DJ Pro to initialize ({int(time.time() - start_t)}s)...", end="\r", flush=True)
     print("")
-    return find_traktor_pid()
+    return find_dj_pid()
 
 def process_stats(pid: int) -> dict:
     if IS_LINUX and os.path.exists(f"/proc/{pid}/stat"):
@@ -398,18 +398,18 @@ def find_settings() -> Optional[Path]:
     elif IS_LINUX:
         for wd in (Path.home() / ".wine/drive_c/users", Path.home() / ".var/app/com.usebottles.bottles/data/bottles/bottles"):
             if wd.is_dir():
-                for p in wd.glob("**/Native Instruments/**/Traktor Settings.tsi"):
+                for p in wd.glob("**/Native Instruments/**/DJ Settings.tsi"):
                     if p.is_file():
                         _SETTINGS_PATH_CACHE = p
                         return p
     for base in docs:
         if base.is_dir():
-            for p in base.glob("Traktor Settings.tsi"):
+            for p in base.glob("DJ Settings.tsi"):
                 if p.is_file():
                     _SETTINGS_PATH_CACHE = p
                     return p
-            for sub in ("Traktor 3.11.1", "Traktor 3", "Traktor Pro 3", "Traktor Pro 4"):
-                cand = base / sub / "Traktor Settings.tsi"
+            for sub in ("DJ 3.11.1", "DJ 3", "DJ Pro 3", "DJ Pro 4"):
+                cand = base / sub / "DJ Settings.tsi"
                 if cand.is_file():
                     _SETTINGS_PATH_CACHE = cand
                     return cand
@@ -486,10 +486,10 @@ def system_audio_defaults() -> tuple[str, str]:
         except Exception: pass
     return "System Default In", "System Default Out"
 
-def get_latest_traktor_history_tracks() -> list[str]:
-    dirs = [Path.home() / f"Documents/Native Instruments/Traktor {v}/History" for v in ("3.11.1", "3", "Pro 3", "Pro 4")]
+def get_latest_dj_history_tracks() -> list[str]:
+    dirs = [Path.home() / f"Documents/Native Instruments/DJ {v}/History" for v in ("3.11.1", "3", "Pro 3", "Pro 4")]
     if IS_WINDOWS and os.environ.get("USERPROFILE"):
-        dirs.append(Path(os.environ["USERPROFILE"]) / "Documents/Native Instruments/Traktor 3.11.1/History")
+        dirs.append(Path(os.environ["USERPROFILE"]) / "Documents/Native Instruments/DJ 3.11.1/History")
     files = [f for hd in dirs if hd.is_dir() for f in hd.glob("history_*.nml")]
     if not files: return []
     latest = max(files, key=lambda x: x.stat().st_mtime)
@@ -553,7 +553,7 @@ def lsof_tracks_and_recording(pid: int) -> tuple[list[str], Optional[str], Optio
             return loaded, recording, rec_size
 
     if not loaded:
-        loaded = get_latest_traktor_history_tracks()
+        loaded = get_latest_dj_history_tracks()
     return loaded, recording, rec_size
 
 def scan_recordings(
@@ -636,7 +636,7 @@ def scan_recordings(
     return rec, size, growing, items[:limit]
 
 def is_recording_active(pid: Optional[int] = None) -> bool:
-    if pid is None: pid = find_traktor_pid()
+    if pid is None: pid = find_dj_pid()
     if pid and IS_LINUX and os.path.isdir(f"/proc/{pid}/fd"):
         try:
             for entry in os.scandir(f"/proc/{pid}/fd"):
@@ -668,13 +668,13 @@ def is_recording_active(pid: Optional[int] = None) -> bool:
         except OSError: pass
     return False
 
-def click_traktor_menu_item(menu_name: str, item_name: str) -> tuple[bool, str]:
+def click_dj_menu_item(menu_name: str, item_name: str) -> tuple[bool, str]:
     if not IS_MACOS: return False, "Menu clicking is currently supported natively on macOS via System Events"
     m_a, i_a = menu_name.replace('"', '\\"'), item_name.replace('"', '\\"')
     script = f'''tell application "System Events"
-  set procs to every process whose bundle identifier is "{TRAKTOR_BUNDLE_ID}"
-  if (count of procs) is 0 then set procs to every process whose name is "{TRAKTOR_PROC}"
-  if (count of procs) is 0 then return "ERROR: Traktor is not running"
+  set procs to every process whose bundle identifier is "{DJ_BUNDLE_ID}"
+  if (count of procs) is 0 then set procs to every process whose name is "{DJ_PROC}"
+  if (count of procs) is 0 then return "ERROR: DJ is not running"
   tell item 1 of procs
     set frontmost to true
     delay 0.25
@@ -689,12 +689,12 @@ end tell'''
     ok, msg = run_osascript(script, timeout=12.0)
     return (False, msg) if not ok or msg.startswith("ERROR:") else (True, msg)
 
-def click_traktor_menu_item_fuzzy(want_start: bool) -> tuple[bool, str]:
+def click_dj_menu_item_fuzzy(want_start: bool) -> tuple[bool, str]:
     if not IS_MACOS: return False, "Menu scanning is supported on macOS via Accessibility"
     script = f'''tell application "System Events"
-  set procs to every process whose bundle identifier is "{TRAKTOR_BUNDLE_ID}"
-  if (count of procs) is 0 then set procs to every process whose name is "{TRAKTOR_PROC}"
-  if (count of procs) is 0 then return "ERROR: Traktor is not running"
+  set procs to every process whose bundle identifier is "{DJ_BUNDLE_ID}"
+  if (count of procs) is 0 then set procs to every process whose name is "{DJ_PROC}"
+  if (count of procs) is 0 then return "ERROR: DJ is not running"
   tell item 1 of procs
     set frontmost to true
     delay 0.25
@@ -713,7 +713,7 @@ def click_traktor_menu_item_fuzzy(want_start: bool) -> tuple[bool, str]:
         end repeat
       end try
     end repeat
-    if hit is "" then return "ERROR: no recording menu item found in Traktor."
+    if hit is "" then return "ERROR: no recording menu item found in DJ."
     set AppleScript's text item delimiters to "||"
     set parts to text items of hit
     try
@@ -727,12 +727,12 @@ end tell'''
     ok, msg = run_osascript(script, timeout=18.0)
     return (False, msg) if not ok or msg.startswith("ERROR:") else (True, msg)
 
-def list_traktor_menu_items() -> tuple[bool, str]:
+def list_dj_menu_items() -> tuple[bool, str]:
     if not IS_MACOS: return False, "Menu listing is only supported on macOS."
     script = f'''tell application "System Events"
-  set procs to every process whose bundle identifier is "{TRAKTOR_BUNDLE_ID}"
-  if (count of procs) is 0 then set procs to every process whose name is "{TRAKTOR_PROC}"
-  if (count of procs) is 0 then return "ERROR: Traktor is not running"
+  set procs to every process whose bundle identifier is "{DJ_BUNDLE_ID}"
+  if (count of procs) is 0 then set procs to every process whose name is "{DJ_PROC}"
+  if (count of procs) is 0 then return "ERROR: DJ is not running"
   tell item 1 of procs
     set out to ""
     repeat with m in every menu bar item of menu bar 1
@@ -752,10 +752,10 @@ end tell'''
 
 def control_recording_windows(action: str) -> tuple[bool, str]:
     ps_script = f'''$wshell = New-Object -ComObject WScript.Shell
-$proc = Get-Process -Name Traktor* -ErrorAction SilentlyContinue | Select-Object -First 1
-if (-not $proc) {{ Write-Output "ERROR: Traktor is not running"; exit 1 }}
-if ($wshell.AppActivate($proc.Id)) {{ Start-Sleep -Milliseconds 250; $wshell.SendKeys("^(r)"); Write-Output "OK: Sent Audio Recorder toggle signal to Traktor (PID $($proc.Id))"; exit 0 }}
-else {{ Write-Output "ERROR: Could not activate Traktor window"; exit 1 }}'''
+$proc = Get-Process -Name DJ* -ErrorAction SilentlyContinue | Select-Object -First 1
+if (-not $proc) {{ Write-Output "ERROR: DJ is not running"; exit 1 }}
+if ($wshell.AppActivate($proc.Id)) {{ Start-Sleep -Milliseconds 250; $wshell.SendKeys("^(r)"); Write-Output "OK: Sent Audio Recorder toggle signal to DJ (PID $($proc.Id))"; exit 0 }}
+else {{ Write-Output "ERROR: Could not activate DJ window"; exit 1 }}'''
     try:
         res = subprocess.run(["powershell.exe", "-NoProfile", "-Command", ps_script], capture_output=True, text=True, timeout=5.0, check=False)
         out = res.stdout.strip()
@@ -767,8 +767,8 @@ def menu_control_recording(action: str) -> tuple[bool, str]:
     action = action.lower().strip()
     if action not in ("start", "stop", "toggle"):
         return False, f"Unknown action {action!r}; use start|stop|toggle"
-    pid = find_traktor_pid()
-    if not pid: return False, "Traktor is not running"
+    pid = find_dj_pid()
+    if not pid: return False, "DJ is not running"
     active = is_recording_active(pid)
     if action == "toggle": want_start = not active
     elif action == "start":
@@ -779,14 +779,14 @@ def menu_control_recording(action: str) -> tuple[bool, str]:
     if IS_MACOS:
         candidates = RECORD_START_MENU_CANDIDATES if want_start else RECORD_STOP_MENU_CANDIDATES
         for menu_name, item_name in candidates:
-            ok, msg = click_traktor_menu_item(menu_name, item_name)
+            ok, msg = click_dj_menu_item(menu_name, item_name)
             if ok: return True, f"{'Started' if want_start else 'Stopped'} via menu: {msg}"
-        ok, msg = click_traktor_menu_item_fuzzy(want_start)
+        ok, msg = click_dj_menu_item_fuzzy(want_start)
         if ok: return True, f"{'Started' if want_start else 'Stopped'} via menu scan: {msg}"
-        return False, "Could not find a recording menu item. Map a shortcut in Traktor Controller Manager."
+        return False, "Could not find a recording menu item. Map a shortcut in DJ Controller Manager."
     if IS_WINDOWS:
         return control_recording_windows(action)
-    return False, "Direct menu dispatch not supported on this platform. Map a keyboard shortcut in Traktor Controller Manager."
+    return False, "Direct menu dispatch not supported on this platform. Map a keyboard shortcut in DJ Controller Manager."
 
 def human_size(n: Optional[int]) -> str:
     if n is None: return "?"
@@ -830,7 +830,7 @@ def render(s: Snapshot, theme: Optional[ThemeColors] = None) -> str:
     lines = []
     w, h = shutil.get_terminal_size((100, 30))
     box_w = min(w, 82)
-    title = "🎛️  TRAKTOR PRO LIVE MONITOR & RECORDER  🎛️"
+    title = "🎛️  DJ PRO LIVE MONITOR & RECORDER  🎛️"
     lines.append(f"{t.border}{'=' * box_w}{t.reset}")
     lines.append(f"{t.bold}{t.primary}{title.center(box_w)}{t.reset}")
     date_str = s.ts.strftime("%A, %B %d, %Y • %H:%M:%S")
@@ -839,8 +839,8 @@ def render(s: Snapshot, theme: Optional[ThemeColors] = None) -> str:
     lines.append(f"{t.border}{'=' * box_w}{t.reset}\n")
 
     if not s.running:
-        lines.append(f"  {t.bold}{t.secondary}STATUS{t.reset}     {t.bold}{t.yellow}Traktor is NOT running{t.reset}\n")
-        lines.append(f"  {t.text_dim}Start Traktor Pro (macOS, Windows, or Linux) to begin live monitoring.{t.reset}\n")
+        lines.append(f"  {t.bold}{t.secondary}STATUS{t.reset}     {t.bold}{t.yellow}DJ is NOT running{t.reset}\n")
+        lines.append(f"  {t.text_dim}Start DJ Pro (macOS, Windows, or Linux) to begin live monitoring.{t.reset}\n")
         lines.extend(format_recent_recordings(s.recent_recordings, box_w, h, t))
     else:
         lines.append(f"  {t.bold}{t.secondary}STATUS{t.reset}     {t.bold}{t.green}● RUNNING{t.reset}   {t.text_dim}PID:{t.reset} {t.bold}{t.text}{s.pid}{t.reset}   {t.text_dim}Threads: ≈{t.reset}{t.text}{s.threads}{t.reset}")
@@ -848,7 +848,7 @@ def render(s: Snapshot, theme: Optional[ThemeColors] = None) -> str:
         lines.append(f"{t.border}{'-' * box_w}{t.reset}")
         lines.append(f"  {t.bold}{t.primary}AUDIO INTERFACE & HARDWARE{t.reset}")
         lines.append(f"{t.border}{'-' * box_w}{t.reset}")
-        lines.append(f"  {t.bold}{t.secondary}Traktor Device{t.reset}      {t.text}{s.device_traktor or '?'}{t.reset}")
+        lines.append(f"  {t.bold}{t.secondary}DJ Device{t.reset}      {t.text}{s.device_dj or '?'}{t.reset}")
         lines.append(f"  {t.bold}{t.secondary}Driver / Clock{t.reset}      {t.text}{s.driver or '?'}{t.reset}  {t.border}│{t.reset}  {t.secondary}Rate:{t.reset} {t.text}{s.sample_rate} Hz{t.reset}  {t.border}│{t.reset}  {t.secondary}Buffer/Latency:{t.reset} {t.text}{s.latency}{t.reset}")
         lines.append(f"  {t.bold}{t.secondary}System Default IN{t.reset}   {t.text_dim}{s.system_in}{t.reset}")
         lines.append(f"  {t.bold}{t.secondary}System Default OUT{t.reset}  {t.text_dim}{s.system_out}{t.reset}\n")
@@ -890,15 +890,15 @@ def take_snapshot(prev_rec_size: Optional[int], theme_id: Optional[str] = None) 
     sp = find_settings()
     if sp:
         conf = parse_settings(sp)
-        s.device_traktor, s.sample_rate, s.latency, s.driver, s.recording_prefix = conf["device"], conf["sample_rate"], conf["latency"], conf["driver"], conf["recording_prefix"]
+        s.device_dj, s.sample_rate, s.latency, s.driver, s.recording_prefix = conf["device"], conf["sample_rate"], conf["latency"], conf["driver"], conf["recording_prefix"]
     else:
-        s.notes.append("Traktor Settings.tsi not found (using system defaults)")
+        s.notes.append("DJ Settings.tsi not found (using system defaults)")
     try:
         s.system_in, s.system_out = system_audio_defaults()
     except Exception as e:
         s.notes.append(f"Audio device query notice: {e}")
 
-    pid = find_traktor_pid()
+    pid = find_dj_pid()
     if not pid:
         s.running = False
         rec, size, grow, recents = scan_recordings(prev_rec_size, is_active=False)
@@ -942,19 +942,19 @@ def get_key_nonblocking(fd: Optional[int]) -> Optional[str]:
 
 def main() -> int:
     global _ACTIVE_THEME_ID
-    ap = argparse.ArgumentParser(description="Traktor live monitor (CPU, tracks, recording, audio I/O) + recording control (macOS, Windows, Linux)")
+    ap = argparse.ArgumentParser(description="DJ live monitor (CPU, tracks, recording, audio I/O) + recording control (macOS, Windows, Linux)")
     ap.add_argument("--interval", type=float, default=1.0, help="Refresh seconds (default 1)")
     ap.add_argument("--once", action="store_true", help="Print one snapshot and exit")
-    ap.add_argument("--start-recording", action="store_true", help="Start Traktor Audio Recorder, then exit")
-    ap.add_argument("--stop-recording", action="store_true", help="Stop Traktor Audio Recorder, then exit")
-    ap.add_argument("--toggle-recording", action="store_true", help="Toggle Traktor Audio Recorder, then exit")
+    ap.add_argument("--start-recording", action="store_true", help="Start DJ Audio Recorder, then exit")
+    ap.add_argument("--stop-recording", action="store_true", help="Stop DJ Audio Recorder, then exit")
+    ap.add_argument("--toggle-recording", action="store_true", help="Toggle DJ Audio Recorder, then exit")
     ap.add_argument("--theme", "-t", type=str, default=None, help="Color theme name")
     ap.add_argument("--list-themes", action="store_true", help="List all available color themes, then exit")
     ap.add_argument("--set-theme", type=str, default=None, metavar="THEME", help="Set and persist the active color theme, then exit")
     ap.add_argument("--save-theme", action="store_true", help="Persist the selected theme to ~/.config/mix-manager/theme")
     ap.add_argument("--no-color", action="store_true", help="Disable ANSI colors")
-    ap.add_argument("--no-launch", action="store_true", help="Do not automatically launch Traktor if not running")
-    ap.add_argument("--list-menus", action="store_true", help="List Traktor menu bar items (debug macOS) and exit")
+    ap.add_argument("--no-launch", action="store_true", help="Do not automatically launch DJ if not running")
+    ap.add_argument("--list-menus", action="store_true", help="List DJ menu bar items (debug macOS) and exit")
     args = ap.parse_args()
 
     if args.list_themes:
@@ -962,11 +962,11 @@ def main() -> int:
     if args.set_theme:
         tid = resolve_theme_id(args.set_theme)
         t = get_theme(tid)
-        if save_active_theme(tid): print(f"\033[1;32m✓\033[0m Traktor Monitor theme set to: {t.primary}{t.name}{t.reset} ({tid})"); return 0
+        if save_active_theme(tid): print(f"\033[1;32m✓\033[0m DJ Monitor theme set to: {t.primary}{t.name}{t.reset} ({tid})"); return 0
         print("✗ Failed to save theme to ~/.config/mix-manager/theme", file=sys.stderr); return 1
     if args.list_menus:
         if IS_MACOS:
-            ok, msg = list_traktor_menu_items()
+            ok, msg = list_dj_menu_items()
             print(msg); return 0 if ok and not msg.startswith("ERROR:") else 1
         print("Menu listing is only supported on macOS."); return 0
 
@@ -982,7 +982,7 @@ def main() -> int:
     _ACTIVE_THEME_ID = active_theme_id
     active_theme = get_theme(active_theme_id, no_color=args.no_color)
 
-    if not args.no_launch: ensure_traktor_running()
+    if not args.no_launch: ensure_dj_running()
 
     prev_size: Optional[int] = None
     last_action = ""
@@ -1045,7 +1045,7 @@ def main() -> int:
                 import termios
                 termios.tcsetattr(fd, termios.TCSADRAIN, old_term)
             except Exception: pass
-        print("\nTraktor Live Monitor closed.")
+        print("\nDJ Live Monitor closed.")
     return 0
 
 if __name__ == "__main__":

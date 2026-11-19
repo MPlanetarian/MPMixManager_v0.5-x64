@@ -1,8 +1,8 @@
 <#
 .SYNOPSIS
-    Traktor Pro Live Monitor & Audio Recorder - Windows 10 & 11 PowerShell Launcher
+    DJ Pro Live Monitor & Audio Recorder - Windows 10 & 11 PowerShell Launcher
 .DESCRIPTION
-    Launches scripts\traktor_monitor.py directly with Python 3 on Windows.
+    Launches scripts\dj_monitor.py directly with Python 3 on Windows.
 #>
 $ErrorActionPreference = "Stop"
 
@@ -11,7 +11,7 @@ if (-not $ScriptDir) {
     $ScriptDir = (Get-Location).Path
 }
 Set-Location $ScriptDir
-$PyScript = Join-Path $ScriptDir "scripts\traktor_monitor.py"
+$PyScript = Join-Path $ScriptDir "scripts\dj_monitor.py"
 
 $PythonCandidates = @(
     "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe",

@@ -18,21 +18,21 @@ done
 OUTPUT_DIR="${OUTPUT_DIR:-FLAC_CONVERTED_OUTPUTS}"
 ARCHIVE_DIR="${ARCHIVE_DIR:-CONVERTED_WAV_FILES}"
 
-# Direct Local Traktor History Directory (Auto-detected across Linux, macOS, and Windows)
-LOCAL_HISTORY_DIR="${TRAKTOR_HISTORY_DIR:-}"
+# Direct Local DJ History Directory (Auto-detected across Linux, macOS, and Windows)
+LOCAL_HISTORY_DIR="${DJ_HISTORY_DIR:-}"
 if [ -z "$LOCAL_HISTORY_DIR" ] || [ ! -d "$LOCAL_HISTORY_DIR" ]; then
     for cand in \
-        "${MIX_ARCHIVE_DIR:-$PWD}/Traktor 3.11.1/History" \
-        "./Traktor 3.11.1/History" \
-        "/run/media/$USER/WD BLACK B/MIX_ARCHIVE/Traktor 3.11.1/History" \
-        "/run/media/mplanetarian/WD BLACK B/MIX_ARCHIVE/Traktor 3.11.1/History" \
-        "/Volumes/WD BLACK B/MIX_ARCHIVE/Traktor 3.11.1/History" \
-        "/Volumes/MIX_ARCHIVE/Traktor 3.11.1/History" \
-        "/d/MIX_ARCHIVE/Traktor 3.11.1/History" \
-        "D:/MIX_ARCHIVE/Traktor 3.11.1/History" \
-        "/mnt/d/MIX_ARCHIVE/Traktor 3.11.1/History" \
-        "$HOME/Documents/Native Instruments/Traktor 3.11.1/History" \
-        "$HOME/Native Instruments/Traktor 3.11.1/History"
+        "${MIX_ARCHIVE_DIR:-$PWD}/DJ 3.11.1/History" \
+        "./DJ 3.11.1/History" \
+        "/run/media/$USER/WD BLACK B/MIX_ARCHIVE/DJ 3.11.1/History" \
+        "/run/media/mplanetarian/WD BLACK B/MIX_ARCHIVE/DJ 3.11.1/History" \
+        "/Volumes/WD BLACK B/MIX_ARCHIVE/DJ 3.11.1/History" \
+        "/Volumes/MIX_ARCHIVE/DJ 3.11.1/History" \
+        "/d/MIX_ARCHIVE/DJ 3.11.1/History" \
+        "D:/MIX_ARCHIVE/DJ 3.11.1/History" \
+        "/mnt/d/MIX_ARCHIVE/DJ 3.11.1/History" \
+        "$HOME/Documents/Native Instruments/DJ 3.11.1/History" \
+        "$HOME/Native Instruments/DJ 3.11.1/History"
     do
         if [ -d "$cand" ]; then
             LOCAL_HISTORY_DIR="$cand"
@@ -239,8 +239,8 @@ except Exception:
 PY_PARSER
 )
 
-# Pre-cache Traktor history files and source WAV files for high-speed lookups
-temp_py_parser=$(mktemp --suffix=_traktor_parser.py)
+# Pre-cache DJ history files and source WAV files for high-speed lookups
+temp_py_parser=$(mktemp --suffix=_dj_parser.py)
 echo "$PY_PARSER_CONTENT" > "$temp_py_parser"
 
 history_cache_file=$(mktemp --suffix=_hist_cache.txt)
@@ -273,7 +273,7 @@ extract_date_time() {
     session_min=$(echo "$target" | grep -oE '[0-9]{2}m' | head -n 1 | tr -d 'm')
 }
 
-# Function to find matching Traktor history file
+# Function to find matching DJ history file
 find_matching_history() {
     local s_year="$1"
     local s_month="$2"
@@ -376,7 +376,7 @@ for current_out in "${flac_scan_dirs[@]}"; do
             done < <(grep -F "$session_id" "$wav_cache_file" 2>/dev/null)
         fi
 
-        # Extract date/time components for Traktor history matching
+        # Extract date/time components for DJ history matching
         session_year="" session_month="" session_day="" session_hour="" session_min=""
         extract_date_time "$session_id"
 
@@ -419,8 +419,8 @@ for current_out in "${flac_scan_dirs[@]}"; do
         
         tracklist_found=false
         if [ -n "$matched_history" ] && [ -f "$matched_history" ]; then
-            echo " -> Matched Traktor history file: $(basename "$matched_history")"
-            echo "TRACKLIST (Extracted from Traktor Database)" >> "$tracklist_path"
+            echo " -> Matched DJ history file: $(basename "$matched_history")"
+            echo "TRACKLIST (Extracted from DJ Database)" >> "$tracklist_path"
             echo "==================================================" >> "$tracklist_path"
             
             python3 "$temp_py_parser" "$matched_history" >> "$tracklist_path"

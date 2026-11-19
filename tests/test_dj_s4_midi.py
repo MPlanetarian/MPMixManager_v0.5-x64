@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Unit and Integration Tests for Traktor Kontrol S4 Hardware MIDI Support
+Unit and Integration Tests for Kontrol S4 Hardware MIDI Support
 MP Mix Archive Manager v0.5.3
 """
 
@@ -13,10 +13,10 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
 sys.path.insert(0, str(PROJECT_ROOT))
 
-import traktor_s4_midi
-from traktor_s4_midi import (
-    TraktorS4MidiController,
-    detect_traktor_s4_port,
+import dj_s4_midi
+from dj_s4_midi import (
+    DJS4MidiController,
+    detect_dj_s4_port,
     freebsd_midi_devices,
     is_daemon_running,
     CONFIG_DIR,
@@ -27,21 +27,21 @@ from traktor_s4_midi import (
 # Tests must not touch the live service files in ~/.config/mix-manager:
 # run_amidi_stream() and the port-repair path write log and state entries.
 _TEST_TMP = Path(tempfile.mkdtemp(prefix="s4midi-test-"))
-traktor_s4_midi.LOG_FILE = _TEST_TMP / "traktor_s4_midi.log"
-traktor_s4_midi.STATE_FILE = _TEST_TMP / "traktor_s4_midi_state.json"
-traktor_s4_midi.PID_FILE = _TEST_TMP / "traktor_s4_midi.pid"
-traktor_s4_midi.LOCK_FILE = _TEST_TMP / "traktor_s4_midi.lock"
+dj_s4_midi.LOG_FILE = _TEST_TMP / "dj_s4_midi.log"
+dj_s4_midi.STATE_FILE = _TEST_TMP / "dj_s4_midi_state.json"
+dj_s4_midi.PID_FILE = _TEST_TMP / "dj_s4_midi.pid"
+dj_s4_midi.LOCK_FILE = _TEST_TMP / "dj_s4_midi.lock"
 
 
-class TestTraktorS4MidiController(unittest.TestCase):
+class TestDJS4MidiController(unittest.TestCase):
     def setUp(self):
-        self.controller = TraktorS4MidiController(port="hw:0,0")
+        self.controller = DJS4MidiController(port="hw:0,0")
 
     def test_port_detection(self):
-        detected, port, details = detect_traktor_s4_port()
+        detected, port, details = detect_dj_s4_port()
         self.assertIsInstance(detected, bool)
         self.assertIsInstance(port, str)
-        if traktor_s4_midi.IS_FREEBSD:
+        if dj_s4_midi.IS_FREEBSD:
             # FreeBSD exposes MIDI through umidi(4) as a path, never ALSA "hw:".
             self.assertTrue(port.startswith("/dev/") or port.startswith("hw:"))
         else:
@@ -68,7 +68,7 @@ class TestTraktorS4MidiController(unittest.TestCase):
         # Max 16383 -> +20%
         self.assertEqual(self.controller.scale_pitch_bend_to_percent(127, 127), 20)
 
-    @patch("traktor_s4_midi.send_player_ipc")
+    @patch("dj_s4_midi.send_player_ipc")
     def test_deck_a_pitch_bend_event(self, mock_ipc):
         # 0xE0 = Pitch bend on channel 1 (Left Deck)
         desc, action = self.controller.process_midi_event(0xE0, 0, 96) # Above center
@@ -76,7 +76,7 @@ class TestTraktorS4MidiController(unittest.TestCase):
         self.assertIn("DJ Pitch", action)
         mock_ipc.assert_called_with("set_pitch", percent=unittest.mock.ANY)
 
-    @patch("traktor_s4_midi.send_player_ipc")
+    @patch("dj_s4_midi.send_player_ipc")
     def test_deck_b_pitch_fader_cc(self, mock_ipc):
         # CC 15 on Channel 2 = Right Deck pitch fader
         desc, action = self.controller.process_midi_event(0xB1, 15, 100)
@@ -84,28 +84,28 @@ class TestTraktorS4MidiController(unittest.TestCase):
         self.assertIn("DJ Pitch", action)
         mock_ipc.assert_called_with("set_pitch", percent=unittest.mock.ANY)
 
-    @patch("traktor_s4_midi.send_player_ipc")
+    @patch("dj_s4_midi.send_player_ipc")
     def test_play_pause_button(self, mock_ipc):
         # Note On 0, Vel 127
         desc, action = self.controller.process_midi_event(0x90, 0, 127)
         self.assertIn("Play / Pause", action)
         mock_ipc.assert_called_with("toggle")
 
-    @patch("traktor_s4_midi.send_player_ipc")
+    @patch("dj_s4_midi.send_player_ipc")
     def test_cue_button(self, mock_ipc):
         # Note On 2, Vel 127
         desc, action = self.controller.process_midi_event(0x90, 2, 127)
         self.assertIn("CUE", action)
         mock_ipc.assert_called_with("seek_to", position=0.0)
 
-    @patch("traktor_s4_midi.send_player_ipc")
+    @patch("dj_s4_midi.send_player_ipc")
     def test_sync_pitch_reset(self, mock_ipc):
         # Note On 6 (Left Deck Sync)
         desc, action = self.controller.process_midi_event(0x90, 6, 127)
         self.assertIn("Sync", action)
         mock_ipc.assert_called_with("reset_pitch")
 
-    @patch("traktor_s4_midi.send_player_ipc")
+    @patch("dj_s4_midi.send_player_ipc")
     def test_pitch_nudge_buttons(self, mock_ipc):
         # Note On 8 (Pitch +)
         desc, action = self.controller.process_midi_event(0x90, 8, 127)
@@ -117,7 +117,7 @@ class TestTraktorS4MidiController(unittest.TestCase):
         self.assertIn("Pitch Nudge Down", action)
         mock_ipc.assert_called_with("pitch_down", step=1)
 
-    @patch("traktor_s4_midi.send_player_ipc")
+    @patch("dj_s4_midi.send_player_ipc")
     def test_browse_encoder(self, mock_ipc):
         # CC 42 clockwise (val > 64)
         self.controller.last_turn_time = 0.0
@@ -131,14 +131,14 @@ class TestTraktorS4MidiController(unittest.TestCase):
         self.assertIn("Previous Track", action)
         mock_ipc.assert_called_with("prev")
 
-    @patch("traktor_s4_midi.send_player_ipc")
+    @patch("dj_s4_midi.send_player_ipc")
     def test_channel_volume_fader(self, mock_ipc):
         # CC 8 (Channel A Fader) at 64 (~50%)
         desc, action = self.controller.process_midi_event(0xB0, 8, 64)
         self.assertIn("Volume: 50%", action)
         mock_ipc.assert_called_with("set_volume", volume=50)
 
-    @patch("traktor_s4_midi.send_player_ipc")
+    @patch("dj_s4_midi.send_player_ipc")
     def test_loop_seek_buttons(self, mock_ipc):
         # Note 16 (Loop In) -> Seek -10s
         desc, action = self.controller.process_midi_event(0x90, 16, 127)
@@ -150,7 +150,7 @@ class TestTraktorS4MidiController(unittest.TestCase):
         self.assertIn("Quick Seek +10s", action)
         mock_ipc.assert_called_with("seek", seconds=10.0)
 
-    @patch("traktor_s4_midi.send_player_ipc")
+    @patch("dj_s4_midi.send_player_ipc")
     def test_recording_toggle(self, mock_ipc):
         # Note 32 (Loop Recorder REC)
         desc, action = self.controller.process_midi_event(0x90, 32, 127)
@@ -167,8 +167,8 @@ class TestPortAutoDetection(unittest.TestCase):
 
     CARDS = """ 0 [NVidia         ]: HDA-Intel - HDA NVidia
                       HDA NVidia at 0xb5080000 irq 172
- 1 [TraktorKontrolS]: snd-usb-caiaq - Traktor Kontrol S4
-                      Native Instruments Traktor Kontrol S4 (usb-0000:00:14.0-11.3)
+ 1 [DJKontrolS]: snd-usb-caiaq - Kontrol S4
+                      Native Instruments Kontrol S4 (usb-0000:00:14.0-11.3)
  2 [MPKmini2       ]: USB-Audio - MPKmini2
                       AKAI MPKmini2 at usb-0000:00:14.0-11.2.4, full speed
 """
@@ -185,7 +185,7 @@ class TestPortAutoDetection(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def _add_card_midi(self, card, dev=0, text="Traktor Kontrol S4"):
+    def _add_card_midi(self, card, dev=0, text="Kontrol S4"):
         d = self.proc / "asound" / f"card{card}"
         d.mkdir(parents=True, exist_ok=True)
         (d / f"midi{dev}").write_text(text + "\n")
@@ -196,16 +196,16 @@ class TestPortAutoDetection(unittest.TestCase):
     def test_finds_s4_on_card_one(self):
         self._add_card_midi(1)
         self._add_node(1)
-        detected, port, details = detect_traktor_s4_port(str(self.proc), str(self.dev))
+        detected, port, details = detect_dj_s4_port(str(self.proc), str(self.dev))
         self.assertTrue(detected)
         self.assertEqual(port, "hw:1,0")
-        self.assertIn("Traktor", details)
+        self.assertIn("Kontrol", details)
 
     def test_ignores_other_cards(self):
         self._add_card_midi(0, text="HDA NVidia")
         self._add_card_midi(2, text="MPKmini2")
         self._add_card_midi(1)
-        detected, port, _ = detect_traktor_s4_port(str(self.proc), str(self.dev))
+        detected, port, _ = detect_dj_s4_port(str(self.proc), str(self.dev))
         self.assertTrue(detected)
         self.assertEqual(port, "hw:1,0")
 
@@ -215,41 +215,41 @@ class TestPortAutoDetection(unittest.TestCase):
         )
         # Keep the host's real `amidi -l` out of this hermetic check.
         empty = MagicMock(stdout="", stderr="", returncode=0)
-        with patch("traktor_s4_midi.subprocess.run", return_value=empty):
-            detected, port, _ = detect_traktor_s4_port(str(self.proc), str(self.dev))
+        with patch("dj_s4_midi.subprocess.run", return_value=empty):
+            detected, port, _ = detect_dj_s4_port(str(self.proc), str(self.dev))
         self.assertFalse(detected)
-        self.assertEqual(port, traktor_s4_midi.DEFAULT_PORT)
+        self.assertEqual(port, dj_s4_midi.DEFAULT_PORT)
 
     def test_resolve_port_replaces_stale_default(self):
         self._add_card_midi(1)
         self._add_node(1)
-        port = traktor_s4_midi.resolve_port("hw:0,0", str(self.proc), str(self.dev))
+        port = dj_s4_midi.resolve_port("hw:0,0", str(self.proc), str(self.dev))
         self.assertEqual(port, "hw:1,0")
 
     def test_resolve_port_keeps_explicit_working_port(self):
         self._add_card_midi(1)
         self._add_node(1)
-        port = traktor_s4_midi.resolve_port("hw:1,0", str(self.proc), str(self.dev))
+        port = dj_s4_midi.resolve_port("hw:1,0", str(self.proc), str(self.dev))
         self.assertEqual(port, "hw:1,0")
 
     def test_rawmidi_path_mapping(self):
         self._add_node(1)
         self.assertEqual(
-            traktor_s4_midi.rawmidi_path_for_port("hw:1,0", str(self.dev)),
+            dj_s4_midi.rawmidi_path_for_port("hw:1,0", str(self.dev)),
             str(self.dev / "snd" / "midiC1D0"),
         )
-        self.assertIsNone(traktor_s4_midi.rawmidi_path_for_port("hw:0,0", str(self.dev)))
+        self.assertIsNone(dj_s4_midi.rawmidi_path_for_port("hw:0,0", str(self.dev)))
 
     def test_port_from_rawmidi_path(self):
-        self.assertEqual(traktor_s4_midi.port_from_rawmidi_path("/dev/snd/midiC3D1"), "hw:3,1")
-        self.assertIsNone(traktor_s4_midi.port_from_rawmidi_path("/dev/umidi0.0"))
+        self.assertEqual(dj_s4_midi.port_from_rawmidi_path("/dev/snd/midiC3D1"), "hw:3,1")
+        self.assertIsNone(dj_s4_midi.port_from_rawmidi_path("/dev/umidi0.0"))
 
     def test_controller_repairs_stale_hardcoded_port(self):
-        with patch("traktor_s4_midi.detect_traktor_s4_port",
-                   return_value=(True, "hw:1,0", "Traktor Kontrol S4")), \
-             patch("traktor_s4_midi.rawmidi_path_for_port",
+        with patch("dj_s4_midi.detect_dj_s4_port",
+                   return_value=(True, "hw:1,0", "Kontrol S4")), \
+             patch("dj_s4_midi.rawmidi_path_for_port",
                    side_effect=lambda p, dev_root="/dev": "/dev/snd/midiC1D0" if p == "hw:1,0" else None):
-            ctrl = TraktorS4MidiController(port="hw:0,0")
+            ctrl = DJS4MidiController(port="hw:0,0")
         self.assertEqual(ctrl.port, "hw:1,0")
         self.assertEqual(ctrl.rawmidi_dev, "/dev/snd/midiC1D0")
 
@@ -263,9 +263,9 @@ class TestRawmidiReadLoop(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             fifo = Path(tmp) / "midi"
             os.mkfifo(fifo)
-            with patch("traktor_s4_midi.detect_traktor_s4_port",
+            with patch("dj_s4_midi.detect_dj_s4_port",
                        return_value=(False, "hw:99,0", "")):
-                ctrl = TraktorS4MidiController(port="hw:99,0")
+                ctrl = DJS4MidiController(port="hw:99,0")
             ctrl.rawmidi_dev = str(fifo)
             ctrl.running = True
             seen = []
@@ -293,12 +293,12 @@ class TestSingleInstanceLock(unittest.TestCase):
     """Two daemons used to race for the exclusive rawmidi node."""
 
     def test_second_lock_is_refused(self):
-        fd = traktor_s4_midi.acquire_single_instance_lock()
+        fd = dj_s4_midi.acquire_single_instance_lock()
         if fd == "unsupported":
             self.skipTest("platform has no fcntl")
         self.assertIsNotNone(fd)
         try:
-            self.assertIsNone(traktor_s4_midi.acquire_single_instance_lock())
+            self.assertIsNone(dj_s4_midi.acquire_single_instance_lock())
         finally:
             os.close(fd)
 
@@ -311,24 +311,24 @@ class TestFreeBSDMidiFallback(unittest.TestCase):
     """
 
     def test_freebsd_midi_devices_is_empty_off_freebsd(self):
-        if not traktor_s4_midi.IS_FREEBSD:
+        if not dj_s4_midi.IS_FREEBSD:
             self.assertEqual(freebsd_midi_devices(), [])
 
     def test_rawmidi_path_uses_umidi_on_freebsd(self):
-        if not traktor_s4_midi.IS_FREEBSD:
+        if not dj_s4_midi.IS_FREEBSD:
             self.skipTest("FreeBSD-only path")
-        ctrl = TraktorS4MidiController(port="hw:0,0")
+        ctrl = DJS4MidiController(port="hw:0,0")
         if ctrl.rawmidi_dev is not None:
             self.assertTrue(ctrl.rawmidi_dev.startswith("/dev/"))
             self.assertNotIn("/dev/snd/", ctrl.rawmidi_dev)
 
     def test_amidi_stream_stands_by_without_amidi(self):
         """No traceback, no subprocess, just a clean standby loop."""
-        ctrl = TraktorS4MidiController(port="hw:0,0")
+        ctrl = DJS4MidiController(port="hw:0,0")
         ctrl.running = True
-        with patch("traktor_s4_midi.subprocess.Popen") as mock_popen, \
-             patch("traktor_s4_midi.shutil.which", return_value=None), \
-             patch("traktor_s4_midi.os.path.exists", return_value=False):
+        with patch("dj_s4_midi.subprocess.Popen") as mock_popen, \
+             patch("dj_s4_midi.shutil.which", return_value=None), \
+             patch("dj_s4_midi.os.path.exists", return_value=False):
             import threading
             th = threading.Thread(target=ctrl.run_amidi_stream, daemon=True)
             th.start()

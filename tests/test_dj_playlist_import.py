@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Import Traktor playlists into the MP Audio Player playlist.
+"""Import DJ playlists into the MP Audio Player playlist.
 
 The importer must:
   * refuse to run until Music Folders are mapped
   * read every playlist from collection.nml, including nested folders
-  * resolve Traktor LOCATION records against the scanned Music Folders even
+  * resolve DJ LOCATION records against the scanned Music Folders even
     when the drive or mount point changed
   * validate every file path before writing a playlist
   * keep generated playlists separate from the Music Folder indexes
@@ -22,7 +22,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
 
-import traktor_playlist_importer as importer
+import dj_playlist_importer as importer
 
 
 def _collection_xml(entries):
@@ -51,7 +51,7 @@ def _collection_xml(entries):
     return ET.tostring(root, encoding="utf-8")
 
 
-class TestTraktorImporter(unittest.TestCase):
+class TestDJImporter(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
@@ -86,7 +86,7 @@ class TestTraktorImporter(unittest.TestCase):
             {"title": "B", "file": "b.flac", "dir": "/:Users/:dj/:Music/:", "key": "/:Users/:dj/:Music/:b.flac"},
             {"title": "C", "file": "c.flac", "dir": "/:Users/:dj/:Music/:", "key": "/:Users/:dj/:Music/:c.flac"},
         ]))
-        rows = importer.list_traktor_playlists(collection)
+        rows = importer.list_dj_playlists(collection)
         self.assertEqual([row["name"] for row in rows], ["House/Deep House", "Warm Up"])
         self.assertEqual(rows[0]["tracks"], 2)
 
@@ -121,10 +121,10 @@ class TestTraktorImporter(unittest.TestCase):
         catalog = json.loads((self.playlists / importer.CATALOG_NAME).read_text(encoding="utf-8"))
         names = sorted(item["name"] for item in catalog["playlists"])
         self.assertEqual(names, ["House/Deep House", "Warm Up"])
-        generated = json.loads((self.playlists / "TRAKTOR_House_Deep_House.json").read_text(encoding="utf-8"))
+        generated = json.loads((self.playlists / "DJAPP_House_Deep_House.json").read_text(encoding="utf-8"))
         self.assertEqual([t["path"] for t in generated],
                          [str(self.music / "a.flac"), str(self.music / "b.flac")])
-        self.assertTrue((self.playlists / "TRAKTOR_House_Deep_House.m3u8").is_file())
+        self.assertTrue((self.playlists / "DJAPP_House_Deep_House.m3u8").is_file())
 
     def test_missing_files_are_never_written(self):
         self.music.mkdir()
@@ -145,21 +145,21 @@ class TestTraktorImporter(unittest.TestCase):
             result = importer.generate_all(collection, interactive=False)
         self.assertTrue(result["ok"])
         self.assertGreaterEqual(result["missing"], 2)
-        generated = json.loads((self.playlists / "TRAKTOR_House_Deep_House.json").read_text(encoding="utf-8"))
+        generated = json.loads((self.playlists / "DJAPP_House_Deep_House.json").read_text(encoding="utf-8"))
         self.assertEqual([t["path"] for t in generated], [str(self.music / "a.flac")])
 
     def test_generated_playlists_require_their_files_to_exist(self):
         (self.playlists / importer.CATALOG_NAME).write_text(json.dumps({
             "version": 1,
             "playlists": [
-                {"name": "Ready", "slug": "Ready", "json": "TRAKTOR_Ready.json",
-                 "m3u8": "TRAKTOR_Ready.m3u8", "tracks": 1},
-                {"name": "Stale", "slug": "Stale", "json": "TRAKTOR_Stale.json",
-                 "m3u8": "TRAKTOR_Stale.m3u8", "tracks": 1},
+                {"name": "Ready", "slug": "Ready", "json": "DJ_Ready.json",
+                 "m3u8": "DJ_Ready.m3u8", "tracks": 1},
+                {"name": "Stale", "slug": "Stale", "json": "DJ_Stale.json",
+                 "m3u8": "DJ_Stale.m3u8", "tracks": 1},
             ],
         }), encoding="utf-8")
-        (self.playlists / "TRAKTOR_Ready.json").write_text("[]", encoding="utf-8")
-        (self.playlists / "TRAKTOR_Ready.m3u8").write_text("#EXTM3U\n", encoding="utf-8")
+        (self.playlists / "DJ_Ready.json").write_text("[]", encoding="utf-8")
+        (self.playlists / "DJ_Ready.m3u8").write_text("#EXTM3U\n", encoding="utf-8")
         with patch.object(importer, "playlists_dir", return_value=self.playlists):
             rows = importer.generated_playlists()
         self.assertEqual([row["name"] for row in rows], ["Ready"])
@@ -191,9 +191,9 @@ class TestTraktorImporter(unittest.TestCase):
         index = [{"name": "a.flac", "title": "A", "path": str(self.music / "a.flac"),
                   "folder": "MUSIC", "subpath": "a.flac", "ext": "FLAC"}]
         (self.playlists / "DJ_Tracks_MUSIC.json").write_text(json.dumps(index), encoding="utf-8")
-        stale_json = self.playlists / "TRAKTOR_Old_Set.json"
+        stale_json = self.playlists / "DJAPP_Old_Set.json"
         stale_json.write_text("[]", encoding="utf-8")
-        offline_json = self.playlists / "TRAKTOR_Warm_Up.json"
+        offline_json = self.playlists / "DJAPP_Warm_Up.json"
         offline_json.write_text("[]", encoding="utf-8")
         keep_json = self.playlists / "DJ_Tracks_ALL_MUSIC_FOLDERS.json"
         keep_json.write_text("[]", encoding="utf-8")
@@ -210,7 +210,7 @@ class TestTraktorImporter(unittest.TestCase):
             importer.generate_all(collection, interactive=False)
         self.assertFalse(stale_json.exists())
         self.assertTrue(keep_json.exists())
-        # Warm Up still exists in Traktor but none of its files were available,
+        # Warm Up still exists in DJ but none of its files were available,
         # so its last generated copy is kept rather than deleted.
         self.assertTrue(offline_json.exists())
 

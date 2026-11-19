@@ -51,7 +51,7 @@ def write_wide_tracklist(path: Path) -> Path:
         "==================================================",
         "Title: A Deliberately Long Release Title For Clipping",
         "==================================================",
-        "TRACKLIST (Extracted from Traktor Database)",
+        "TRACKLIST (Extracted from DJ Database)",
         "==================================================",
     ]
     lines += [

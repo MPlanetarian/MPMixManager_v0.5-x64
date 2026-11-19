@@ -9,8 +9,8 @@ Storage Folders:
 Ensures every FLAC mix has a corresponding valid tracklist file.
 If missing or dummy fallback, searches:
 1) Existing valid tracklists in any of the 3 archive storage locations
-2) Traktor history database files (*.nml)
-If not in Traktor, skips to the next FLAC immediately.
+2) DJ history database files (*.nml)
+If not in DJ, skips to the next FLAC immediately.
 """
 import os
 import re
@@ -23,7 +23,7 @@ ARCHIVE_FOLDERS = [
     str(Path(os.environ.get("MIX_ARCHIVE_DIR", "") or (Path.home() / "GoogleDrive/MIX_ARCHIVE")) / "FLAC_CONVERTED_OUTPUTS")
 ]
 
-TRAKTOR_HISTORY_DIR = "/run/media/mplanetarian/WD BLACK B/MIX_ARCHIVE/Traktor 3.11.1/History"
+DJ_HISTORY_DIR = "/run/media/mplanetarian/WD BLACK B/MIX_ARCHIVE/DJ 3.11.1/History"
 CACHE_DIR = str(Path.home() / ".cache/rclone/vfs/google3/MIX_ARCHIVE/FLAC_CONVERTED_OUTPUTS")
 
 
@@ -39,8 +39,8 @@ def is_valid_tracklist_content(text):
     return len(track_lines) >= 2
 
 
-def parse_traktor_nml(nml_path):
-    """Parse Traktor NML file and extract ordered tracklist."""
+def parse_dj_nml(nml_path):
+    """Parse DJ NML file and extract ordered tracklist."""
     try:
         tree = ET.parse(nml_path)
         root = tree.getroot()
@@ -109,7 +109,7 @@ def format_tracklist_file(title, flac_filename, tracks, conversion_date=""):
         f"Source Files Merged/Converted (1 file(s)):",
         f" - {flac_filename}",
         "==================================================",
-        "TRACKLIST (Extracted from Traktor Database)",
+        "TRACKLIST (Extracted from DJ Database)",
         "=================================================="
     ]
     for idx, trk in enumerate(tracks, start=1):
@@ -123,16 +123,16 @@ def main():
     print("      MIX ARCHIVE TRACKLIST AUDIT & RESOLUTION      ")
     print("=" * 60)
 
-    # 1. Index Traktor History files
-    print("\n[1/4] Indexing Traktor History files...")
+    # 1. Index DJ History files
+    print("\n[1/4] Indexing DJ History files...")
     hist_files = []
-    if os.path.isdir(TRAKTOR_HISTORY_DIR):
+    if os.path.isdir(DJ_HISTORY_DIR):
         hist_files = [
-            os.path.join(TRAKTOR_HISTORY_DIR, f)
-            for f in os.listdir(TRAKTOR_HISTORY_DIR)
+            os.path.join(DJ_HISTORY_DIR, f)
+            for f in os.listdir(DJ_HISTORY_DIR)
             if f.endswith(".nml")
         ]
-    print(f"Found {len(hist_files)} Traktor history files in {TRAKTOR_HISTORY_DIR}")
+    print(f"Found {len(hist_files)} DJ history files in {DJ_HISTORY_DIR}")
 
     hist_by_dt = {}
     hist_by_date = {}
@@ -204,8 +204,8 @@ def main():
     total_audited = 0
     total_already_valid = 0
     total_resolved_from_archive = 0
-    total_resolved_from_traktor = 0
-    total_skipped_no_traktor = 0
+    total_resolved_from_dj = 0
+    total_skipped_no_dj = 0
 
     for fld in ARCHIVE_FOLDERS:
         if not os.path.isdir(fld):
@@ -263,7 +263,7 @@ def main():
                         resolution_source = f"archive match ({k})"
                         break
 
-            # Strategy 4: Search Traktor History
+            # Strategy 4: Search DJ History
             if not content_to_write:
                 # Extract date and time
                 m_dt = re.search(r"(\d{4}-\d{2}-\d{2})_(\d{1,2})h(\d{2})m", stem)
@@ -286,11 +286,11 @@ def main():
                             matched_date = date_str
 
                 if matched_nml:
-                    tracks = parse_traktor_nml(matched_nml)
+                    tracks = parse_dj_nml(matched_nml)
                     if len(tracks) >= 2:
                         readable_title = stem.replace("_", " ")
                         content_to_write = format_tracklist_file(readable_title, fl, tracks, matched_date)
-                        resolution_source = f"Traktor database ({os.path.basename(matched_nml)})"
+                        resolution_source = f"DJ database ({os.path.basename(matched_nml)})"
 
             # Apply resolution or skip
             if content_to_write:
@@ -303,16 +303,16 @@ def main():
                                 f.write(content_to_write)
                         except Exception:
                             pass
-                    if "Traktor" in resolution_source:
-                        total_resolved_from_traktor += 1
+                    if "DJ" in resolution_source:
+                        total_resolved_from_dj += 1
                     else:
                         total_resolved_from_archive += 1
                     print(f"  [RESOLVED] {fl} -> {resolution_source}")
                 except Exception as e:
                     print(f"  [ERROR WRITING] {txt_path}: {e}", file=sys.stderr)
             else:
-                total_skipped_no_traktor += 1
-                # User constraint: "if it's not in Traktor then skip and process the next flac immediately"
+                total_skipped_no_dj += 1
+                # User constraint: "if it's not in DJ then skip and process the next flac immediately"
                 # If a dummy fallback was previously created, remove it so it's not falsely presented as a tracklist
                 for dp in ([cache_txt_path, txt_path] if cache_txt_path else [txt_path]):
                     if dp and os.path.isfile(dp):
@@ -323,7 +323,7 @@ def main():
                                 os.remove(dp)
                         except Exception:
                             pass
-                print(f"  [SKIPPED] {fl} (not in Traktor)")
+                print(f"  [SKIPPED] {fl} (not in DJ)")
 
     print("\n" + "=" * 60)
     print("AUDIT & RESOLUTION COMPLETE")
@@ -331,8 +331,8 @@ def main():
     print(f"Total FLAC files audited:              {total_audited}")
     print(f"Already had valid tracklists:          {total_already_valid}")
     print(f"Resolved from counterpart archives:    {total_resolved_from_archive}")
-    print(f"Generated directly from Traktor NML:   {total_resolved_from_traktor}")
-    print(f"Skipped (not found in Traktor/archive):{total_skipped_no_traktor}")
+    print(f"Generated directly from DJ NML:   {total_resolved_from_dj}")
+    print(f"Skipped (not found in DJ/archive):{total_skipped_no_dj}")
     print("=" * 60)
 
 

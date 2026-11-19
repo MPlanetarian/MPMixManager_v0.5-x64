@@ -154,8 +154,8 @@ def _ui(mixes, playlist_path=""):
     ui.inspector_hud_active = False
     ui.favorites_clear_confirm = False
     ui.fav_export_mode = ""
-    ui.traktor_offer_paths = None
-    ui.traktor_input_mode = ""
+    ui.dj_offer_paths = None
+    ui.dj_input_mode = ""
     ui._last_playlist_dir = ""
     return ui
 

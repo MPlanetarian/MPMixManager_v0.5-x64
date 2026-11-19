@@ -87,8 +87,8 @@ class TestRetroLinuxMemoriesTheme(unittest.TestCase):
         self.assertEqual(mwc.THEME_ALIASES.get("retro_linux_memories"), "retro_linux_memories")
         self.assertEqual(mwc.THEME_ALIASES.get("veracrypt"), "retro_linux_memories")
 
-    def test_traktor_monitor_registration(self):
-        import traktor_monitor as tm
+    def test_dj_monitor_registration(self):
+        import dj_monitor as tm
         self.assertIn("retro_linux_memories", tm.THEMES)
         theme_row = tm.THEMES["retro_linux_memories"]
         self.assertEqual(theme_row[0], "Retro Linux Memories")

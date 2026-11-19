@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-scripts/generate_traktor_playlist_from_history.py - Traktor Playlist Generator
+scripts/generate_dj_playlist_from_history.py - DJ Playlist Generator
 
-Builds a Traktor playlist from a Traktor Pro History (.nml) session and inserts
+Builds a DJ playlist from a DJ Pro History (.nml) session and inserts
 it into collection.nml under the default $ROOT playlist folder.
 
 The same helpers are imported by MP_Fav_Playlist_Track_Exporter.py so the
@@ -15,15 +15,15 @@ written once. When the named playlist already exists, only tracks that are
 not already in it are added. Duplicate rows are removed after that write.
 
 Interactive use (Manager menu option 17 > 3):
-    python3 scripts/generate_traktor_playlist_from_history.py
+    python3 scripts/generate_dj_playlist_from_history.py
 
 Headless use:
-    python3 scripts/generate_traktor_playlist_from_history.py \
+    python3 scripts/generate_dj_playlist_from_history.py \
         --history-id history_2026y07m20d_08h01m28s.nml \
         --playlist-name "Favourites 2026-11-12"
 
 Artist playlist (Manager Tracklist menu):
-    python3 scripts/generate_traktor_playlist_from_history.py \
+    python3 scripts/generate_dj_playlist_from_history.py \
         --artist "Airbase" --playlist-name "Airbase — Collection"
 """
 
@@ -65,7 +65,7 @@ CONFIG_CANDIDATES = (
 
 
 # ------------------------------------------------------------------------------
-# Configuration and Traktor discovery
+# Configuration and DJ discovery
 # ------------------------------------------------------------------------------
 def load_config() -> Dict[str, str]:
     """Read config.env values, then let real environment variables win."""
@@ -94,14 +94,14 @@ def _expand(value: Optional[str]) -> str:
 
 
 def _candidate_dirs(cfg: Dict[str, str]) -> List[str]:
-    """Likely roots that hold a Traktor user folder or synced History folder."""
+    """Likely roots that hold a DJ user folder or synced History folder."""
     candidates: List[str] = []
     for key in (
-        "TRAKTOR_HISTORY_DIR",
-        "TRAKTOR_AUDIO_ROOT",
+        "DJ_HISTORY_DIR",
+        "DJ_AUDIO_ROOT",
         "MIX_ARCHIVE_DIR",
-        "TRAKTOR_SMB_MOUNT",
-        "TRAKTOR_NFS_MOUNT",
+        "DJ_SMB_MOUNT",
+        "DJ_NFS_MOUNT",
     ):
         value = _expand(cfg.get(key, ""))
         if value:
@@ -125,13 +125,13 @@ def _candidate_dirs(cfg: Dict[str, str]) -> List[str]:
 
 def find_collection_path(cfg: Optional[Dict[str, str]] = None) -> Optional[Path]:
     cfg = cfg or load_config()
-    configured = _expand(cfg.get("TRAKTOR_COLLECTION_PATH", ""))
+    configured = _expand(cfg.get("DJ_COLLECTION_PATH", ""))
     if configured and os.path.isfile(configured):
         return Path(configured).resolve()
 
     patterns = [
-        "Traktor*/collection.nml",
-        "Native Instruments/Traktor*/collection.nml",
+        "DJ*/collection.nml",
+        "Native Instruments/DJ*/collection.nml",
         "*/History/../collection.nml",
     ]
     found: List[Path] = []
@@ -146,13 +146,13 @@ def find_collection_path(cfg: Optional[Dict[str, str]] = None) -> Optional[Path]
     return found[0]
 
 
-def find_traktor_user_dir(cfg: Optional[Dict[str, str]] = None) -> Optional[Path]:
+def find_dj_user_dir(cfg: Optional[Dict[str, str]] = None) -> Optional[Path]:
     collection = find_collection_path(cfg)
     if collection:
         return collection.parent
     dirs: List[Path] = []
     for root in _candidate_dirs(cfg or load_config()):
-        for match in glob.glob(os.path.join(root, "Traktor*")):
+        for match in glob.glob(os.path.join(root, "DJ*")):
             path = Path(match)
             if path.is_dir() and (path / "History").is_dir():
                 dirs.append(path)
@@ -168,15 +168,15 @@ def find_history_dirs(
 ) -> List[Path]:
     cfg = cfg or load_config()
     candidates: List[str] = []
-    configured = _expand(cfg.get("TRAKTOR_HISTORY_DIR", ""))
+    configured = _expand(cfg.get("DJ_HISTORY_DIR", ""))
     if configured:
         candidates.append(configured)
-    user_dir = find_traktor_user_dir(cfg)
+    user_dir = find_dj_user_dir(cfg)
     if user_dir:
         candidates.append(str(user_dir / "History"))
     for root in _candidate_dirs(cfg):
-        candidates.extend(glob.glob(os.path.join(root, "Traktor*/History")))
-        candidates.extend(glob.glob(os.path.join(root, "**", "Traktor*/History"), recursive=False))
+        candidates.extend(glob.glob(os.path.join(root, "DJ*/History")))
+        candidates.extend(glob.glob(os.path.join(root, "**", "DJ*/History"), recursive=False))
     candidates.extend(_expand(value) for value in (extra or []))
     unique: List[Path] = []
     for value in candidates:
@@ -246,9 +246,9 @@ def list_history_files(
 def preferred_history_dirs(
     collection_path: Optional[Path], cfg: Optional[Dict[str, str]] = None
 ) -> List[str]:
-    """History folders that belong to the Traktor collection being written.
+    """History folders that belong to the DJ collection being written.
 
-    When the collection has a sibling History folder (a normal Traktor user
+    When the collection has a sibling History folder (a normal DJ user
     folder, or the folder a synced history tree was copied into) that folder is
     authoritative. Otherwise every discovered History folder is used.
     """
@@ -296,29 +296,29 @@ def resolve_history_file(
     return None
 
 
-def is_traktor_running() -> bool:
+def is_dj_running() -> bool:
     if not sys.platform.startswith(("darwin", "linux", "freebsd")):
         return False
     try:
-        return bool(subprocess.check_output(["pgrep", "-x", "Traktor"], stderr=subprocess.DEVNULL).strip())
+        return bool(subprocess.check_output(["pgrep", "-x", "DJ"], stderr=subprocess.DEVNULL).strip())
     except Exception:
         return False
 
 
-def quit_traktor() -> bool:
-    """Close Traktor cleanly so it flushes collection.nml before we write it."""
-    if not is_traktor_running():
+def quit_dj() -> bool:
+    """Close DJ cleanly so it flushes collection.nml before we write it."""
+    if not is_dj_running():
         return True
     if sys.platform == "darwin":
         try:
-            subprocess.run(["osascript", "-e", 'tell application "Traktor" to quit'], check=False)
+            subprocess.run(["osascript", "-e", 'tell application "DJ" to quit'], check=False)
         except Exception:
             pass
         for _ in range(20):
-            if not is_traktor_running():
+            if not is_dj_running():
                 return True
             time.sleep(0.5)
-    return not is_traktor_running()
+    return not is_dj_running()
 
 
 # ------------------------------------------------------------------------------
@@ -331,8 +331,8 @@ def _decode_name(value: str) -> str:
         return str(value or "")
 
 
-def traktor_fs_path(volume: str, directory: str, filename: str) -> str:
-    """Turn a Traktor LOCATION into a filesystem path. Nothing is deleted."""
+def dj_fs_path(volume: str, directory: str, filename: str) -> str:
+    """Turn a DJ LOCATION into a filesystem path. Nothing is deleted."""
     filename = _decode_name(filename)
     directory = _decode_name(directory)
     folder = directory.replace("/:", "/")
@@ -398,7 +398,7 @@ def _make_track(entry: ET.Element) -> Dict[str, Any]:
         "entry_elem": entry,
         "file": _decode_name(filename),
         "basename": os.path.basename(_decode_name(filename)).casefold(),
-        "fs_path": traktor_fs_path(volume, directory, filename),
+        "fs_path": dj_fs_path(volume, directory, filename),
     }
 
 
@@ -649,19 +649,19 @@ def _same_file(left: Path, right: Path) -> bool:
         return str(left) == str(right)
 
 
-def _blocked_by_running_traktor(
-    path: Path, cfg: Optional[Dict[str, str]], close_traktor: bool
+def _blocked_by_running_dj(
+    path: Path, cfg: Optional[Dict[str, str]], close_dj: bool
 ) -> Optional[str]:
-    """Refuse to rewrite the live collection while Traktor still has it open."""
+    """Refuse to rewrite the live collection while DJ still has it open."""
     live = find_collection_path(cfg)
-    if live is None or not _same_file(path, live) or not is_traktor_running():
+    if live is None or not _same_file(path, live) or not is_dj_running():
         return None
-    if close_traktor and quit_traktor():
+    if close_dj and quit_dj():
         return None
-    if close_traktor:
-        return "Could not close Traktor. Close it manually and try again."
+    if close_dj:
+        return "Could not close DJ. Close it manually and try again."
     return (
-        "Traktor is running. Close Traktor cleanly so collection.nml is not "
+        "DJ is running. Close DJ cleanly so collection.nml is not "
         "overwritten, then try again."
     )
 
@@ -1014,7 +1014,7 @@ def add_missing_tracks_to_playlist(
 def remove_duplicate_playlist_entries(collection_path: str, playlist_name: str) -> Dict[str, Any]:
     """Remove later copies of the same track from a playlist that was just written.
 
-    Identity is the Traktor PRIMARYKEY. The first row stays. The collection
+    Identity is the DJ PRIMARYKEY. The first row stays. The collection
     file is rewritten only when at least one duplicate is removed.
     """
     name = _clean_label(playlist_name)
@@ -1124,7 +1124,7 @@ def _playlist_name_taken(collection_path: str, playlist_name: str, except_path: 
 def _prepare_collection_write(
     collection_path: Optional[str],
     cfg: Optional[Dict[str, str]],
-    close_traktor: bool,
+    close_dj: bool,
 ) -> Tuple[Optional[Path], Optional[Dict[str, Any]]]:
     cfg = cfg or load_config()
     path = _collection_target(collection_path, cfg)
@@ -1133,11 +1133,11 @@ def _prepare_collection_write(
             "ok": False,
             "reason": "collection",
             "message": (
-                "collection.nml was not found. Set TRAKTOR_COLLECTION_PATH in "
-                "config.env, or open Traktor once so the collection is created."
+                "collection.nml was not found. Set DJ_COLLECTION_PATH in "
+                "config.env, or open DJ once so the collection is created."
             ),
         }
-    blocked = _blocked_by_running_traktor(path, cfg, close_traktor)
+    blocked = _blocked_by_running_dj(path, cfg, close_dj)
     if blocked:
         return None, {
             "ok": False,
@@ -1153,7 +1153,7 @@ def create_artist_playlist(
     playlist_name: str,
     collection_path: Optional[str] = None,
     cfg: Optional[Dict[str, str]] = None,
-    close_traktor: bool = False,
+    close_dj: bool = False,
 ) -> Dict[str, Any]:
     """Scan the collection and write one playlist for this artist.
 
@@ -1176,7 +1176,7 @@ def create_artist_playlist(
             "reason": "name",
             "message": "Artist and playlist names must be 200 characters or fewer.",
         }
-    path, blocked = _prepare_collection_write(collection_path, cfg, close_traktor)
+    path, blocked = _prepare_collection_write(collection_path, cfg, close_dj)
     if blocked is not None or path is None:
         return blocked or {"ok": False, "reason": "collection", "message": "collection.nml was not found."}
     exists = _playlist_name_taken(str(path), playlist)
@@ -1196,7 +1196,7 @@ def create_artist_playlist(
                 "reason": "unchanged",
                 "message": (
                     f"Playlist '{playlist}' was left as it is. "
-                    f"No tracks in the Traktor collection use the artist name '{artist}'."
+                    f"No tracks in the DJ collection use the artist name '{artist}'."
                 ),
                 "artist": artist,
                 "playlist": playlist,
@@ -1209,7 +1209,7 @@ def create_artist_playlist(
         return {
             "ok": False,
             "reason": "no_match",
-            "message": f"No tracks in the Traktor collection use the artist name '{artist}'.",
+            "message": f"No tracks in the DJ collection use the artist name '{artist}'.",
             "artist": artist,
             "playlist": playlist,
             "matched": 0,
@@ -1336,7 +1336,7 @@ def rename_playlist(
     new_name: str,
     collection_path: Optional[str] = None,
     cfg: Optional[Dict[str, str]] = None,
-    close_traktor: bool = False,
+    close_dj: bool = False,
 ) -> Dict[str, Any]:
     """Rename one playlist node. Audio files in the collection are not touched."""
     updated = _clean_label(new_name)
@@ -1348,7 +1348,7 @@ def rename_playlist(
             "reason": "name",
             "message": "Playlist names must be 200 characters or fewer.",
         }
-    path, blocked = _prepare_collection_write(collection_path, cfg, close_traktor)
+    path, blocked = _prepare_collection_write(collection_path, cfg, close_dj)
     if blocked is not None or path is None:
         return blocked or {"ok": False, "reason": "collection", "message": "collection.nml was not found."}
     try:
@@ -1400,10 +1400,10 @@ def remove_playlist(
     playlist_path: str,
     collection_path: Optional[str] = None,
     cfg: Optional[Dict[str, str]] = None,
-    close_traktor: bool = False,
+    close_dj: bool = False,
 ) -> Dict[str, Any]:
-    """Remove one playlist node. Tracks stay in the Traktor collection."""
-    path, blocked = _prepare_collection_write(collection_path, cfg, close_traktor)
+    """Remove one playlist node. Tracks stay in the DJ collection."""
+    path, blocked = _prepare_collection_write(collection_path, cfg, close_dj)
     if blocked is not None or path is None:
         return blocked or {"ok": False, "reason": "collection", "message": "collection.nml was not found."}
     try:
@@ -1516,7 +1516,7 @@ def collection_status(cfg: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     return {
         "ok": path is not None,
         "path": str(path) if path else "",
-        "running": is_traktor_running(),
+        "running": is_dj_running(),
     }
 
 
@@ -1641,7 +1641,7 @@ def _dispatch_artist_tools(args: argparse.Namespace) -> Optional[int]:
             args.playlist_name or "",
             collection_path=str(path),
             cfg=cfg,
-            close_traktor=bool(args.close_traktor),
+            close_dj=bool(args.close_dj),
         )
         return _emit_result(result, bool(args.json))
 
@@ -1651,7 +1651,7 @@ def _dispatch_artist_tools(args: argparse.Namespace) -> Optional[int]:
             args.playlist_name or "",
             collection_path=str(path),
             cfg=cfg,
-            close_traktor=bool(args.close_traktor),
+            close_dj=bool(args.close_dj),
         )
         return _emit_result(result, bool(args.json))
 
@@ -1660,13 +1660,13 @@ def _dispatch_artist_tools(args: argparse.Namespace) -> Optional[int]:
             args.remove_playlist,
             collection_path=str(path),
             cfg=cfg,
-            close_traktor=bool(args.close_traktor),
+            close_dj=bool(args.close_dj),
         )
         return _emit_result(result, bool(args.json))
     return None
 
 
-def build_traktor_playlist(
+def build_dj_playlist(
     favorite_paths: Sequence[str],
     history_id: Optional[str] = None,
     playlist_name: Optional[str] = None,
@@ -1674,7 +1674,7 @@ def build_traktor_playlist(
     history_dirs: Optional[Iterable[str]] = None,
     cfg: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
-    """Create a Traktor playlist for the files that exist in Traktor.
+    """Create a DJ playlist for the files that exist in DJ.
 
     The history file is the session the user prepared before exporting, so its
     key/BPM metadata wins. Favorites that are not in that session are looked up
@@ -1686,7 +1686,7 @@ def build_traktor_playlist(
         return {
             "ok": False,
             "reason": "collection",
-            "message": "collection.nml was not found. Run Traktor once and choose the collection path first.",
+            "message": "collection.nml was not found. Run DJ once and choose the collection path first.",
         }
     history = resolve_history_file(
         history_id,
@@ -1697,20 +1697,20 @@ def build_traktor_playlist(
         return {
             "ok": False,
             "reason": "history",
-            "message": "No Traktor History (.nml) files are available. Sync your Traktor history first.",
+            "message": "No DJ History (.nml) files are available. Sync your DJ history first.",
         }
-    if is_traktor_running():
+    if is_dj_running():
         return {
             "ok": False,
             "reason": "running",
-            "message": "Traktor is running. Close Traktor cleanly, then create the playlist.",
+            "message": "DJ is running. Close DJ cleanly, then create the playlist.",
         }
 
     try:
         _, history_index = parse_history_file(str(history))
         collection_index = load_collection_index(str(collection))
     except Exception as exc:
-        return {"ok": False, "reason": "parse", "message": f"Could not parse Traktor data: {exc}"}
+        return {"ok": False, "reason": "parse", "message": f"Could not parse DJ data: {exc}"}
 
     matched: List[Dict[str, Any]] = []
     missing: List[str] = []
@@ -1743,7 +1743,7 @@ def build_traktor_playlist(
             "ok": False,
             "reason": "no_match",
             "message": (
-                f"None of the favorites were found in {history.name} or the Traktor collection. "
+                f"None of the favorites were found in {history.name} or the DJ collection. "
                 "Choose a history file from the session where those tracks were imported."
             ),
             "missing": missing,
@@ -1789,7 +1789,7 @@ def interactive_main() -> int:
 
     os.system("clear 2>/dev/null || true")
     print(f"{BOLD}{MAGENTA}{'=' * 83}{NC}")
-    print(f"{BOLD}{MAGENTA}     TRAKTOR PLAYLIST FROM HISTORY FILES - KEY SORTED / DECKS READY        {NC}")
+    print(f"{BOLD}{MAGENTA}     DJ PLAYLIST FROM HISTORY FILES - KEY SORTED / DECKS READY        {NC}")
     print(f"{BOLD}{MAGENTA}{'=' * 83}{NC}")
     print(f"  {BOLD}Collection:{NC}   {collection or 'Not found'}")
     for directory in history_dirs:
@@ -1798,10 +1798,10 @@ def interactive_main() -> int:
     print(f"{BLUE}{'-' * 83}{NC}\n")
 
     if not collection:
-        print(f"{YELLOW}No collection.nml found. Set TRAKTOR_COLLECTION_PATH in config.env.{NC}")
+        print(f"{YELLOW}No collection.nml found. Set DJ_COLLECTION_PATH in config.env.{NC}")
         return 1
     if not history_files:
-        print(f"{YELLOW}No Traktor History (.nml) files found. Sync the Traktor history first.{NC}")
+        print(f"{YELLOW}No DJ History (.nml) files found. Sync the DJ history first.{NC}")
         return 1
 
     for index, row in enumerate(history_files, 1):
@@ -1830,7 +1830,7 @@ def interactive_main() -> int:
     print(f"{BOLD}{CYAN}History: {history.name}  ({len(session)} tracks){NC}\n")
     _print_session(sorted_session)
     print(f"\n{BOLD}{YELLOW}First four tracks in Key Ascending order are ready for Decks A-D.{NC}")
-    commit = input("Generate this playlist in Traktor now? [Y/n]: ").strip().lower()
+    commit = input("Generate this playlist in DJ now? [Y/n]: ").strip().lower()
     if commit not in ("", "y", "yes"):
         print(f"{YELLOW}Cancelled.{NC}")
         return 0
@@ -1841,13 +1841,13 @@ def interactive_main() -> int:
             f"SOF Mix {match.group(1)}-{match.group(2)}-{match.group(3)} "
             f"({match.group(4)}h{match.group(5)}m)"
         )
-    name = input(f"Traktor playlist name [{default_name}]: ").strip() or default_name
+    name = input(f"DJ playlist name [{default_name}]: ").strip() or default_name
 
-    if is_traktor_running():
-        print(f"{YELLOW}Traktor is running. It must be closed so collection.nml is not overwritten.{NC}")
-        if input("Close Traktor now? [Y/n]: ").strip().lower() in ("", "y", "yes"):
-            if not quit_traktor():
-                print(f"{RED}Could not close Traktor. Close it manually and try again.{NC}")
+    if is_dj_running():
+        print(f"{YELLOW}DJ is running. It must be closed so collection.nml is not overwritten.{NC}")
+        if input("Close DJ now? [Y/n]: ").strip().lower() in ("", "y", "yes"):
+            if not quit_dj():
+                print(f"{RED}Could not close DJ. Close it manually and try again.{NC}")
                 return 1
         else:
             return 1
@@ -1859,19 +1859,19 @@ def interactive_main() -> int:
     )
     if ok:
         print(f"\n{BOLD}{GREEN}{message}{NC}")
-        print(f"{GREEN}Open Traktor and the playlist will be in the default Playlists folder.{NC}")
+        print(f"{GREEN}Open DJ and the playlist will be in the default Playlists folder.{NC}")
         return 0
     print(f"\n{RED}{message}{NC}")
     return 1
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
-    parser = argparse.ArgumentParser(description="Generate a Traktor playlist from a History .nml session.")
-    parser.add_argument("--version-only", action="store_true", help="Print the detected Traktor version and exit")
+    parser = argparse.ArgumentParser(description="Generate a DJ playlist from a History .nml session.")
+    parser.add_argument("--version-only", action="store_true", help="Print the detected DJ version and exit")
     parser.add_argument("--list-history", action="store_true", help="List available history .nml files and exit")
     parser.add_argument("--json", action="store_true", help="Machine-readable output for --list-history")
     parser.add_argument("--history-id", "-H", help="History index, file name, ID or path")
-    parser.add_argument("--playlist-name", "-n", help="Name of the Traktor playlist")
+    parser.add_argument("--playlist-name", "-n", help="Name of the DJ playlist")
     parser.add_argument("--collection", help="Path to collection.nml")
     parser.add_argument("--history-dir", action="append", default=[], help="Extra History directory (repeatable)")
     parser.add_argument("--track", "-t", action="append", default=[], help="File to include (repeatable)")
@@ -1882,13 +1882,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--remove-playlist", default=None, help="Path of the playlist to remove")
     parser.add_argument("--show-playlist", default=None, help="Print the tracks in one playlist")
     parser.add_argument("--suggest-artists", default=None, help="List collection artist names close to this text")
-    parser.add_argument("--collection-status", action="store_true", help="Print the collection path and whether Traktor is running")
-    parser.add_argument("--close-traktor", action="store_true", help="Ask Traktor to quit before writing the live collection")
+    parser.add_argument("--collection-status", action="store_true", help="Print the collection path and whether DJ is running")
+    parser.add_argument("--close-dj", action="store_true", help="Ask DJ to quit before writing the live collection")
     args = parser.parse_args(argv)
 
     if args.version_only:
-        user_dir = find_traktor_user_dir()
-        match = re.search(r"Traktor\s+([0-9][0-9.]*)", str(user_dir or ""))
+        user_dir = find_dj_user_dir()
+        match = re.search(r"DJ\s+([0-9][0-9.]*)", str(user_dir or ""))
         print(match.group(1) if match else "3")
         return 0
 
@@ -1910,7 +1910,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             history = resolve_history_file(args.history_id, args.history_dir)
             if not history:
                 print(
-                    "A Traktor History file is required. Pass --history-id or sync the history first.",
+                    "A DJ History file is required. Pass --history-id or sync the history first.",
                     file=sys.stderr,
                 )
                 return 1
@@ -1925,10 +1925,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             paths = list(args.track)
             history = resolve_history_file(args.history_id, args.history_dir)
             if args.history_id and not history:
-                print(f"Traktor history '{args.history_id}' was not found.", file=sys.stderr)
+                print(f"DJ history '{args.history_id}' was not found.", file=sys.stderr)
                 return 1
 
-        result = build_traktor_playlist(
+        result = build_dj_playlist(
             paths,
             history_id=str(history) if history else args.history_id,
             playlist_name=args.playlist_name,

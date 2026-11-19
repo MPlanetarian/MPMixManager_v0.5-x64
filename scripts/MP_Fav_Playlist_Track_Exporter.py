@@ -4,7 +4,7 @@ scripts/MP_Fav_Playlist_Track_Exporter.py - DJ Set Preparation: Favorites Export
 
 Copies the MP Audio Player Favorites playlist to a folder on the local drive or
 to an SMB share, writes a tracklist in the MP Mix Manager format, writes an
-m3u8 playlist, and (optionally) creates a Traktor playlist from a History file.
+m3u8 playlist, and (optionally) creates a DJ playlist from a History file.
 
 Every copy is size-checked, and at least one copied track must decode as audio
 before the export is reported as successful. SMB exports fetch one file back
@@ -332,14 +332,14 @@ def clean_track_label(artist: str, title: str) -> str:
 # ------------------------------------------------------------------------------
 def smb_settings(cfg: Optional[Dict[str, str]] = None) -> Dict[str, str]:
     cfg = cfg or load_config()
-    host = _expand(cfg.get("FAV_EXPORT_SMB_HOST") or cfg.get("TRAKTOR_SMB_HOST") or cfg.get("MUSIC_SMB_HOST") or "")
-    share = _expand(cfg.get("FAV_EXPORT_SMB_SHARE") or cfg.get("TRAKTOR_SMB_SHARE") or "")
-    user = _expand(cfg.get("FAV_EXPORT_SMB_USER") or cfg.get("TRAKTOR_SMB_USER") or cfg.get("MUSIC_SMB_USER") or "")
+    host = _expand(cfg.get("FAV_EXPORT_SMB_HOST") or cfg.get("DJ_SMB_HOST") or cfg.get("MUSIC_SMB_HOST") or "")
+    share = _expand(cfg.get("FAV_EXPORT_SMB_SHARE") or cfg.get("DJ_SMB_SHARE") or "")
+    user = _expand(cfg.get("FAV_EXPORT_SMB_USER") or cfg.get("DJ_SMB_USER") or cfg.get("MUSIC_SMB_USER") or "")
     password = _expand(
-        cfg.get("FAV_EXPORT_SMB_PASSWORD") or cfg.get("TRAKTOR_SMB_PASSWORD") or cfg.get("MUSIC_SMB_PASSWORD") or ""
+        cfg.get("FAV_EXPORT_SMB_PASSWORD") or cfg.get("DJ_SMB_PASSWORD") or cfg.get("MUSIC_SMB_PASSWORD") or ""
     )
     subpath = _expand(cfg.get("FAV_EXPORT_SMB_PATH") or "")
-    mount = _expand(cfg.get("FAV_EXPORT_SMB_MOUNT") or cfg.get("TRAKTOR_SMB_MOUNT") or "")
+    mount = _expand(cfg.get("FAV_EXPORT_SMB_MOUNT") or cfg.get("DJ_SMB_MOUNT") or "")
     return {
         "host": host,
         "share": share,
@@ -607,7 +607,7 @@ def build_tracklist(tracks: Sequence[Dict[str, Any]], playlist_name: str,
         "Source:        MP Audio Player Favorites Playlist",
     ]
     if history_name:
-        lines.append(f"Traktor Source: {history_name}")
+        lines.append(f"DJ Source: {history_name}")
     lines.extend(
         [
             f"Total Tracks:  {len(tracks)}",
@@ -654,74 +654,74 @@ def write_m3u(path: Path, playlist_name: str, entries: Sequence[Dict[str, Any]])
 
 
 # ------------------------------------------------------------------------------
-# Traktor bridge
+# DJ bridge
 # ------------------------------------------------------------------------------
-def traktor_ready(cfg: Optional[Dict[str, str]] = None) -> Tuple[bool, str]:
-    """True when Traktor collection + synced History files are available."""
+def dj_ready(cfg: Optional[Dict[str, str]] = None) -> Tuple[bool, str]:
+    """True when DJ collection + synced History files are available."""
     cfg = cfg or load_config()
-    if str(cfg.get("TRAKTOR_ENABLED", "auto")).strip().lower() in ("false", "0", "no", "off", "disabled"):
-        return False, "Traktor is disabled in config.env (TRAKTOR_ENABLED=false)."
+    if str(cfg.get("DJ_ENABLED", "auto")).strip().lower() in ("false", "0", "no", "off", "disabled"):
+        return False, "DJ is disabled in config.env (DJ_ENABLED=false)."
     try:
         scripts = str(SCRIPT_DIR)
         if scripts not in sys.path:
             sys.path.insert(0, scripts)
-        import generate_traktor_playlist_from_history as traktor
+        import generate_dj_playlist_from_history as dj
     except Exception as exc:
-        return False, f"Traktor helper is unavailable: {exc}"
-    if not traktor.find_collection_path(cfg):
-        return False, "collection.nml not found. Run Traktor once and set TRAKTOR_COLLECTION_PATH."
-    collection = traktor.find_collection_path(cfg)
-    history_dirs = traktor.preferred_history_dirs(collection, cfg)
-    if not traktor.list_history_files(1, history_dirs, cfg=cfg):
-        return False, "No Traktor History files were copied over yet. Sync the Traktor history first."
-    return True, "Traktor history and collection are ready."
+        return False, f"DJ helper is unavailable: {exc}"
+    if not dj.find_collection_path(cfg):
+        return False, "collection.nml not found. Run DJ once and set DJ_COLLECTION_PATH."
+    collection = dj.find_collection_path(cfg)
+    history_dirs = dj.preferred_history_dirs(collection, cfg)
+    if not dj.list_history_files(1, history_dirs, cfg=cfg):
+        return False, "No DJ History files were copied over yet. Sync the DJ history first."
+    return True, "DJ history and collection are ready."
 
 
-def traktor_playlist_exists(playlist_name: str, cfg: Optional[Dict[str, str]] = None) -> bool:
+def dj_playlist_exists(playlist_name: str, cfg: Optional[Dict[str, str]] = None) -> bool:
     cfg = cfg or load_config()
     try:
-        import generate_traktor_playlist_from_history as traktor
+        import generate_dj_playlist_from_history as dj
     except Exception:
         return False
-    collection = traktor.find_collection_path(cfg)
+    collection = dj.find_collection_path(cfg)
     if not collection:
         return False
-    return traktor.playlist_name_exists(str(collection), playlist_name)
+    return dj.playlist_name_exists(str(collection), playlist_name)
 
 
 def favorites_from_history(history_id: str, cfg: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
-    """Resolve one Traktor history file to on-disk tracks from collection.nml.
+    """Resolve one DJ history file to on-disk tracks from collection.nml.
 
     The history file supplies the play order. The file path comes from the
-    loaded Traktor collection. Audio files are not deleted or moved.
+    loaded DJ collection. Audio files are not deleted or moved.
     """
     cfg = cfg or load_config()
     try:
-        import generate_traktor_playlist_from_history as traktor
+        import generate_dj_playlist_from_history as dj
     except Exception as exc:
         return {"ok": False, "reason": "import", "message": str(exc), "tracks": [], "missing": []}
-    collection = traktor.find_collection_path(cfg)
+    collection = dj.find_collection_path(cfg)
     if not collection or not Path(collection).is_file():
         return {
             "ok": False,
             "reason": "collection",
-            "message": "collection.nml was not found. Load the Traktor collection first.",
+            "message": "collection.nml was not found. Load the DJ collection first.",
             "tracks": [],
             "missing": [],
         }
-    history_dirs = traktor.preferred_history_dirs(collection, cfg)
-    history = traktor.resolve_history_file(history_id, history_dirs, cfg=cfg)
+    history_dirs = dj.preferred_history_dirs(collection, cfg)
+    history = dj.resolve_history_file(history_id, history_dirs, cfg=cfg)
     if not history or not history.is_file():
         return {
             "ok": False,
             "reason": "history",
-            "message": "No Traktor history file matched that ID.",
+            "message": "No DJ history file matched that ID.",
             "tracks": [],
             "missing": [],
         }
     try:
-        ordered, _index = traktor.parse_history_file(str(history))
-        collection_index = traktor.load_collection_index(str(collection))
+        ordered, _index = dj.parse_history_file(str(history))
+        collection_index = dj.load_collection_index(str(collection))
     except Exception as exc:
         return {"ok": False, "reason": "parse", "message": str(exc), "tracks": [], "missing": []}
     tracks: List[Dict[str, Any]] = []
@@ -730,10 +730,10 @@ def favorites_from_history(history_id: str, cfg: Optional[Dict[str, str]] = None
     for row in ordered:
         basename = str(row.get("basename") or "")
         coll = collection_index.get(basename)
-        if coll is None or not traktor.metadata_agrees(row, coll):
+        if coll is None or not dj.metadata_agrees(row, coll):
             coll = None
             for candidate in collection_index.values():
-                if traktor.metadata_agrees(row, candidate):
+                if dj.metadata_agrees(row, candidate):
                     coll = candidate
                     break
         label = row.get("file") or basename or "unknown"
@@ -763,7 +763,7 @@ def favorites_from_history(history_id: str, cfg: Optional[Dict[str, str]] = None
         return {
             "ok": False,
             "reason": "no_match",
-            "message": "None of the history tracks were found in the Traktor collection on disk.",
+            "message": "None of the history tracks were found in the DJ collection on disk.",
             "tracks": [],
             "missing": missing,
             "history": history.name,
@@ -777,30 +777,30 @@ def favorites_from_history(history_id: str, cfg: Optional[Dict[str, str]] = None
     }
 
 
-def create_traktor_playlist(favorite_paths: Sequence[str], playlist_name: str,
+def create_dj_playlist(favorite_paths: Sequence[str], playlist_name: str,
                             history_id: Optional[str] = None,
                             cfg: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     cfg = cfg or load_config()
-    ready, reason = traktor_ready(cfg)
+    ready, reason = dj_ready(cfg)
     if not ready:
         return {"ok": False, "reason": "not_ready", "message": reason}
-    import generate_traktor_playlist_from_history as traktor
+    import generate_dj_playlist_from_history as dj
 
-    collection = traktor.find_collection_path(cfg)
-    history_dirs = traktor.preferred_history_dirs(collection, cfg)
-    history = traktor.resolve_history_file(history_id, history_dirs, cfg=cfg)
+    collection = dj.find_collection_path(cfg)
+    history_dirs = dj.preferred_history_dirs(collection, cfg)
+    history = dj.resolve_history_file(history_id, history_dirs, cfg=cfg)
     if not history:
-        return {"ok": False, "reason": "history", "message": "No matching Traktor History file was found."}
-    if playlist_name and traktor.playlist_name_exists(str(collection), playlist_name):
+        return {"ok": False, "reason": "history", "message": "No matching DJ History file was found."}
+    if playlist_name and dj.playlist_name_exists(str(collection), playlist_name):
         return {
             "ok": False,
             "reason": "duplicate_name",
             "message": (
-                f"Traktor already has a playlist named '{playlist_name}'. "
+                f"DJ already has a playlist named '{playlist_name}'. "
                 "Choose a different name. The audio files were not changed."
             ),
         }
-    result = traktor.build_traktor_playlist(
+    result = dj.build_dj_playlist(
         favorite_paths,
         history_id=str(history),
         playlist_name=playlist_name,
@@ -1039,9 +1039,9 @@ def summary_lines(result: Dict[str, Any]) -> List[str]:
         lines.append(f"Playlist file: {os.path.basename(result['m3u8'])}")
     if result.get("elapsed_sec"):
         lines.append(f"Elapsed: {result['elapsed_sec']:.3f}s")
-    traktor = result.get("traktor") or {}
-    if traktor:
-        lines.append(f"Traktor: {traktor.get('playlist') or traktor.get('message', '')}")
+    dj = result.get("dj") or {}
+    if dj:
+        lines.append(f"DJ: {dj.get('playlist') or dj.get('message', '')}")
     for failure in (result.get("failed") or [])[:4]:
         lines.append(f"Failed: {failure.get('name')} — {failure.get('reason')}")
     for error in (result.get("errors") or [])[:4]:
@@ -1103,7 +1103,7 @@ def interactive_main() -> int:
         if not smb_configured(cfg):
             print(f"\n{YELLOW}The SMB share is not configured.{NC}")
             print("Set FAV_EXPORT_SMB_HOST, FAV_EXPORT_SMB_SHARE, FAV_EXPORT_SMB_USER and")
-            print("FAV_EXPORT_SMB_PASSWORD (or the TRAKTOR_SMB_* values) in config.env.")
+            print("FAV_EXPORT_SMB_PASSWORD (or the DJ_SMB_* values) in config.env.")
             return 1
         if settings["mount"]:
             print(f"  {BOLD}SMB mount:{NC} {settings['mount']}")
@@ -1123,21 +1123,21 @@ def interactive_main() -> int:
         return 0
 
     history_name = ""
-    traktor_playlist = ""
-    ready, reason = traktor_ready(cfg)
+    dj_playlist = ""
+    ready, reason = dj_ready(cfg)
     if ready:
-        print(f"\n{GREEN}Traktor history is ready.{NC}")
-        if _yes("Create a Traktor playlist for these favorites too?", True):
+        print(f"\n{GREEN}DJ history is ready.{NC}")
+        if _yes("Create a DJ playlist for these favorites too?", True):
             while True:
-                traktor_playlist = _ask("Traktor playlist name", playlist_name)
-                if traktor_playlist_exists(traktor_playlist, cfg):
-                    print(f"{YELLOW}That Traktor playlist name already exists. Choose another name.{NC}")
+                dj_playlist = _ask("DJ playlist name", playlist_name)
+                if dj_playlist_exists(dj_playlist, cfg):
+                    print(f"{YELLOW}That DJ playlist name already exists. Choose another name.{NC}")
                     continue
                 break
-            history_id = _ask("Traktor history file ID (Enter uses the newest)", "")
+            history_id = _ask("DJ history file ID (Enter uses the newest)", "")
             history_name = history_id
     else:
-        print(f"\n{DIM}Traktor playlist skipped: {reason}{NC}")
+        print(f"\n{DIM}DJ playlist skipped: {reason}{NC}")
 
     print(f"\n{CYAN}Exporting {len(tracks)} favorite track(s). Audio files are copied, never deleted.{NC}")
     result = export_favorites(
@@ -1150,9 +1150,9 @@ def interactive_main() -> int:
         preparation=choice in ("1", ""),
         progress=lambda line: print(f"  {DIM}{line}{NC}"),
     )
-    if result.get("ok") and traktor_playlist:
-        result["traktor"] = create_traktor_playlist(
-            [row["path"] for row in tracks], traktor_playlist, history_name, cfg
+    if result.get("ok") and dj_playlist:
+        result["dj"] = create_dj_playlist(
+            [row["path"] for row in tracks], dj_playlist, history_name, cfg
         )
 
     print(f"\n{BOLD}{GREEN if result.get('ok') else RED}{'EXPORT COMPLETE' if result.get('ok') else 'EXPORT FAILED'}{NC}")
@@ -1163,7 +1163,7 @@ def interactive_main() -> int:
         elapsed = float(result.get("elapsed_sec") or 0.0)
         print(f"\n{BOLD}{GREEN}Copied and verified {copied} track(s) in {elapsed:.3f}s.{NC}")
         print(f"{BOLD}Audio files were not deleted.{NC}")
-        if _yes("Export again to another destination and create another Traktor playlist?", False):
+        if _yes("Export again to another destination and create another DJ playlist?", False):
             return interactive_main()
     return 0 if result.get("ok") else 1
 
@@ -1177,8 +1177,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--smb-path", default=None, help="Folder inside the SMB share")
     parser.add_argument("--tracklist-name", "-n", help="Custom tracklist file name (without .txt)")
     parser.add_argument("--playlist-name", "-p", help="Custom playlist name (default: date + 12 characters)")
-    parser.add_argument("--traktor-playlist", help="Also create this Traktor playlist")
-    parser.add_argument("--history-id", help="Traktor history index, file name, ID or path")
+    parser.add_argument("--dj-playlist", help="Also create this DJ playlist")
+    parser.add_argument("--history-id", help="DJ history index, file name, ID or path")
     parser.add_argument("--yes", "-y", action="store_true", help="Do not prompt")
     parser.add_argument("--json", action="store_true", help="Print the result as JSON")
     parser.add_argument("--list-favorites", action="store_true", help="List the favorites and exit")
@@ -1217,23 +1217,23 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         tracklist_name=args.tracklist_name,
         playlist_name=args.playlist_name,
     )
-    if result.get("ok") and args.traktor_playlist:
-        result["traktor"] = create_traktor_playlist(
+    if result.get("ok") and args.dj_playlist:
+        result["dj"] = create_dj_playlist(
             [row["path"] for row in tracks],
-            args.traktor_playlist,
+            args.dj_playlist,
             args.history_id,
         )
     if args.json:
-        printable = {key: value for key, value in result.items() if key != "traktor"}
+        printable = {key: value for key, value in result.items() if key != "dj"}
         if isinstance(printable.get("copied"), list):
             printable["copied"] = [
                 {key: value for key, value in row.items() if key in ("source", "dest", "name")}
                 for row in printable["copied"]
             ]
-        traktor = result.get("traktor")
-        if traktor:
-            printable["traktor"] = {
-                key: value for key, value in traktor.items() if key not in ("tracks",)
+        dj = result.get("dj")
+        if dj:
+            printable["dj"] = {
+                key: value for key, value in dj.items() if key not in ("tracks",)
             }
         print(json.dumps(printable, indent=2, default=str))
     else:

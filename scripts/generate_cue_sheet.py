@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 MP_Mix_Manager_v0.3 - Standard CUE Sheet Generator & Audio Splitter
-- Generates Red Book CDRWIN / EAC compliant .cue sheets from tracklists and Traktor history
+- Generates Red Book CDRWIN / EAC compliant .cue sheets from tracklists and DJ history
 - Calculates frame-accurate CDDA index timecodes (MM:SS:FF at 75 frames/sec)
 - Splits FLAC/WAV mixes into individual tracks using .cue sheets with embedded Vorbis/ID3 tags
 - Cross-platform support for Linux, macOS, and Windows

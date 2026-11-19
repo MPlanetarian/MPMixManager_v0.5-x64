@@ -1,7 +1,7 @@
 @echo off
 rem ==============================================================================
-rem Traktor Pro Live Monitor & Recorder - Windows 10 & 11 Direct Launcher
-rem Runs scripts\traktor_monitor.py directly via Python
+rem DJ Pro Live Monitor & Recorder - Windows 10 & 11 Direct Launcher
+rem Runs scripts\dj_monitor.py directly via Python
 rem ==============================================================================
 setlocal enabledelayedexpansion
 
@@ -21,7 +21,7 @@ for %%P in (
     "C:\Python310\python.exe"
 ) do (
     if exist "%%~P" (
-        "%%~P" "%SCRIPT_DIR%scripts\traktor_monitor.py" %*
+        "%%~P" "%SCRIPT_DIR%scripts\dj_monitor.py" %*
         goto :eof
     )
 )
@@ -29,7 +29,7 @@ for %%P in (
 rem 2. Check for py.exe (Python Launcher for Windows)
 where py.exe >nul 2>nul
 if %ERRORLEVEL% equ 0 (
-    py.exe -3 "%SCRIPT_DIR%scripts\traktor_monitor.py" %*
+    py.exe -3 "%SCRIPT_DIR%scripts\dj_monitor.py" %*
     goto :eof
 )
 
@@ -37,7 +37,7 @@ rem 3. Check for python.exe on PATH (excluding WindowsApps fake stub)
 for /f "delims=" %%p in ('where python.exe 2^>nul') do (
     echo "%%p" | findstr /i "WindowsApps" >nul
     if errorlevel 1 (
-        "%%p" "%SCRIPT_DIR%scripts\traktor_monitor.py" %*
+        "%%p" "%SCRIPT_DIR%scripts\dj_monitor.py" %*
         goto :eof
     )
 )

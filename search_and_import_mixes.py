@@ -42,10 +42,10 @@ def _default_smb_sources():
                 return str(value).strip()
         return ""
 
-    host = setting("MUSIC_SMB_HOST", "TRAKTOR_SMB_HOST", "SMB_DEFAULT_HOST")
-    share = setting("TRAKTOR_SMB_SHARE", "MUSIC_SMB_SHARE") or "mplanetarian"
-    user = setting("MUSIC_SMB_USER", "TRAKTOR_SMB_USER")
-    password = setting("MUSIC_SMB_PASSWORD", "TRAKTOR_SMB_PASSWORD")
+    host = setting("MUSIC_SMB_HOST", "DJ_SMB_HOST", "SMB_DEFAULT_HOST")
+    share = setting("DJ_SMB_SHARE", "MUSIC_SMB_SHARE") or "mplanetarian"
+    user = setting("MUSIC_SMB_USER", "DJ_SMB_USER")
+    password = setting("MUSIC_SMB_PASSWORD", "DJ_SMB_PASSWORD")
 
     # No host configured: return an empty list rather than inventing one, so a
     # fresh install cannot try to reach somebody else's LAN address.
@@ -68,8 +68,12 @@ def _default_smb_sources():
         }
 
     return [
-        source("TRAKTOR RECORDINGS (SMB)", share,
-               setting("TRAKTOR_RECORDINGS_DIR") or "Documents/TRAKTOR_RECORDINGS"),
+        # The folder on disk is named TRAKTOR_RECORDINGS (an existing
+        # recordings tree); only the label is the suite's neutral wording.
+        source("DJ RECORDINGS (SMB)", share,
+               setting("DJ_RECORDINGS_DIR")
+               or setting("TRAKTOR_RECORDINGS_DIR")
+               or "Documents/TRAKTOR_RECORDINGS"),
         source("MIX ARCHIVE (SMB)", share,
                setting("MIX_ARCHIVE_SMB_DIR") or "Documents/MPlanetarian/M_PRODUCTION/MIX_ARCHIVE"),
     ]

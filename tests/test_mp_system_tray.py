@@ -644,7 +644,7 @@ class TestCloseAllClosesEverything(unittest.TestCase):
         text = (ROOT / "scripts" / "windows_tray.ps1").read_text(encoding="utf-8")
         fn = text.split("function Stop-MpSuite", 1)[1].split("\nfunction ", 1)[0]
         for needle in ("mix-archive-manager", "launch-manager", "MP_Liquid_Visualizer",
-                       "MP_Audio_Player", "MP_Gui.sh", "traktor_s4_midi"):
+                       "MP_Audio_Player", "MP_Gui.sh", "dj_s4_midi"):
             self.assertIn(needle, fn, needle)
 
     def test_macos_close_already_runs_off_the_main_thread(self):

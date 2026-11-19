@@ -3579,7 +3579,7 @@ class AudioEngine:
     def load_track(self, index: int, start_playing: bool = True, start_position: float = 0.0) -> bool:
         if not self.playlist or not (0 <= index < len(self.playlist)): return False
         # Refuse a track whose file is gone before touching any state. A
-        # Traktor playlist generated elsewhere names files that may not be
+        # DJ playlist generated elsewhere names files that may not be
         # mounted; without this the cursor moved to a dead entry and every
         # control then failed against it.
         #
@@ -4156,17 +4156,21 @@ class AudioEngine:
     def set_effect(self, mode: Optional[str] = None, amount: Any = None,
                    enabled: Optional[bool] = None) -> bool:
         """Apply the mixer's per-channel insert (flanger/delay/reverb/gater)."""
-        if self.insert_effect is None:
+        effect = getattr(self, "insert_effect", None)
+        if effect is None:
             return False
-        self.insert_effect.configure(mode=mode, amount=amount, enabled=enabled,
-                                     sample_rate=self.sample_rate)
+        effect.configure(mode=mode, amount=amount, enabled=enabled,
+                         sample_rate=self.sample_rate)
         self._sync_state_file()
         return True
 
     def effect_status(self) -> Dict[str, Any]:
-        if self.insert_effect is None:
+        # getattr: a partially built engine (a test double, or the brief
+        # window before __init__ finishes) simply has no insert.
+        effect = getattr(self, "insert_effect", None)
+        if effect is None:
             return {"mode": "flanger", "amount": 0.0, "enabled": False}
-        return self.insert_effect.to_dict()
+        return effect.to_dict()
 
     def save_eq_preset(self, name: str, gains: Optional[Sequence[float]] = None) -> bool:
         ok = self.eq_manager.save_custom_preset(name, gains)
@@ -8284,22 +8288,22 @@ def _ensure_playable_path(path: str) -> bool:
         return False
 
 
-def _traktor_importer_module():
-    """The Traktor playlist importer, loaded lazily.
+def _dj_importer_module():
+    """The DJ playlist importer, loaded lazily.
 
     A module function rather than a direct import so the UI can be built (and
     tested) without the importer's optional dependencies.
     """
     try:
-        import traktor_playlist_importer as importer
+        import dj_playlist_importer as importer
         return importer
     except ImportError:
-        from scripts import traktor_playlist_importer as importer  # type: ignore
+        from scripts import dj_playlist_importer as importer  # type: ignore
         return importer
 
 
-class _TraktorPlaylistScanner:
-    """Playlist source for the player after a Traktor playlist is imported.
+class _DJPlaylistScanner:
+    """Playlist source for the player after a DJ playlist is imported.
 
     Presents the same two methods the player's own scanner does (`get_mixes`
     and `playlist_path`) so the rest of the UI needs no special case. Missing
@@ -8354,21 +8358,21 @@ class TerminalPlayerUI:
         self.open_playlist_path = ""
         self._last_playlist_dir = ""
         self._playlist_clear_armed = False
-        # Favorites clear decision window, DJ export and Traktor playlist prompts.
+        # Favorites clear decision window, DJ export and DJ playlist prompts.
         self.favorites_clear_confirm = False
         self.fav_export_mode = ""
         self.fav_export_dest = ""
         self.fav_export_name = ""
-        # Traktor playlist import picker (Shift+T).
-        self.traktor_picker_active = False
-        self.traktor_picker_rows: List[Dict[str, Any]] = []
-        self.traktor_picker_row = 0
-        self.traktor_picker_error = ""
-        self.traktor_offer_paths: Optional[List[str]] = None
-        self.traktor_offer_name = ""
-        self.traktor_input_mode = ""
-        self.traktor_playlist_name = ""
-        self.traktor_history_id = ""
+        # DJ playlist import picker (Shift+T).
+        self.dj_picker_active = False
+        self.dj_picker_rows: List[Dict[str, Any]] = []
+        self.dj_picker_row = 0
+        self.dj_picker_error = ""
+        self.dj_offer_paths: Optional[List[str]] = None
+        self.dj_offer_name = ""
+        self.dj_input_mode = ""
+        self.dj_playlist_name = ""
+        self.dj_history_id = ""
         self.favorites = FavoritesStore()
         # The library mode the Favorites button came from, so pressing it a
         # second time returns the user to the playlist they were browsing
@@ -9077,9 +9081,9 @@ class TerminalPlayerUI:
             self.engine.current_index = match if match is not None else 0
 
     # ------------------------------------------------------------------
-    # TRAKTOR PLAYLIST IMPORT (Shift+T)
+    # DJ PLAYLIST IMPORT (Shift+T)
     # ------------------------------------------------------------------
-    def _traktor_picker_open(self) -> None:
+    def _dj_picker_open(self) -> None:
         """Open the playlist picker, or explain why it cannot open.
 
         Only playlists that were generated in advance are offered: the importer
@@ -9087,41 +9091,41 @@ class TerminalPlayerUI:
         and anything without both files is not usable here.
         """
         if os.environ.get("MP_LIQUID_GLASS") == "1":
-            self._notify("Traktor playlist import is available in CLI mode only.", 3.5)
+            self._notify("DJ playlist import is available in CLI mode only.", 3.5)
             return
-        importer = _traktor_importer_module()
+        importer = _dj_importer_module()
         try:
             ready, reason = importer.music_folders_ready()
         except Exception as exc:
             ready, reason = False, str(exc)
         if not ready:
-            self.traktor_picker_active = True
-            self.traktor_picker_rows = []
-            self.traktor_picker_row = 0
-            self.traktor_picker_error = reason or "Music Folders are not configured."
+            self.dj_picker_active = True
+            self.dj_picker_rows = []
+            self.dj_picker_row = 0
+            self.dj_picker_error = reason or "Music Folders are not configured."
             return
         try:
             rows = importer.generated_playlists()
         except Exception as exc:
             rows = []
-            self.traktor_picker_error = str(exc)
+            self.dj_picker_error = str(exc)
         else:
-            self.traktor_picker_error = "" if rows else (
-                "No generated Traktor playlists were found. "
+            self.dj_picker_error = "" if rows else (
+                "No generated DJ playlists were found. "
                 "Use music_folders_manager.sh to generate them first."
             )
-        self.traktor_picker_rows = list(rows)
-        self.traktor_picker_row = 0
-        self.traktor_picker_active = True
+        self.dj_picker_rows = list(rows)
+        self.dj_picker_row = 0
+        self.dj_picker_active = True
 
-    def _traktor_import_start(self) -> None:
+    def _dj_import_start(self) -> None:
         """Hand off to the importer's interactive flow, after the preflight.
 
         The importer needs the Music Folders configuration to resolve the
-        Traktor collection; running it without that produces a confusing
+        DJ collection; running it without that produces a confusing
         failure deep inside, so it is checked here and reported plainly.
         """
-        importer = _traktor_importer_module()
+        importer = _dj_importer_module()
         try:
             ready, reason = importer.music_folders_ready()
         except Exception as exc:
@@ -9132,32 +9136,32 @@ class TerminalPlayerUI:
         try:
             importer.interactive_main()
         except Exception as exc:
-            self._notify(f"Traktor import failed: {exc}", 4.5)
+            self._notify(f"DJ import failed: {exc}", 4.5)
             return
-        self._notify("Traktor import finished.", 3.0)
+        self._notify("DJ import finished.", 3.0)
 
-    def _traktor_picker_close(self) -> None:
-        self.traktor_picker_active = False
+    def _dj_picker_close(self) -> None:
+        self.dj_picker_active = False
 
-    def _traktor_picker_move(self, delta: int) -> None:
-        if not self.traktor_picker_rows:
+    def _dj_picker_move(self, delta: int) -> None:
+        if not self.dj_picker_rows:
             return
-        self.traktor_picker_row = max(
-            0, min(len(self.traktor_picker_rows) - 1, self.traktor_picker_row + delta)
+        self.dj_picker_row = max(
+            0, min(len(self.dj_picker_rows) - 1, self.dj_picker_row + delta)
         )
 
-    def _traktor_picker_activate(self) -> None:
+    def _dj_picker_activate(self) -> None:
         """Load the highlighted playlist, dropping tracks that are not on disk.
 
         A generated playlist can name files on a drive that is not mounted any
         more, so every path is checked before it reaches the engine. The count
         of unavailable tracks is reported rather than silently swallowed.
         """
-        self.traktor_picker_active = False
-        if not self.traktor_picker_rows:
+        self.dj_picker_active = False
+        if not self.dj_picker_rows:
             return
-        row = self.traktor_picker_rows[
-            max(0, min(self.traktor_picker_row, len(self.traktor_picker_rows) - 1))
+        row = self.dj_picker_rows[
+            max(0, min(self.dj_picker_row, len(self.dj_picker_rows) - 1))
         ]
         json_path = str(row.get("json_path", ""))
         tracks: List[Dict[str, Any]] = []
@@ -9173,28 +9177,28 @@ class TerminalPlayerUI:
         if not available:
             self._notify("That playlist has no tracks available on this machine.", 4.0)
             return
-        self.scanner = _TraktorPlaylistScanner(available, json_path)
+        self.scanner = _DJPlaylistScanner(available, json_path)
         self.selected_row, self.scroll_offset = 0, 0
         name = str(row.get("name") or Path(json_path).stem)
-        message = f"Loaded Traktor playlist: {name} ({len(available)} tracks)"
+        message = f"Loaded DJ playlist: {name} ({len(available)} tracks)"
         if missing:
             message += f" - {missing} unavailable"
         self._notify(message, 4.5)
 
-    def _traktor_picker_box(self, width: int) -> List[str]:
+    def _dj_picker_box(self, width: int) -> List[str]:
         """Draw the picker window over the playlist area."""
-        rows = self.traktor_picker_rows
+        rows = self.dj_picker_rows
         lines = [
-            "  TRAKTOR PLAYLIST IMPORT  ",
+            "  DJ PLAYLIST IMPORT  ",
             f"  {len(rows)} generated playlist(s) available",
             "",
         ]
-        if self.traktor_picker_error:
-            lines.append(f"  {self.traktor_picker_error}")
+        if self.dj_picker_error:
+            lines.append(f"  {self.dj_picker_error}")
             lines.append("  [G] pre-generate the playlists   [Esc] Cancel")
         else:
             for index, row in enumerate(rows[:12]):
-                marker = "▶" if index == self.traktor_picker_row else " "
+                marker = "▶" if index == self.dj_picker_row else " "
                 lines.append(
                     f"  {marker} {index + 1:2d}) {row.get('name', 'playlist')}"
                     f"  ({row.get('tracks', '?')} tracks)"
@@ -9255,8 +9259,8 @@ class TerminalPlayerUI:
         return bool(
             self.favorites_clear_confirm
             or self.fav_export_mode
-            or self.traktor_offer_paths
-            or self.traktor_input_mode
+            or self.dj_offer_paths
+            or self.dj_input_mode
         )
 
     def _ensure_favorites_decision_state(self) -> None:
@@ -9270,13 +9274,13 @@ class TerminalPlayerUI:
             "fav_export_kind": "local",
             "fav_export_log": [],
             "fav_export_result": None,
-            "traktor_offer_paths": None,
-            "traktor_offer_name": "",
-            "traktor_offer_details": "",
-            "traktor_input_mode": "",
-            "traktor_playlist_name": "",
-            "traktor_history_id": "",
-            "_traktor_used_names": [],
+            "dj_offer_paths": None,
+            "dj_offer_name": "",
+            "dj_offer_details": "",
+            "dj_input_mode": "",
+            "dj_playlist_name": "",
+            "dj_history_id": "",
+            "_dj_used_names": [],
         }
         for name, value in defaults.items():
             if not hasattr(self, name):
@@ -9334,7 +9338,7 @@ class TerminalPlayerUI:
         if self.fav_export_mode == "choose":
             return (
                 f"  {BOLD}{COLOR_TRAFFIC_AMBER}Export Tracks — [1] Local folder   "
-                f"[2] SMB share   [3] Traktor history   [Esc] Cancel{NC}"
+                f"[2] SMB share   [3] DJ history   [Esc] Cancel{NC}"
             )
         if self.fav_export_mode == "folder_name":
             return (
@@ -9345,16 +9349,16 @@ class TerminalPlayerUI:
             return f"  {BOLD}{COLOR_ELECTRIC_CYAN}EXPORT DECK RUNNING  ·  copy verify  ·  no delete{NC}"
         if self.fav_export_mode == "summary":
             return (
-                f"  {BOLD}{COLOR_TRAFFIC_GREEN}[T] Traktor playlist   [Y] Export again   [N] Close{NC}"
+                f"  {BOLD}{COLOR_TRAFFIC_GREEN}[T] DJ playlist   [Y] Export again   [N] Close{NC}"
             )
         if self.fav_export_mode == "again":
             return (
-                f"  {BOLD}{COLOR_TRAFFIC_AMBER}Export again to another destination and another Traktor playlist?   "
+                f"  {BOLD}{COLOR_TRAFFIC_AMBER}Export again to another destination and another DJ playlist?   "
                 f"[Y] Yes   [N] No{NC}"
             )
         if self.fav_export_mode == "history_id":
             return (
-                f"  {BOLD}{COLOR_TRAFFIC_GREEN}Traktor history ID: [{self.traktor_history_id}█]  "
+                f"  {BOLD}{COLOR_TRAFFIC_GREEN}DJ history ID: [{self.dj_history_id}█]  "
                 f"(Enter: Load • Esc: Cancel){NC}"
             )
         if self.fav_export_mode == "history_merge":
@@ -9376,19 +9380,19 @@ class TerminalPlayerUI:
                 f"  {BOLD}{COLOR_TRAFFIC_AMBER}Folder inside the SMB share: [{self.fav_export_dest}█]  "
                 f"(Enter: Export • empty = share root • Esc: Cancel){NC}"
             )
-        if self.traktor_offer_paths:
+        if self.dj_offer_paths:
             return (
-                f"  {BOLD}{COLOR_TRAFFIC_GREEN}Traktor is ready. Create a Traktor playlist for these favorites?   "
+                f"  {BOLD}{COLOR_TRAFFIC_GREEN}DJ is ready. Create a DJ playlist for these favorites?   "
                 f"[Y] Yes   [N] No{NC}"
             )
-        if self.traktor_input_mode == "playlist_name":
+        if self.dj_input_mode == "playlist_name":
             return (
-                f"  {BOLD}{COLOR_TRAFFIC_GREEN}Traktor playlist name: [{self.traktor_playlist_name}█]  "
+                f"  {BOLD}{COLOR_TRAFFIC_GREEN}DJ playlist name: [{self.dj_playlist_name}█]  "
                 f"(Enter: Continue • Esc: Cancel){NC}"
             )
-        if self.traktor_input_mode == "history_id":
+        if self.dj_input_mode == "history_id":
             return (
-                f"  {BOLD}{COLOR_TRAFFIC_GREEN}Traktor history file ID: [{self.traktor_history_id}█]  "
+                f"  {BOLD}{COLOR_TRAFFIC_GREEN}DJ history file ID: [{self.dj_history_id}█]  "
                 f"(Enter: Create playlist • empty = newest history • Esc: Cancel){NC}"
             )
         return ""
@@ -9396,8 +9400,8 @@ class TerminalPlayerUI:
     def _favorites_decision_box(self, width: int) -> List[str]:
         """Draw the Favorites decision window over the playlist area."""
         self._ensure_favorites_decision_state()
-        if getattr(self, "traktor_picker_active", False):
-            return self._traktor_picker_box(width)
+        if getattr(self, "dj_picker_active", False):
+            return self._dj_picker_box(width)
         if self.favorites_clear_confirm:
             count = len(self._favorites_store())
             title = "  CLEAR FAVORITES PLAYLIST?  "
@@ -9406,23 +9410,23 @@ class TerminalPlayerUI:
                 "The audio files themselves are NOT deleted from disk.",
                 "",
                 "Press [Y] to confirm, or [N] / Esc to keep the playlist.",
-                "After clearing, a Traktor playlist can be created if Traktor is ready.",
+                "After clearing, a DJ playlist can be created if DJ is ready.",
             ]
             color = COLOR_TRAFFIC_RED
         elif self.fav_export_mode == "choose":
             title = "  EXPORT TRACKS  ·  DJ SET PREP DECK  "
             count = len(self._favorites_store())
-            traktor_note = (
-                "Traktor is ready: a playlist can be created after the copy."
-                if getattr(self, "fav_export_traktor_ready", False)
-                else f"Traktor playlist unavailable: {getattr(self, 'fav_export_traktor_reason', 'not configured')}"
+            dj_note = (
+                "DJ is ready: a playlist can be created after the copy."
+                if getattr(self, "fav_export_dj_ready", False)
+                else f"DJ playlist unavailable: {getattr(self, 'fav_export_dj_reason', 'not configured')}"
             )
             body = [
                 f"{count} favorite track(s) will be copied. Audio files are never deleted.",
                 "Every copy is size-checked and must still open as audio.",
                 "",
-                "[1] This computer   [2] SMB share   [3] Traktor history ID   [Esc] Cancel",
-                traktor_note,
+                "[1] This computer   [2] SMB share   [3] DJ history ID   [Esc] Cancel",
+                dj_note,
             ]
             color = COLOR_TRAFFIC_AMBER
         elif self.fav_export_mode == "folder_name":
@@ -9448,17 +9452,17 @@ class TerminalPlayerUI:
             body = [
                 "The last export is still in its folder. Nothing was deleted.",
                 "The same destination folder is allowed.",
-                "A Traktor playlist name that already exists will be rejected.",
+                "A DJ playlist name that already exists will be rejected.",
                 "",
-                "[Y] Export again and create another Traktor playlist",
+                "[Y] Export again and create another DJ playlist",
                 "[N] Close this deck",
             ]
             color = COLOR_TRAFFIC_AMBER
         elif self.fav_export_mode == "history_id":
-            title = "  TRAKTOR HISTORY → FAVORITES  "
+            title = "  DJ HISTORY → FAVORITES  "
             body = [
-                "Enter the Traktor history file ID, name, or list number.",
-                "Paths are read from the loaded Traktor collection.",
+                "Enter the DJ history file ID, name, or list number.",
+                "Paths are read from the loaded DJ collection.",
                 "The audio files are copied, never deleted.",
             ]
             color = COLOR_TRAFFIC_GREEN
@@ -9489,24 +9493,24 @@ class TerminalPlayerUI:
                 "Press Enter to start the export, or Esc to cancel.",
             ]
             color = COLOR_TRAFFIC_AMBER
-        elif self.traktor_offer_paths:
-            title = "  CREATE A TRAKTOR PLAYLIST?  "
+        elif self.dj_offer_paths:
+            title = "  CREATE A DJ PLAYLIST?  "
             body = [
-                f"Traktor History and collection.nml were found.",
-                f"Playlist name: {self.traktor_playlist_name or self.traktor_offer_name}",
-                getattr(self, "traktor_offer_details", ""),
+                f"DJ History and collection.nml were found.",
+                f"Playlist name: {self.dj_playlist_name or self.dj_offer_name}",
+                getattr(self, "dj_offer_details", ""),
                 "[Y] Create the playlist now        [N] Skip",
             ]
             color = COLOR_TRAFFIC_GREEN
-        elif self.traktor_input_mode == "playlist_name":
-            title = "  TRAKTOR PLAYLIST NAME  "
+        elif self.dj_input_mode == "playlist_name":
+            title = "  DJ PLAYLIST NAME  "
             body = [
-                "Enter the name Traktor will show in its Playlists folder.",
+                "Enter the name DJ will show in its Playlists folder.",
                 "Press Enter to continue, Esc to cancel.",
             ]
             color = COLOR_TRAFFIC_GREEN
         else:
-            title = "  TRAKTOR HISTORY FILE ID  "
+            title = "  DJ HISTORY FILE ID  "
             body = [
                 "Enter the history file ID, file name or list number.",
                 "Press Enter with an empty value to use the newest history file.",
@@ -9551,25 +9555,25 @@ class TerminalPlayerUI:
             lines.append(f"STATUS            {reason}")
         else:
             lines.append("STATUS            copies verified")
-        if getattr(self, "fav_export_traktor_ready", False):
-            lines.append("[T] Traktor playlist   [Y] Export again   [N] Close")
+        if getattr(self, "fav_export_dj_ready", False):
+            lines.append("[T] DJ playlist   [Y] Export again   [N] Close")
         else:
             lines.append("[Y] Export again   [N] Close")
         return lines
 
-    def _traktor_name_rejected(self, name: str) -> str:
+    def _dj_name_rejected(self, name: str) -> str:
         cleaned = (name or "").strip()
         if not cleaned:
             return ""
-        used = list(getattr(self, "_traktor_used_names", []) or [])
+        used = list(getattr(self, "_dj_used_names", []) or [])
         if cleaned in used:
-            return f"Traktor playlist '{cleaned}' was already created. Choose another name."
+            return f"DJ playlist '{cleaned}' was already created. Choose another name."
         try:
-            exists = self._fav_exporter_module().traktor_playlist_exists(cleaned)
+            exists = self._fav_exporter_module().dj_playlist_exists(cleaned)
         except Exception:
             return ""
         if exists is True:
-            return f"Traktor already has a playlist named '{cleaned}'. Choose another name."
+            return f"DJ already has a playlist named '{cleaned}'. Choose another name."
         return ""
 
     def _favorites_export_begin(self):
@@ -9599,10 +9603,10 @@ class TerminalPlayerUI:
             )
             return
         try:
-            self.fav_export_traktor_ready, reason = self._fav_exporter_module().traktor_ready()
+            self.fav_export_dj_ready, reason = self._fav_exporter_module().dj_ready()
         except Exception as exc:
-            self.fav_export_traktor_ready, reason = False, str(exc)
-        self.fav_export_traktor_reason = reason
+            self.fav_export_dj_ready, reason = False, str(exc)
+        self.fav_export_dj_reason = reason
         self.fav_export_mode = "choose"
         self.fav_export_dest = ""
         self.fav_export_name = ""
@@ -9635,9 +9639,9 @@ class TerminalPlayerUI:
             self.fav_export_mode = "tracklist_name"
             self.fav_export_name = ""
         elif choice == "3":
-            self.traktor_history_id = ""
+            self.dj_history_id = ""
             self.fav_export_mode = "history_id"
-            self._notify("Enter the Traktor history file ID. Esc cancels.", 6.0)
+            self._notify("Enter the DJ history file ID. Esc cancels.", 6.0)
 
     def _favorites_export_start(self):
         tracks = self._favorites_store().tracks()
@@ -9693,11 +9697,11 @@ class TerminalPlayerUI:
         self.fav_export_result = result
         self.fav_export_mode = "summary"
         try:
-            ready, reason = self._fav_exporter_module().traktor_ready()
+            ready, reason = self._fav_exporter_module().dj_ready()
         except Exception as exc:
             ready, reason = False, str(exc)
-        self.fav_export_traktor_ready = ready
-        self.fav_export_traktor_reason = reason
+        self.fav_export_dj_ready = ready
+        self.fav_export_dj_reason = reason
         folder = os.path.basename(str(result.get("dest") or "")) or str(result.get("dest") or "")
         if result.get("ok"):
             self._notify(
@@ -9709,49 +9713,49 @@ class TerminalPlayerUI:
             reason_text = "; ".join((result.get("errors") or ["unknown error"])[:2])
             self._notify(f"Export Tracks failed after {elapsed:.3f}s: {reason_text}. Nothing was deleted.", 9.0)
 
-    def _favorites_traktor_start(self):
-        """Ask for the Traktor playlist name, then create the playlist."""
-        paths = list(getattr(self, "traktor_offer_paths", None) or [])
-        self.traktor_offer_paths = None
-        self.traktor_input_mode = ""
+    def _favorites_dj_start(self):
+        """Ask for the DJ playlist name, then create the playlist."""
+        paths = list(getattr(self, "dj_offer_paths", None) or [])
+        self.dj_offer_paths = None
+        self.dj_input_mode = ""
         if not paths:
             return
-        name = self.traktor_playlist_name.strip() or self.traktor_offer_name or "MP Favorites"
-        history_id = self.traktor_history_id.strip() or None
-        self._notify(f"Creating Traktor playlist '{name}'...", 5.0)
+        name = self.dj_playlist_name.strip() or self.dj_offer_name or "MP Favorites"
+        history_id = self.dj_history_id.strip() or None
+        self._notify(f"Creating DJ playlist '{name}'...", 5.0)
 
         def _worker():
             try:
-                result = self._fav_exporter_module().create_traktor_playlist(paths, name, history_id)
+                result = self._fav_exporter_module().create_dj_playlist(paths, name, history_id)
             except Exception as exc:
                 result = {"ok": False, "message": str(exc)}
             if result.get("ok"):
                 missing = len(result.get("missing") or [])
-                used = list(getattr(self, "_traktor_used_names", []) or [])
+                used = list(getattr(self, "_dj_used_names", []) or [])
                 if name not in used:
                     used.append(name)
-                self._traktor_used_names = used
+                self._dj_used_names = used
                 self.fav_export_mode = "again"
                 self._notify(
-                    f"Traktor playlist ready: {result.get('playlist')} "
-                    f"({result.get('matched', 0)} tracks{'  •  ' + str(missing) + ' not in Traktor' if missing else ''}). "
-                    "Open Traktor to use it. Export again? [Y/N]",
+                    f"DJ playlist ready: {result.get('playlist')} "
+                    f"({result.get('matched', 0)} tracks{'  •  ' + str(missing) + ' not in DJ' if missing else ''}). "
+                    "Open DJ to use it. Export again? [Y/N]",
                     9.0,
                 )
             else:
                 self.fav_export_mode = "summary"
-                self._notify(f"Traktor playlist not created: {result.get('message', 'unknown error')}", 9.0)
+                self._notify(f"DJ playlist not created: {result.get('message', 'unknown error')}", 9.0)
 
         threading.Thread(target=_worker, daemon=True).start()
 
     def _favorites_history_import_begin(self):
         self._ensure_favorites_decision_state()
-        self.traktor_history_id = ""
+        self.dj_history_id = ""
         self.fav_export_mode = "history_id"
-        self._notify("Enter the Traktor history file ID to build the Favorites playlist.", 6.0)
+        self._notify("Enter the DJ history file ID to build the Favorites playlist.", 6.0)
 
     def _favorites_history_import_apply(self, mode: str):
-        history_id = (self.traktor_history_id or "").strip()
+        history_id = (self.dj_history_id or "").strip()
         self.fav_export_mode = "progress"
         self.fav_export_log = [f"{time.strftime('%H:%M:%S')}  HISTORY  id={history_id or 'newest'}  mode={mode}"]
         try:
@@ -9760,7 +9764,7 @@ class TerminalPlayerUI:
             loaded = {"ok": False, "message": str(exc), "tracks": []}
         if not loaded.get("ok"):
             self.fav_export_mode = ""
-            self._notify(loaded.get("message") or "That Traktor history file could not be imported.", 8.0)
+            self._notify(loaded.get("message") or "That DJ history file could not be imported.", 8.0)
             return
         tracks = list(loaded.get("tracks") or [])
         store = self._favorites_store()
@@ -9814,22 +9818,22 @@ class TerminalPlayerUI:
             f"Favorites cleared — {removed} track(s) removed from the playlist. Audio files were not deleted.",
             6.0,
         )
-        # Offer the Traktor playlist for the tracks that were just cleared, as
+        # Offer the DJ playlist for the tracks that were just cleared, as
         # the last chance to turn this listened-to set into a ready playlist.
         try:
-            ready, _reason = self._fav_exporter_module().traktor_ready()
+            ready, _reason = self._fav_exporter_module().dj_ready()
         except Exception:
             ready = False
         if ready and paths:
-            self.traktor_offer_paths = paths
-            self.traktor_offer_name = f"MP Favorites {time.strftime('%Y-%m-%d')}"
-            self.traktor_offer_details = (
-                f"{removed} cleared favorite track(s) are still on disk and can become a Traktor playlist."
+            self.dj_offer_paths = paths
+            self.dj_offer_name = f"MP Favorites {time.strftime('%Y-%m-%d')}"
+            self.dj_offer_details = (
+                f"{removed} cleared favorite track(s) are still on disk and can become a DJ playlist."
             )
-            self.traktor_playlist_name = self.traktor_offer_name
-            self.traktor_history_id = ""
+            self.dj_playlist_name = self.dj_offer_name
+            self.dj_history_id = ""
             self._notify(
-                f"Favorites cleared — {removed} track(s) removed. Create a Traktor playlist from them? "
+                f"Favorites cleared — {removed} track(s) removed. Create a DJ playlist from them? "
                 "[Y] Yes   [N] No",
                 9.0,
             )
@@ -11267,15 +11271,15 @@ class TerminalPlayerUI:
         if self.fav_export_mode == "progress":
             return
         if self.fav_export_mode == "summary":
-            if data in (b"t", b"T") and getattr(self, "fav_export_traktor_ready", False):
+            if data in (b"t", b"T") and getattr(self, "fav_export_dj_ready", False):
                 paths = [row.get("path") for row in self._favorites_store().tracks() if row.get("path")]
-                self.traktor_offer_paths = paths
-                self.traktor_offer_name = (self.fav_export_result or {}).get("playlist_name") or "Favorites"
-                self.traktor_playlist_name = ""
-                self.traktor_history_id = ""
+                self.dj_offer_paths = paths
+                self.dj_offer_name = (self.fav_export_result or {}).get("playlist_name") or "Favorites"
+                self.dj_playlist_name = ""
+                self.dj_history_id = ""
                 self.fav_export_mode = ""
-                self.traktor_input_mode = "playlist_name"
-                self._notify("Enter a new Traktor playlist name. A name that already exists is rejected.", 7.0)
+                self.dj_input_mode = "playlist_name"
+                self._notify("Enter a new DJ playlist name. A name that already exists is rejected.", 7.0)
             elif data in (b"y", b"Y"):
                 self.fav_export_mode = "choose"
                 self.fav_export_dest = ""
@@ -11290,7 +11294,7 @@ class TerminalPlayerUI:
                 self.fav_export_mode = "choose"
                 self.fav_export_dest = ""
                 self.fav_export_folder = ""
-                self._notify("Export again. The same output folder is allowed. A used Traktor playlist name is rejected.", 7.0)
+                self._notify("Export again. The same output folder is allowed. A used DJ playlist name is rejected.", 7.0)
             elif data in (b"n", b"N", b"\x1b", b"q", b"Q"):
                 self.fav_export_mode = ""
                 self._notify("Export deck closed.", 3.0)
@@ -11306,11 +11310,11 @@ class TerminalPlayerUI:
                 self.fav_export_mode = ""
                 self._notify("History import cancelled. The Favorites playlist was not changed.", 3.0)
             elif data in (b"\x7f", b"\x08"):
-                self.traktor_history_id = self.traktor_history_id[:-1]
+                self.dj_history_id = self.dj_history_id[:-1]
             else:
                 try:
                     if (c := data.decode("utf-8", "ignore")).isprintable():
-                        self.traktor_history_id += c
+                        self.dj_history_id += c
                 except Exception: pass
             return
         if self.fav_export_mode == "history_merge":
@@ -11322,48 +11326,48 @@ class TerminalPlayerUI:
                 self.fav_export_mode = ""
                 self._notify("History import cancelled. Favorites was left as it was.", 3.0)
             return
-        if self.traktor_offer_paths:
+        if self.dj_offer_paths:
             if data in (b"y", b"Y", b"\r", b"\n"):
-                self.traktor_playlist_name = self.traktor_playlist_name or self.traktor_offer_name
-                self.traktor_offer_paths = None
-                self.traktor_input_mode = "playlist_name"
-                self._notify("Enter the Traktor playlist name, then press Enter (empty keeps the export name).", 7.0)
+                self.dj_playlist_name = self.dj_playlist_name or self.dj_offer_name
+                self.dj_offer_paths = None
+                self.dj_input_mode = "playlist_name"
+                self._notify("Enter the DJ playlist name, then press Enter (empty keeps the export name).", 7.0)
             elif data in (b"n", b"N", b"\x1b", b"q", b"Q"):
-                self.traktor_offer_paths = None
+                self.dj_offer_paths = None
                 self.fav_export_mode = "again"
-                self._notify("Traktor playlist skipped. The exported files are ready. Export again? [Y/N]", 6.0)
+                self._notify("DJ playlist skipped. The exported files are ready. Export again? [Y/N]", 6.0)
             return
-        if self.traktor_input_mode == "playlist_name":
+        if self.dj_input_mode == "playlist_name":
             if data in (b"\r", b"\n"):
-                rejection = self._traktor_name_rejected(self.traktor_playlist_name)
+                rejection = self._dj_name_rejected(self.dj_playlist_name)
                 if rejection:
                     self._notify(rejection, 7.0)
                     return
-                self.traktor_input_mode = "history_id"
-                self._notify("Enter the Traktor history file ID, then press Enter (empty uses the newest history).", 7.0)
+                self.dj_input_mode = "history_id"
+                self._notify("Enter the DJ history file ID, then press Enter (empty uses the newest history).", 7.0)
             elif data == b"\x1b":
-                self.traktor_input_mode = ""
-                self._notify("Traktor playlist cancelled.", 3.0)
+                self.dj_input_mode = ""
+                self._notify("DJ playlist cancelled.", 3.0)
             elif data in (b"\x7f", b"\x08"):
-                self.traktor_playlist_name = self.traktor_playlist_name[:-1]
+                self.dj_playlist_name = self.dj_playlist_name[:-1]
             else:
                 try:
                     if (c := data.decode("utf-8", "ignore")).isprintable():
-                        self.traktor_playlist_name += c
+                        self.dj_playlist_name += c
                 except Exception: pass
             return
-        if self.traktor_input_mode == "history_id":
+        if self.dj_input_mode == "history_id":
             if data in (b"\r", b"\n"):
-                self._favorites_traktor_start()
+                self._favorites_dj_start()
             elif data == b"\x1b":
-                self.traktor_input_mode = ""
-                self._notify("Traktor playlist cancelled.", 3.0)
+                self.dj_input_mode = ""
+                self._notify("DJ playlist cancelled.", 3.0)
             elif data in (b"\x7f", b"\x08"):
-                self.traktor_history_id = self.traktor_history_id[:-1]
+                self.dj_history_id = self.dj_history_id[:-1]
             else:
                 try:
                     if (c := data.decode("utf-8", "ignore")).isprintable():
-                        self.traktor_history_id += c
+                        self.dj_history_id += c
                 except Exception: pass
             return
         if self.search_mode:
@@ -11645,12 +11649,12 @@ class TerminalPlayerUI:
         elif data == b"\x08": self._toggle_hidden_mode()
         elif data in (b"o", b"O"): self._open_audio_file()
         elif data == b"T" and os.environ.get("MP_LIQUID_GLASS") == "1":
-            self._notify("Traktor playlist import is available in CLI mode only.", 3.5)
+            self._notify("DJ playlist import is available in CLI mode only.", 3.5)
         elif data == b"T" and sys.stdin.isatty():
-            # Shift+T opens the Traktor playlist importer. Lowercase t stays on
+            # Shift+T opens the DJ playlist importer. Lowercase t stays on
             # the tracklist viewer. The picker is terminal-only: the Liquid
             # Glass hosts have no decision-window UI for it.
-            self._traktor_picker_open()
+            self._dj_picker_open()
         elif data in (b"t", b"T"): self._view_selected_tracklist()
         elif data == b"w" and os.environ.get("MP_LIQUID_GLASS") == "1":
             # W opens an MP Black Glass pane at exactly this window's size.
@@ -11890,7 +11894,7 @@ class TerminalPlayerUI:
         if not bt_dev:
             out_n = output_device_label(out_n, _system_output_sink_name())
         bt_b = f"{bold_s}{COLOR_NEON_PINK}🎧 Output: {out_n}{NC}" if (is_bt or "bluetooth" in str(out_n).lower()) else f"{dim_s}{CYAN}🔊 Output: {out_n}{NC}"
-        s4_b = f"  │  {bold_s}\033[38;2;0;255;127m🎛️ S4 MIDI [hw:0,0]{NC}" if (CONFIG_DIR / "traktor_s4_midi.pid").exists() else ""
+        s4_b = f"  │  {bold_s}\033[38;2;0;255;127m🎛️ S4 MIDI [hw:0,0]{NC}" if (CONFIG_DIR / "dj_s4_midi.pid").exists() else ""
         src_badge = " Lossless" if (w >= 116 and is_lossless_path(st.get("path", ""))) else ""
         # Three widths, so a portrait column does not run past its border: the
         # full line, then without the device name, then without the output.
@@ -12485,10 +12489,10 @@ def _spawn_player_daemon(file_path: Optional[str] = None, auto_bluetooth: bool =
         cmd.append(cleaned)
     try:
         proc = subprocess.Popen(cmd, cwd=str(get_base_dir()), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
-        # Auto-start Traktor S4 MIDI controller service if configured
+        # Auto-start DJ S4 MIDI controller service if configured
         try:
-            s4_script = Path(__file__).resolve().parent / "scripts" / "traktor_s4_midi.py"
-            if not s4_script.is_file(): s4_script = Path(__file__).resolve().parent / "traktor_s4_midi.py"
+            s4_script = Path(__file__).resolve().parent / "scripts" / "dj_s4_midi.py"
+            if not s4_script.is_file(): s4_script = Path(__file__).resolve().parent / "dj_s4_midi.py"
             if s4_script.is_file() and os.environ.get("MIDI_CONTROL_ENABLED", "true").lower() != "false":
                 subprocess.Popen([sys.executable, str(s4_script), "--start"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except Exception: pass

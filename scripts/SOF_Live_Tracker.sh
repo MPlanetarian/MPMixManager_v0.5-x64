@@ -10,7 +10,7 @@ OUTPUT_DIR="FLAC_CONVERTED_OUTPUTS"
 PLAYLIST_NAME="Stream of Frequency"
 CLIAMP_BIN="${HOME}/.local/bin/cliamp"
 [ -x "$CLIAMP_BIN" ] || CLIAMP_BIN="$(command -v cliamp 2>/dev/null || true)"
-LOCAL_HISTORY_DIR="$SCRIPT_DIR/Traktor 3.11.1/History"
+LOCAL_HISTORY_DIR="$SCRIPT_DIR/DJ 3.11.1/History"
 
 # ANSI Color Codes & Formatting Styles
 C_RESET="\033[0m"
@@ -226,7 +226,7 @@ stem_variants() {
     echo "${stripped//_/ }"
 }
 
-try_generate_from_traktor() {
+try_generate_from_dj() {
     local file_path="$1"
     local stem="$2"
     [ -d "$LOCAL_HISTORY_DIR" ] || return 1
@@ -358,7 +358,7 @@ try:
         "Source Files Merged/Converted (1 file(s)):",
         f" - {os.path.basename(file_path)}",
         "==================================================",
-        "TRACKLIST (Extracted from Traktor Database)",
+        "TRACKLIST (Extracted from DJ Database)",
         "=================================================="
     ]
     for idx, t in enumerate(extracted_tracks, start=1):
@@ -447,9 +447,9 @@ find_tracklist() {
         done < <(find "${OUTPUT_DIR}" "$dir" "$SCRIPT_DIR" -maxdepth 2 -name "*${ep_num}*.txt" 2>/dev/null | head -n 1)
     fi
 
-    # 4. Try extracting from Traktor History database
+    # 4. Try extracting from DJ History database
     local generated
-    generated="$(try_generate_from_traktor "$file_path" "$stem" 2>/dev/null || true)"
+    generated="$(try_generate_from_dj "$file_path" "$stem" 2>/dev/null || true)"
     if [ -n "$generated" ] && [ -f "$generated" ]; then
         echo "$generated"
         return 0

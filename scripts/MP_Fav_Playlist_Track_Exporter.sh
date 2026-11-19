@@ -4,7 +4,7 @@
 #
 # Exports the MP Audio Player Favorites playlist to a local folder or an SMB
 # share, writes an MP Mix Manager tracklist plus an m3u8 playlist, and can
-# create a matching Traktor playlist from a Traktor History file.
+# create a matching DJ playlist from a DJ History file.
 #
 # The work is done by MP_Fav_Playlist_Track_Exporter.py next to this script.
 # ==============================================================================

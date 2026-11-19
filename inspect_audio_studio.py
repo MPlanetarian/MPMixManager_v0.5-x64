@@ -44,7 +44,7 @@ MUSIC_APPS_CATALOG = [
     {"name": "Kwave", "category": "Audio Editor", "bins": ["kwave"], "flatpaks": ["org.kde.kwave"]},
     {"name": "LosslessCut", "category": "Audio/Video Cutter", "bins": ["losslesscut"], "flatpaks": ["no.mifi.losslesscut"]},
     # DJ Software
-    {"name": "Traktor Pro", "category": "DJ Software", "bins": ["traktor"], "flatpaks": []},
+    {"name": "DJ Pro", "category": "DJ Software", "bins": ["dj"], "flatpaks": []},
     {"name": "Mixxx", "category": "DJ Software", "bins": ["mixxx"], "flatpaks": ["org.mixxx.Mixxx"]},
     # Audio Analyzers & Spectrograms
     {"name": "Spek", "category": "Acoustic Spectrogram", "bins": ["spek"], "flatpaks": ["cc.spek.Spek"]},

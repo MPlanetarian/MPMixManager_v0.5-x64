@@ -1,13 +1,14 @@
-# MP Liquid Mixer 0.0.1
+# MP Liquid Mixer 0.0.2
 
-A full-screen, liquid-glass DJ mixer built from the **MP Liquid Player**. Two real
-player engines sit left and right with a wide gap between them; the gap holds a
-four-channel mixer with a crossfader, and the MP Liquid Visualizer can run
-behind the whole surface.
+A full-screen, liquid-glass DJ mixer built from the **MP Liquid Player**. Four
+real player engines feed a four-channel mixer with a crossfader, and the MP
+Liquid Visualizer runs behind the whole surface.
 
-> **Status: 0.0.1.** One 1920x1080 (or 4K) full-screen window. Channels **A and
-> B** are live and control the two players. Channels **C and D** are drawn and
-> remember a position but are intentionally not wired to anything yet.
+> **Status: 0.0.2.** One 1920x1080 (or 4K) full-screen window. All four
+> channels - **A, B, C and D** - have their own engine, fader, EQ, filter knob,
+> effect insert and level meter. The two playlist windows each switch between a
+> pair of decks (left: A/C, right: B/D), so two windows reach all four channels.
+> The mixer always opens in **Into Darkness (Void Out)**.
 
 ---
 
@@ -16,19 +17,23 @@ behind the whole surface.
 | Component | What it does |
 | :--- | :--- |
 | **One full-screen window** | 1920x1080 design grid, scaled and letterboxed to the monitor. Inherits the Liquid Glass host, so it uses the same theme table, ink resolver, fonts and visualizer plumbing as MP Liquid Player. |
-| **Two MP Liquid Players** | Real `MP_Audio_Player.py` engines in VTE terminals, one per side. Each has its own IPC namespace, PID, lock and state, so neither retires or silences the other. They share the library, favorites and theme, and both open the **Music Folders** library in Music mode - never the mix archive, because these decks are for mixing tracks. The terminal is fitted to the player's own 74-column layout. |
-| **4 channels + crossfader** | Faders A and B apply per-deck gain; the crossfader is equal-power (both decks at -3 dB in the centre). C and D are inactive placeholders. |
+| **Four MP Liquid Players** | Real `MP_Audio_Player.py` engines in VTE terminals, four in all. Each has its own IPC namespace, PID, lock and state, so none retires or silences another. They share the library, favorites and theme, and all open the **Music Folders** library in Music mode - never the mix archive, because these decks are for mixing tracks. The terminal is fitted to the player's own 74-column layout. |
+| **Two playlist windows, four decks** | The left player shows deck **A** or **C**, the right player **B** or **D**. Each player's header carries a neon **DECK A / SWITCH TO C** button: one click flips that window to its other deck, another flips it back. Switching re-points that side's tempo slider at the new deck and moves the playlist highlight to the track the deck has loaded, flashing the theme colours so the change is obvious. |
+| **4 channels + crossfader** | Every fader is live. A and B are blended by the equal-power crossfader (both at -3 dB in the centre, with a centre detent marker on the track); C and D play at their own fader level. Each strip has an **FX** button, a headphone-cue button and a peak meter. |
 | **Internal / External mixing** | Internal applies the software faders and crossfader. External hands both decks to the house mixer at unity and bypasses the software levels. |
 | **MP Visualizer behind** | A locked companion MP Liquid Visualizer runs behind the mixer at the mixer's exact rectangle in both full screen and windowed mode. It follows every move/resize, cannot be detached (Z/double-click are ignored on a locked companion), and is relaunched if it is closed or killed. The **VISUALIZER** button (or `V`) only hides/shows it. |
-| **Traktor MIDI auto-map** | A detected **Traktor Kontrol** mixer in MIDI mode is mapped automatically (Play A/B, Sync A/B, Shift, Browse, Load, Record, channel volume and deck pitch). A generic MIDI controller is never opened or mapped; only a device whose ALSA name contains `Traktor` is used. The native S4 evdev path remains available for hardware that is not in MIDI mode. |
+| **DJ MIDI auto-map** | A detected **DJ Kontrol** mixer in MIDI mode is mapped automatically (Play A/B, Sync A/B, Shift, Browse, Load, Record, channel volume and deck pitch). A generic MIDI controller is never opened or mapped; only a device whose ALSA name contains `DJ` is used. The native S4 evdev path remains available for hardware that is not in MIDI mode. |
 | **Exit_MP_Video.mp4 brackets the window** | On every launch the shared loader movie plays **before** the mixer window exists, and after the last window closes the same movie plays **after** the window is gone. Both use `scripts/display_loader_video.sh` (`--intro-force` / `--exit-force`), so the movie, player choice, borderless window and timeout are the ones every other MP window uses. Each launch path (desktop shortcut, `X` in another MP window, or `run.sh`) shares this one implementation, so the movie never plays twice. |
 | **Desktop shortcut** | `MP Liquid Mixer.desktop` on the Desktop and in the application menu on Linux, written by `scripts/install_desktop_shortcuts.py` in the same style as the other four MP entries. It points at `scripts/launch_liquid_mixer.sh` through `mp-desktop-exec`, so moving or renaming the install keeps it working. macOS and Windows do not get one: the mixer needs X11/XWayland, VTE and ALSA. |
 | **WAV / FLAC with a selectable part size** | The master output records as WAV (default) or FLAC. The part ceiling is 4 GiB by default and can be lowered to 2 GiB or 1 GiB in Settings; WAV sizes are unsigned 32-bit, so a 4 GiB part passes the old 2 GiB wall. At the ceiling the next file is `..._PART_2`, `..._PART_3`, and so on. |
 | **Themed chrome** | A **Trance Connection Enabled** status lamp, a live system clock, the **WAV/FLAC** toggle, a **24-Bit** badge and the **DREAMWORLDS PRODUCTIONS / MPLANETARIAN** credit all use the active theme's accent and secondary colours, so `C` repaints them with the rest of the window. |
 | **Transparency bar** | The player's own 20%-80% slider range at the bottom of the screen, applied to the whole glass window so the visualizer shows through. |
-| **Settings window** | The **SETTINGS** button in the top bar (or `S`) opens one modal window for every configurable preference: recording folder, format and part size; the master output device (any sink, Bluetooth included); the default theme; the startup and exit videos; the background visualizer; a default equaliser preset; start full screen and deck autoplay. Saved to `~/.config/mix-manager/liquid_mixer_settings.json`. |
-| **Tempo & sync** | Vertical pitch sliders for A/B, master-tempo ownership, and Sync. BPM tags give a true beat match; without tags the target copies the master's pitch. The master follows the most recently started deck and hands over when its track ends. |
-| **Themes** | `C` cycles the same theme list as every other MP window. The players follow the shared `theme` file within a second, so both decks and the chrome change together. The mixer also repaints each deck terminal's background and ink from the theme, including when `C` is pressed inside a deck or in MP Gui. |
+| **Settings window** | The **SETTINGS** button in the top bar (or `S`) opens one modal window for every configurable preference: recording folder, format and part size; the **master output** and a separate **monitor output** (for two-interface setups); the default theme; the startup and exit videos; the background visualizer; a default equaliser preset; the MIDI DJ Mixer Profile; start full screen and deck autoplay. The dialog is painted in the mixer's active theme, follows `C` live, and is saved to `~/.config/mix-manager/liquid_mixer_settings.json`. |
+| **Master and monitor** | **MASTER** and **MON** trims sit at the top of the window, and each channel's headphone button routes that one deck to the monitor interface while the rest stay on the master output. A **MASTER** meter and volume slider at the bottom left show and set the summed output. |
+| **Per-channel filter and effects** | Under each channel's LOW EQ knob there is a **FILTER** knob at 1.5x the EQ size. Above it are four fixed-colour effect squares - **red Flanger, blue Reverb, yellow Delay, green Gater** - and an **orange Filter** square. The knob is the effect depth; the orange square turns it into a centre-detent DJ filter sweep (low-pass below centre, high-pass above). The **FX** button above each fader arms or bypasses that insert. |
+| **Channel meters** | A segmented ladder beside each fader shows that deck's peak. The zones run yellow at the bottom, green through the middle, yellow at 75% and red at the top. |
+| **Tempo & sync** | Two vertical pitch sliders, each beside a playlist window and driving that window's current deck. Each has master-tempo ownership and Sync, and the mouse wheel nudges either one. BPM tags give a true beat match; without tags the target copies the master's pitch. The master follows the most recently started deck and hands over when its track ends. |
+| **Themes** | The mixer always opens in **Into Darkness (Void Out)**, whatever was used last. `C` cycles the same theme list as every other MP window. The players follow the shared `theme` file within a second, so every deck and the chrome change together, including the Settings window. |
 
 ---
 
@@ -61,9 +66,14 @@ finds Python itself; no install step.
 
 | Input | Action |
 | :--- | :--- |
-| **Channel A / B fader** (drag) | Deck volume, 0-100% |
-| **Crossfader** (drag) | Equal-power blend between deck A and deck B |
-| **Channel C / D** | Inactive in 0.0.1 ("SOON") |
+| **Channel fader A-D** (drag or wheel) | Deck volume, 0-100% |
+| **Crossfader** (drag or wheel) | Equal-power blend between decks A and B, with a centre marker |
+| **Knobs** (drag or wheel) | GAIN, TREBLE, MID, LOW and FILTER per channel; MASTER and MON trims; the wheel nudges each one |
+| **Effect squares** | Pick which effect the FILTER knob drives; the orange square selects the filter itself |
+| **FX button** | Arm or bypass that channel's insert |
+| **Headphone button** | Route that channel to the monitor output |
+| **DECK A / SWITCH TO C button** | Flip a playlist window to its other deck (left A/C, right B/D) |
+| **MASTER slider** (bottom left) | Software master volume |
 | **MIXER mode button** or `X` | Internal (software faders) / External (unity, house mixer) |
 | **VISUALIZER** button or `V` | Show/hide the visualizer behind the mixer (it is never detached) |
 | **Trance Connection Enabled** | Themed status lamp in the top bar |
@@ -73,7 +83,8 @@ finds Python itself; no install step.
 | **EXPORT MIXES** | Moves finished recordings into the primary `MIX_ARCHIVE`: WAV to its root, FLAC to `FLAC_CONVERTED_OUTPUTS`. With no archive configured, nothing is moved and the MP Tray posts a setup reminder. |
 | **Clock** | Real-time system clock (date and `HH:MM:SS`), read when the mixer opens and refreshed every second |
 | **Transparency bar** (drag) | Window opacity, 20%-80%, persisted |
-| `C` | Next theme. In a deck the player handles `C` itself (so search can still type "c"); here it writes the same shared theme file, and the mixer follows it. |
+| `1`-`9` | Choose that MP Visualizer preset on the window behind the mixer |
+| `C` | Next theme. In a deck the player handles `C` itself (so search can still type "c"); here it writes the same shared theme file, and the mixer and the Settings window follow it. |
 | `S` or **SETTINGS** | Open the Settings window (see below) |
 | `R` or **REC** | Start/stop master-output recording |
 | `M` | Open MP Mix Manager in a new Konsole window (`Mix_Archive_Manager.sh`) |
@@ -84,7 +95,7 @@ finds Python itself; no install step.
 | `F11` or **double-click the top bar** | Toggle full screen and a 1920x1080 centred window |
 | **Drag the top bar** | Move the window while it is windowed |
 | **Drag the bottom-right grip** | Resize the window (minimum 960x540) |
-| `Esc` | Quit (stops both deck engines) |
+| `Esc` or `Q` | Quit and silence the decks. `Esc` works from anywhere, including a focused deck; `Q` is taken over the mixer's chrome only, because the player inside a deck uses `Q` for its own queue. Shutdown pauses and stops all four engines, then escalates to a signal for any that ignore it. |
 
 Inside a deck the player's own keys keep working: `Space` play/pause, arrows to
 seek, `1`/`2`/`3` libraries, `/` search, and the rest of the MP Audio Player
@@ -122,18 +133,18 @@ The Settings window re-reads the device list when it opens, and **Refresh** in
 the Audio Output section fetches it again, so a headset connected while the
 mixer is running appears as soon as the desktop has it.
 
-### Traktor hardware
+### DJ hardware
 
-The mixer looks for a Traktor Kontrol port at startup and keeps looking while
+The mixer looks for a DJ Kontrol port at startup and keeps looking while
 it runs, so a device switched to MIDI mode or plugged in later is picked up.
 
-- Only ALSA rawmidi ports whose device name contains **Traktor** are opened.
+- Only ALSA rawmidi ports whose device name contains **DJ** are opened.
   The MPK mini and any other generic controller stay unopened and unmapped.
 - MIDI-mode buttons use the S4 note/CC map already used by
-  `scripts/traktor_s4_midi.py`: Play A/B, Sync A/B, Shift, Browse push/turn,
+  `scripts/dj_s4_midi.py`: Play A/B, Sync A/B, Shift, Browse push/turn,
   Load, Record, channel volume and deck pitch.
 - The listener prefers the ALSA **sequencer** (via `aseqdump`), which several
-  processes can share, so it works beside the standalone Traktor service. It
+  processes can share, so it works beside the standalone DJ service. It
   falls back to the rawmidi node when the sequencer is unavailable.
 - The map can be adjusted per control in
   `~/.config/mix-manager/liquid_mixer_midi.json`, for example
@@ -279,8 +290,11 @@ shows through the chrome and around the player screens.
 MP_Liquid_Mixer/
   MP_Liquid_Mixer.py   # the window, drawing, input, deck spawning, visualizer
   mixer_core.py        # model, equal-power curve, IPC, themes, layout
+  mixer_effects.py     # flanger / reverb / delay / gater / filter DSP
+  mixer_midi.py        # MIDI DJ Mixer Profiles (Kontrol S4 and Kontrol S3)
+  mixer_evdev.py       # native Kontrol fader axes on Linux
   mixer_settings.py    # the saved preferences and the audio-device helpers
-  mixer_settings_dialog.py  # the Settings window (GTK)
+  mixer_settings_dialog.py  # the Settings window (GTK, themed)
   run.sh               # launcher
   README.md            # this file
 scripts/
@@ -321,7 +335,7 @@ close itself after its 15-second host grace period.
 
 ---
 
-## Traktor Kontrol S4
+## Kontrol S4
 
 The S4 **does not need MIDI mode** for the mixer. Its faders are native
 absolute axes on the controller's evdev node, and the mixer reads them
@@ -393,8 +407,8 @@ The Play buttons are key events (263 left / 319 right) and toggle the
 matching deck through its own IPC socket, so they behave like the player's
 Space bar. The top bar reports the state live: green
 `S4 /dev/input/eventN  A 62%` while a fader moves, amber when the controller
-is idle, and `S4: not found` when the USB cable is out. Reading evdev is shared, so the standalone Traktor MIDI
-service (and Traktor itself) can keep the device open at the same time; the
+is idle, and `S4: not found` when the USB cable is out. Reading evdev is shared, so the standalone DJ MIDI
+service (and DJ itself) can keep the device open at the same time; the
 mixer no longer stops anything.
 
 > **MIDI mode.** There is no host command that forces an S4 MK1/MK2 into MIDI
@@ -412,30 +426,40 @@ mixer no longer stops anything.
 python3 -m unittest tests.test_liquid_mixer tests.test_liquid_mixer_settings -v
 ```
 
-The suite covers the equal-power curve, channel gating (C/D inert), External
+The suite covers the equal-power curve, all four live channels, External
 unity, persistence, the 1920x1080 composition and 4K scaling, the opacity and
 fader coordinate maps, theme cycling, deck path namespacing and the player's
 `MP_PLAYER_NAMESPACE` / `--no-autoplay` wiring.
 
 `tests.test_liquid_mixer_settings` covers the Settings model: defaults,
-validation, persistence, the theme list, the device/sink helpers, the recording
-part limits and the recorder's capture device. The GTK dialog itself is driven
-by those tests through a stubbed `run()`, so a headless run still exercises it.
+validation, persistence, the theme list, the master/monitor device helpers, the
+recording part limits and the recorder's capture device. The GTK dialog itself
+is driven by those tests through a stubbed `run()`, so a headless run still
+exercises it, including the themed CSS and the `C` key cycling the theme.
+
+`tests.test_liquid_mixer_v02` covers the four-deck playlist switches, the filter
+knob and its five switches, the effect bypass buttons, the channel and master
+meters, the mouse wheel on every fader and knob, the quit keys, and the Settings
+window's live theme. `tests.test_liquid_mixer_player_bridge` covers the player
+side: the Favorites toggle and the per-channel insert effect.
 
 ---
 
-## Known limits (0.0.1)
+## Known limits (0.0.2)
 
-- C and D are drawn but not routed. The model already stores their gain, so
-  wiring a third and fourth engine is additive.
-- External mode sets both decks to unity; it does not route them to separate
-  physical outputs. Use it when an external mixer is doing the summing.
-- Both decks play through the system default output, as the player always does.
-  If the desktop default changes between the two engine starts, the deck status
-  lines can name different devices; set the default output before launching the
-  mixer and both engines follow it.
-- One mixer window. Closing it stops both deck engines, because they are
-  detached daemons rather than children of the window.
+- The four engines all play through the master output (or the monitor output
+  for a cued deck). External mode sets every deck to unity; it does not route
+  them to separate physical outputs. Use it when an external mixer is doing the
+  summing.
+- The effect squares are fixed colours on every theme, by design: they are a
+  hardware-style legend for the FILTER knob, not themed chrome.
+- With no master output configured the decks follow the system default, as the
+  player always does. If the desktop default changes between engine starts, the
+  deck status lines can name different devices; set the default output (or pin
+  one in Settings) before launching the mixer.
+- One mixer window. Closing it (Esc, Q or the window close button) pauses and
+  stops all four deck engines, because they are detached daemons rather than
+  children of the window.
 - The companion visualizer is shared with the Liquid Player state file. The
   mixer only stops a visualizer it started; a player-owned one is left alone.
 - The glass is Cairo-painted rather than raymarched; it keeps the player's
