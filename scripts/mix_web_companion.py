@@ -3333,6 +3333,137 @@ def _follow_stream(follow: str) -> bool:
     return str(follow or "").strip().lower() in ("stream", "web", "phone")
 
 
+# ------------------------------------------------------------------------------
+# SERVER-SIDE SPECTRUM FOR THE iOS VISUALIZER
+#
+# iOS keeps the <audio> element on the native media pipeline so background
+# playback survives, which also means no AnalyserNode can hear it. The page
+# already falls back to /api/eq for that case, but the phone stream had no
+# levels to report there and the equaliser sat flat. Decode a short window of
+# the file the phone is hearing with ffmpeg and turn it into the same 24 bands
+# the browser analyser produces.
+# ------------------------------------------------------------------------------
+_STREAM_EQ_CACHE: Dict[str, Dict[str, Any]] = {}
+_STREAM_EQ_FAILED: Dict[str, float] = {}
+_STREAM_EQ_LOCK = threading.Lock()
+_STREAM_EQ_WINDOW = 4.0
+_STREAM_EQ_RATE = 22050
+_STREAM_EQ_FPS = 4.0
+_STREAM_EQ_FRAME = 2048
+
+
+def _spectrum_bands(samples: Any, rate: int, bands: int = 24) -> List[float]:
+    """24 log-spaced band levels from mono float samples, analyser-style."""
+    try:
+        import numpy as np
+    except Exception:
+        return [0.0] * bands
+    if samples is None or len(samples) < 256:
+        return [0.0] * bands
+    frame = np.asarray(samples, dtype=np.float32)
+    # A Hann window keeps the low bands from leaking across the spectrum.
+    window = np.hanning(len(frame)).astype(np.float32)
+    spectrum = np.abs(np.fft.rfft(frame * window))
+    freqs = np.fft.rfftfreq(len(frame), 1.0 / float(rate))
+    # Full-scale int16 is 1.0, matching the browser analyser's dB scale.
+    magnitude = spectrum / (max(1.0, float(np.sum(window)) / 2.0)) / 32768.0
+    db = 20.0 * np.log10(np.maximum(magnitude, 1e-9))
+    edges = np.geomspace(30.0, min(18000.0, rate / 2.0), bands + 1)
+    levels: List[float] = []
+    for index in range(bands):
+        mask = (freqs >= edges[index]) & (freqs < edges[index + 1])
+        if not bool(np.any(mask)):
+            levels.append(0.0)
+            continue
+        # The browser analyser maps -90..-20 dBFS to 0..255. Use the strongest
+        # bin in the band so a narrow tone is visible instead of averaged away.
+        value = float(np.max(db[mask]))
+        levels.append(max(0.0, min(1.0, (value + 90.0) / 70.0)))
+    return levels
+
+
+def _decode_stream_window(path: str, start: float, duration: float) -> Optional[Any]:
+    try:
+        import numpy as np
+    except Exception:
+        return None
+    ffmpeg = shutil_which("ffmpeg")
+    if not ffmpeg:
+        return None
+    command = [
+        ffmpeg, "-v", "error", "-nostdin",
+        "-ss", f"{max(0.0, start):.3f}",
+        "-i", path,
+        "-t", f"{max(0.25, duration):.3f}",
+        "-vn", "-map", "0:a:0",
+        "-ac", "1", "-ar", str(_STREAM_EQ_RATE),
+        "-f", "s16le", "-",
+    ]
+    try:
+        result = subprocess.run(
+            command, capture_output=True, timeout=8, check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0 or not result.stdout:
+        return None
+    return np.frombuffer(result.stdout, dtype="<i2").astype(np.float32)
+
+
+def stream_spectrum_levels(path: str, position: float, bands: int = 24) -> List[float]:
+    """Spectrum for the file and position a phone is hearing.
+
+    The window is cached for a few seconds, so a 2-second status poll does not
+    spawn ffmpeg every time. Any failure returns zeros: a visualizer must never
+    make playback or the status request fail.
+    """
+    if not path:
+        return [0.0] * bands
+    try:
+        stat_result = os.stat(path)
+    except OSError:
+        return [0.0] * bands
+    now = time.time()
+    key = f"{path}|{stat_result.st_size}|{int(stat_result.st_mtime)}"
+    position = max(0.0, float(position or 0.0))
+    with _STREAM_EQ_LOCK:
+        failed_at = _STREAM_EQ_FAILED.get(key, 0.0)
+        if failed_at and now - failed_at < 20.0:
+            return [0.0] * bands
+        entry = _STREAM_EQ_CACHE.get(key)
+        if entry and entry["start"] <= position <= entry["end"] + 0.5:
+            frames = entry["frames"]
+            if frames:
+                nearest = min(frames, key=lambda frame: abs(frame[0] - position))
+                return list(nearest[1])
+    start = max(0.0, position - 0.5)
+    samples = _decode_stream_window(path, start, _STREAM_EQ_WINDOW)
+    if samples is None or len(samples) < _STREAM_EQ_FRAME:
+        with _STREAM_EQ_LOCK:
+            _STREAM_EQ_FAILED[key] = now
+        return [0.0] * bands
+    hop = max(1, int(_STREAM_EQ_RATE / _STREAM_EQ_FPS))
+    frames: List[Tuple[float, Tuple[float, ...]]] = []
+    for offset in range(0, max(0, len(samples) - _STREAM_EQ_FRAME) + 1, hop):
+        frame = samples[offset:offset + _STREAM_EQ_FRAME]
+        levels = _spectrum_bands(frame, _STREAM_EQ_RATE, bands)
+        frames.append((start + offset / float(_STREAM_EQ_RATE), tuple(levels)))
+    if not frames:
+        with _STREAM_EQ_LOCK:
+            _STREAM_EQ_FAILED[key] = now
+        return [0.0] * bands
+    end = start + len(samples) / float(_STREAM_EQ_RATE)
+    with _STREAM_EQ_LOCK:
+        _STREAM_EQ_CACHE[key] = {"start": start, "end": end, "frames": frames, "built": now}
+        _STREAM_EQ_FAILED.pop(key, None)
+        if len(_STREAM_EQ_CACHE) > 4:
+            oldest = min(_STREAM_EQ_CACHE, key=lambda item: _STREAM_EQ_CACHE[item]["built"])
+            if oldest != key:
+                _STREAM_EQ_CACHE.pop(oldest, None)
+    nearest = min(frames, key=lambda frame: abs(frame[0] - position))
+    return list(nearest[1])
+
+
 def get_eq_status(follow: str = "") -> Dict[str, Any]:
     # The host player is the authority on what is on air, so the visualizer and
     # the progress bar must read its clock, not the phone-facing stream cursor.
@@ -3360,6 +3491,11 @@ def get_eq_status(follow: str = "") -> Dict[str, Any]:
     pos = stream_position(state)
     dur = float(state.get("duration_sec", 0.0) or 0.0)
     pct = round(pos / dur * 100.0, 1) if dur > 0 else 0.0
+    # The phone's own element is the only audio output, so the server cannot
+    # observe it. Decode the file it is hearing instead. This is what feeds the
+    # iOS equalizer while the native media pipeline keeps background playback
+    # alive; other browsers still use their local AnalyserNode.
+    levels = stream_spectrum_levels(active_file, pos) if (playing and active_file) else [0.0] * 24
     return {
         "state": "playing" if playing else ("paused" if active_file else "stopped"),
         "position": format_seconds(pos),
@@ -3372,8 +3508,8 @@ def get_eq_status(follow: str = "") -> Dict[str, Any]:
         "pitch_percent": clamp_pitch(state.get("pitch_percent", 0)),
         "shuffle": bool(state.get("shuffle", False)),
         "repeat": str(state.get("repeat", "all")),
-        "levels": [0.0] * 24,
-        "peaks": [0.0] * 24,
+        "levels": levels,
+        "peaks": list(levels),
     }
 
 
@@ -9216,10 +9352,11 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             }}
         }}
 
-        // Visualizer. The bars and the spectrogram both read the phone's
-        // <audio> element. The server answers /api/eq with 24 zeros for a
-        // phone stream — it cannot hear the element — and a sine wave drawn
-        // in place of that does not follow the mix.
+        // Visualizer. The bars and the spectrogram read the phone's <audio>
+        // element through Web Audio where that is safe. On iOS the element
+        // stays on the native media pipeline for background playback, so the
+        // server decodes the file the phone is hearing and /api/eq returns
+        // those 24 bands instead.
         const BANDS = 24;
         const currentLevels = new Float32Array(BANDS).fill(0.04);
         const targetLevels = new Float32Array(BANDS).fill(0.04);
@@ -9310,8 +9447,9 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             // MediaElementSourceNode hands the element's output to the
             // AudioContext, which iOS suspends in the background, so the mix
             // would go silent the moment the listener switches apps. The
-            // equaliser falls back to the server's /api/eq levels there; the
-            // music keeps playing. See isIOSAudioDevice().
+            // server decodes the same file for /api/eq, so the equaliser has
+            // real levels while the music keeps playing. See
+            // isIOSAudioDevice() and stream_spectrum_levels().
             if (isIOSAudioDevice()) return null;
             const audioEl = document.getElementById('mobileAudioStream');
             const ctx = unlockAudioContext();
@@ -9894,9 +10032,10 @@ def render_html_page(theme: Dict[str, Any]) -> str:
                 // The phone is the only audio output, so the visualizer follows
                 // its element. The server cannot observe audio itself.
                 const audioEl = document.getElementById('mobileAudioStream');
-                // Zeros from the server are not a quiet mix. While this phone
-                // is the player they used to overwrite the live spectrum on
-                // every poll, which is why the equaliser sat still on iPhone.
+                // A non-iOS phone reads its own AnalyserNode, so the server's
+                // levels must not overwrite that live spectrum. On iOS the
+                // server decodes the file instead, because the native media
+                // element cannot be analysed without breaking background play.
                 if (!phoneIsAudible()) {{
                     isPlayerActive = audioElIsPlaying();
                     if (data.levels && data.levels.length) {{

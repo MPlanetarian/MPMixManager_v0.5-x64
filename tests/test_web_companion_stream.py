@@ -14,10 +14,21 @@ These tests pin the range maths and the "only follow a live clock" rule.
 """
 
 import importlib
+import math
+import shutil
+import struct
 import sys
+import tempfile
 import unittest
+import wave
 from pathlib import Path
 from unittest import mock
+
+try:
+    import numpy  # noqa: F401
+    HAS_NUMPY = True
+except ImportError:  # pragma: no cover - the server falls back to zeros
+    HAS_NUMPY = False
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -432,10 +443,11 @@ class ThemeAndPlaylistUiTest(unittest.TestCase):
 class PhoneEqualiserTest(unittest.TestCase):
     """The iPhone equaliser reads the element, and a press opens the spectrogram.
 
-    /api/eq answers a phone stream with 24 zeros. Copying those into the bars
-    froze the equaliser while the mix played. Percentage heights inside the
-    flex row also do not resolve on iOS, so a bar that did change level still
-    did not change size.
+    iOS keeps the element on the native media pipeline for background play, so
+    it has no AnalyserNode. /api/eq now decodes the file the phone is hearing
+    and returns real bands for that fallback instead of 24 zeros. Percentage
+    heights inside the flex row also do not resolve on iOS, so a bar that did
+    change level still did not change size.
     """
 
     @classmethod
@@ -521,6 +533,66 @@ class PhoneEqualiserTest(unittest.TestCase):
         engage = self.html[self.html.index("function engageStreamFromServer"):]
         engage = engage[:engage.index("function handleUnplayableMix")]
         self.assertIn("ensureAudioGraph()", engage)
+
+
+class ServerSpectrumTest(unittest.TestCase):
+    """The iOS fallback gets real bands from the server, not 24 zeros."""
+
+    @unittest.skipUnless(HAS_NUMPY, "numpy is required for the server spectrum")
+    def test_a_tone_lands_in_the_expected_band(self):
+        rate = 22050
+        samples = [
+            12000.0 * math.sin(2.0 * math.pi * 1000.0 * i / rate)
+            for i in range(2048)
+        ]
+        levels = mwc._spectrum_bands(samples, rate)
+        self.assertEqual(len(levels), 24)
+        self.assertGreater(max(levels), 0.15)
+        peak = max(range(len(levels)), key=lambda index: levels[index])
+        # 1 kHz sits high in a 30 Hz-18 kHz log split, but not at the top.
+        self.assertGreater(peak, 8)
+        self.assertLess(peak, 19)
+
+    @unittest.skipUnless(
+        HAS_NUMPY and shutil.which("ffmpeg"),
+        "ffmpeg and numpy are required to decode the stream window",
+    )
+    def test_the_stream_window_is_decoded_and_cached(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "tone.wav"
+            rate = 22050
+            with wave.open(str(path), "wb") as handle:
+                handle.setnchannels(1)
+                handle.setsampwidth(2)
+                handle.setframerate(rate)
+                handle.writeframes(b"".join(
+                    struct.pack("<h", int(12000 * math.sin(2 * math.pi * 1000 * i / rate)))
+                    for i in range(rate * 2)
+                ))
+            first = mwc.stream_spectrum_levels(str(path), 0.5)
+            self.assertGreater(max(first), 0.15)
+            # The same position is served from the window cache, not a second
+            # ffmpeg run.
+            with mock.patch.object(mwc, "_decode_stream_window") as decode:
+                cached = mwc.stream_spectrum_levels(str(path), 0.5)
+            decode.assert_not_called()
+            self.assertEqual(cached, first)
+
+    def test_phone_eq_reports_the_server_levels(self):
+        levels = [0.42] * 24
+        state = {
+            "playing": True,
+            "position_sec": 30.0,
+            "duration_sec": 120.0,
+            "volume": 80,
+        }
+        with mock.patch.object(mwc, "host_player_payload", return_value=None), \
+             mock.patch.object(mwc, "current_stream_file", return_value=("/mix.flac", state)), \
+             mock.patch.object(mwc, "stream_position", return_value=30.0), \
+             mock.patch.object(mwc, "stream_spectrum_levels", return_value=levels):
+            eq = mwc.get_eq_status("stream")
+        self.assertEqual(eq["levels"], levels)
+        self.assertEqual(eq["peaks"], levels)
 
 
 if __name__ == "__main__":
