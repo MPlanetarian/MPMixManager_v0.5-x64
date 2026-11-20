@@ -19,8 +19,10 @@ exact window type and hints the fix depends on.
 """
 
 import sys
+import time
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -30,6 +32,8 @@ from liquid_glass_slider import (  # noqa: E402
     DEFAULT_OPACITY,
     MAX_OPACITY,
     MIN_OPACITY,
+    SLIDER_FADE_IN_SECONDS,
+    SLIDER_FRAME_MS,
     SLIDER_STRIP,
     GlassSlider,
     opacity_from_x,
@@ -98,6 +102,8 @@ class FakeGdk:
         BUTTON_RELEASE_MASK = 1 << 3
         BUTTON1_MOTION_MASK = 1 << 8
         POINTER_MOTION_MASK = 1 << 6
+        ENTER_NOTIFY_MASK = 1 << 4
+        LEAVE_NOTIFY_MASK = 1 << 5
 
 
 def fake_gtk(window_types):
@@ -252,6 +258,122 @@ class MappingTest(unittest.TestCase):
         seen = [opacity_from_x(x, 1000) for x in range(40, 961, 100)]
         self.assertEqual(seen, sorted(seen))
         self.assertGreater(seen[-1], seen[0])
+
+
+class FakeGLib:
+    """Records the fade clock without running a GTK main loop."""
+
+    def __init__(self):
+        self.timeouts = []
+        self.removed = []
+
+    def timeout_add(self, milliseconds, callback):
+        self.timeouts.append((milliseconds, callback))
+        return 4242
+
+    def source_remove(self, source):
+        self.removed.append(source)
+
+
+class SliderHoverFadeTest(unittest.TestCase):
+    """The bar is invisible until the pointer finds its track."""
+
+    def _slider(self):
+        window_types = []
+        gtk = fake_gtk(window_types)
+        slider = GlassSlider()
+        self.assertTrue(slider.attach(gtk, FakeGdk, parent=MagicMock()))
+        slider._fade_glib = FakeGLib()
+        return slider
+
+    def _handler(self, slider, signal):
+        return slider._area.handlers[signal]
+
+    def test_the_bar_starts_fully_transparent(self):
+        slider = self._slider()
+        self.assertEqual(slider._alpha, 0.0)
+        self.assertEqual(slider._alpha_target, 0.0)
+
+    def test_entering_the_track_schedules_a_fade_in(self):
+        slider = self._slider()
+        self._handler(slider, "enter-notify-event")(
+            slider._area, SimpleNamespace(x=500))
+        self.assertEqual(slider._alpha_target, 1.0)
+        self.assertEqual(slider._fade_glib.timeouts[0][0], SLIDER_FRAME_MS)
+
+    def test_entering_far_outside_the_track_does_not_show_the_bar(self):
+        slider = self._slider()
+        self._handler(slider, "enter-notify-event")(
+            slider._area, SimpleNamespace(x=4))
+        self.assertEqual(slider._alpha_target, 0.0)
+
+    def test_motion_inside_shows_and_motion_outside_hides(self):
+        slider = self._slider()
+        motion = self._handler(slider, "motion-notify-event")
+        motion(slider._area, SimpleNamespace(x=500))
+        self.assertEqual(slider._alpha_target, 1.0)
+        motion(slider._area, SimpleNamespace(x=4))
+        self.assertEqual(slider._alpha_target, 0.0)
+        motion(slider._area, SimpleNamespace(x=500))
+        self.assertEqual(slider._alpha_target, 1.0)
+
+    def test_leaving_hides_the_bar_unless_it_is_being_dragged(self):
+        slider = self._slider()
+        enter = self._handler(slider, "enter-notify-event")
+        leave = self._handler(slider, "leave-notify-event")
+        enter(slider._area, SimpleNamespace(x=500))
+        leave(slider._area, SimpleNamespace(x=500))
+        self.assertEqual(slider._alpha_target, 0.0)
+
+        slider._dragging = True
+        enter(slider._area, SimpleNamespace(x=500))
+        leave(slider._area, SimpleNamespace(x=500))
+        self.assertEqual(slider._alpha_target, 1.0,
+                         "a drag gesture must survive leaving the strip")
+
+    def test_press_shows_the_bar_and_release_hides_when_outside(self):
+        slider = self._slider()
+        press = self._handler(slider, "button-press-event")
+        release = self._handler(slider, "button-release-event")
+        press(slider._area, SimpleNamespace(button=1, x=500))
+        self.assertTrue(slider._dragging)
+        self.assertEqual(slider._alpha_target, 1.0)
+        release(slider._area, SimpleNamespace(button=1, x=4))
+        self.assertFalse(slider._dragging)
+        self.assertEqual(slider._alpha_target, 0.0)
+
+    def test_the_fade_tick_advances_and_settles(self):
+        slider = self._slider()
+        slider._alpha_target = 1.0
+        slider._fade_from = 0.0
+        slider._fade_started = time.monotonic() - SLIDER_FADE_IN_SECONDS / 2.0
+        self.assertTrue(slider._fade_tick())
+        self.assertGreater(slider._alpha, 0.0)
+        self.assertLess(slider._alpha, 1.0)
+
+        slider._fade_started = time.monotonic() - SLIDER_FADE_IN_SECONDS - 0.01
+        self.assertFalse(slider._fade_tick())
+        self.assertEqual(slider._alpha, 1.0)
+        self.assertEqual(slider._fade_source, 0)
+
+    def test_drawing_applies_the_fade_alpha(self):
+        slider = self._slider()
+        cr = MagicMock()
+        slider._alpha = 0.5
+        slider._on_draw(slider._area, cr)
+        alphas = [call.args[3] for call in cr.set_source_rgba.call_args_list]
+        self.assertAlmostEqual(alphas[0], 0.0)       # transparent clear
+        self.assertAlmostEqual(alphas[1], 0.14)      # trough: 0.28 * 0.5
+        self.assertAlmostEqual(alphas[-1], 0.40)     # thumb: 0.80 * 0.5
+
+    def test_detach_stops_a_running_fade(self):
+        slider = self._slider()
+        self._handler(slider, "enter-notify-event")(
+            slider._area, SimpleNamespace(x=500))
+        slider.detach()
+        self.assertEqual(slider._fade_source, 0)
+        self.assertIn(4242, slider._fade_glib.removed)
+        self.assertEqual(slider._alpha, 0.0)
 
 
 class SourceGuardTest(unittest.TestCase):

@@ -700,6 +700,10 @@ class LiquidGlassRendererOpenGL:
         self.renderer_name = "OpenGL Generic"
         self.gl_version = "Unknown"
         self.cursor = (0.0, 0.0)
+        # False once the pointer leaves the window. The cursor position stops
+        # updating at that point, so hover-only UI (the transparency bar) uses
+        # this flag to keep from latching on at the last interior position.
+        self.cursor_inside = True
         self.panels = ((0.0, 0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 0.0))
         self.mouse_down = False
         self.presses = []
@@ -1667,6 +1671,9 @@ class LiquidGlassRendererOpenGL:
         g.glfwSetMouseButtonCallback.restype = c_void_p
         g.glfwSetCursorPosCallback.argtypes = [c_void_p, c_void_p]
         g.glfwSetCursorPosCallback.restype = c_void_p
+        if hasattr(g, "glfwSetCursorEnterCallback"):
+            g.glfwSetCursorEnterCallback.argtypes = [c_void_p, c_void_p]
+            g.glfwSetCursorEnterCallback.restype = c_void_p
         g.glfwSetFramebufferSizeCallback.argtypes = [c_void_p, c_void_p]
         g.glfwSetFramebufferSizeCallback.restype = c_void_p
         g.glfwSetWindowPosCallback.argtypes = [c_void_p, c_void_p]
@@ -1734,11 +1741,15 @@ class LiquidGlassRendererOpenGL:
     def _bind_input(self):
         self._on_mouse = CFUNCTYPE(None, c_void_p, c_int, c_int, c_int)(self._mouse_button)
         self._on_cursor = CFUNCTYPE(None, c_void_p, c_double, c_double)(self._cursor)
+        self._on_enter = CFUNCTYPE(None, c_void_p, c_int)(self._cursor_enter)
         self._on_fb = CFUNCTYPE(None, c_void_p, c_int, c_int)(self._framebuffer)
         self._on_pos = CFUNCTYPE(None, c_void_p, c_int, c_int)(self._pos_callback)
         self._on_size = CFUNCTYPE(None, c_void_p, c_int, c_int)(self._size_callback)
         self._glfw.glfwSetMouseButtonCallback(self._window, ctypes.cast(self._on_mouse, c_void_p))
         self._glfw.glfwSetCursorPosCallback(self._window, ctypes.cast(self._on_cursor, c_void_p))
+        if hasattr(self._glfw, "glfwSetCursorEnterCallback"):
+            self._glfw.glfwSetCursorEnterCallback(
+                self._window, ctypes.cast(self._on_enter, c_void_p))
         self._glfw.glfwSetFramebufferSizeCallback(self._window, ctypes.cast(self._on_fb, c_void_p))
         self._glfw.glfwSetWindowPosCallback(self._window, ctypes.cast(self._on_pos, c_void_p))
         if hasattr(self._glfw, "glfwSetWindowSizeCallback"):
@@ -1758,6 +1769,9 @@ class LiquidGlassRendererOpenGL:
 
     def _cursor(self, _window, x, y):
         self.cursor = (float(x), float(y))
+
+    def _cursor_enter(self, _window, entered):
+        self.cursor_inside = bool(entered)
 
     def _framebuffer(self, _window, _w, _h):
         self._cur_fb_size = (max(1, int(_w)), max(1, int(_h)))

@@ -10,6 +10,11 @@ well reserves at the bottom of the player. It draws the same track and thumb,
 follows the active theme colour, and reports drag input, so both hosts share
 one implementation and one visual result regardless of the GPU path.
 
+The bar is hover-only: it stays transparent until the pointer enters the
+reserved strip, then fades in, and fades out again when the pointer leaves.
+The overlay itself remains mapped at alpha 0 so it can still receive the
+enter event that brings the bar back.
+
 The overlay is a *managed* toplevel, never a GTK popup window. A popup is
 created override-redirect, so the window manager never restacks it: the bar
 stayed at the top of the X stack for its whole life and kept floating over any
@@ -19,6 +24,7 @@ the player is restacked with the player instead.
 from __future__ import annotations
 
 import sys
+import time
 
 DEFAULT_OPACITY = 0.70
 MIN_OPACITY = 0.20
@@ -33,6 +39,14 @@ SLIDER_HEIGHT = 8
 
 # Smallest strip the bar still fits in: the thumb is SLIDER_HEIGHT + 6 tall.
 MIN_SLIDER_STRIP = SLIDER_HEIGHT + 6
+
+# The bar is hover-only and fades in and out. The same timing is used by the
+# OpenGL host, which draws its own bar, so both backends feel identical.
+SLIDER_FADE_IN_SECONDS = 0.20
+SLIDER_FADE_OUT_SECONDS = 0.35
+SLIDER_FRAME_MS = 16
+# Extra horizontal room around the track that still counts as the bar area.
+SLIDER_HOVER_PAD = 16
 
 
 def player_slider_strip(cell_height: float = 0.0) -> int:
@@ -80,7 +94,8 @@ class GlassSlider:
     The overlay is a separate borderless window, so it appears above both the
     GPU-drawn glass and the VTE terminal on either backend. ``place()`` keeps it
     on the reserved strip, ``set_theme()`` recolours it, and a press or drag on
-    it reports a new opacity through ``on_change``.
+    it reports a new opacity through ``on_change``. The bar is hidden until the
+    pointer enters that strip, then fades in; leaving fades it out again.
 
     The window must be *managed* by the window manager, not a
     ``Gtk.WindowType.POPUP``. A GTK popup is created override-redirect, which
@@ -101,6 +116,14 @@ class GlassSlider:
         self._theme = ((0, 229, 255), (247, 37, 133), (102, 102, 255))
         self._dragging = False
         self._placed = None
+        # Hover-only fade state. The overlay window stays mapped at alpha 0 so
+        # it can still receive the enter event that brings the bar back.
+        self._alpha = 0.0
+        self._alpha_target = 0.0
+        self._fade_from = 0.0
+        self._fade_started = 0.0
+        self._fade_source = 0
+        self._fade_glib = None
 
     # -- lifecycle --------------------------------------------------------
     def attach(self, Gtk, Gdk, parent=None) -> bool:
@@ -150,16 +173,23 @@ class GlassSlider:
                 pass
             area = Gtk.DrawingArea()
             area.set_size_request(1, SLIDER_STRIP)
-            area.add_events(
+            masks = (
                 Gdk.EventMask.BUTTON_PRESS_MASK
                 | Gdk.EventMask.BUTTON_RELEASE_MASK
                 | Gdk.EventMask.BUTTON1_MOTION_MASK
                 | Gdk.EventMask.POINTER_MOTION_MASK
             )
+            # Older Gdk versions in the suite's supported range still have
+            # these; the fallback keeps a stripped-down fake Gdk usable.
+            masks |= int(getattr(Gdk.EventMask, "ENTER_NOTIFY_MASK", 0))
+            masks |= int(getattr(Gdk.EventMask, "LEAVE_NOTIFY_MASK", 0))
+            area.add_events(masks)
             area.connect("draw", self._on_draw)
             area.connect("button-press-event", self._on_press)
             area.connect("button-release-event", self._on_release)
             area.connect("motion-notify-event", self._on_motion)
+            area.connect("enter-notify-event", self._on_enter)
+            area.connect("leave-notify-event", self._on_leave)
             win.add(area)
             # A managed window is mapped by the window manager at a position it
             # chooses, so showing the toplevel here would flash the bar at that
@@ -193,6 +223,7 @@ class GlassSlider:
             return False
 
     def detach(self) -> None:
+        self._stop_fade()
         try:
             if self._win is not None:
                 self._win.destroy()
@@ -200,6 +231,7 @@ class GlassSlider:
             pass
         self._win = self._area = None
         self._placed = None
+        self._alpha = self._alpha_target = 0.0
 
     @property
     def available(self) -> bool:
@@ -259,6 +291,10 @@ class GlassSlider:
         cr.paint()
         cr.set_operator(2)  # cairo.OPERATOR_OVER
 
+        fade = max(0.0, min(1.0, self._alpha))
+        if fade <= 0.001:
+            return False
+
         track = self._theme[0] if self._theme else (255, 255, 255)
         accent = self._theme[1] if len(self._theme) > 1 else track
 
@@ -271,20 +307,23 @@ class GlassSlider:
         # white so it reads as frosted glass on top of the pane rather than a
         # solid coloured bar.
         trough = tuple(int(c + (255 - c) * 0.55) for c in track)
-        cr.set_source_rgba(trough[0] / 255.0, trough[1] / 255.0, trough[2] / 255.0, 0.28)
+        cr.set_source_rgba(trough[0] / 255.0, trough[1] / 255.0, trough[2] / 255.0,
+                           0.28 * fade)
         cr.rectangle(left, bar_top, max(1.0, right - left), bar_h)
         cr.fill()
 
         # The filled portion, in the theme accent, still translucent.
         thumb_x = slider_thumb_x(self.opacity, width)
         if thumb_x > left:
-            cr.set_source_rgba(accent[0] / 255.0, accent[1] / 255.0, accent[2] / 255.0, 0.45)
+            cr.set_source_rgba(accent[0] / 255.0, accent[1] / 255.0, accent[2] / 255.0,
+                               0.45 * fade)
             cr.rectangle(left, bar_top, max(1.0, thumb_x - left), bar_h)
             cr.fill()
 
         # The thumb: a small bright glass knob.
         knob = tuple(int(c + (255 - c) * 0.35) for c in accent)
-        cr.set_source_rgba(knob[0] / 255.0, knob[1] / 255.0, knob[2] / 255.0, 0.80)
+        cr.set_source_rgba(knob[0] / 255.0, knob[1] / 255.0, knob[2] / 255.0,
+                           0.80 * fade)
         cr.rectangle(thumb_x - 5.0, bar_top - 3.0, 10.0, bar_h + 6.0)
         cr.fill()
         return False
@@ -313,14 +352,44 @@ class GlassSlider:
         width = max(1, widget.get_allocated_width())
         self.set_opacity(opacity_from_x(event.x, width))
 
+    def _pointer_in_hover(self, widget, event) -> bool:
+        """Whether the pointer is over the track (plus a little padding).
+
+        The overlay is only the height of the bottom strip, so the vertical
+        test is implicit. The horizontal test keeps the far ends of the strip
+        - which are not part of the track - from waking the bar.
+        """
+        try:
+            x = float(event.x)
+            width = max(1, int(widget.get_allocated_width()))
+        except (AttributeError, TypeError, ValueError):
+            return False
+        left = float(SLIDER_LEFT) - SLIDER_HOVER_PAD
+        right = float(width) - float(SLIDER_RIGHT_PAD) + SLIDER_HOVER_PAD
+        return left <= x <= right
+
+    def _on_enter(self, widget, event) -> bool:
+        if self._pointer_in_hover(widget, event):
+            self._set_shown(True)
+        return False
+
+    def _on_leave(self, _widget, _event) -> bool:
+        # While the button is held the bar stays up, even if the pointer leaves
+        # the strip; a drag gesture keeps working until release.
+        if not self._dragging:
+            self._set_shown(False)
+        return False
+
     def _on_press(self, widget, event) -> bool:
         if getattr(event, "button", 1) != 1:
             return False
         self._dragging = True
+        self._set_shown(True)
         self._apply_from_event(widget, event)
         return True
 
     def _on_motion(self, widget, event) -> bool:
+        self._set_shown(bool(self._dragging or self._pointer_in_hover(widget, event)))
         if not self._dragging:
             return False
         self._apply_from_event(widget, event)
@@ -331,4 +400,69 @@ class GlassSlider:
             return False
         self._dragging = False
         self._apply_from_event(widget, event)
+        self._set_shown(self._pointer_in_hover(widget, event))
+        return True
+
+    # -- hover fade -------------------------------------------------------
+    def _glib(self):
+        """The GLib module for the fade clock, or ``False`` when unavailable."""
+        if self._fade_glib is None:
+            try:
+                from gi.repository import GLib
+            except Exception:
+                GLib = False
+            self._fade_glib = GLib
+        return self._fade_glib
+
+    def _stop_fade(self) -> None:
+        if not self._fade_source:
+            return
+        glib = self._glib()
+        if glib:
+            try:
+                glib.source_remove(self._fade_source)
+            except Exception:
+                pass
+        self._fade_source = 0
+
+    def _set_shown(self, shown: bool) -> None:
+        target = 1.0 if shown else 0.0
+        if target == self._alpha_target:
+            return
+        self._alpha_target = target
+        self._fade_from = self._alpha
+        self._fade_started = time.monotonic()
+        if self._fade_source:
+            # A fade is already running; it reads the new target next tick.
+            return
+        glib = self._glib()
+        if glib:
+            try:
+                self._fade_source = glib.timeout_add(SLIDER_FRAME_MS, self._fade_tick)
+                return
+            except Exception:
+                pass
+        # No running GTK loop (unit tests, or GTK unavailable): settle at once.
+        self._alpha = target
+        self._redraw()
+
+    def _fade_tick(self) -> bool:
+        if self._win is None:
+            self._fade_source = 0
+            return False
+        now = time.monotonic()
+        target = self._alpha_target
+        duration = (SLIDER_FADE_IN_SECONDS
+                    if target >= self._fade_from
+                    else SLIDER_FADE_OUT_SECONDS)
+        progress = (now - self._fade_started) / max(0.001, duration)
+        progress = 0.0 if progress < 0.0 else (1.0 if progress > 1.0 else progress)
+        eased = progress * progress * (3.0 - 2.0 * progress)
+        if progress >= 1.0:
+            self._alpha = target
+            self._fade_source = 0
+            self._redraw()
+            return False
+        self._alpha = self._fade_from + (target - self._fade_from) * eased
+        self._redraw()
         return True

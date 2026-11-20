@@ -109,9 +109,22 @@ from liquid_glass_opengl import (
     THEME_ALIASES,
 )
 try:  # The player keeps a slightly shorter bottom strip so its hints sit lower.
-    from liquid_glass_slider import SLIDER_STRIP, player_slider_strip  # noqa: E402
+    from liquid_glass_slider import (  # noqa: E402
+        SLIDER_FADE_IN_SECONDS,
+        SLIDER_FADE_OUT_SECONDS,
+        SLIDER_HOVER_PAD,
+        SLIDER_LEFT,
+        SLIDER_RIGHT_PAD,
+        SLIDER_STRIP,
+        player_slider_strip,
+    )
 except ImportError:
     SLIDER_STRIP = 44
+    SLIDER_LEFT = 40
+    SLIDER_RIGHT_PAD = 40
+    SLIDER_HOVER_PAD = 16
+    SLIDER_FADE_IN_SECONDS = 0.20
+    SLIDER_FADE_OUT_SECONDS = 0.35
 
     def player_slider_strip(_cell_height=0.0):  # type: ignore[misc]
         return SLIDER_STRIP
@@ -458,6 +471,12 @@ class CustomGlassRenderer(LiquidGlassRendererOpenGL):
         super().__init__(*args, **kwargs)
         self.slider_val = DEFAULT_WINDOW_OPACITY
         self._slider_dragging = False
+        # Hover-only bar: alpha 0 means hidden. The GL loop draws continuously,
+        # so time.monotonic() advances the fade without a separate timer.
+        self._slider_alpha = 0.0
+        self._slider_alpha_target = 0.0
+        self._slider_fade_from = 0.0
+        self._slider_fade_started = time.monotonic()
         # Height of the strip the host keeps clear under the terminal. The host
         # owns the mode (player vs MP Gui / tracklist) and publishes the value
         # it reserved in `_place_terminal`; until then the classic strip is
@@ -596,7 +615,46 @@ class CustomGlassRenderer(LiquidGlassRendererOpenGL):
         except Exception:
             return None
 
+    def _slider_hovered(self, ww, wh) -> bool:
+        """True while the pointer is over the track's bottom strip."""
+        if not getattr(self, "cursor_inside", True):
+            return False
+        try:
+            x, y = self.cursor
+            strip = max(10.0, float(self._slider_strip()))
+        except (AttributeError, TypeError, ValueError):
+            return False
+        left = float(SLIDER_LEFT) - float(SLIDER_HOVER_PAD)
+        right = float(ww) - float(SLIDER_RIGHT_PAD) + float(SLIDER_HOVER_PAD)
+        return left <= float(x) <= right and float(y) >= float(wh) - strip
+
+    def _update_slider_fade(self, ww, wh) -> None:
+        """Advance the hover fade, keeping the bar up during a drag."""
+        now = time.monotonic()
+        target = 1.0 if (self._slider_dragging or self._slider_hovered(ww, wh)) else 0.0
+        if target != self._slider_alpha_target:
+            self._slider_alpha_target = target
+            self._slider_fade_from = self._slider_alpha
+            self._slider_fade_started = now
+        if abs(self._slider_alpha - target) < 1e-4:
+            self._slider_alpha = target
+            return
+        duration = (SLIDER_FADE_IN_SECONDS
+                    if target >= self._slider_fade_from
+                    else SLIDER_FADE_OUT_SECONDS)
+        progress = (now - self._slider_fade_started) / max(0.001, duration)
+        progress = 0.0 if progress < 0.0 else (1.0 if progress > 1.0 else progress)
+        eased = progress * progress * (3.0 - 2.0 * progress)
+        self._slider_alpha = (self._slider_fade_from
+                              + (target - self._slider_fade_from) * eased)
+        if progress >= 1.0:
+            self._slider_alpha = target
+
     def _draw_transparency_slider(self, fw, fh, ww, wh, colors):
+        self._update_slider_fade(ww, wh)
+        if self._slider_alpha <= 0.001:
+            return
+        alpha = self._slider_alpha
         try:
             (
                 glUseProgram, glGenVertexArrays, glBindVertexArray, glGenBuffers,
@@ -690,7 +748,7 @@ class CustomGlassRenderer(LiquidGlassRendererOpenGL):
             # Theme-matched subtle background panel strip. Track and thumb share
             # this buffer, so both are uploaded every frame: the thumb draw
             # overwrites the track, and the next frame has to put it back.
-            glUniform4f(u_col_loc, c0[0] * 0.7, c0[1] * 0.7, c0[2] * 0.7, 0.55)
+            glUniform4f(u_col_loc, c0[0] * 0.7, c0[1] * 0.7, c0[2] * 0.7, 0.55 * alpha)
             glBufferData(GL_ARRAY_BUFFER, track_quad.nbytes, track_quad, GL_DYNAMIC_DRAW)
             glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2 * 4, ctypes.c_void_p(0))
             glEnableVertexAttribArray(0)
@@ -714,7 +772,7 @@ class CustomGlassRenderer(LiquidGlassRendererOpenGL):
             thumb_quad = self._thumb_quad_data
 
             # Theme-matched vibrant accent thumb
-            glUniform4f(u_col_loc, c1[0], c1[1], c1[2], 0.95)
+            glUniform4f(u_col_loc, c1[0], c1[1], c1[2], 0.95 * alpha)
             glBufferData(GL_ARRAY_BUFFER, thumb_quad.nbytes, thumb_quad, GL_DYNAMIC_DRAW)
             glDrawArrays(GL_TRIANGLES, 0, 6)
 

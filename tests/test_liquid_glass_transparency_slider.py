@@ -16,6 +16,7 @@ that method rather than reading the source text.
 """
 
 import sys
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -195,6 +196,77 @@ class SliderStripTest(unittest.TestCase):
         """Source guard: the reservation and the bar must not drift apart."""
         text = (ROOT / "MP_Audio_Player_Liquid_Glass_OpenGL.py").read_text(encoding="utf-8")
         self.assertIn("self.renderer._slider_strip_px = self._slider_strip()", text)
+
+
+class SliderHoverFadeTest(unittest.TestCase):
+    """The OpenGL bar uses the same hover-only fade as the Vulkan overlay."""
+
+    def _renderer(self):
+        import MP_Audio_Player_Liquid_Glass_OpenGL as host
+        renderer = host.CustomGlassRenderer.__new__(host.CustomGlassRenderer)
+        renderer._slider_strip_px = slider_mod.SLIDER_STRIP
+        renderer.cursor = (500.0, 1060.0)
+        renderer.cursor_inside = True
+        renderer._slider_dragging = False
+        renderer._slider_alpha = 0.0
+        renderer._slider_alpha_target = 0.0
+        renderer._slider_fade_from = 0.0
+        renderer._slider_fade_started = time.monotonic()
+        return renderer
+
+    def test_the_bar_starts_hidden(self):
+        renderer = self._renderer()
+        renderer.cursor_inside = False
+        renderer._update_slider_fade(1000.0, 1080.0)
+        self.assertEqual(renderer._slider_alpha, 0.0)
+
+    def test_hovering_the_bottom_strip_fades_the_bar_in(self):
+        renderer = self._renderer()
+        renderer._update_slider_fade(1000.0, 1080.0)
+        self.assertEqual(renderer._slider_alpha_target, 1.0)
+        renderer._slider_fade_started = (
+            time.monotonic() - slider_mod.SLIDER_FADE_IN_SECONDS / 2.0)
+        renderer._update_slider_fade(1000.0, 1080.0)
+        self.assertGreater(renderer._slider_alpha, 0.0)
+        self.assertLess(renderer._slider_alpha, 1.0)
+
+        renderer._slider_fade_started = (
+            time.monotonic() - slider_mod.SLIDER_FADE_IN_SECONDS - 0.01)
+        renderer._update_slider_fade(1000.0, 1080.0)
+        self.assertEqual(renderer._slider_alpha, 1.0)
+
+    def test_leaving_the_window_starts_a_fade_out(self):
+        renderer = self._renderer()
+        renderer._slider_alpha = renderer._slider_alpha_target = 1.0
+        renderer.cursor_inside = False
+        renderer._update_slider_fade(1000.0, 1080.0)
+        self.assertEqual(renderer._slider_alpha_target, 0.0)
+        renderer._slider_fade_started = (
+            time.monotonic() - slider_mod.SLIDER_FADE_OUT_SECONDS - 0.01)
+        renderer._update_slider_fade(1000.0, 1080.0)
+        self.assertEqual(renderer._slider_alpha, 0.0)
+
+    def test_pointer_above_the_strip_does_not_show_the_bar(self):
+        renderer = self._renderer()
+        renderer.cursor = (500.0, 500.0)
+        renderer._update_slider_fade(1000.0, 1080.0)
+        self.assertEqual(renderer._slider_alpha_target, 0.0)
+
+    def test_dragging_keeps_the_bar_visible_outside_the_strip(self):
+        renderer = self._renderer()
+        renderer._slider_dragging = True
+        renderer.cursor = (500.0, 200.0)
+        renderer._update_slider_fade(1000.0, 1080.0)
+        self.assertEqual(renderer._slider_alpha_target, 1.0)
+
+    def test_a_hidden_bar_never_builds_the_slider_shader(self):
+        import MP_Audio_Player_Liquid_Glass_OpenGL as host
+        renderer = self._renderer()
+        renderer.cursor_inside = False
+        with patch.object(host, "_slider_gl") as slider_gl:
+            renderer._draw_transparency_slider(
+                100, 100, 1000, 1080, ((255, 0, 0),) * 3)
+            slider_gl.assert_not_called()
 
 
 class SourceGuardTest(unittest.TestCase):

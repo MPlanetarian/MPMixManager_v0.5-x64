@@ -314,6 +314,20 @@ from liquid_glass_opengl import (
     _rgb01,
     THEME_ALIASES,
 )
+try:  # Keep the hover fade timing identical to the Vulkan/OpenGL backends.
+    from liquid_glass_slider import (
+        SLIDER_FADE_IN_SECONDS,
+        SLIDER_FADE_OUT_SECONDS,
+        SLIDER_HOVER_PAD,
+        SLIDER_LEFT,
+        SLIDER_RIGHT_PAD,
+    )
+except ImportError:
+    SLIDER_LEFT = 40
+    SLIDER_RIGHT_PAD = 40
+    SLIDER_HOVER_PAD = 16
+    SLIDER_FADE_IN_SECONDS = 0.20
+    SLIDER_FADE_OUT_SECONDS = 0.35
 from liquid_player_visualizer import (
     macos_fullscreen_size,
     macos_liquid_player_window_size,
@@ -982,6 +996,12 @@ class CustomGlassRenderer(LiquidGlassRendererOpenGL):
         self.clear_opacity = DEFAULT_WINDOW_OPACITY
         self.slider_val = DEFAULT_WINDOW_OPACITY
         self._slider_dragging = False
+        # Hover-only bar: alpha 0 hides the track entirely. The GL loop draws
+        # continuously, so the fade is advanced from time.monotonic().
+        self._slider_alpha = 0.0
+        self._slider_alpha_target = 0.0
+        self._slider_fade_from = 0.0
+        self._slider_fade_started = time.monotonic()
 
     def open(self):
         super().open()
@@ -1009,7 +1029,9 @@ class CustomGlassRenderer(LiquidGlassRendererOpenGL):
                 ypos = c_double()
                 if hasattr(self._glfw, "glfwGetCursorPos"):
                     self._glfw.glfwGetCursorPos(_window, ctypes.byref(xpos), ctypes.byref(ypos))
-                
+                self.cursor = (float(xpos.value), float(ypos.value))
+                self.mouse_down = action == 1
+
                 ww, wh = self.window_size()
                 if wh - ypos.value <= 35 and 40 <= xpos.value <= ww - 40:
                     if action == 1:
@@ -1045,6 +1067,7 @@ class CustomGlassRenderer(LiquidGlassRendererOpenGL):
 
         @CFUNCTYPE(None, c_void_p, c_double, c_double)
         def cursor_pos_callback(_window, xpos, ypos):
+            self.cursor = (float(xpos), float(ypos))
             ww, wh = self.window_size()
             if self._slider_dragging:
                 self._update_slider(xpos, ww)
@@ -1201,7 +1224,44 @@ class CustomGlassRenderer(LiquidGlassRendererOpenGL):
         self._glfw.glfwSwapBuffers(self._window)
         return pixels
 
+    def _slider_hovered(self, ww, wh) -> bool:
+        """True while the pointer is over the bar's bottom strip."""
+        if not getattr(self, "cursor_inside", True):
+            return False
+        try:
+            x, y = self.cursor
+        except (AttributeError, TypeError, ValueError):
+            return False
+        left = float(SLIDER_LEFT) - float(SLIDER_HOVER_PAD)
+        right = float(ww) - float(SLIDER_RIGHT_PAD) + float(SLIDER_HOVER_PAD)
+        return left <= float(x) <= right and float(y) >= float(wh) - 35.0
+
+    def _update_slider_fade(self, ww, wh) -> None:
+        now = time.monotonic()
+        target = 1.0 if (self._slider_dragging or self._slider_hovered(ww, wh)) else 0.0
+        if target != self._slider_alpha_target:
+            self._slider_alpha_target = target
+            self._slider_fade_from = self._slider_alpha
+            self._slider_fade_started = now
+        if abs(self._slider_alpha - target) < 1e-4:
+            self._slider_alpha = target
+            return
+        duration = (SLIDER_FADE_IN_SECONDS
+                    if target >= self._slider_fade_from
+                    else SLIDER_FADE_OUT_SECONDS)
+        progress = (now - self._slider_fade_started) / max(0.001, duration)
+        progress = 0.0 if progress < 0.0 else (1.0 if progress > 1.0 else progress)
+        eased = progress * progress * (3.0 - 2.0 * progress)
+        self._slider_alpha = (self._slider_fade_from
+                              + (target - self._slider_fade_from) * eased)
+        if progress >= 1.0:
+            self._slider_alpha = target
+
     def _draw_transparency_slider(self, fw, fh, ww, wh):
+        self._update_slider_fade(ww, wh)
+        if self._slider_alpha <= 0.001:
+            return
+        alpha = self._slider_alpha
         try:
             from OpenGL.GL import (
                 glUseProgram, glGenVertexArrays, glBindVertexArray, glGenBuffers,
@@ -1266,7 +1326,7 @@ class CustomGlassRenderer(LiquidGlassRendererOpenGL):
             from OpenGL.GL import glGetUniformLocation
             u_col_loc = glGetUniformLocation(self._slider_prog, "u_color")
             
-            glUniform4f(u_col_loc, 0.2, 0.4, 0.6, 0.6)
+            glUniform4f(u_col_loc, 0.2, 0.4, 0.6, 0.6 * alpha)
             glBufferData(GL_ARRAY_BUFFER, track_quad.nbytes, track_quad, GL_DYNAMIC_DRAW)
             glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2 * 4, ctypes.c_void_p(0))
             glEnableVertexAttribArray(0)
@@ -1285,7 +1345,7 @@ class CustomGlassRenderer(LiquidGlassRendererOpenGL):
                 t_x2, t_y1,  t_x2, t_y2,  t_x1, t_y2
             ], dtype=np.float32)
 
-            glUniform4f(u_col_loc, 0.6, 0.8, 1.0, 0.9)
+            glUniform4f(u_col_loc, 0.6, 0.8, 1.0, 0.9 * alpha)
             glBufferData(GL_ARRAY_BUFFER, thumb_quad.nbytes, thumb_quad, GL_DYNAMIC_DRAW)
             glDrawArrays(GL_TRIANGLES, 0, 6)
 
