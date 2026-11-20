@@ -109,6 +109,12 @@ class TestRoleDetection(LimiterCase):
             "setsid python3 /opt/MP_Audio_Player_Liquid_Glass.py",
             "stdbuf -oL -eL python3 /opt/MP_Audio_Player_Liquid_Glass.py",
             "python3 '/opt/MP_Audio_Player_Liquid_Glass.py' --mini",
+            # The Windows launchers start pythonw.exe from the venv. A suffix
+            # or a backslash path must not hide the window from the cap.
+            r"C:\MPMixManager_v0.5-x64\venv\Scripts\pythonw.exe "
+            r"X:\MPMixManager_v0.5-x64\MP_Audio_Player_Liquid_Glass_OpenGL.py",
+            '"C:\\MPMixManager_v0.5-x64\\venv\\Scripts\\python.exe" '
+            '"X:\\MPMixManager_v0.5-x64\\MP_Audio_Player_Liquid_Glass.py"',
         ):
             self.assertEqual(
                 limiter.role_from_cmdline(cmdline), limiter.ROLE_PLAYER, cmdline,
@@ -116,6 +122,28 @@ class TestRoleDetection(LimiterCase):
         self.assertEqual(
             limiter.role_from_cmdline("env PYTHONPATH=/opt python3 /opt/MP_Audio_Player_Liquid_Glass.py --manager"),
             limiter.ROLE_GUI,
+        )
+        self.assertEqual(
+            limiter.role_from_cmdline(
+                '"C:\\MPMixManager_v0.5-x64\\venv\\Scripts\\pythonw.exe" '
+                '"X:\\MPMixManager_v0.5-x64\\MP_Audio_Player_Liquid_Glass_OpenGL.py" --manager'
+            ),
+            limiter.ROLE_GUI,
+        )
+
+    def test_a_venv_redirector_is_not_a_second_window(self):
+        """Scripts/pythonw.exe spawns the real interpreter with the same argv.
+
+        Counting both made one MP Gui take two of the four slots.
+        """
+        rows = [
+            (500, 100, "pythonw.exe host.py --manager"),
+            (501, 500, "pythonw.exe host.py --manager"),
+            (600, 100, "pythonw.exe host.py"),
+        ]
+        self.assertEqual(
+            limiter._drop_windows_redirectors(rows),
+            [(501, "pythonw.exe host.py --manager"), (600, "pythonw.exe host.py")],
         )
 
     def test_a_python_dash_c_is_not_a_host_window(self):
@@ -307,6 +335,7 @@ class TestLaunchersSourceTheCap(unittest.TestCase):
 
 
 class TestShellCap(unittest.TestCase):
+    @unittest.skipIf(os.name == "nt", "the helper needs a POSIX sleep binary")
     def test_claim_blocks_the_fifth_window(self):
         with tempfile.TemporaryDirectory() as tmp:
             env = {

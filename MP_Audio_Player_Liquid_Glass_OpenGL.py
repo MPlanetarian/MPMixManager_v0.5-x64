@@ -2,7 +2,7 @@
 """OpenGL liquid-glass window hosting the MP Audio Player with theme-matching transparency slider and drop-shadow text."""
 
 from __future__ import annotations
-import ctypes, os, shutil, signal, subprocess, sys, time
+import ctypes, os, shutil, signal, subprocess, sys, time, traceback
 from pathlib import Path
 
 os.environ.setdefault("PYOPENGL_PLATFORM", "wgl" if sys.platform == "win32" else "glx")
@@ -2135,9 +2135,44 @@ def main(argv):
             stop_companion_for_mode(mode, player_gui=player_gui)
 
 
+def _report_startup_failure(exc: BaseException) -> None:
+    """Leave a trace when the host dies before a window appears.
+
+    The Windows launchers start this host with pythonw.exe, so there is no
+    console and stderr goes nowhere: a missing glfw3.dll or a missing module
+    looked exactly like "Launch MP Gui does nothing". Write the traceback next
+    to the other MP logs and, on Windows, put the message on screen as well.
+    """
+    message = f"{type(exc).__name__}: {exc}"
+    log = CONFIG_DIR / "mp_gui.log"
+    try:
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        detail = "".join(
+            traceback.format_exception(type(exc), exc, exc.__traceback__)
+        )
+        with open(log, "a", encoding="utf-8") as handle:
+            handle.write(
+                f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] launch failed\n{detail}"
+            )
+    except OSError:
+        pass
+    if sys.platform == "win32" and not os.environ.get("MP_GUI_NO_DIALOG"):
+        try:
+            ctypes.windll.user32.MessageBoxW(
+                None,
+                f"MP Gui could not start.\n\n{message}\n\n"
+                f"The full error was written to:\n{log}",
+                "MP Mix Manager",
+                0x10,
+            )
+        except Exception:
+            pass
+
+
 if __name__ == "__main__":
     try:
         raise SystemExit(main(sys.argv[1:]))
     except Exception as exc:
         print(f"Liquid Glass (OpenGL): {exc}", file=sys.stderr)
+        _report_startup_failure(exc)
         raise SystemExit(1)

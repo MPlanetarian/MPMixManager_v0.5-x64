@@ -69,6 +69,22 @@ class TestWindowsUserIntegration(unittest.TestCase):
         self.assertNotIn("EnableAutoTray", tray)
         self.assertNotIn("SetPreference", tray)
 
+    def test_the_launcher_does_not_block_on_the_companion_start(self):
+        # manager.bat used to wait for the whole desktop integration before the
+        # Bash menu could draw. On Windows 10 that wait includes up to 20 s for
+        # the Web Companion process plus 20 s for its port, so the terminal sat
+        # blank for about a minute and looked hung.
+        manager = (ROOT / "manager.ps1").read_text(encoding="utf-8")
+        self.assertIn("-Quick", manager)
+        self.assertNotIn("$proc.WaitForExit", manager)
+        self.assertIn("Start-Process", manager)
+        self.assertIn("windows_integration.err.log", manager)
+        integration = (ROOT / "scripts" / "windows_user_integration.ps1").read_text(encoding="utf-8")
+        self.assertIn("[switch]$Quick", integration)
+        self.assertIn("Quick repair complete", integration)
+        # A full install still waits for and starts the companion.
+        self.assertIn("Start-MpCompanion -InstallRoot $Root", integration)
+
     def test_manager_and_tray_helper_repair_a_windows_profile(self):
         manager = (ROOT / "manager.ps1").read_text(encoding="utf-8")
         self.assertIn("windows_user_integration.ps1", manager)

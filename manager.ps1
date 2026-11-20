@@ -34,25 +34,31 @@ foreach ($pythonHome in $pythonHomes) {
 }
 
 # Shortcuts and the tray belong to this user profile even when install.sh ran
-# without a working python3. A failure here must not block the manager.
+# without a working python3. This repair is detached: it used to be waited on
+# with WaitForExit(), and on Windows 10 its Web Companion start alone waits up
+# to 20 s for a process plus 20 s for the port when the server cannot come up.
+# The terminal then sat blank for about a minute before the menu appeared, which
+# looked exactly like a hang. -Quick skips that companion start and leaves a
+# tray the user already has alone, so the repair is short even in the
+# background. A failure here must never block the manager.
 $integrate = Join-Path $Dir "scripts\windows_user_integration.ps1"
 if (Test-Path -LiteralPath $integrate) {
     try {
         $powershellExe = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
-        $integrateArgs = "-NoProfile -ExecutionPolicy Bypass -File `"$integrate`" -Root `"$Dir`" -Action Install"
-        $info = New-Object System.Diagnostics.ProcessStartInfo
-        $info.FileName = $powershellExe
-        $info.Arguments = $integrateArgs
-        $info.UseShellExecute = $false
-        $info.CreateNoWindow = $true
-        $info.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
-        $proc = [System.Diagnostics.Process]::Start($info)
-        $proc.WaitForExit()
-        if ($proc.ExitCode -ne 0) {
-            Write-Host "[WARNING] Desktop shortcuts or the tray icon were not installed for this user (exit $($proc.ExitCode))." -ForegroundColor Yellow
-        }
+        $integrateArgs = "-NoProfile -ExecutionPolicy Bypass -File `"$integrate`" -Root `"$Dir`" -Action Install -Quick"
+        # Give the detached repair its own log files. Inheriting the console
+        # would let its Write-Host lines land in the middle of the menu frame,
+        # and redirecting keeps a failed repair diagnosable without a warning
+        # that would also paint over the menu.
+        $logDir = Join-Path $env:USERPROFILE ".config\mix-manager"
+        New-Item -ItemType Directory -Force -Path $logDir -ErrorAction SilentlyContinue | Out-Null
+        Start-Process -FilePath $powershellExe -ArgumentList $integrateArgs `
+            -WindowStyle Hidden `
+            -RedirectStandardOutput (Join-Path $logDir "windows_integration.out.log") `
+            -RedirectStandardError (Join-Path $logDir "windows_integration.err.log") `
+            -ErrorAction Stop | Out-Null
     } catch {
-        Write-Host "[WARNING] Desktop shortcuts or the tray icon could not be installed for this user." -ForegroundColor Yellow
+        Write-Host "[WARNING] Desktop shortcuts or the tray icon could not be repaired for this user." -ForegroundColor Yellow
     }
 }
 

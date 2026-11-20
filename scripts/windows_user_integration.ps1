@@ -13,7 +13,12 @@ param(
     [string]$Action = "Install",
     # Comma-separated shortcut names this install should create. Empty means
     # all four, which keeps every older caller working unchanged.
-    [string]$Components = ""
+    [string]$Components = "",
+    # Launcher repair: ensure the shortcuts and a tray, but never stop a tray
+    # the user already has and never wait for the Web Companion. manager.ps1
+    # passes this so opening the menu cannot sit on the companion's 40 s start
+    # timeout.
+    [switch]$Quick
 )
 
 $ErrorActionPreference = "Stop"
@@ -596,6 +601,20 @@ if ($Action -eq "EnsureTray") {
 }
 
 $context = Install-MpUserShortcuts -InstallRoot $Root -Wanted $Components
+if ($Quick) {
+    # Called from manager.ps1 while the console is about to hand over to the
+    # Bash menu. Leave a running tray alone (restarting it closed the icon the
+    # user was using on every launch), and skip the companion entirely: its
+    # Startup shortcut starts it at the next sign-in, and a full install already
+    # started it now. Start-MpCompanion waits 20 s for a process and another
+    # 20 s for the port when Python cannot serve, which is what made
+    # manager.bat look hung before the menu appeared.
+    if ($context.IsCurrent -and -not (Get-MpTrayProcess)) {
+        Start-MpTray -InstallRoot $Root -Stay | Out-Null
+    }
+    Write-Host "Quick repair complete."
+    exit 0
+}
 if ($context.IsCurrent) {
     Stop-MpTrayProcess
     if (-not (Start-MpTray -InstallRoot $Root -Stay)) {

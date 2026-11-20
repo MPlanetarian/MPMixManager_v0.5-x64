@@ -115,14 +115,34 @@ function Show-MpWindow {
 }
 
 function Get-MpCommandLines {
-    $rows = @()
+    $raw = @()
     foreach ($proc in @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)) {
         if ($proc.ProcessId -eq $PID) { continue }
         $command = [string]$proc.CommandLine
         if (-not $command) { continue }
         if ($command -like "*windows_tray.ps1*") { continue }
         if ($command -like "*windows_user_integration.ps1*") { continue }
-        $rows += [pscustomobject]@{ ProcessId = $proc.ProcessId; CommandLine = $command }
+        $raw += [pscustomobject]@{
+            ProcessId = $proc.ProcessId
+            ParentProcessId = $proc.ParentProcessId
+            CommandLine = $command
+        }
+    }
+    # A Windows venv installs Scripts\pythonw.exe as a redirector. It starts
+    # the base interpreter with the same command line, so one MP Gui looked
+    # like two windows and the four-window count stopped after two. Keep the
+    # child (the real window) and drop the redirector.
+    $childCommands = @{}
+    foreach ($row in $raw) {
+        $key = [string]$row.ParentProcessId
+        if (-not $childCommands.ContainsKey($key)) { $childCommands[$key] = @() }
+        $childCommands[$key] += [string]$row.CommandLine
+    }
+    $rows = @()
+    foreach ($row in $raw) {
+        $kids = $childCommands[[string]$row.ProcessId]
+        if ($kids -and ($kids -contains [string]$row.CommandLine)) { continue }
+        $rows += $row
     }
     return $rows
 }

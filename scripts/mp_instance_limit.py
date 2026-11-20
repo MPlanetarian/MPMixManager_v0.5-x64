@@ -96,15 +96,25 @@ _HOST_INTERPRETERS = (
 
 
 def _interpreter_name(token: str) -> str:
-    return Path(token.strip("'\"")).name
+    # Backslashes are path separators on Windows but not on POSIX, so normalise
+    # them before Path: tests run this module on Linux against Windows command
+    # lines, and `Path(r"C:\venv\Scripts\pythonw.exe").name` would otherwise
+    # return the whole string and lose the interpreter name.
+    return Path(token.strip("'\" ").replace("\\", "/")).name
 
 
 def _is_host_interpreter(token: str) -> bool:
     name = _interpreter_name(token)
+    # The Windows launchers use pythonw.exe. The suffix is not part of the
+    # interpreter name, and leaving it on meant no Windows GUI host ever
+    # counted toward the four-window cap or the exit-video election.
+    if name.lower().endswith(".exe"):
+        name = name[:-4]
     if name in _HOST_INTERPRETERS:
         return True
-    # Versioned builds: python3.14, python3.11, pypy3.10.
-    return name.startswith(("python3.", "python2.", "pypy3."))
+    # Versioned builds: python3.14, python3.11, pypy3.10, plus the windowless
+    # pythonw / pythonw3.13 spellings used by the Windows .bat launchers.
+    return name.startswith(("python3.", "python2.", "pypy3.", "pythonw"))
 
 
 def _host_script_index(tokens: list[str]) -> int | None:
@@ -247,10 +257,33 @@ def _proc_table_from_ps() -> list[tuple[int, str]]:
     return found
 
 
+def _drop_windows_redirectors(
+    rows: list[tuple[int, int, str]]
+) -> list[tuple[int, str]]:
+    """Collapse a venv's python.exe/pythonw.exe redirector into its child.
+
+    A Windows venv installs a small redirector as `Scripts/pythonw.exe`. When
+    the launcher starts it, the redirector spawns the base interpreter with
+    the *same* command line, so the process table showed two hosts for one
+    window. The real interpreter is the child: it owns the window and the
+    guard claim. Drop the redirector row so one window takes one slot.
+    """
+    child_commands: dict[int, list[str]] = {}
+    for _pid, parent, command in rows:
+        child_commands.setdefault(parent, []).append(command)
+    kept: list[tuple[int, str]] = []
+    for pid, _parent, command in rows:
+        if command in child_commands.get(pid, ()):
+            # This process is the redirector; its child is the real one.
+            continue
+        kept.append((pid, command))
+    return kept
+
+
 def _proc_table_from_windows() -> list[tuple[int, str]]:
     script = (
         "Get-CimInstance Win32_Process | "
-        "ForEach-Object { \"$($_.ProcessId) $($_.CommandLine)\" }"
+        "ForEach-Object { \"$($_.ProcessId) $($_.ParentProcessId) $($_.CommandLine)\" }"
     )
     try:
         result = subprocess.run(
@@ -262,16 +295,16 @@ def _proc_table_from_windows() -> list[tuple[int, str]]:
         )
     except (OSError, subprocess.SubprocessError):
         return []
-    found: list[tuple[int, str]] = []
+    rows: list[tuple[int, int, str]] = []
     for line in (result.stdout or "").splitlines():
         line = line.strip()
         if not line:
             continue
-        parts = line.split(None, 1)
-        if len(parts) < 2 or not parts[0].isdigit():
+        parts = line.split(None, 2)
+        if len(parts) < 3 or not parts[0].isdigit() or not parts[1].isdigit():
             continue
-        found.append((int(parts[0]), parts[1]))
-    return found
+        rows.append((int(parts[0]), int(parts[1]), parts[2]))
+    return _drop_windows_redirectors(rows)
 
 
 def process_table() -> list[tuple[int, str]]:

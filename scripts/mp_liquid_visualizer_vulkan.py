@@ -258,11 +258,19 @@ for _preset in VISUALIZER_PRESETS:
 try:
     from mp_visualizer_user_presets import load_user_presets as _load_user_presets
 except ImportError:  # imported as scripts.mp_liquid_visualizer_vulkan
-    from scripts.mp_visualizer_user_presets import load_user_presets as _load_user_presets  # type: ignore
-try:
-    VISUALIZER_PRESETS.extend(_load_user_presets())
-except Exception:
-    pass
+    try:
+        from scripts.mp_visualizer_user_presets import load_user_presets as _load_user_presets  # type: ignore
+    except ImportError:
+        # The registry module must never keep the visualizer from opening. A
+        # missing copy used to raise ModuleNotFoundError at import time, so
+        # Launch MP Visualizer from the tray closed with no window and no
+        # traceback (the .bat starts it detached).
+        _load_user_presets = None  # type: ignore[assignment]
+if _load_user_presets is not None:
+    try:
+        VISUALIZER_PRESETS.extend(_load_user_presets())
+    except Exception:
+        pass
 
 
 def _apply_builtin_overrides() -> None:
@@ -2288,11 +2296,17 @@ class LiquidVisualizerVulkanRenderer(MonitorSpanMixin, RandomPresetMixin, Player
         folded = None
         # User-generated presets ship their own already-specialised module, so
         # they do not go through the thirteen-scene folding path.
+        user_module = None
         try:
-            from mp_visualizer_user_presets import vulkan_spirv_for
-        except ImportError:
-            from scripts.mp_visualizer_user_presets import vulkan_spirv_for  # type: ignore
-        user_module = vulkan_spirv_for(self.preset)
+            try:
+                from mp_visualizer_user_presets import vulkan_spirv_for
+            except ImportError:
+                from scripts.mp_visualizer_user_presets import vulkan_spirv_for  # type: ignore
+            user_module = vulkan_spirv_for(self.preset)
+        except Exception:
+            # A missing or damaged user-preset registry falls back to the
+            # built-in shaders instead of closing the window.
+            user_module = None
         if user_module:
             folded = user_module
         elif _IS_MAC or _IS_LINUX:

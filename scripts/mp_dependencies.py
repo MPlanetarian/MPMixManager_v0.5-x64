@@ -706,6 +706,17 @@ def _which_windows_library(name: str) -> str:
 def _windows_package_dirs() -> List[str]:
     """site-packages folders where a package ships its own DLLs."""
     found: List[str] = []
+    # The launchers prefer <install>/venv, and that is where pip puts the
+    # PyPI glfw wheel. Without this directory the engine installed glfw3.dll
+    # into the venv and then still reported GLFW missing, so an install looked
+    # successful while MP Gui exited with "Could not load GLFW on Windows".
+    try:
+        site = venv_path() / "Lib" / "site-packages"
+        if site.is_dir():
+            found.append(str(site / "glfw"))
+            found.append(str(site))
+    except (NameError, OSError):
+        pass
     local = os.environ.get("LOCALAPPDATA", "")
     program_files = os.environ.get("ProgramFiles", r"C:\Program Files")
     for base in (
@@ -1423,6 +1434,26 @@ def main(argv: Optional[List[str]] = None) -> int:
                 still_failing.extend(r["id"] for r in binaries)
                 for note in notes:
                     print(f"  {DIM}{note}{NC}")
+            # Some binary dependencies also ship as a pip wheel. GLFW is the
+            # important one: Windows has no platform package for it in every
+            # manager (winget has no id at all), but the PyPI `glfw` wheel
+            # carries glfw3.dll. Without this fallback `--install` finished
+            # with GLFW still missing and the GUI died silently at launch.
+            pip_binaries = [
+                r for r in binaries
+                if r["id"] in still_failing and _pip_name(r)
+            ]
+            if pip_binaries and not args.no_pip:
+                ok, notes, used_python = install_modules(
+                    python, pip_binaries, "", args.dry_run, args.yes
+                )
+                if used_python and _works(used_python):
+                    python = used_python
+                if ok:
+                    installed.extend(r["id"] for r in pip_binaries)
+                else:
+                    for note in notes:
+                        print(f"  {DIM}{note}{NC}")
 
         if modules:
             if args.no_pip:
@@ -1483,9 +1514,16 @@ def main(argv: Optional[List[str]] = None) -> int:
         for entry in unmet:
             spec = next((s for s in SPECS if s["id"] == entry["id"]), None)
             packages = (spec or {}).get("pkgs", {}).get(manager, [])
-            hint = " ".join(packages) if packages else (spec or {}).get("pip", "")
-            print(f"  - {entry['id']}: {entry['purpose']}"
-                  + (f"  ({manager} {hint})" if hint else ""))
+            pip_name = (spec or {}).get("pip", "")
+            if packages:
+                # Name the manager that would actually be used, so a Windows
+                # user is not told to run a pip package as a winget id.
+                hint = f" ({manager} {' '.join(packages)})"
+            elif pip_name:
+                hint = f" (pip install {pip_name})"
+            else:
+                hint = ""
+            print(f"  - {entry['id']}: {entry['purpose']}{hint}")
 
     return 0 if not unmet else 1
 

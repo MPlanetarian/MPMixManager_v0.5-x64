@@ -232,7 +232,10 @@ def load_glfw_dll():
             except OSError as exc:
                 last_error = exc
                 continue
-        raise RuntimeError("Could not load GLFW on Windows. Ensure glfw3.dll is in PATH.") from last_error
+        raise RuntimeError(
+            "Could not load GLFW on Windows. Install it with: pip install glfw "
+            "(the wheel ships glfw3.dll), or put glfw3.dll in PATH."
+        ) from last_error
     if is_macos():
         candidates = ["libglfw.3.dylib", "libglfw.dylib"]
         try:

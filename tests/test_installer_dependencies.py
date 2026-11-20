@@ -24,6 +24,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 INSTALL = ROOT / "install.sh"
@@ -303,6 +304,19 @@ class TestDependencyEngine(unittest.TestCase):
                 empty.append(spec["id"])
         self.assertEqual(empty, [], "binary dependencies with no package mapping")
 
+    def test_a_binary_that_ships_a_wheel_falls_back_to_pip(self):
+        """GLFW has no winget id; the PyPI wheel must still be installed.
+
+        The Windows installer reported "no winget package name known", skipped
+        GLFW, and finished with a venv that could not open a window.
+        """
+        source = DEPS.read_text(encoding="utf-8")
+        install_body = source.split("if binaries:", 1)[1].split("if modules:", 1)[0]
+        self.assertIn("pip_binaries", install_body)
+        self.assertIn("install_modules", install_body)
+        glfw = next(s for s in load_deps_module().SPECS if s["id"] == "GLFW")
+        self.assertEqual(glfw.get("pip"), "glfw")
+
     def test_pygobject_never_uses_pip(self):
         """PyGObject needs headers and a girepository; pip cannot supply them."""
         deps = load_deps_module()
@@ -336,6 +350,25 @@ class TestDependencyEngine(unittest.TestCase):
         self.assertIn("site-packages", source)
         # `lib` prefix is stripped, because Windows has no libglfw.
         self.assertIn('startswith("lib")', windows_fn)
+
+    def test_windows_library_lookup_finds_the_venv_wheel(self):
+        """A glfw wheel installed into <install>/venv must satisfy the probe.
+
+        Without the venv in the search list `--install` created the venv, put
+        glfw3.dll in it, and then still reported GLFW missing; the GUI died
+        with "Could not load GLFW on Windows" and the tray click did nothing.
+        """
+        deps = load_deps_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            venv = Path(tmp) / "venv"
+            dll_dir = venv / "Lib" / "site-packages" / "glfw"
+            dll_dir.mkdir(parents=True)
+            dll = dll_dir / "glfw3.dll"
+            dll.write_bytes(b"")
+            with mock.patch.object(deps, "venv_path", return_value=venv), \
+                    mock.patch.object(deps, "which_binary", return_value=""):
+                found = deps._which_windows_library("libglfw.so.3")
+        self.assertEqual(Path(found), dll)
 
     def test_brew_is_invoked_by_its_resolved_path(self):
         """A bare `brew` failed on a Mac where brew was installed.
