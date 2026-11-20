@@ -331,13 +331,30 @@ class LiquidPlayerVisualizerModeTests(unittest.TestCase):
         self.assertEqual(vis.march_target_size(1920, 1080, platform="linux"), (1920, 1080))
         self.assertEqual(vis.march_target_size(1094, 778, platform="linux"), (1094, 778))
         self.assertEqual(vis.march_target_size(100, 80, platform="linux"), (100, 80))
-        self.assertEqual(vis.march_target_size(700, 700, platform="win32"), (224, 224))
+        self.assertEqual(vis.march_target_size(700, 700, platform="win32"), (700, 700))
+        self.assertEqual(vis.march_target_size(1920, 1080, platform="win32"), (960, 540))
         self.assertEqual(vis.march_target_size(1094, 734, platform="darwin"), (768, 515))
+        # The unfolded shader fallback asks for the old cap explicitly.
+        self.assertEqual(vis.march_target_size(700, 700, long_edge=224), (224, 224))
         os.environ["MP_VISUALIZER_GL_LONG_EDGE"] = "512"
         try:
             self.assertEqual(vis.march_target_size(2784, 1685, platform="linux"), (512, 310))
         finally:
             os.environ.pop("MP_VISUALIZER_GL_LONG_EDGE", None)
+
+    def test_windows_renders_with_the_folded_preset_module(self):
+        """Windows used to skip the folded modules and cap the march at 224.
+
+        With the shipped per-preset SPIR-V it can march at the window's own
+        size; the 224 cap must only be the unfolded fallback.
+        """
+        renderer = vulkan_vis.LiquidVisualizerVulkanRenderer.__new__(
+            vulkan_vis.LiquidVisualizerVulkanRenderer
+        )
+        renderer.preset = {"id": 0}
+        resolved = renderer._resolve_frag_spv()
+        self.assertEqual(Path(resolved).name, "p0.frag.spv")
+        self.assertTrue(renderer._folded_spv)
 
     def test_linux_visualizer_matches_the_liquid_player_window(self):
         self.assertEqual(vis.linux_liquid_player_window_size(), (1094, 778))

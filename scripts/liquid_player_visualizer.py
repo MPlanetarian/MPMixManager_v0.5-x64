@@ -290,11 +290,15 @@ def write_player_visualizer_state(active: bool, preset: Dict[str, Any],
 # is 768, so a 1094×734 window is drawn at 768×515 and scaled up. A
 # full-window march of this shader is about 9 fps through MoltenVK.
 # Linux marches at the framebuffer size, one raymarch pixel per window
-# pixel, so the picture stays sharp. Windows keeps the 224 cap.
+# pixel, so the picture stays sharp. Windows used to keep a 224 cap because
+# only the unfolded thirteen-scene shader was available there; the shipped
+# per-preset SPIR-V modules now fold on Windows too, so the march runs at
+# 960 and a normal 700×700 window is drawn at its native size.
 # MP_VISUALIZER_GL_LONG_EDGE still overrides the long edge.
 # MP_VISUALIZER_GL_MARCH_STEPS clamps to 24..84.
 MACOS_FULLSCREEN_SIZE = (1920, 1080)
 _MACOS_LONG_EDGE = 768
+_WINDOWS_LONG_EDGE = 960
 _UNFOLDED_LONG_EDGE = 224
 _FULL_MARCH_STEPS = 84
 _MACOS_MARCH_STEPS = 64
@@ -944,7 +948,9 @@ def march_target_size(
 
     Linux uses the framebuffer as it is, so a 1920×1200 window marches at
     1920×1200 and is not scaled up. macOS keeps a 768 long edge: a 1094×734
-    window marches at 768×515. Windows keeps the 224 cap.
+    window marches at 768×515. Windows uses 960, so the default 700×700 window
+    is not upscaled at all; the unfolded fallback shader in the Vulkan host
+    still passes 224 explicitly when no folded module is available.
     ``MP_VISUALIZER_GL_LONG_EDGE`` still overrides the long edge.
     """
     host = sys.platform if platform is None else platform
@@ -959,7 +965,7 @@ def march_target_size(
         if cap:
             return _scale_long_edge(width_i, height_i, cap)
         return width_i, height_i
-    return _scale_long_edge(width_i, height_i, _UNFOLDED_LONG_EDGE)
+    return _scale_long_edge(width_i, height_i, _WINDOWS_LONG_EDGE)
 
 
 def fullscreen_render_cap(width: int, height: int, fullscreen: bool) -> tuple:

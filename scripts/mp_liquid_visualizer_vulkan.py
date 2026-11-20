@@ -2289,9 +2289,11 @@ class LiquidVisualizerVulkanRenderer(MonitorSpanMixin, RandomPresetMixin, Player
     def _resolve_frag_spv(self) -> Path:
         """Folded preset shader, so the march contains the selected scene.
 
-        Linux draws at the framebuffer size. The full shader still carries
-        every preset, which is why the Linux picture used to be 224 pixels
-        on the long edge. macOS uses these same folded modules.
+        Linux and macOS use these folded modules, and so does Windows: the
+        shipped ``shaders/presets/p*.frag.spv`` files carry only one scene,
+        while the unfolded shader carries all thirteen and forced the old
+        224-pixel cap. The digest check in ``vulkan_preset_spirv`` keeps a
+        stale module from being used.
         """
         folded = None
         # User-generated presets ship their own already-specialised module, so
@@ -2309,7 +2311,7 @@ class LiquidVisualizerVulkanRenderer(MonitorSpanMixin, RandomPresetMixin, Player
             user_module = None
         if user_module:
             folded = user_module
-        elif _IS_MAC or _IS_LINUX:
+        else:
             try:
                 from liquid_player_visualizer import vulkan_preset_spirv
             except ImportError:
@@ -2354,7 +2356,13 @@ class LiquidVisualizerVulkanRenderer(MonitorSpanMixin, RandomPresetMixin, Player
             cap_h = min(int(self._saver_render[1]), fh)
             self._march_extent = self._scale_to_fit(fw, fh, cap_w, cap_h)
         else:
-            self._march_extent = march_target_size(fw, fh)
+            fallback_cap = None
+            if _IS_WIN and not self._folded_spv:
+                # No folded per-preset module: the shader still carries all
+                # thirteen scenes, so keep the old 224 cap instead of dropping
+                # to single-digit frame rates.
+                fallback_cap = 224
+            self._march_extent = march_target_size(fw, fh, long_edge=fallback_cap)
         self._needs_upscale = bool(self._can_blit and tuple(self._march_extent) != (fw, fh))
         if not self._needs_upscale:
             return
