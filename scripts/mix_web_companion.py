@@ -7617,10 +7617,30 @@ def render_html_page(theme: Dict[str, Any]) -> str:
                 audioEl.addEventListener('play', () => syncPlayPauseButton());
                 audioEl.addEventListener('pause', () => syncPlayPauseButton());
                 audioEl.addEventListener('playing', () => syncPlayPauseButton());
+                // Lock-screen / Control Center controls, plus the iOS audio
+                // session category that keeps this page audible while the app
+                // is in the background. Both follow the element's own state.
+                installMediaSessionActions();
                 audioEl.addEventListener('play', () => {{
+                    claimPlaybackAudioSession();
+                    updateMediaSessionMetadata();
+                    updateMediaSessionState(true);
                     if (audioCtx && audioCtx.state === 'suspended') {{
                         try {{ audioCtx.resume(); }} catch (e) {{}}
                     }}
+                }});
+                audioEl.addEventListener('pause', () => updateMediaSessionState(false));
+                audioEl.addEventListener('timeupdate', () => {{
+                    if (!('mediaSession' in navigator) || !navigator.mediaSession.setPositionState) return;
+                    const dur = isFinite(audioEl.duration) ? audioEl.duration : 0;
+                    if (dur <= 0) return;
+                    try {{
+                        navigator.mediaSession.setPositionState({{
+                            duration: dur,
+                            position: Math.min(audioEl.currentTime, dur),
+                            playbackRate: audioEl.playbackRate || 1,
+                        }});
+                    }} catch (e) {{}}
                 }});
                 audioEl.addEventListener('playing', () => {{
                     if (audioCtx) ensureAudioGraph();
@@ -8082,6 +8102,7 @@ def render_html_page(theme: Dict[str, Any]) -> str:
         // first row of the filtered list.
         function playPlaylistTrack(index, file) {{
             if (phoneOwnsPlayback()) listenerPaused = false;
+            claimPlaybackAudioSession();
             const audioEl = document.getElementById('mobileAudioStream');
             const sameFile = Boolean(file && activeAudioFile === file);
             // The status poll only reloads the element when the file changes.
@@ -8189,6 +8210,11 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             audioStreamEngaged = true;
             networkResumeAttempts = 0;
             networkResumePending = false;
+            // The mix is audible now: mark the session as media playback so
+            // iOS keeps it running when this page leaves the foreground.
+            claimPlaybackAudioSession();
+            updateMediaSessionMetadata();
+            updateMediaSessionState(true);
             // Audio is running, so a pending "tap to start" retry is spent.
             disarmGestureEngage();            if (!hostPlayerActive) {{
                 followStream = true;
@@ -8269,6 +8295,7 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             // (or from a context a previous gesture already unlocked).
             if (onGesture) {{
                 unlockAudioContext();
+                claimPlaybackAudioSession();
                 ensureAudioGraph();
             }} else if (audioCtx && audioCtx.state === 'running') {{
                 ensureAudioGraph();
@@ -8810,15 +8837,132 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             if (audioTimelineEnd(audioEl) > 0) apply();
         }}
 
-        // iPhone and iPad only allow audible play() inside the tap that
-        // called it. A play() from the status poll is rejected, and that
-        // rejection is what made Engage look dead: the gate never moved.
-        function needsPlaybackGesture() {{
+        // iPhone and iPad: the device this page is listened on most. Two iOS
+        // rules shape everything below:
+        //
+        //   1. Audible play() is only allowed inside the tap that called it, so
+        //      a play() from the status poll is rejected. That rejection is
+        //      what made Engage look dead: the gate never moved.
+        //   2. A plain <audio> element keeps playing when Safari is backgrounded
+        //      or the phone is locked. An AudioContext does NOT: WebKit
+        //      suspends/interrupts it the moment the app loses focus, and a mix
+        //      routed through createMediaElementSource then plays silence.
+        //      That is the "music stops when I switch apps" report.
+        function isIOSAudioDevice() {{
             const ua = navigator.userAgent || '';
             if (/iPhone|iPad|iPod/i.test(ua)) return true;
             // iPadOS 13+ reports itself as a Mac.
             if (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1) return true;
             return false;
+        }}
+
+        function needsPlaybackGesture() {{
+            return isIOSAudioDevice();
+        }}
+
+        // iOS 16.4+ Audio Session API. The default session is "ambient", which
+        // the hardware ringer switch silences and which the OS may end as soon
+        // as the page loses focus. "playback" marks this page as intentional
+        // media output, like a native music app: it survives the silent switch
+        // and keeps the audio session in the background. A no-op elsewhere.
+        function claimPlaybackAudioSession() {{
+            try {{
+                const nav = navigator;
+                if (nav.audioSession && typeof nav.audioSession === 'object') {{
+                    nav.audioSession.type = 'playback';
+                }}
+            }} catch (e) {{}}
+        }}
+
+        // Lock-screen / Control Center metadata. With a metadata record and a
+        // playbackState, iOS treats this page as the now-playing app and shows
+        // transport controls instead of stopping the mix when the screen locks.
+        // The <audio> element still owns the clock and the decoders.
+        let trackMeta = {{ title: '', artist: '', album: '' }};
+
+        function updateMediaSessionMetadata() {{
+            if (!('mediaSession' in navigator) || typeof MediaMetadata === 'undefined') return;
+            const title = trackMeta.title || 'MP Mix Manager';
+            const artist = trackMeta.artist || 'MPlanetarian';
+            try {{
+                navigator.mediaSession.metadata = new MediaMetadata({{
+                    title: title,
+                    artist: artist,
+                    album: trackMeta.album || 'MP Mix Manager',
+                }});
+            }} catch (e) {{}}
+        }}
+
+        function updateMediaSessionState(playing) {{
+            if (!('mediaSession' in navigator)) return;
+            try {{
+                navigator.mediaSession.playbackState = playing ? 'playing' : 'paused';
+            }} catch (e) {{}}
+        }}
+
+        // Hardware and lock-screen buttons must drive whichever side is really
+        // playing. While this page owns the mix that is its own element; while
+        // the desk player is on air the same buttons are remote controls.
+        function mediaSessionPlay() {{
+            const audioEl = document.getElementById('mobileAudioStream');
+            if (audioEl && phoneOwnsPlayback()) {{
+                if (audioEl.paused) {{
+                    listenerPaused = false;
+                    applyStreamPitch(currentPitchPercent);
+                    const started = audioEl.play();
+                    if (started && started.catch) started.catch(() => {{}});
+                    sendAction('play');
+                }}
+                return;
+            }}
+            sendAction('play');
+        }}
+
+        function mediaSessionPause() {{
+            const audioEl = document.getElementById('mobileAudioStream');
+            if (audioEl && phoneOwnsPlayback()) {{
+                if (!audioEl.paused) {{
+                    listenerPaused = true;
+                    audioEl.pause();
+                    sendAction('pause');
+                }}
+                return;
+            }}
+            sendAction('pause');
+        }}
+
+        function installMediaSessionActions() {{
+            if (!('mediaSession' in navigator)) return;
+            const ms = navigator.mediaSession;
+            if (!ms.setActionHandler) return;
+            const audioEl = document.getElementById('mobileAudioStream');
+            const seekBy = (delta) => {{
+                if (!audioEl) return;
+                try {{
+                    const dur = isFinite(audioEl.duration) ? audioEl.duration : currentDurationSec;
+                    const next = audioEl.currentTime + delta;
+                    audioEl.currentTime = Math.max(0, dur > 0 ? Math.min(next, dur - 0.5) : next);
+                }} catch (e) {{}}
+            }};
+            const actions = {{
+                play: mediaSessionPlay,
+                pause: mediaSessionPause,
+                stop: mediaSessionPause,
+                previoustrack: () => sendAction('prev'),
+                nexttrack: () => sendAction('next'),
+                seekbackward: (details) => seekBy(-(Number(details && details.seekOffset) || 30)),
+                seekforward: (details) => seekBy(Number(details && details.seekOffset) || 30),
+                seekto: (details) => {{
+                    if (!audioEl || details == null) return;
+                    try {{
+                        if (details.fastSeek && audioEl.fastSeek) audioEl.fastSeek(details.seekTime);
+                        else audioEl.currentTime = details.seekTime;
+                    }} catch (e) {{}}
+                }},
+            }};
+            Object.keys(actions).forEach((name) => {{
+                try {{ ms.setActionHandler(name, actions[name]); }} catch (e) {{}}
+            }});
         }}
 
         // Called once the dashboard knows which file the server is streaming.
@@ -8922,6 +9066,9 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             // stays suspended on iPhone and the equaliser (and the mix, once
             // it is routed through that context) never starts.
             unlockAudioContext();
+            // The session category has to be claimed from a gesture too, and
+            // this is the tap that is about to start the mix.
+            claimPlaybackAudioSession();
             // A tap must always produce an answer. The old handler returned
             // silently when the host had no queue, so on a phone with an empty
             // archive the button looked broken: no sound, no message, no
@@ -9032,6 +9179,7 @@ def render_html_page(theme: Dict[str, Any]) -> str:
                 return;
             }}
             unlockAudioContext();
+            claimPlaybackAudioSession();
             ensureAudioGraph();
             if (!audioEl || !activeAudioFile) {{
                 showStreamOverlay(streamUnavailableReason ||
@@ -9108,6 +9256,12 @@ def render_html_page(theme: Dict[str, Any]) -> str:
         // one that was only constructed from a timer, and a suspended context
         // silences the element once it is routed through Web Audio.
         function unlockAudioContext() {{
+            // iOS: never build Web Audio. It is not the missing piece there,
+            // it is the thing that stops background playback (see
+            // isIOSAudioDevice). Returning null keeps the element on the
+            // native media pipeline, which is the only path iOS keeps alive
+            // when the app is backgrounded.
+            if (isIOSAudioDevice()) return null;
             const Ctx = window.AudioContext || window.webkitAudioContext;
             if (!Ctx) return null;
             if (!audioCtx) {{
@@ -9152,6 +9306,13 @@ def render_html_page(theme: Dict[str, Any]) -> str:
         }}
 
         function ensureAudioGraph() {{
+            // iPhone/iPad: the element is deliberately left unrouted. A
+            // MediaElementSourceNode hands the element's output to the
+            // AudioContext, which iOS suspends in the background, so the mix
+            // would go silent the moment the listener switches apps. The
+            // equaliser falls back to the server's /api/eq levels there; the
+            // music keeps playing. See isIOSAudioDevice().
+            if (isIOSAudioDevice()) return null;
             const audioEl = document.getElementById('mobileAudioStream');
             const ctx = unlockAudioContext();
             if (!audioEl || !ctx) return null;
@@ -9222,6 +9383,9 @@ def render_html_page(theme: Dict[str, Any]) -> str:
         // element itself is loud. After a short run of silence, route the
         // element through the context so the analyser can see the mix.
         function promoteCaptureToElement() {{
+            // iOS never builds a graph (see ensureAudioGraph), so there is no
+            // capture source to promote and nothing to route.
+            if (isIOSAudioDevice()) return;
             if (!audioCtx || !audioGraph || audioGraph.mode !== 'capture') return;
             const audioEl = document.getElementById('mobileAudioStream');
             if (!audioEl) return;
@@ -9295,9 +9459,26 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             currentVolumePercent = p;
             if (muted !== undefined && muted !== null) streamMuted = Boolean(muted);
             const pill = document.getElementById('volPill');
-            if (pill) pill.innerText = streamMuted ? 'Vol: MUTED' : ('Vol: ' + p + '%');
+            if (pill) {{
+                if (streamMuted) {{
+                    pill.innerText = 'Vol: MUTED';
+                    pill.title = '';
+                }} else if (isIOSAudioDevice() && !speakersFollowGain() && phoneOwnsPlayback()) {{
+                    // A native iOS element has no settable volume (Safari
+                    // ignores audio.volume) and this page no longer routes it
+                    // through a GainNode, so the hardware buttons are the
+                    // level control. Say so instead of showing a percentage
+                    // the tap cannot change.
+                    pill.innerText = 'Vol: iOS';
+                    pill.title = 'Use the iPhone volume buttons';
+                }} else {{
+                    pill.innerText = 'Vol: ' + p + '%';
+                    pill.title = '';
+                }}
+            }}
             // iPhone Safari ignores audio.volume. Once the element is the
-            // graph source, the gain node is what the speaker follows.
+            // graph source, the gain node is what the speaker follows; on the
+            // native iOS path only mute is available, so the pill says so.
             if ((audioCtx && needsPlaybackGesture()) || speakersFollowGain()) ensureAudibleGain();
             setMixLoudness(mixLoudness());
         }}
@@ -9723,6 +9904,16 @@ def render_html_page(theme: Dict[str, Any]) -> str:
                             targetLevels[i] = isPlayerActive ? Math.max(0.04, Math.min(1.0, data.levels[i])) : 0.04;
                         }}
                     }}
+                }} else if (isIOSAudioDevice()) {{
+                    // iOS plays the native element, so no AnalyserNode can hear
+                    // it (see ensureAudioGraph). Follow the server's levels
+                    // instead of leaving the bars frozen on the first frame.
+                    isPlayerActive = true;
+                    if (data.levels && data.levels.length) {{
+                        for (let i = 0; i < BANDS && i < data.levels.length; i++) {{
+                            targetLevels[i] = Math.max(0.04, Math.min(1.0, data.levels[i]));
+                        }}
+                    }}
                 }} else {{
                     isPlayerActive = true;
                 }}
@@ -9939,6 +10130,17 @@ def render_html_page(theme: Dict[str, Any]) -> str:
 
                 document.getElementById('trackTitle').innerText = data.title || "No Mix Playing";
                 document.getElementById('trackArtist').innerText = data.album ? (data.artist + " • " + data.album) : (data.artist || "MPlanetarian");
+                // Keep the lock screen in step with the dashboard. iOS shows
+                // this metadata in Control Center and on the lock screen while
+                // the mix plays in the background.
+                const nextTitle = data.title || '';
+                const nextArtist = data.artist || '';
+                const nextAlbum = data.album || '';
+                if (nextTitle !== trackMeta.title || nextArtist !== trackMeta.artist ||
+                    nextAlbum !== trackMeta.album) {{
+                    trackMeta = {{ title: nextTitle, artist: nextArtist, album: nextAlbum }};
+                    updateMediaSessionMetadata();
+                }}
 
                 const badge = document.getElementById('playBadge');
                 const state = (data.state || "stopped").toLowerCase();
@@ -10502,7 +10704,9 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             syncRainbowDrive();
             if (paused) {{
                 stopPolls();
+                startBackgroundStreamPoll();
             }} else {{
+                stopBackgroundStreamPoll();
                 // Catch up immediately: the page was frozen while hidden and
                 // the displayed state is now stale.
                 startPolls();
@@ -10511,8 +10715,59 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             }}
         }}
 
+        // A backgrounded iPhone keeps the <audio> element playing, and iOS then
+        // throttles the full poll schedule away. Without any poll the queue
+        // cannot advance when a mix ends: the page would fall silent after one
+        // track while the listener was in another app. One status request every
+        // three seconds is enough to follow the queue and is nowhere near the
+        // ten-a-second eq storm that pausing the schedule was introduced for.
+        const BACKGROUND_STREAM_POLL_MS = 3000;
+        let backgroundStreamPoll = 0;
+
+        function startBackgroundStreamPoll() {{
+            if (!isIOSAudioDevice()) return;
+            stopBackgroundStreamPoll();
+            const tick = async () => {{
+                backgroundStreamPoll = 0;
+                if (!document.hidden) return;
+                // Stop following the queue only when the listener asked for
+                // silence. An element paused by an interruption is still a
+                // session that should pick the next mix back up.
+                if (!audioStreamEngaged || listenerPaused) return;
+                try {{ await fetchStatus(); }} catch (e) {{}}
+                if (document.hidden && audioStreamEngaged && !listenerPaused) {{
+                    backgroundStreamPoll = setTimeout(tick, BACKGROUND_STREAM_POLL_MS);
+                }}
+            }};
+            backgroundStreamPoll = setTimeout(tick, BACKGROUND_STREAM_POLL_MS);
+        }}
+
+        function stopBackgroundStreamPoll() {{
+            clearTimeout(backgroundStreamPoll);
+            backgroundStreamPoll = 0;
+        }}
+
+        // Coming back to the page after a call, Siri or the lock screen. iOS
+        // can pause the element for an interruption without telling this page,
+        // so resume it when the listener did not ask for silence. A refusal
+        // (no fresh gesture) is harmless: the transport button is repainted by
+        // the status poll and the next tap starts the same mix.
+        function resumeStreamAfterInterruption() {{
+            if (isIOSAudioDevice()) claimPlaybackAudioSession();
+            const audioEl = document.getElementById('mobileAudioStream');
+            if (!audioEl || !audioStreamEngaged || listenerPaused || !activeAudioFile) return;
+            if (!audioEl.paused || audioEl.ended) return;
+            if (audioEl.__unlocking) return;
+            applyStreamPitch(currentPitchPercent);
+            const started = audioEl.play();
+            if (started && started.catch) started.catch(() => {{}});
+        }}
+
         document.addEventListener('visibilitychange', () => {{
             setPollingPaused(document.hidden);
+            // Backgrounding never pauses the element: that is what lets the
+            // mix keep playing while the listener uses another app.
+            if (!document.hidden) resumeStreamAfterInterruption();
         }});
         // iOS Safari fires pagehide while the document is still on screen
         // (bfcache snapshot, audio session). Freezing there, and only
