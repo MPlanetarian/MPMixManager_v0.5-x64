@@ -1467,16 +1467,53 @@ class LiquidGlassRendererOpenGL:
 
     def focus_window(self, window):
         if not window:
-            return
+            return False
         if is_windows():
+            # SetForegroundWindow alone is refused when this process did not
+            # start from the foreground. The MP Gui console is a separate,
+            # glass-owned window, so without this the glass keeps keyboard
+            # focus and the arrow keys never reach the menu. Attaching to the
+            # current foreground thread is the documented way past that lock.
             try:
-                ctypes.windll.user32.SetForegroundWindow(int(window))
+                user32 = ctypes.windll.user32
+                kernel32 = ctypes.windll.kernel32
+                user32.GetForegroundWindow.restype = ctypes.c_void_p
+                user32.GetWindowThreadProcessId.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+                user32.GetWindowThreadProcessId.restype = ctypes.c_uint32
+                user32.BringWindowToTop.argtypes = [ctypes.c_void_p]
+                user32.BringWindowToTop.restype = ctypes.c_bool
+                user32.SetForegroundWindow.argtypes = [ctypes.c_void_p]
+                user32.SetForegroundWindow.restype = ctypes.c_bool
+                user32.SetFocus.argtypes = [ctypes.c_void_p]
+                user32.SetFocus.restype = ctypes.c_void_p
+                user32.AttachThreadInput.argtypes = [ctypes.c_uint32, ctypes.c_uint32, ctypes.c_bool]
+                user32.AttachThreadInput.restype = ctypes.c_bool
+                kernel32.GetCurrentThreadId.restype = ctypes.c_uint32
+                hwnd = int(window)
+                foreground = int(user32.GetForegroundWindow() or 0)
+                foreground_thread = int(
+                    user32.GetWindowThreadProcessId(foreground, None)
+                ) if foreground else 0
+                current_thread = int(kernel32.GetCurrentThreadId())
+                attached = False
+                if foreground_thread and foreground_thread != current_thread:
+                    attached = bool(
+                        user32.AttachThreadInput(current_thread, foreground_thread, True)
+                    )
+                try:
+                    user32.BringWindowToTop(hwnd)
+                    user32.SetForegroundWindow(hwnd)
+                    user32.SetFocus(hwnd)
+                finally:
+                    if attached:
+                        user32.AttachThreadInput(current_thread, foreground_thread, False)
+                return True
             except Exception:
-                pass
-            return
+                return False
         if getattr(self, "_x11", None):
             self._x11.XSetInputFocus(self.x11_display(), int(window), 2, 0)
             self._x11.XFlush(self.x11_display())
+        return True
 
     def take_mouse_focus(self, child=0, warp=True) -> bool:
         """Raise this window and move the pointer into the terminal."""

@@ -1569,6 +1569,14 @@ class GlassHost:
             except Exception:
                 pass
             self._place_terminal(force=True)
+            # The console is a separate window owned by the glass. Without
+            # this the glass keeps keyboard focus and every keystroke -- the
+            # arrow keys included -- goes to GLFW instead of the menu. The
+            # Linux path focuses its VTE child for the same reason.
+            try:
+                self.renderer.focus_window(self.child_xid)
+            except Exception:
+                pass
 
         self._sync_windows_drag()
         down = dragging = False

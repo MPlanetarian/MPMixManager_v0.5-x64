@@ -156,6 +156,28 @@ class TestWindowsPlayerHosts(unittest.TestCase):
             self.assertIsNone(gtk)
             self.assertIsNone(vte)
 
+    def test_the_windows_console_receives_keyboard_focus(self):
+        """Arrow keys belong to the menu, not the glass frame.
+
+        The console is a glass-owned window. If the glass keeps focus, every
+        keystroke goes to GLFW and Up/Down do nothing.
+        """
+        host = (ROOT / "MP_Audio_Player_Liquid_Glass_OpenGL.py").read_text(
+            encoding="utf-8", errors="replace"
+        )
+        placed = host.split("_reveal_windows_console(user32, child_hwnd", 1)[1].split(
+            "self._sync_windows_drag", 1
+        )[0]
+        self.assertIn("focus_window(self.child_xid)", placed)
+        opengl = (ROOT / "scripts" / "liquid_glass_opengl.py").read_text(
+            encoding="utf-8", errors="replace"
+        )
+        focus = opengl.split("def focus_window", 1)[1].split(
+            "def take_mouse_focus", 1
+        )[0]
+        self.assertIn("AttachThreadInput", focus)
+        self.assertIn("SetForegroundWindow", focus)
+
     def test_glass_host_handles_none_terminal_on_windows(self):
         # On Windows, self.terminal is None (hosted via console HWND), so toggle_maximize and set_mode must not crash
         host_gl = MP_Audio_Player_Liquid_Glass_OpenGL.GlassHost(["test"], mode="NORMAL")
