@@ -413,6 +413,7 @@ function Start-MpRole {
         gui = "MP Mix Manager (Liquid Glass"
         liquid = "MP Audio Player (Liquid Glass"
         manager = "MP Mix Archive Manager"
+        visualizer = "MP Liquid Visualizer"
     }
     # MP Gui and MP Liquid Player open new windows until four are up. Only
     # past that does a launch raise the window that is already open.
@@ -422,6 +423,7 @@ function Start-MpRole {
         return
     }
     if ($Role -eq "manager" -and (Show-MpWindow -TitlePart $titles[$Role])) { return }
+    if ($Role -eq "visualizer" -and (Show-MpWindow -TitlePart $titles[$Role])) { return }
     $target = $null
     switch ($Role) {
         "gui" {
@@ -432,6 +434,12 @@ function Start-MpRole {
         }
         "liquid" { $target = Join-Path $Root "launch_liquid_glass.bat" }
         "manager" { $target = Join-Path $Root "manager.bat" }
+        "visualizer" {
+            $target = Join-Path $Root "launch_liquid_visualizer.bat"
+            if (-not (Test-Path -LiteralPath $target)) {
+                $target = Join-Path $Root "scripts\launch_liquid_visualizer.bat"
+            }
+        }
     }
     if ($target -and (Test-Path -LiteralPath $target)) {
         Start-Process -FilePath $target -WorkingDirectory $Root | Out-Null
@@ -676,6 +684,7 @@ function Invoke-MpTrayAction {
         "gui" { "gui" }
         "liquid" { "liquid" }
         "manager" { "manager" }
+        "visualizer" { "visualizer" }
         default { "" }
     }
     if (-not $role) { return }
@@ -974,7 +983,8 @@ try {
     $entries = @(
         @{ Id = "gui"; Label = "Launch MP Gui"; Component = "gui" },
         @{ Id = "liquid"; Label = "Launch MP Liquid Player"; Component = "liquid" },
-        @{ Id = "manager"; Label = "Launch MP Mix Manager"; Component = "manager" },
+        @{ Id = "manager"; Label = "Launch MP Mix Manager (CLI)"; Component = "manager" },
+        @{ Id = "visualizer"; Label = "Launch MP Visualizer"; Component = "visualizer" },
         @{ Id = "rescan-archive"; Label = "Rescan Mix Archive Folders"; Component = "" },
         @{ Id = "rescan-music"; Label = "Rescan Music Folders"; Component = "" },
         @{ Id = "mute-audio"; Label = "Mute MP Player Audio"; Component = "" },

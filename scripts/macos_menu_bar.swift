@@ -46,7 +46,8 @@ final class MenuBarController: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let entries = [
             ("launch-gui", "Launch MP Gui"),
             ("launch-liquid", "Launch MP Liquid Player"),
-            ("launch-manager", "Launch MP Mix Manager"),
+            ("launch-manager", "Launch MP Mix Manager (CLI)"),
+            ("launch-visualizer", "Launch MP Visualizer"),
             ("web-audio", "Start / Stop MP Audio Player (Web)"),
             ("rescan-archive", "Rescan Mix Archive Folders"),
             ("rescan-music", "Rescan Music Folders"),
@@ -91,6 +92,7 @@ final class MenuBarController: NSObject, NSApplicationDelegate, NSMenuDelegate {
         case "launch-gui": component = "gui"
         case "launch-liquid": component = "liquid"
         case "launch-manager": component = "manager"
+        case "launch-visualizer": component = "visualizer"
         default: component = nil
         }
         guard let wanted = component else { return true }
