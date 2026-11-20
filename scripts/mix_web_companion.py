@@ -2177,20 +2177,33 @@ def _archive_dirs() -> List[Path]:
     base = get_base_dir()
     for name in ("MIX_ARCHIVE", "FLAC_CONVERTED_OUTPUTS"):
         add(base / name)
-    # Configured folders that are missing must not hide a mounted archive: a
-    # stale MIX_ARCHIVE_DIR is the normal case for removable media, and
-    # returning only the empty install-tree folders is what made the phone
-    # report "Playlist is empty" while 694 mixes were sitting on a disk.
+    # Discover every populated archive mount, not only a replacement for a
+    # stale configured path. A desktop player can stream from more than one
+    # disk at once (the manager and MP Audio Player scan the configured folder
+    # *and* the archive mounted under /run/media, /mnt or /Volumes), so the
+    # phone must see the same library instead of only the primary folder.
+    #
+    # A match is added only when it already contains a mix: the empty
+    # MIX_ARCHIVE/FLAC_CONVERTED_OUTPUTS skeleton in a fresh install must not
+    # become a second root, and an unmounted autofs/CIFS stub must not be
+    # pulled in just because it exists.
     #
     # ARCHIVE_MOUNT_GLOBS is emptied by the test suite, which must never walk
     # the developer's real archive; setting WEB_COMPANION_ARCHIVE_AUTODETECT=0
     # does the same for an operator who pins the exact folders.
     globs = _archive_mount_globs()
-    if globs and not any(_dir_is_archive_candidate(p) for p in dirs):
+    if globs:
         for pattern in globs:
             try:
                 for match in sorted(glob.glob(pattern)):
-                    add(match)
+                    try:
+                        candidate = Path(os.path.expanduser(str(match))).resolve()
+                    except Exception:
+                        continue
+                    if str(candidate) in seen:
+                        continue
+                    if _dir_is_archive_candidate(candidate):
+                        add(match)
             except Exception:
                 pass
     return dirs

@@ -1084,6 +1084,37 @@ class ArchiveAutodiscoveryTest(unittest.TestCase):
         self.assertIn(str(mount.resolve()), dirs,
                       "the mounted archive must be discovered")
 
+    def test_a_second_mounted_archive_is_not_hidden_by_the_primary(self):
+        """The desktop scans the configured archive *and* the mount beside it.
+
+        The phone counted 775 tracks while MP Audio Player listed 1084 because
+        `_archive_dirs()` stopped at the first configured candidate and never
+        looked at the populated drive mounted under /run/media. Both libraries
+        must be in the stream queue.
+        """
+        primary = self.tmp / "primary" / "MIX_ARCHIVE"
+        (primary / "FLAC_CONVERTED_OUTPUTS").mkdir(parents=True)
+        (primary / "FLAC_CONVERTED_OUTPUTS" / "primary.flac").write_bytes(b"\x00" * 4096)
+        mount = self.tmp / "run" / "media" / "user" / "DISK" / "MIX_ARCHIVE"
+        (mount / "FLAC_CONVERTED_OUTPUTS").mkdir(parents=True)
+        (mount / "FLAC_CONVERTED_OUTPUTS" / "second.flac").write_bytes(b"\x00" * 4096)
+        empty = self.tmp / "install" / "MIX_ARCHIVE"
+        empty.mkdir(parents=True)
+
+        globs = (str(self.tmp / "run" / "media" / "*" / "*" / "MIX_ARCHIVE"),)
+        patches = self._patches(globs, configured=str(primary))
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+
+        dirs = [str(d) for d in mwc._archive_dirs()]
+        self.assertIn(str(primary.resolve()), dirs)
+        self.assertIn(str(mount.resolve()), dirs,
+                      "the populated second archive must be streamable too")
+        # The empty install-tree placeholder may be listed, but it contributes
+        # no files; it must not replace either populated archive.
+        self.assertTrue(empty.is_dir())
+
     def test_an_empty_install_tree_does_not_count_as_the_archive(self):
         """Placeholder folders must not suppress discovery.
 
