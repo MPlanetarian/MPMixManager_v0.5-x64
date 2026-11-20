@@ -45,6 +45,10 @@ LAUNCHD_PLIST="$HOME/Library/LaunchAgents/$LAUNCHD_LABEL.plist"
 LOG_DIR="$HOME/.config/mix-manager"
 LOG_FILE="$LOG_DIR/mp-web-companion.log"
 UNIT_PATH="$HOME/.config/systemd/user/$SERVICE_NAME"
+# Older local setups dropped this in to keep the host silent. It also disabled
+# the stream arming that lets a phone start the mix without a tap, so the next
+# start removes it. Autoplay never opens a local audio device.
+LEGACY_NO_AUTOPLAY_DROPIN="$HOME/.config/systemd/user/$SERVICE_NAME.d/10-no-local-autoplay.conf"
 
 # Where the macOS app bundle lives. /Applications is the folder Finder's
 # sidebar calls "Applications" and the list System Settings shows, so the app
@@ -166,7 +170,22 @@ remove_stale_token() {
 # ------------------------------------------------------------------------------
 # Service definition
 # ------------------------------------------------------------------------------
+clear_legacy_no_autoplay_dropin() {
+    [ -f "$LEGACY_NO_AUTOPLAY_DROPIN" ] || return 0
+    if grep -q 'WEB_COMPANION_AUTOPLAY=false' "$LEGACY_NO_AUTOPLAY_DROPIN" 2>/dev/null; then
+        rm -f "$LEGACY_NO_AUTOPLAY_DROPIN" 2>/dev/null || true
+        echo "✓ Removed the old drop-in that disabled startup autoplay."
+        if have_user_systemd; then
+            systemctl --user daemon-reload >/dev/null 2>&1 || true
+        fi
+    fi
+    return 0
+}
+
 write_systemd_unit() {
+    # A legacy drop-in wins over the unit's own Environment= lines, so remove
+    # it before writing the unit that arms the stream at service start.
+    clear_legacy_no_autoplay_dropin
     [ -n "$PYTHON_BIN" ] || { echo "✗ No usable Python 3.8+ interpreter found."; return 1; }
     mkdir -p "$(dirname "$UNIT_PATH")"
 
@@ -214,6 +233,9 @@ Wants=network-online.target$mount_units
 Type=simple
 WorkingDirectory=$APP_DIR
 Environment=PYTHONUNBUFFERED=1
+# Arm the stream session when the service starts, so a phone (or the dashboard
+# opened later) begins the mix automatically. Nothing is played on this host.
+Environment=WEB_COMPANION_AUTOPLAY=1
 ExecStart="$PYTHON_BIN" "$PY_SCRIPT" --host "$HOST" --port "$PORT"
 Restart=on-failure
 RestartSec=5
@@ -757,6 +779,10 @@ start_service() {
             sleep 1
         fi
     else
+        # The old drop-in disabled the startup queue arming. Remove it even
+        # when the user starts an already-installed unit rather than
+        # re-running `install`.
+        clear_legacy_no_autoplay_dropin
         if have_user_systemd && [ -f "$UNIT_PATH" ]; then
             systemctl --user daemon-reload
             systemctl --user start "$SERVICE_NAME"

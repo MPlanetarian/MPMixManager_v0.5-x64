@@ -67,6 +67,19 @@ class TestCompanionBundleIdentity(unittest.TestCase):
         value = match.group(1)
         self.assertIn("$APP_DIR", value, "WorkingDirectory must not be a fixed path")
 
+    def test_the_service_arms_the_stream_when_it_starts(self):
+        """Autoplay must survive an old local "stay silent" drop-in.
+
+        The stream arming marks the phone session playing; it never opens a
+        host audio device. A drop-in that set WEB_COMPANION_AUTOPLAY=false used
+        to override the unit and left /api/status reporting no queue.
+        """
+        self.assertIn("Environment=WEB_COMPANION_AUTOPLAY=1", self.text)
+        self.assertIn("clear_legacy_no_autoplay_dropin", self.text)
+        self.assertIn("10-no-local-autoplay.conf", self.text)
+        start = self.text.split("start_service() {", 1)[1].split("\nstop_service", 1)[0]
+        self.assertIn("clear_legacy_no_autoplay_dropin", start)
+
     def test_no_hard_coded_version_path_anywhere(self):
         for needle in ("MPMixManager_v0.4-x64", "MPMixManager_v0.5-x64"):
             self.assertNotIn(needle, self.text, f"hard-coded install path: {needle}")
