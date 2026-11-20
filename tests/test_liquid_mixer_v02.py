@@ -200,11 +200,34 @@ class TestLayoutAdditions(unittest.TestCase):
             self.assertGreater(switch[1], slots[0][1] + slots[0][3])
             self.assertEqual(len({round(slot[0], 2) for slot in slots}), 4)
 
-    def test_master_and_monitor_knobs_are_top_left(self):
+    def test_master_and_monitor_knobs_sit_on_the_right_of_the_ribbon(self):
         boxes = mixer_core.layout(1920, 1080)
-        self.assertLess(boxes["master_knob"][0], boxes["trance_button"][0])
-        self.assertLess(boxes["monitor_knob"][0], boxes["trance_button"][0])
+        # They moved off the title end to the right side, before VISUALIZER.
+        self.assertGreater(boxes["master_knob"][0],
+                           boxes["settings_button"][0] + boxes["settings_button"][2])
+        self.assertGreater(boxes["monitor_knob"][0],
+                           boxes["master_knob"][0] + boxes["master_knob"][2])
+        self.assertLess(boxes["monitor_knob"][0] + boxes["monitor_knob"][2],
+                        boxes["visualizer_button"][0])
         self.assertEqual(boxes["master_knob"][1], boxes["monitor_knob"][1])
+        self.assertLessEqual(boxes["master_knob"][1] + boxes["master_knob"][3],
+                             boxes["top_bar"][3])
+
+    def test_top_buttons_are_centred_over_the_profile_button(self):
+        boxes = mixer_core.layout(1920, 1080)
+        left = boxes["trance_button"][0]
+        right = boxes["settings_button"][0] + boxes["settings_button"][2]
+        profile = boxes["profile_button"]
+        self.assertAlmostEqual((left + right) / 2.0,
+                               profile[0] + profile[2] / 2.0, places=3)
+
+    def test_visualizer_is_flush_with_the_right_panel_and_close_is_gone(self):
+        boxes = mixer_core.layout(1920, 1080)
+        card = boxes["deck_b"]
+        visualizer = boxes["visualizer_button"]
+        self.assertAlmostEqual(visualizer[0] + visualizer[2],
+                               card[0] + card[2], places=3)
+        self.assertNotIn("close_button", boxes)
 
     def test_deck_switch_buttons_live_in_the_headers(self):
         boxes = mixer_core.layout(1920, 1080)
@@ -370,12 +393,28 @@ class TestWindowActions(unittest.TestCase):
         self.assertTrue(mixer._on_scroll(None, event))
         self.assertGreater(mixer.model.monitor_volume, 0.85)
 
-    def test_escape_quits_from_a_deck_too(self):
+    def test_escape_is_left_to_a_focused_deck(self):
         mixer = self._mixer()
+        term = MagicMock()
+        mixer.decks["A"] = {"vte": term, "namespace": "x"}
+        mixer.window.get_focus.return_value = term
         with patch.object(mixer, "quit") as quit_mixer:
-            event = SimpleNamespace(keyval=65307)
-            self.assertTrue(mixer._on_key(mixer.decks.get("A", {}).get("vte") or object(), event))
-        quit_mixer.assert_called_once()
+            self.assertFalse(mixer._on_key(term, SimpleNamespace(keyval=65307)))
+        quit_mixer.assert_not_called()
+
+    def test_search_keystrokes_reach_the_focused_deck_not_the_mixer(self):
+        mixer = self._mixer()
+        term = MagicMock()
+        mixer.decks["A"] = {"vte": term, "namespace": "x"}
+        # GTK emits key-press-event on the toplevel first, with widget=window,
+        # even while the deck terminal owns the keyboard.
+        mixer.window.get_focus.return_value = term
+        with patch.object(mixer, "_toggle_visualizer") as visualizer, \
+             patch.object(mixer, "_toggle_recording") as recording:
+            for key in (mixer.Gdk.KEY_v, mixer.Gdk.KEY_r):
+                self.assertFalse(mixer._on_key(mixer.window, SimpleNamespace(keyval=key)))
+        visualizer.assert_not_called()
+        recording.assert_not_called()
 
     def test_number_keys_change_the_visualizer_preset(self):
         mixer = self._mixer()
@@ -477,13 +516,14 @@ class TestQuitKeys(unittest.TestCase):
             self.assertTrue(mixer._on_key(object(), SimpleNamespace(keyval=65307)))
         quit_mixer.assert_called_once()
 
-    def test_escape_quits_from_a_deck_too(self):
+    def test_escape_is_left_to_a_focused_deck(self):
         mixer = TestWindowActions()._mixer()
         term = MagicMock()
         mixer.decks["A"] = {"vte": term, "namespace": "x"}
+        mixer.window.get_focus.return_value = term
         with patch.object(mixer, "quit") as quit_mixer:
-            self.assertTrue(mixer._on_key(term, SimpleNamespace(keyval=65307)))
-        quit_mixer.assert_called_once()
+            self.assertFalse(mixer._on_key(term, SimpleNamespace(keyval=65307)))
+        quit_mixer.assert_not_called()
 
     def test_q_quits_from_the_chrome(self):
         mixer = TestWindowActions()._mixer()

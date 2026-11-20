@@ -11850,6 +11850,12 @@ class TerminalPlayerUI:
             preset = self._mp_visualizer_preset()
             btitle = f"✦ MP LIQUID GLASS VISUALIZER — {preset.get('id', 0)} {preset.get('name', '')} ✦"
             bsub = "Press 0-9 to change the visualizer theme  •  Shift+V returns to liquid glass"
+        # Inside a mixer deck the panel's second line is the loaded track. The
+        # mixer used to draw the filename above the terminal; it now lives on
+        # the old "All Music Folders" line, prefixed with "Track: ".
+        mixer_deck = bool(os.environ.get("MP_LIQUID_GLASS_MIXER") == "1")
+        if is_lg and mixer_deck and self.mode == "MUSIC":
+            bsub = f"Track: {st.get('title') or 'Nothing loaded'}"
         # A portrait column is narrower than the wording these headers were
         # written for, so the title and subtitle are chosen from progressively
         # shorter forms rather than sliced mid-word.
@@ -11858,7 +11864,11 @@ class TerminalPlayerUI:
             bsub_forms = [bsub, "Favorites Playlist", "Favorites"]
         elif self.mode == "MUSIC":
             btitle_forms = [btitle, "✦ MP AUDIO PLAYER — MUSIC ✦", "✦ MUSIC ✦"]
-            bsub_forms = [bsub, music_library_label(self.folder_name), "Music Library"]
+            if is_lg and mixer_deck:
+                # Always keep the Track line; _clip_display ellipsises it.
+                bsub_forms = [bsub]
+            else:
+                bsub_forms = [bsub, music_library_label(self.folder_name), "Music Library"]
         else:
             btitle_forms = [btitle, "✦ MP AUDIO PLAYER (LIQUID GLASS) ✦", "✦ MP AUDIO PLAYER ✦", "✦ MP LIQUID ✦"]
             bsub_forms = [bsub, "Liquid Glass Translucent Surface", "Liquid Glass", "Glass"]

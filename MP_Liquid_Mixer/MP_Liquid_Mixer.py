@@ -1983,7 +1983,20 @@ class LiquidMixer(GlassHost):
     # input
     # ------------------------------------------------------------------
     def _event_from_deck(self, widget) -> bool:
-        return any(deck.get("vte") is widget for deck in self.decks.values())
+        """True when a keystroke belongs to a deck's player.
+
+        GTK emits the toplevel's key-press-event before the event reaches the
+        focused widget, so ``widget`` is the window even while someone is
+        typing into a deck's search field. Following focus as well keeps the
+        mixer's single-key shortcuts (V, R, S, C, ...) out of that search.
+        """
+        if any(deck.get("vte") is widget for deck in self.decks.values()):
+            return True
+        try:
+            focus = self.window.get_focus() if self.window is not None else None
+        except Exception:
+            focus = None
+        return any(deck.get("vte") is focus for deck in self.decks.values())
 
     # ------------------------------------------------------------------
     # launch the other MP windows
@@ -2127,11 +2140,10 @@ class LiquidMixer(GlassHost):
         if key == Gdk.KEY_F11:
             self._toggle_fullscreen()
             return True
-        # Esc and Q both quit. Esc is taken even from a focused deck so the
-        # window can always be dismissed with one key; Q is only taken over the
-        # mixer's chrome, because the player inside a deck uses Q for its own
-        # queue.
-        if key == Gdk.KEY_Escape:
+        # Esc quits from the mixer's chrome. Inside a deck it belongs to that
+        # player: while searching, Esc cancels the search instead of closing
+        # the mixer. Click the chrome first to quit with Esc.
+        if key == Gdk.KEY_Escape and not from_deck:
             self.quit()
             return True
         if not from_deck and key in (Gdk.KEY_q, ord("q"), ord("Q")):
@@ -2317,9 +2329,6 @@ class LiquidMixer(GlassHost):
                 self._toggle_visualizer()
                 self.area.queue_draw()
                 return True
-            if core.inside(x, y, self.boxes["close_button"]):
-                self.quit()
-                return True
             if core.inside(x, y, self.boxes["master_knob"]):
                 self._knob_drag = ("master", "", y, self.model.master_volume, 0.0, 1.0)
                 self.drag = ("knob", "master:")
@@ -2445,9 +2454,6 @@ class LiquidMixer(GlassHost):
         if core.inside(x, y, self.boxes["visualizer_button"]):
             self._toggle_visualizer()
             self.area.queue_draw()
-            return True
-        if core.inside(x, y, self.boxes["close_button"]):
-            self.quit()
             return True
         return False
 
@@ -3075,12 +3081,9 @@ class LiquidMixer(GlassHost):
         self._paint(cr, width, height)
         return False
 
-    def _text(self, cr, x: float, y: float, text: str, size: float, color: Tuple[int, int, int],
-              alpha: float = 1.0, bold: bool = False, anchor: str = "start",
-              max_width: float = 0.0) -> Tuple[int, int]:
+    def _text_layout(self, cr, text: str, size: float, bold: bool, max_width: float):
         Pango = self.Pango
-        PangoCairo = self.PangoCairo
-        layout = PangoCairo.create_layout(cr)
+        layout = self.PangoCairo.create_layout(cr)
         desc = Pango.FontDescription.from_string(f"Sans {max(6.0, size):.1f}")
         desc.set_weight(Pango.Weight.BOLD if bold else Pango.Weight.NORMAL)
         layout.set_font_description(desc)
@@ -3088,6 +3091,12 @@ class LiquidMixer(GlassHost):
         if max_width > 0:
             layout.set_width(int(max_width * Pango.SCALE))
             layout.set_ellipsize(Pango.EllipsizeMode.END)
+        return layout
+
+    def _text(self, cr, x: float, y: float, text: str, size: float, color: Tuple[int, int, int],
+              alpha: float = 1.0, bold: bool = False, anchor: str = "start",
+              max_width: float = 0.0) -> Tuple[int, int]:
+        layout = self._text_layout(cr, text, size, bold, max_width)
         pw, ph = layout.get_pixel_size()
         if anchor == "middle":
             x -= pw / 2.0
@@ -3095,8 +3104,60 @@ class LiquidMixer(GlassHost):
             x -= pw
         cr.move_to(x, y)
         cr.set_source_rgba(*_rgba(color, alpha))
-        PangoCairo.show_layout(cr, layout)
+        self.PangoCairo.show_layout(cr, layout)
         return pw, ph
+
+    def _text_in_box(self, cr, box, text: str, size: float,
+                     color: Tuple[int, int, int], alpha: float = 1.0,
+                     bold: bool = False, max_width: float = 0.0,
+                     align: str = "middle", pad: float = 0.0) -> Tuple[int, int]:
+        """Draw one label centred vertically inside a button rectangle.
+
+        Pango anchors a layout at the top of its line box, so a fixed top
+        offset drifts as the font's line height changes. Measuring the line
+        and subtracting half of it from the button centre keeps short
+        (22-24 px) buttons looking centred at every window scale. ``align``
+        and ``pad`` keep left/right-aligned bar text on the same vertical
+        centre.
+        """
+        if max_width <= 0:
+            max_width = max(0.0, box[2] - 12 * self._ui_scale)
+        layout = self._text_layout(cr, text, size, bold, max_width)
+        pw, ph = layout.get_pixel_size()
+        if align == "start":
+            x = box[0] + pad
+        elif align == "end":
+            x = box[0] + box[2] - pad - pw
+        else:
+            x = box[0] + (box[2] - pw) / 2.0
+        cr.move_to(x, box[1] + (box[3] - ph) / 2.0)
+        cr.set_source_rgba(*_rgba(color, alpha))
+        self.PangoCairo.show_layout(cr, layout)
+        return pw, ph
+
+    def _text_block_in_box(self, cr, box, lines, color: Tuple[int, int, int],
+                           max_width: float = 0.0) -> None:
+        """Stack ``(text, size, alpha, bold)`` lines centred as one block.
+
+        Buttons such as EXTERNAL carry a caption plus a smaller subtitle; the
+        pair is measured first and then placed so the whole block is centred,
+        instead of pinning each line to a fixed offset.
+        """
+        if max_width <= 0:
+            max_width = max(0.0, box[2] - 12 * self._ui_scale)
+        layouts = []
+        total = 0.0
+        for text, size, alpha, bold in lines:
+            layout = self._text_layout(cr, text, size, bold, max_width)
+            pw, ph = layout.get_pixel_size()
+            layouts.append((layout, pw, ph, alpha))
+            total += ph
+        y = box[1] + (box[3] - total) / 2.0
+        for layout, pw, ph, alpha in layouts:
+            cr.move_to(box[0] + (box[2] - pw) / 2.0, y)
+            cr.set_source_rgba(*_rgba(color, alpha))
+            self.PangoCairo.show_layout(cr, layout)
+            y += ph
 
     def _paint(self, cr, width: int, height: int) -> None:
         s = self._ui_scale
@@ -3163,8 +3224,10 @@ class LiquidMixer(GlassHost):
         cr.set_source_rgba(*_rgba(accent, 0.65))
         cr.rectangle(box[0], box[1] + box[3] - max(1.0, 1.2 * s), box[2], max(1.0, 1.2 * s))
         cr.fill()
-        self._text(cr, box[0] + 28 * s, box[1] + 18 * s, "MP LIQUID MIXER", 21 * s, glass_ink, 0.96, bold=True)
-        self._text(cr, box[0] + 412 * s, box[1] + 25 * s, f"v{core.VERSION}", 12 * s, glass_ink, 0.55)
+        self._text_in_box(cr, box, "MP LIQUID MIXER", 21 * s, glass_ink, 0.96,
+                          bold=True, align="start", pad=28 * s)
+        self._text_in_box(cr, box, f"v{core.VERSION}", 12 * s, glass_ink, 0.55,
+                          align="start", pad=412 * s)
 
         # Trance Connection status. It is a button in the suite's style; it is
         # a status lamp, so pressing it does not change the audio path.
@@ -3176,9 +3239,8 @@ class LiquidMixer(GlassHost):
         cr.set_line_width(max(1.0, 1.2 * s))
         self._rounded(cr, tb[0], tb[1], tb[2], tb[3], 9 * s)
         cr.stroke()
-        self._text(cr, tb[0] + tb[2] / 2 - 5 * s, tb[1] + 10 * s,
-                   "Trance Connection Enabled", 11 * s, glass_ink, 0.95,
-                   bold=True, anchor="middle", max_width=tb[2] - 16 * s)
+        self._text_in_box(cr, tb, "Trance Connection Enabled", 11 * s, glass_ink, 0.95,
+                          bold=True, max_width=tb[2] - 16 * s)
 
         # MIDI DJ Mixer Profile: the A/B switch keeps the S4 and S3 maps apart.
         self._paint_profile_button(cr, s, accent, secondary, glass_ink)
@@ -3194,9 +3256,8 @@ class LiquidMixer(GlassHost):
         cr.set_line_width(max(1.0, 1.2 * s))
         self._rounded(cr, pill[0], pill[1], pill[2], pill[3], 9 * s)
         cr.stroke()
-        self._text(cr, pill[0] + pill[2] / 2, pill[1] + 11 * s, s4_text, 10.5 * s,
-                   s4_color, 0.98, bold=True, anchor="middle",
-                   max_width=pill[2] - 20 * s)
+        self._text_in_box(cr, pill, s4_text, 10.5 * s, s4_color, 0.98,
+                          bold=True, max_width=pill[2] - 20 * s)
 
         # Settings button: the same pill style as the visualizer toggle.
         sx = self.boxes["settings_button"]
@@ -3207,8 +3268,7 @@ class LiquidMixer(GlassHost):
         cr.set_line_width(max(1.0, 1.2 * s))
         self._rounded(cr, sx[0], sx[1], sx[2], sx[3], 9 * s)
         cr.stroke()
-        self._text(cr, sx[0] + sx[2] / 2, sx[1] + 10 * s,
-                   "SETTINGS", 12 * s, glass_ink, 0.92, bold=True, anchor="middle")
+        self._text_in_box(cr, sx, "SETTINGS", 12 * s, glass_ink, 0.92, bold=True)
 
         # Visualizer button.
         vx = self.boxes["visualizer_button"]
@@ -3220,22 +3280,8 @@ class LiquidMixer(GlassHost):
         cr.set_line_width(max(1.0, 1.2 * s))
         self._rounded(cr, vx[0], vx[1], vx[2], vx[3], 9 * s)
         cr.stroke()
-        self._text(cr, vx[0] + vx[2] / 2, vx[1] + 9 * s,
-                   f"VISUALIZER  {'ON' if active else 'OFF'}", 12 * s, glass_ink, 0.92, bold=True, anchor="middle")
-
-        # Close button.
-        cx = self.boxes["close_button"]
-        cr.set_source_rgba(*_rgba(glass_ink, 0.10))
-        self._rounded(cr, cx[0], cx[1], cx[2], cx[3], 9 * s)
-        cr.fill()
-        cr.set_source_rgba(*_rgba(glass_ink, 0.75))
-        cr.set_line_width(max(1.4, 1.6 * s))
-        pad = 14 * s
-        cr.move_to(cx[0] + pad, cx[1] + pad)
-        cr.line_to(cx[0] + cx[2] - pad, cx[1] + cx[3] - pad)
-        cr.move_to(cx[0] + cx[2] - pad, cx[1] + pad)
-        cr.line_to(cx[0] + pad, cx[1] + cx[3] - pad)
-        cr.stroke()
+        self._text_in_box(cr, vx, f"VISUALIZER  {'ON' if active else 'OFF'}", 12 * s,
+                          glass_ink, 0.92, bold=True)
 
     def _paint_deck(self, cr, channel: str, side: str, s, accent, secondary, glass_ink, dark_ui) -> None:
         key = "a" if side == "L" else "b"
@@ -3246,30 +3292,35 @@ class LiquidMixer(GlassHost):
         cr.set_source_rgba(*_rgba(panel, 0.38))
         self._rounded(cr, card[0], card[1], card[2], card[3], 18 * s)
         cr.fill()
+
+        # Fill the header inside the card's rounded path, then stroke the card
+        # outline last. That keeps the top-right corner identical to the other
+        # three at every scale instead of letting the header fill dull it.
+        cr.save()
+        self._rounded(cr, card[0], card[1], card[2], card[3], 18 * s)
+        cr.clip()
+        cr.set_source_rgba(*_rgba(_darken(core.theme_field(self.theme), 0.45), 0.52))
+        self._rounded(cr, header[0], header[1], header[2], header[3], 18 * s)
+        cr.fill()
+        cr.restore()
         cr.set_source_rgba(*_rgba(accent, 0.55))
         cr.set_line_width(max(1.0, 1.2 * s))
         self._rounded(cr, card[0], card[1], card[2], card[3], 18 * s)
         cr.stroke()
-
-        cr.set_source_rgba(*_rgba(_darken(core.theme_field(self.theme), 0.45), 0.52))
-        self._rounded(cr, header[0], header[1], header[2], header[3], 18 * s)
-        cr.fill()
 
         status = self._deck_status.get(channel) or {}
         online = bool(self.decks.get(channel, {}).get("online"))
         playing = str(status.get("state") or "").lower() == "playing"
         led = (80, 230, 140) if playing else ((250, 205, 90) if online else (150, 160, 168))
 
-        # Row 1: LED, the deck letter, the switch button and SYNC. Each has its
-        # own box in the design grid, so none of them can overlap: the
-        # switch sits right of the letter and SYNC is pinned to the far right.
+        # Row 1: LED, the switch button, the state and SYNC. The yellow LED is
+        # the left-most mark; the switch button sits right beside it now that
+        # the redundant "DECK A/B" text label is gone.
         sync_box = self.boxes[f"sync_{key}"]
         row_y = header[1] + header[3] / 2 - 15 * s
         cr.set_source_rgba(*_rgba(led, 0.95))
         cr.arc(header[0] + 24 * s, row_y + 11 * s, 5.5 * s, 0, 6.2832)
         cr.fill()
-        self._text(cr, header[0] + 40 * s, row_y + 5 * s, f"DECK {channel}",
-                   12 * s, glass_ink, 0.96, bold=True)
         right = "LIVE" if playing else ("READY" if online else "OFFLINE")
         self._text(cr, sync_box[0] - 14 * s, row_y + 5 * s, right, 9.5 * s, led, 0.92,
                    bold=True, anchor="end")
@@ -3283,42 +3334,28 @@ class LiquidMixer(GlassHost):
         cr.set_line_width(max(1.0, 1.1 * s))
         self._rounded(cr, sync_box[0], sync_box[1], sync_box[2], sync_box[3], 7 * s)
         cr.stroke()
-        self._text(cr, sync_box[0] + sync_box[2] / 2, sync_box[1] + 8 * s,
-                   "MASTER" if master else "SYNC", 9 * s, glass_ink,
-                   0.98 if master else 0.85, bold=True, anchor="middle")
+        self._text_in_box(cr, sync_box, "MASTER" if master else "SYNC", 9 * s,
+                          glass_ink, 0.98 if master else 0.85, bold=True)
 
-        # Row 2: the loaded track, always centred on the header's own axis so
-        # a long name is ellipsised from both sides instead of running off to
-        # the left or right.
-        title = status.get("name") or status.get("title") or (
-            "Engine starting..." if online else "Waiting for engine...")
+        # Row 2: only failures stay in the deck header. The loaded track now
+        # lives in the player panel's second line ("Track: ..."), where "All
+        # Music Folders" used to be, so the mixer does not duplicate it above.
+        error_title = ""
         # When every music share is down the deck's list is empty and pressing
         # Enter cannot possibly play anything. Say that in the header instead
         # of leaving a deck that looks ready but silently does nothing. The
         # engine's own reason covers Play and the S4 button, which do not go
         # through the playlist row handler.
         if self._library_error and not playing:
-            title = f"Music library offline - {self._library_error}"
+            error_title = f"Music library offline - {self._library_error}"
         elif not playing and str(status.get("last_load_error") or ""):
-            title = str(status.get("last_load_error"))
-        self._text(cr, header[0] + header[2] / 2, header[1] + header[3] - 15 * s,
-                   str(title), 10 * s, glass_ink, 0.78, bold=True, anchor="middle",
-                   max_width=max(80.0, header[2] - 40 * s))
-
-        self._paint_deck_switch(cr, side, channel, s, hue, glass_ink)
-
-        master = self.sync_master == channel
-        sync_color = hue
-        cr.set_source_rgba(*_rgba(sync_color, 0.34 if master else 0.10))
-        self._rounded(cr, sync_box[0], sync_box[1], sync_box[2], sync_box[3], 7 * s)
-        cr.fill()
-        cr.set_source_rgba(*_rgba(sync_color, 0.90 if master else 0.55))
-        cr.set_line_width(max(1.0, 1.1 * s))
-        self._rounded(cr, sync_box[0], sync_box[1], sync_box[2], sync_box[3], 7 * s)
-        cr.stroke()
-        self._text(cr, sync_box[0] + sync_box[2] / 2, sync_box[1] + 8 * s,
-                   "MASTER" if master else "SYNC", 9 * s, glass_ink,
-                   0.98 if master else 0.85, bold=True, anchor="middle")
+            error_title = str(status.get("last_load_error"))
+        elif not online:
+            error_title = "Waiting for engine..."
+        if error_title:
+            self._text(cr, header[0] + header[2] / 2, header[1] + header[3] - 15 * s,
+                       error_title, 10 * s, glass_ink, 0.78, bold=True, anchor="middle",
+                       max_width=max(80.0, header[2] - 40 * s))
 
         self._paint_deck_switch(cr, side, channel, s, hue, glass_ink)
 
@@ -3352,10 +3389,12 @@ class LiquidMixer(GlassHost):
         cr.set_line_width(max(1.2, 1.8 * s))
         self._rounded(cr, box[0], box[1], box[2], box[3], 9 * s)
         cr.stroke()
-        self._text(cr, box[0] + box[2] / 2, box[1] + 6 * s,
-                   f"DECK {channel}", 10.5 * s, glass_ink, 0.98, bold=True, anchor="middle")
-        self._text(cr, box[0] + box[2] / 2, box[1] + 16 * s,
-                   f"SWITCH TO {other}", 7.2 * s, hue, 0.95, bold=True, anchor="middle")
+        self._text_block_in_box(
+            cr, box,
+            [(f"DECK {channel}", 8.5 * s, 0.98, True),
+             (f"SWITCH TO {other}", 5.8 * s, 0.95, True)],
+            glass_ink,
+        )
 
     def _paint_mixer(self, cr, s, accent, secondary, tertiary, glass_ink, dark_ui) -> None:
         panel = self.boxes["mixer"]
@@ -3571,9 +3610,16 @@ class LiquidMixer(GlassHost):
             self._paint_knob_dial(cr, key, "", cx, cy, radius, hue, True, value, 0.0, 1.0,
                                   s, glass_ink)
             caption = {"MASTER": "M", "MON": "MON"}.get(label, label)
-            self._text(cr, cx, box[1] + box[3] + 2 * s,
-                       f"{caption} {int(round(value * 100))}%", 6.8 * s, glass_ink, 0.72,
-                       bold=True, anchor="middle")
+            # Keep the value line inside the ribbon: its strip runs from the
+            # knob's bottom to the top bar's bottom rule instead of hanging
+            # past the rule at a fixed offset.
+            bar = self.boxes["top_bar"]
+            cap_top = box[1] + box[3]
+            caption_box = (box[0], cap_top, box[2],
+                           max(1.0, bar[1] + bar[3] - cap_top))
+            self._text_in_box(cr, caption_box, f"{caption} {int(round(value * 100))}%",
+                              6.6 * s, glass_ink, 0.72, bold=True,
+                              max_width=box[2] + 24 * s)
 
     def _toggle_profile(self) -> None:
         """Switch the MIDI DJ Mixer Profile between A (S4) and B (S3).
@@ -3608,8 +3654,7 @@ class LiquidMixer(GlassHost):
         cr.set_line_width(max(1.0, 1.3 * s))
         self._rounded(cr, box[0], box[1], box[2], box[3], 7 * s)
         cr.stroke()
-        self._text(cr, box[0] + box[2] / 2, box[1] + 13 * s,
-                   f"PROFILE {self.profile}", 8 * s, hue, 0.98, bold=True, anchor="middle")
+        self._text_in_box(cr, box, f"PROFILE {self.profile}", 8 * s, hue, 0.98, bold=True)
 
     def _paint_format_buttons(self, cr, s, accent, secondary, glass_ink) -> None:
         """WAV/FLAC toggle and the fixed 24-Bit badge.
@@ -3627,8 +3672,7 @@ class LiquidMixer(GlassHost):
         cr.set_line_width(max(1.0, 1.1 * s))
         self._rounded(cr, fb[0], fb[1], fb[2], fb[3], 7 * s)
         cr.stroke()
-        self._text(cr, fb[0] + fb[2] / 2, fb[1] + 6 * s, fmt, 10.5 * s,
-                   glass_ink, 0.96, bold=True, anchor="middle")
+        self._text_in_box(cr, fb, fmt, 10.5 * s, glass_ink, 0.96, bold=True)
 
         bb = self.boxes["bitdepth_button"]
         cr.set_source_rgba(*_rgba(secondary, 0.14))
@@ -3638,8 +3682,7 @@ class LiquidMixer(GlassHost):
         cr.set_line_width(max(1.0, 1.1 * s))
         self._rounded(cr, bb[0], bb[1], bb[2], bb[3], 7 * s)
         cr.stroke()
-        self._text(cr, bb[0] + bb[2] / 2, bb[1] + 6 * s, "24-Bit", 10.5 * s,
-                   glass_ink, 0.92, bold=True, anchor="middle")
+        self._text_in_box(cr, bb, "24-Bit", 10.5 * s, glass_ink, 0.92, bold=True)
 
     def _paint_credit_button(self, cr, s, accent, secondary, glass_ink) -> None:
         box = self.boxes["credit_button"]
@@ -3650,14 +3693,11 @@ class LiquidMixer(GlassHost):
         cr.set_line_width(max(1.0, 1.1 * s))
         self._rounded(cr, box[0], box[1], box[2], box[3], 8 * s)
         cr.stroke()
-        self._text(cr, box[0] + box[2] / 2, box[1] + 4 * s,
-                   "DREAMWORLDS PRODUCTIONS", 8.2 * s,
-                   glass_ink, 0.90, bold=True, anchor="middle",
-                   max_width=box[2] - 12 * s)
-        self._text(cr, box[0] + box[2] / 2, box[1] + 18 * s,
-                   "/ MPLANETARIAN", 8.2 * s,
-                   glass_ink, 0.78, bold=True, anchor="middle",
-                   max_width=box[2] - 12 * s)
+        # DREAMWORLDS PRODUCTIONS is the whole credit now; the old
+        # "/ MPLANETARIAN" second line was removed.
+        self._text_in_box(cr, box, "DREAMWORLDS PRODUCTIONS", 8.2 * s,
+                          glass_ink, 0.90, bold=True,
+                          max_width=box[2] - 12 * s)
 
     def _paint_clock_button(self, cr, s, accent, secondary, glass_ink) -> None:
         box = self.boxes["clock_button"]
@@ -3668,10 +3708,7 @@ class LiquidMixer(GlassHost):
         cr.set_line_width(max(1.0, 1.1 * s))
         self._rounded(cr, box[0], box[1], box[2], box[3], 8 * s)
         cr.stroke()
-        self._text(cr, box[0] + box[2] / 2, box[1] + 5 * s,
-                   self._clock_date, 8 * s, glass_ink, 0.60, anchor="middle")
-        self._text(cr, box[0] + box[2] / 2, box[1] + 17 * s,
-                   self._clock_text, 17 * s, glass_ink, 0.97, bold=True, anchor="middle")
+        self._text_in_box(cr, box, self._clock_date, 9 * s, glass_ink, 0.66, bold=True)
 
     def _paint_verify_button(self, cr, s, accent, secondary, glass_ink) -> None:
         """Verify Audio Files: progress while it runs, result after it ends."""
@@ -3694,9 +3731,8 @@ class LiquidMixer(GlassHost):
         cr.set_line_width(max(1.0, 1.2 * s))
         self._rounded(cr, box[0], box[1], box[2], box[3], 7 * s)
         cr.stroke()
-        self._text(cr, box[0] + box[2] / 2, box[1] + 6 * s,
-                   self._verify_button_label(), 9 * s, glass_ink, 0.95,
-                   bold=True, anchor="middle", max_width=box[2] - 12 * s)
+        self._text_in_box(cr, box, self._verify_button_label(), 9 * s, glass_ink, 0.95,
+                          bold=True)
         if running and self._verify_total:
             # A thin progress rule under the label, so a long pass visibly
             # moves even when the movie has the user's attention.
@@ -3817,8 +3853,7 @@ class LiquidMixer(GlassHost):
         cr.set_line_width(max(1.0, 1.2 * s))
         self._rounded(cr, box[0], box[1], box[2], box[3], 8 * s)
         cr.stroke()
-        self._text(cr, box[0] + box[2] / 2, box[1] + 8 * s,
-                   "EXPORT MIXES", 10 * s, glass_ink, 0.96, bold=True, anchor="middle")
+        self._text_in_box(cr, box, "EXPORT MIXES", 10 * s, glass_ink, 0.96, bold=True)
 
     def _paint_record_button(self, cr, s, accent, secondary, glass_ink) -> None:
         box = self.boxes["record_button"]
@@ -3839,10 +3874,11 @@ class LiquidMixer(GlassHost):
         cr.set_line_width(max(1.0, 1.2 * s))
         self._rounded(cr, box[0], box[1], box[2], box[3], 9 * s)
         cr.stroke()
-        label_width, _height = self._text(cr, box[0] + box[2] / 2, box[1] + 13 * s, label, 10.5 * s,
-                                          glass_ink, 0.95, bold=True, anchor="middle")
+        label_width, _height = self._text_in_box(cr, box, label, 10.5 * s,
+                                                 glass_ink, 0.95, bold=True)
         cr.set_source_rgba(*_rgba(color, 0.98))
-        cr.arc(box[0] + box[2] / 2 - label_width / 2 - 10 * s, box[1] + 21 * s, 4 * s, 0, 6.2832)
+        cr.arc(box[0] + box[2] / 2 - label_width / 2 - 10 * s,
+               box[1] + box[3] / 2, 4 * s, 0, 6.2832)
         cr.fill()
         self._text(cr, box[0] + box[2] / 2, box[1] + box[3] + 6 * s,
                    f"master output -> {self.recorder.format}" if not recording else self._short_recording_name(),
@@ -4089,8 +4125,6 @@ class LiquidMixer(GlassHost):
 
         self._text(cr, box[0] + 4 * s, cy + 5 * s, "A", 12 * s, accent, 0.95, bold=True)
         self._text(cr, box[0] + box[2] - 4 * s, cy + 5 * s, "B", 12 * s, secondary, 0.95, bold=True, anchor="end")
-        self._text(cr, box[0] + box[2] / 2, box[1] + box[3] - 2 * s,
-                   f"CROSSFADER {int(round(self.model.crossfade * 100))}%", 9 * s, glass_ink, 0.55, anchor="middle")
 
     def _paint_browse_button(self, cr, s, accent, secondary, glass_ink) -> None:
         box = self.boxes["browse_button"]
@@ -4102,8 +4136,8 @@ class LiquidMixer(GlassHost):
         cr.set_line_width(max(1.0, 1.1 * s))
         self._rounded(cr, box[0], box[1], box[2], box[3], 7 * s)
         cr.stroke()
-        self._text(cr, box[0] + box[2] / 2, box[1] + 8 * s,
-                   f"BROWSE  {self.browse_target}", 9.5 * s, glass_ink, 0.92, bold=True, anchor="middle")
+        self._text_in_box(cr, box, f"BROWSE  {self.browse_target}", 9.5 * s,
+                          glass_ink, 0.92, bold=True)
 
     def _paint_mode_button(self, cr, s, accent, glass_ink) -> None:
         box = self.boxes["mode_button"]
@@ -4115,10 +4149,13 @@ class LiquidMixer(GlassHost):
         cr.set_line_width(max(1.0, 1.2 * s))
         self._rounded(cr, box[0], box[1], box[2], box[3], 8 * s)
         cr.stroke()
-        self._text(cr, box[0] + box[2] / 2, box[1] + 12 * s, self.model.mode, 10 * s, glass_ink, 0.95, bold=True, anchor="middle")
-        self._text(cr, box[0] + box[2] / 2, box[1] + 26 * s,
-                   "unity / external mixer" if self.model.external else "software faders live",
-                   7.6 * s, glass_ink, 0.55, anchor="middle")
+        self._text_block_in_box(
+            cr, box,
+            [(self.model.mode, 10 * s, 0.95, True),
+             ("unity / external mixer" if self.model.external else "software faders live",
+              7.6 * s, 0.55, False)],
+            glass_ink,
+        )
 
     def _paint_bottom_bar(self, cr, s, accent, ink, glass_ink, dark_ui) -> None:
         box = self.boxes["bottom_bar"]
@@ -4165,6 +4202,11 @@ class LiquidMixer(GlassHost):
         self._text(cr, box[0] + box[2] - 28 * s, box[1] + 5 * s, hints, 8.5 * s, glass_ink, 0.55, anchor="end")
         launches = "M  MANAGER    Z  VISUALIZER    W  BLACK GLASS    L  LIQUID PLAYER    G  MP GUI"
         self._text(cr, box[0] + box[2] - 28 * s, box[1] + 21 * s, launches, 7.6 * s, glass_ink, 0.44, anchor="end")
+
+        # The live clock is the bottom-centre mark of the window, centred in
+        # the bottom ribbon the same way the top bar centres its controls.
+        self._text_in_box(cr, box, self._clock_text, 17 * s, glass_ink, 0.97,
+                          bold=True, max_width=460 * s)
 
 
 def main(argv: Optional[list] = None) -> int:

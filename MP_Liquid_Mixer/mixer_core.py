@@ -1441,24 +1441,30 @@ def layout(width: int = DESIGN_W, height: int = DESIGN_H) -> Dict[str, Tuple[flo
         # in the narrow gap between that card and the mixer column.
         "pitch_a": rect(813, 92, 26, 420),
         "pitch_b": rect(1081, 92, 26, 420),
-        "sync_a": rect(660, 94, 70, 26),
-        "sync_b": rect(1746, 94, 70, 26),
+        "sync_a": rect(695, 94, 70, 26),
+        "sync_b": rect(1781, 94, 70, 26),
         # The deck-switch button in each player's header. Clicking flips that
-        # playlist window between its two decks (A <-> C, B <-> D).
-        "deck_switch_a": rect(132, 94, 146, 26),
-        "deck_switch_b": rect(1218, 94, 146, 26),
-        # Master and monitor trims at the top of the window.
-        "master_knob": rect(296, 10, 44, 44),
-        "monitor_knob": rect(348, 10, 44, 44),
+        # playlist window between its two decks (A <-> C, B <-> D). It sits
+        # right beside the header LED; the old "DECK A/B" text label is gone.
+        "deck_switch_a": rect(64, 94, 146, 26),
+        "deck_switch_b": rect(1150, 94, 146, 26),
+        # Master and monitor trims on the right side of the ribbon, clear of
+        # the title and parked just left of the VISUALIZER button.
+        "master_knob": rect(1516, 4, 44, 44),
+        "monitor_knob": rect(1564, 4, 44, 44),
         # One text line below the master row, so the thumb and percentage
         # clear the bottom bar's second hint line at the right-hand end.
         "opacity": rect(192, 1056, 1536, 24),
-        "visualizer_button": rect(1600, 14, 196, 36),
-        "trance_button": rect(540, 14, 300, 36),
-        "settings_button": rect(1150, 14, 144, 36),
-        "close_button": rect(1836, 14, 48, 36),
+        # The visualizer toggle takes the far right, flush with the player
+        # panel's right edge. The old square close button is gone.
+        "visualizer_button": rect(1700, 14, 196, 36),
+        # The controller status, the trance lamp and SETTINGS are one row:
+        # their group centre lines up with the PROFILE A/B switch below, so
+        # the top bar reads as a single centred column over the mixer.
+        "trance_button": rect(583, 14, 300, 36),
+        "settings_button": rect(1193, 14, 144, 36),
         "profile_button": rect(852, 64, 216, 24),
-        "status_pill": rect(872, 14, 250, 36),
+        "status_pill": rect(915, 14, 250, 36),
     }
     # Channel strips: FX button, headphone cue, letter, fader, meter. The FX
     # button arms the channel's filter-knob effect, the cue button routes the

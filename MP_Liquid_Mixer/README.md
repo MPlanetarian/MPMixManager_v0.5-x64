@@ -29,7 +29,7 @@ Liquid Visualizer runs behind the whole surface.
 | **Themed chrome** | A **Trance Connection Enabled** status lamp, a live system clock, the **WAV/FLAC** toggle, a **24-Bit** badge and the **DREAMWORLDS PRODUCTIONS / MPLANETARIAN** credit all use the active theme's accent and secondary colours, so `C` repaints them with the rest of the window. |
 | **Transparency bar** | The player's own 20%-80% slider range at the bottom of the screen, applied to the whole glass window so the visualizer shows through. |
 | **Settings window** | The **SETTINGS** button in the top bar (or `S`) opens one modal window for every configurable preference: recording folder, format and part size; the **master output** and a separate **monitor output** (for two-interface setups); the default theme; the startup and exit videos; the background visualizer; a default equaliser preset; the MIDI DJ Mixer Profile; start full screen and deck autoplay. The dialog is painted in the mixer's active theme, follows `C` live, and is saved to `~/.config/mix-manager/liquid_mixer_settings.json`. |
-| **Master and monitor** | **MASTER** and **MON** trims sit at the top of the window, and each channel's headphone button routes that one deck to the monitor interface while the rest stay on the master output. A **MASTER** meter and volume slider at the bottom left show and set the summed output. |
+| **Master and monitor** | **MASTER** and **MON** trims sit on the right side of the top ribbon, and each channel's headphone button routes that one deck to the monitor interface while the rest stay on the master output. A **MASTER** meter and volume slider at the bottom left show and set the summed output. |
 | **Per-channel filter and effects** | Under each channel's LOW EQ knob there is a **FILTER** knob at 1.5x the EQ size. Above it are four fixed-colour effect squares - **red Flanger, blue Reverb, yellow Delay, green Gater** - and an **orange Filter** square. The knob is the effect depth; the orange square turns it into a centre-detent DJ filter sweep (low-pass below centre, high-pass above). The **FX** button above each fader arms or bypasses that insert. |
 | **Channel meters** | A segmented ladder beside each fader shows that deck's peak. The zones run yellow at the bottom, green through the middle, yellow at 75% and red at the top. |
 | **Tempo & sync** | Two vertical pitch sliders, each beside a playlist window and driving that window's current deck. Each has master-tempo ownership and Sync, and the mouse wheel nudges either one. BPM tags give a true beat match; without tags the target copies the master's pitch. The master follows the most recently started deck and hands over when its track ends. |
@@ -119,12 +119,15 @@ missing. The launcher finds Python itself; no separate install step.
 | `F11` or **double-click the top bar** | Toggle full screen and a 1920x1080 centred window |
 | **Drag the top bar** | Move the window while it is windowed |
 | **Drag the bottom-right grip** | Resize the window (minimum 960x540) |
-| `Esc` or `Q` | Quit and silence the decks. `Esc` works from anywhere, including a focused deck; `Q` is taken over the mixer's chrome only, because the player inside a deck uses `Q` for its own queue. Shutdown pauses and stops all four engines, then escalates to a signal for any that ignore it. |
+| `Esc` or `Q` | Quit and silence the decks. Both apply over the mixer's chrome; a focused deck keeps `Esc` (cancel search) and `Q` (queue) for its own player, so click the chrome first to quit from there. Shutdown pauses and stops all four engines, then escalates to a signal for any that ignore it. |
 
 Inside a deck the player's own keys keep working: `Space` play/pause, arrows to
 seek, `1`/`2`/`3` libraries, `/` search, and the rest of the MP Audio Player
-key map. The mixer only takes `C`, `S`, `V`, `X`, `R`, `M`, `Z`, `W`, `L`,
-`G`, `F11` and `Esc`, and only when the deck is not the focused widget.
+key map. While a deck has keyboard focus the mixer takes **no** single-letter
+shortcuts, so typing `V`, `R`, `S`, `C`, `W`, `X`, `M`, `Z`, `L`, `G` or
+`Esc` into the search field is passed straight to the player. Click the
+mixer's chrome to give the shortcuts back. `F11` remains mixer-wide in either
+case.
 
 ### Settings
 
@@ -481,9 +484,9 @@ side: the Favorites toggle and the per-channel insert effect.
   player always does. If the desktop default changes between engine starts, the
   deck status lines can name different devices; set the default output (or pin
   one in Settings) before launching the mixer.
-- One mixer window. Closing it (Esc, Q or the window close button) pauses and
-  stops all four deck engines, because they are detached daemons rather than
-  children of the window.
+- One mixer window. Closing it (Esc or Q over the chrome) pauses and stops all
+  four deck engines, because they are detached daemons rather than children of
+  the window.
 - The companion visualizer is shared with the Liquid Player state file. The
   mixer only stops a visualizer it started; a player-owned one is left alone.
 - The glass is Cairo-painted rather than raymarched; it keeps the player's
