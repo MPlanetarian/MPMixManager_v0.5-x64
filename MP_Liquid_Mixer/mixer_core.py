@@ -1450,7 +1450,9 @@ def layout(width: int = DESIGN_W, height: int = DESIGN_H) -> Dict[str, Tuple[flo
         # Master and monitor trims at the top of the window.
         "master_knob": rect(296, 10, 44, 44),
         "monitor_knob": rect(348, 10, 44, 44),
-        "opacity": rect(192, 1040, 1536, 24),
+        # One text line below the master row, so the thumb and percentage
+        # clear the bottom bar's second hint line at the right-hand end.
+        "opacity": rect(192, 1056, 1536, 24),
         "visualizer_button": rect(1600, 14, 196, 36),
         "trance_button": rect(540, 14, 300, 36),
         "settings_button": rect(1150, 14, 144, 36),
