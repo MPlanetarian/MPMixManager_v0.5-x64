@@ -469,6 +469,19 @@ class TestWindowsWiring(unittest.TestCase):
         self.assertIn("$keepAll", text)
         self.assertIn('$key -eq "mixer"', text)
 
+    def test_the_component_list_is_not_shadowed_by_a_typed_parameter(self):
+        # PowerShell variable names are case-insensitive. A local `$wanted = @()`
+        # inside a function whose parameter is [string]$Wanted does not create an
+        # array: it coerces the parameter to "" and the parse loop reads nothing.
+        # Every shortcut was then "not selected" and deleted, so a Windows 10
+        # install created the tray startup entry but no Desktop or Start Menu
+        # shortcuts. The working list therefore has its own name.
+        text = POWERSHELL.read_text(encoding="utf-8")
+        self.assertNotRegex(text, r"(?im)^\s*\$wanted\s*=\s*@\(")
+        self.assertIn("$wantedItems", text)
+        self.assertIn("$wantedItems.Count -eq 0", text)
+        self.assertIn("$wantedItems -contains $item.Name", text)
+
     def test_windows_tray_filters_its_menu(self):
         text = WINDOWS_TRAY.read_text(encoding="utf-8")
         self.assertIn("Get-MpInstalledComponents", text)

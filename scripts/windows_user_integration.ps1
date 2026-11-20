@@ -504,7 +504,14 @@ function Install-MpUserShortcuts {
         "liquid" = "MP Liquid Player"
         "visualizer" = "MP Liquid Visualizer"
     }
-    $wanted = @()
+    #
+    # This list must NOT be called $wanted. PowerShell variable names are
+    # case-insensitive and $Wanted is a typed [string] parameter, so
+    # `$wanted = @()` silently coerced the parameter to "" and the parse loop
+    # then read nothing. Every shortcut was treated as unselected and deleted:
+    # a Windows install created the tray and Web Companion startup entries but
+    # no Desktop or Start Menu shortcuts at all.
+    $wantedItems = @()
     if ($Wanted) {
         foreach ($part in ($Wanted -split "[,\s]+")) {
             $trimmed = $part.Trim()
@@ -512,16 +519,16 @@ function Install-MpUserShortcuts {
             $key = $trimmed.ToLowerInvariant()
             if ($key -eq "mixer" -or $key -eq "mp-liquid-mixer") { continue }
             if ($idToName.ContainsKey($key)) {
-                $wanted += $idToName[$key]
+                $wantedItems += $idToName[$key]
             } else {
-                $wanted += $trimmed
+                $wantedItems += $trimmed
             }
         }
     }
-    $keepAll = ($wanted.Count -eq 0)
+    $keepAll = ($wantedItems.Count -eq 0)
     $written = @()
     foreach ($item in $items) {
-        $selected = $keepAll -or ($wanted -contains $item.Name)
+        $selected = $keepAll -or ($wantedItems -contains $item.Name)
         if (-not $selected) {
             foreach ($dir in @($desktop, $menu)) {
                 $staleLink = Join-Path $dir ($item.Name + ".lnk")
