@@ -5847,6 +5847,23 @@ class EqualizerVisualizer:
         bot = f"╰{'─' * ch_w_l}┴{'─' * ch_w_r}╯"
         return [f"  {self.b_col}{lbl}{NC}", f"  {self.b_col}{bot}{NC}"]
 
+    @staticmethod
+    def _equal_slot_widths(total: int, count: int) -> List[int]:
+        """Split ``total`` cells into ``count`` near-equal band slots."""
+        total, count = max(0, int(total)), max(1, int(count))
+        base, rem = divmod(total, count)
+        return [base + (1 if i < rem else 0) for i in range(count)]
+
+    @staticmethod
+    def _slot_centers(widths: List[int]) -> List[int]:
+        """One column per band, spread across the full width of its half."""
+        centers: List[int] = []
+        pos = 0
+        for width in widths:
+            centers.append(pos + max(0, (width - 1) // 2))
+            pos += width
+        return centers
+
     def render_neon_prism_eq(self, levels_l: np.ndarray, levels_r: np.ndarray, peaks_l: np.ndarray, peaks_r: np.ndarray, width: int = 80, height: int = 7, rms: float = 0.0, peak_db: float = -60.0) -> List[str]:
         # The frame is ╭ + left + ┬ + right + ╮, so the three border cells come
         # out of the inner width. Reserving only two drew a row one cell wider
@@ -5884,11 +5901,13 @@ class EqualizerVisualizer:
         for r in range(height - 1, -1, -1):
             rf = (r + 1) / float(height)
             def _side(bands, pks, ch_w):
-                rem = max(0, ch_w - n * 2)
-                l_pad = rem // 2
-                r_pad = rem - l_pad
+                # Spread the bands over the whole half. A fixed two cells per
+                # band centred the cluster in the middle of a wide standalone
+                # window; the slot keeps the 16-band cap that the mixer's
+                # narrower deck needs while filling every column.
+                widths = self._equal_slot_widths(ch_w, n)
                 pts = []
-                for c in range(n):
+                for c, w_c in enumerate(widths):
                     frac, cf, pk = bands[c] * height - r, c / float(max(1, n - 1)), pks[c] if c < len(pks) else 0.0
                     if frac >= 1.0: col, ch = self._get_neon_prism_color(cf, rf, is_cap=(frac < 2.0)), "█"
                     elif frac > 0.0: col, ch = self._get_neon_prism_color(cf, rf, is_cap=True), prism_level_glyph(max(1, min(8, int(frac * 8))))
@@ -5896,8 +5915,18 @@ class EqualizerVisualizer:
                         col = "\033[38;2;255;255;255m\033[1m" if pk >= 0.90 else self._get_neon_prism_color(cf, rf, is_peak=True)
                         ch = prism_peak_glyph(pk >= 0.90, c)
                     else: ch = " "
-                    pts.append(f"{col}{ch}{NC} " if ch != " " else "  ")
-                return (" " * l_pad) + "".join(pts) + (" " * r_pad)
+                    if ch == " " or w_c <= 0:
+                        pts.append(" " * w_c)
+                    elif w_c == 1:
+                        pts.append(f"{col}{ch}{NC}")
+                    else:
+                        # The glyph is one cell; the trailing space makes the
+                        # familiar two-cell bar. Extra slot cells become even
+                        # padding on both sides.
+                        pad = w_c - 2
+                        left = pad // 2
+                        pts.append((" " * left) + f"{col}{ch}{NC} " + (" " * (pad - left)))
+                return "".join(pts)
             lines.append(f"  {self.b_col}│{NC}{_side(bl, pl, ch_w_l)}{div}│{NC}{_side(br, pr, ch_w_r)}{self.b_col}│{NC}")
         return lines + self._stereo_footer(ch_w_l, ch_w_r)
 
@@ -5913,10 +5942,12 @@ class EqualizerVisualizer:
         scol = "\033[1;38;2;255;255;255m" if is_beat else ("\033[1;38;2;255;215;0m" if rms > 0.07 else COLOR_HOT_PURPLE)
         div = "\033[1;38;2;247;37;133m" if is_beat else self.b_col
         spark = console_symbol("✦")
-        m_l = max(0, (ch_w_l - (2 * n - 1)) // 2)
-        m_r = max(0, (ch_w_r - (2 * n - 1)) // 2)
-        col_map_l = [min(ch_w_l - 1, m_l + b * 2) for b in range(n)]
-        col_map_r = [min(ch_w_r - 1, m_r + b * 2) for b in range(n)]
+        # One band per equal slot across the whole half. The previous 2-cell
+        # stride left a wide standalone console with one narrow cluster in the
+        # middle; the slots keep the 16-band cap for the mixer's deck width and
+        # fill the space on a large window.
+        col_map_l = self._slot_centers(self._equal_slot_widths(ch_w_l, n))
+        col_map_r = self._slot_centers(self._equal_slot_widths(ch_w_r, n))
         # Each half's heading must fit its own column. The long form is used
         # when it fits; a portrait column falls back to shorter wording rather
         # than letting the row grow past the border.
