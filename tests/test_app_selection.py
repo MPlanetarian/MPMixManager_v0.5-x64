@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""The installer can set up all four MP apps, or only one of them.
+"""The installer can set up all five MP apps, or only one of them.
 
 The choice is stored once (~/.config/mix-manager/installed_apps) and every
 surface reads it: the Desktop shortcuts, the application menu, the shared tray
 menu and the Web Companion launch pad. These tests pin the parser, the stored
 file, and each consumer, so a one-app install cannot quietly advertise the
-three apps it did not set up.
+apps it did not set up. The Linux-only mixer is a real fifth choice, including
+on its own; macOS and Windows filter it out.
 """
 
 from __future__ import annotations
@@ -54,11 +55,11 @@ class TestParser(unittest.TestCase):
     def test_all_is_the_canonical_order(self):
         self.assertEqual(
             list(selection.COMPONENTS),
-            ["manager", "gui", "liquid", "visualizer"],
+            ["manager", "gui", "liquid", "visualizer", "mixer"],
         )
         self.assertEqual(selection.parse("all"), list(selection.COMPONENTS))
 
-    def test_a_missing_or_empty_answer_means_all_four(self):
+    def test_a_missing_or_empty_answer_means_all_supported(self):
         for value in (None, "", "   ", "nonsense"):
             with self.subTest(value=value):
                 self.assertEqual(selection.parse(value), list(selection.COMPONENTS))
@@ -70,11 +71,25 @@ class TestParser(unittest.TestCase):
         for value in ("liquid", "player", "MP Liquid Player"):
             with self.subTest(value=value):
                 self.assertEqual(selection.parse(value), ["liquid"])
+        for value in ("mixer", "MP Liquid Mixer", "mp-liquid-mixer", "mp_liquid_mixer", "dj"):
+            with self.subTest(value=value):
+                self.assertEqual(selection.parse(value), ["mixer"])
+
+    def test_the_mixer_is_linux_only(self):
+        self.assertEqual(selection.parse("mixer", "linux"), ["mixer"])
+        self.assertEqual(selection.parse("mixer", "macos"), [])
+        self.assertEqual(selection.parse("mixer", "windows"), [])
+        self.assertEqual(
+            selection.parse("all", "macos"),
+            ["manager", "gui", "liquid", "visualizer"],
+        )
+        self.assertNotIn("mixer", selection.supported_components("windows"))
 
     def test_several_apps_in_a_list(self):
         self.assertEqual(selection.parse("gui,liquid"), ["gui", "liquid"])
         self.assertEqual(selection.parse("liquid gui"), ["gui", "liquid"])
         self.assertEqual(selection.parse("visualizer;manager"), ["manager", "visualizer"])
+        self.assertEqual(selection.parse("gui,mixer"), ["gui", "mixer"])
 
     def test_the_display_labels_are_the_shortcut_names(self):
         self.assertEqual(
@@ -82,21 +97,37 @@ class TestParser(unittest.TestCase):
             ["MP Mix Manager", "MP Liquid Player"],
         )
         self.assertEqual(selection.summary(["gui"]), "MP Gui")
-        self.assertEqual(selection.summary(), "all four MP applications")
+        self.assertEqual(selection.summary(), "all five MP applications")
+        self.assertEqual(selection.summary(["gui", "mixer"]), "MP Gui and MP Liquid Mixer")
 
 
 class TestStateFile(SelectionBase):
-    def test_a_missing_file_reads_as_all_four(self):
+    def test_a_missing_file_reads_as_all_supported(self):
         self.assertFalse(self.state.exists())
         self.assertEqual(selection.read(), list(selection.COMPONENTS))
 
     def test_write_stores_one_line_in_canonical_order(self):
         path = selection.write(["liquid", "gui"])
         self.assertEqual(path, self.state)
-        self.assertEqual(path.read_text(encoding="utf-8"), "gui liquid\n")
+        self.assertEqual(
+            path.read_text(encoding="utf-8"),
+            "gui liquid\nmixer=off\n",
+        )
         self.assertEqual(selection.read(), ["gui", "liquid"])
         self.assertTrue(selection.enabled("gui"))
         self.assertFalse(selection.enabled("manager"))
+        self.assertFalse(selection.enabled("mixer"))
+
+    def test_a_legacy_file_keeps_the_mixer_on_linux(self):
+        self.state.write_text("gui\n", encoding="utf-8")
+        self.assertEqual(selection.read(), ["gui", "mixer"])
+        self.state.write_text("gui\nmixer=off\n", encoding="utf-8")
+        self.assertEqual(selection.read(), ["gui"])
+
+    def test_the_mixer_can_be_written_alone(self):
+        selection.write(["mixer"])
+        self.assertEqual(self.state.read_text(encoding="utf-8"), "mixer\n")
+        self.assertEqual(selection.read(), ["mixer"])
 
     def test_an_empty_write_is_not_an_empty_install(self):
         selection.write([])
@@ -124,11 +155,11 @@ class TestStateFile(SelectionBase):
             self.assertEqual(selection.main(["--set", "gui"]), 0)
             self.assertEqual(selection.main(["--enabled", "gui"]), 0)
             self.assertEqual(selection.main(["--enabled", "liquid"]), 1)
-        self.assertEqual(self.state.read_text(encoding="utf-8"), "gui\n")
+        self.assertEqual(self.state.read_text(encoding="utf-8"), "gui\nmixer=off\n")
 
 
 class TestShortcutsFollowTheSelection(SelectionBase):
-    def test_all_four_still_writes_every_shortcut(self):
+    def test_all_five_still_writes_every_shortcut(self):
         with tempfile.TemporaryDirectory() as tmp:
             desktop = Path(tmp) / "Desktop"
             paths = install_desktop_shortcuts(
@@ -144,7 +175,7 @@ class TestShortcutsFollowTheSelection(SelectionBase):
                 [f"{name}.desktop" for name in SHORTCUT_NAMES],
             )
 
-    def test_one_app_writes_that_shortcut_and_the_linux_mixer(self):
+    def test_one_app_writes_only_that_shortcut(self):
         with tempfile.TemporaryDirectory() as tmp:
             desktop = Path(tmp) / "Desktop"
             apps = Path(tmp) / "applications"
@@ -156,20 +187,53 @@ class TestShortcutsFollowTheSelection(SelectionBase):
                 launcher_dir=Path(tmp) / "launchers",
                 components=["gui"],
             )
-            self.assertEqual(
-                [path.name for path in paths],
-                ["MP Gui.desktop", "MP Liquid Mixer.desktop"],
-            )
+            self.assertEqual([path.name for path in paths], ["MP Gui.desktop"])
             self.assertEqual(
                 sorted(p.name for p in desktop.glob("*.desktop")),
-                ["MP Gui.desktop", "MP Liquid Mixer.desktop"],
+                ["MP Gui.desktop"],
             )
             self.assertEqual(
                 sorted(p.name for p in apps.glob("*.desktop")),
-                ["MP Gui.desktop", "MP Liquid Mixer.desktop"],
+                ["MP Gui.desktop"],
             )
 
-    def test_switching_to_one_app_removes_the_other_three(self):
+    def test_the_mixer_can_be_installed_alone(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            desktop = Path(tmp) / "Desktop"
+            apps = Path(tmp) / "applications"
+            paths = install_desktop_shortcuts(
+                ROOT,
+                platform_name="linux",
+                desktop_dir=desktop,
+                apps_dir=apps,
+                launcher_dir=Path(tmp) / "launchers",
+                components=["mixer"],
+            )
+            self.assertEqual([path.name for path in paths], ["MP Liquid Mixer.desktop"])
+            self.assertEqual(
+                sorted(p.name for p in desktop.glob("*.desktop")),
+                ["MP Liquid Mixer.desktop"],
+            )
+            self.assertEqual(
+                sorted(p.name for p in apps.glob("*.desktop")),
+                ["MP Liquid Mixer.desktop"],
+            )
+
+    def test_the_mixer_is_not_written_on_macos(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            desktop = Path(tmp) / "Desktop"
+            paths = install_desktop_shortcuts(
+                ROOT,
+                platform_name="macos",
+                desktop_dir=desktop,
+                apps_dir=Path(tmp) / "Applications",
+                launcher_dir=Path(tmp) / "launchers",
+                components=["mixer"],
+            )
+            self.assertEqual(paths, [])
+            self.assertEqual(list(desktop.glob("*")) if desktop.exists() else [], [])
+
+    def test_switching_to_one_app_removes_the_other_four(self):
         with tempfile.TemporaryDirectory() as tmp:
             desktop = Path(tmp) / "Desktop"
             apps = Path(tmp) / "applications"
@@ -192,7 +256,7 @@ class TestShortcutsFollowTheSelection(SelectionBase):
             )
             self.assertEqual(
                 sorted(p.name for p in desktop.glob("*.desktop")),
-                ["MP Liquid Mixer.desktop", "MP Liquid Player.desktop"],
+                ["MP Liquid Player.desktop"],
             )
             self.assertFalse((apps / "MP Gui.desktop").exists())
 
@@ -209,7 +273,7 @@ class TestShortcutsFollowTheSelection(SelectionBase):
             )
             self.assertEqual(
                 [path.name for path in paths],
-                ["MP Liquid Visualizer.desktop", "MP Liquid Mixer.desktop"],
+                ["MP Liquid Visualizer.desktop"],
             )
 
     def test_presence_check_only_requires_the_selected_apps(self):
@@ -229,13 +293,19 @@ class TestShortcutsFollowTheSelection(SelectionBase):
     def test_selected_names_keeps_display_order(self):
         self.assertEqual(
             selected_names(["visualizer", "manager"]),
-            ("MP Mix Manager", "MP Liquid Visualizer", "MP Liquid Mixer"),
+            ("MP Mix Manager", "MP Liquid Visualizer"),
         )
         self.assertEqual(
             selected_names(["visualizer", "manager"], "macos"),
             ("MP Mix Manager", "MP Liquid Visualizer"),
         )
+        self.assertEqual(selected_names(["mixer"]), ("MP Liquid Mixer",))
+        self.assertEqual(selected_names(["mixer"], "macos"), ())
         self.assertEqual(selected_names([]), SHORTCUT_NAMES)
+        self.assertEqual(
+            selected_names([], "macos"),
+            tuple(name for name in SHORTCUT_NAMES if name != "MP Liquid Mixer"),
+        )
 
     def test_windows_shortcuts_receive_the_selection(self):
         created = []
@@ -269,7 +339,9 @@ class TestTrayMenuFollowsTheSelection(SelectionBase):
             [
                 "launch-gui",
                 "launch-liquid",
+                "launch-mixer",
                 "launch-manager",
+                "launch-visualizer",
                 "web-audio",
                 "rescan-archive",
                 "rescan-music",
@@ -283,8 +355,13 @@ class TestTrayMenuFollowsTheSelection(SelectionBase):
         ids = [ident for ident, _label in tray.menu_entries()]
         self.assertEqual(ids, ["launch-gui", "web-audio", "rescan-archive", "rescan-music", "mute-audio", "close-all"])
 
+    def test_a_mixer_only_install_offers_the_mixer(self):
+        selection.write(["mixer"])
+        ids = [ident for ident, _label in tray.menu_entries()]
+        self.assertEqual(ids, ["launch-mixer", "web-audio", "rescan-archive", "rescan-music", "mute-audio", "close-all"])
+
     def test_the_rescan_and_mute_entries_survive_every_selection(self):
-        for chosen in (["manager"], ["gui"], ["liquid"], ["visualizer"], ["gui", "liquid"]):
+        for chosen in (["manager"], ["gui"], ["liquid"], ["visualizer"], ["mixer"], ["gui", "liquid"]):
             with self.subTest(components=chosen):
                 selection.write(chosen)
                 ids = [ident for ident, _label in tray.menu_entries()]
@@ -292,7 +369,7 @@ class TestTrayMenuFollowsTheSelection(SelectionBase):
                     self.assertIn(ident, ids)
 
     def test_close_all_and_the_web_entry_survive_every_selection(self):
-        for chosen in (["manager"], ["gui"], ["liquid"], ["visualizer"], ["gui", "liquid"]):
+        for chosen in (["manager"], ["gui"], ["liquid"], ["visualizer"], ["mixer"], ["gui", "liquid"]):
             with self.subTest(components=chosen):
                 selection.write(chosen)
                 ids = [ident for ident, _label in tray.menu_entries()]
@@ -308,6 +385,17 @@ class TestWebCompanionFollowsTheSelection(SelectionBase):
     def test_only_selected_apps_get_a_launch_button(self):
         selection.write(["gui"])
         self.assertEqual([app["id"] for app in suite_control.app_definitions()], ["gui"])
+
+    def test_a_mixer_only_install_gets_its_launch_button(self):
+        selection.write(["mixer"])
+        self.assertEqual([app["id"] for app in suite_control.app_definitions()], ["mixer"])
+        with patch.object(suite_control, "is_supported", return_value=True), \
+             patch.object(suite_control, "tty_mode_active", return_value=False), \
+             patch.object(suite_control, "_spawn") as spawn:
+            result = suite_control.launch_app("mixer")
+        self.assertEqual(result["action"], "launch")
+        self.assertEqual(result["label"], "MP Liquid Mixer")
+        self.assertTrue(str(spawn.call_args.args[0][1]).endswith("launch_liquid_mixer.sh"))
 
     def test_launching_an_uninstalled_app_is_refused(self):
         selection.write(["gui"])
@@ -339,13 +427,17 @@ class TestInstallerWiring(unittest.TestCase):
     def test_the_installer_prompts_for_one_or_all(self):
         self.assertIn("MP_INSTALL_APPS", self.text)
         self.assertIn("[9/10] Choosing the MP Applications to Install", self.text)
-        self.assertIn("All four", self.text)
+        self.assertIn("All five", self.text)
         self.assertIn("Choose several", self.text)
+        self.assertIn("MP Liquid Mixer only", self.text)
 
-    def test_all_four_is_the_default_for_a_non_interactive_run(self):
+    def test_all_five_is_the_default_for_a_non_interactive_run(self):
         marker = self.text.index("Choosing the MP Applications")
         window = self.text[marker:marker + 3000]
-        self.assertIn("installing all four MP applications", window)
+        self.assertIn("installing all five MP applications", window)
+
+    def test_a_mixer_request_is_refused_off_linux(self):
+        self.assertIn("MP Liquid Mixer is Linux only", self.text)
 
     def test_the_selection_reaches_both_shortcut_installers(self):
         self.assertIn('--components "$MP_APPS_SELECTION"', self.text)
@@ -375,6 +467,7 @@ class TestWindowsWiring(unittest.TestCase):
         self.assertIn("[string]$Components", text)
         self.assertIn("$Wanted", text)
         self.assertIn("$keepAll", text)
+        self.assertIn('$key -eq "mixer"', text)
 
     def test_windows_tray_filters_its_menu(self):
         text = WINDOWS_TRAY.read_text(encoding="utf-8")

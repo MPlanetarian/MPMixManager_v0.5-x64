@@ -27,15 +27,15 @@ def proc(pid, ppid, cmdline, environ=""):
 
 
 class TestRoles(unittest.TestCase):
-    def test_four_buttons_in_launch_order(self):
-        # app_definitions() lists installed apps only; pin all four so the
+    def test_five_buttons_in_launch_order(self):
+        # app_definitions() lists installed apps only; pin all five so the
         # assertion does not depend on this machine's installed_apps file.
         with patch.object(control, "installed_components",
                           return_value=set(control.ROLE_ORDER)):
             apps = control.app_definitions()
         self.assertEqual(
             [app["id"] for app in apps],
-            ["gui", "manager", "liquid", "visualizer"],
+            ["gui", "manager", "liquid", "visualizer", "mixer"],
         )
         self.assertEqual(
             [app["label"] for app in apps],
@@ -44,6 +44,7 @@ class TestRoles(unittest.TestCase):
                 "MP Mix Manager (CLI)",
                 "MP Liquid Player",
                 "MP Liquid Visualizer",
+                "MP Liquid Mixer",
             ],
         )
 
@@ -61,24 +62,29 @@ class TestRoles(unittest.TestCase):
         visualizer = control.launch_argv(control.ROLE_VISUALIZER, ROOT)
         self.assertTrue(visualizer[1].endswith("launch_liquid_visualizer.sh"))
 
+        mixer = control.launch_argv(control.ROLE_MIXER, ROOT)
+        self.assertEqual(mixer[0], "bash")
+        self.assertTrue(mixer[1].endswith("launch_liquid_mixer.sh"))
+
     def test_unknown_role_is_rejected(self):
         with self.assertRaises(ValueError):
             control.launch_argv("not-an-app", ROOT)
 
 
 class TestDetection(unittest.TestCase):
-    def test_all_four_are_detected_from_a_process_list(self):
+    def test_all_five_are_detected_from_a_process_list(self):
         processes = [
             proc(10, 1, "python3 /opt/MP_Audio_Player_Liquid_Glass_OpenGL.py --manager"),
             proc(11, 5, "bash /opt/Mix_Archive_Manager.sh"),
             proc(5, 1, "/usr/bin/konsole -e /opt/bin/mix-archive-manager"),
             proc(12, 1, "python3 /opt/MP_Audio_Player_Liquid_Glass_OpenGL.py"),
             proc(13, 1, "python3 /opt/MP_Liquid_Visualizer.py --preset random"),
+            proc(15, 1, "python3 /opt/MP_Liquid_Mixer/MP_Liquid_Mixer.py"),
             proc(14, 1, "python3 /opt/scripts/mp_system_tray.py"),
         ]
         self.assertEqual(
             control.running_roles(processes),
-            {"gui", "manager", "liquid", "visualizer"},
+            {"gui", "manager", "liquid", "visualizer", "mixer"},
         )
 
     def test_a_manager_hosted_in_mp_gui_is_not_the_cli(self):
@@ -99,8 +105,9 @@ class TestDetection(unittest.TestCase):
     def test_status_payload_carries_a_running_flag_per_app(self):
         processes = [proc(12, 1, "python3 /opt/MP_Audio_Player_Liquid_Glass.py")]
         # app_status() only lists installed apps, and that set comes from the
-        # user's config. Pin all four so the assertion does not depend on what
+        # user's config. Pin all five so the assertion does not depend on what
         # this machine happens to have set up.
+        control.reset_status_cache()
         with patch.object(control, "is_supported", return_value=True), \
              patch.object(control, "installed_components",
                           return_value=set(control.ROLE_ORDER)), \
@@ -110,7 +117,13 @@ class TestDetection(unittest.TestCase):
         flags = {app["id"]: app["running"] for app in status["apps"]}
         self.assertEqual(
             flags,
-            {"gui": False, "manager": False, "liquid": True, "visualizer": False},
+            {
+                "gui": False,
+                "manager": False,
+                "liquid": True,
+                "visualizer": False,
+                "mixer": False,
+            },
         )
 
 
@@ -159,7 +172,7 @@ class TestCloseAll(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             config = Path(tmp)
             with patch.object(control, "is_supported", return_value=True), \
-                 patch.object(control, "running_roles", side_effect=[{"gui", "manager", "liquid", "visualizer"}, set()]), \
+                 patch.object(control, "running_roles", side_effect=[{"gui", "manager", "liquid", "visualizer", "mixer"}, set()]), \
                  patch.object(control, "tray_running", return_value=True), \
                  patch.object(control, "_tray_module") as module:
                 module.return_value.shutdown_suite = fake_shutdown
@@ -176,7 +189,7 @@ class TestCloseAll(unittest.TestCase):
         # And the icon is reported as still up, never as one of the closed apps.
         self.assertTrue(result["tray_running"])
         self.assertEqual(
-            result["closed"], ["gui", "liquid", "manager", "visualizer"]
+            result["closed"], ["gui", "liquid", "manager", "mixer", "visualizer"]
         )
         self.assertNotIn("tray", result["closed"])
 

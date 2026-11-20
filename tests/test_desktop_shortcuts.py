@@ -61,7 +61,7 @@ class TestDesktopShortcuts(unittest.TestCase):
                 desktop_dir=desktop,
                 apps_dir=apps,
                 launcher_dir=Path(tmp) / "launchers",
-                components=["manager", "gui", "liquid", "visualizer"],
+                components=["manager", "gui", "liquid", "visualizer", "mixer"],
             )
             self.assertEqual([path.name for path in paths], [f"{name}.desktop" for name in SHORTCUT_NAMES])
             self.assertFalse((desktop / "MP_Liquid.desktop").exists())
@@ -108,7 +108,8 @@ class TestDesktopShortcuts(unittest.TestCase):
             apps.mkdir()
             (desktop / "MP Gui.command").write_text("old\n", encoding="utf-8")
             (apps / "MP Liquid Player.command").write_text("old\n", encoding="utf-8")
-            self.assertFalse(desktop_shortcuts_present(desktop, "macos"))
+            mac_components = ["manager", "gui", "liquid", "visualizer"]
+            self.assertFalse(desktop_shortcuts_present(desktop, "macos", mac_components))
             written = install_desktop_shortcuts(
                 ROOT,
                 platform_name="macos",
@@ -165,7 +166,7 @@ class TestDesktopShortcuts(unittest.TestCase):
             if sys.platform == "darwin":
                 self.assertTrue(mac_finder_icon_present(desktop / "MP Mix Manager.command"))
                 self.assertTrue(mac_finder_icon_present(apps / "MP Mix Manager.command"))
-            self.assertTrue(desktop_shortcuts_present(desktop, "macos"))
+            self.assertTrue(desktop_shortcuts_present(desktop, "macos", mac_components))
 
     def test_linux_desktop_exec_survives_the_two_pass_keyfile_parse(self):
         """The Exec line must launch, not just pass desktop-file-validate.
@@ -218,7 +219,7 @@ class TestDesktopShortcuts(unittest.TestCase):
             for name in SHORTCUT_NAMES:
                 (desktop / f"{name}.desktop").write_text(broken, encoding="utf-8")
             self.assertFalse(
-                desktop_shortcuts_present(desktop, "linux"),
+                desktop_shortcuts_present(desktop, "linux", list(SHORTCUT_NAMES)),
                 "a shortcut with an unloadable Exec must be treated as absent",
             )
             self.assertFalse(linux_shortcut_is_healthy(desktop / f"{SHORTCUT_NAMES[0]}.desktop"))
@@ -260,7 +261,7 @@ class TestDesktopShortcuts(unittest.TestCase):
                 "a TryExec pointing at a deleted tree must be unhealthy",
             )
             self.assertFalse(
-                desktop_shortcuts_present(desktop, "linux"),
+                desktop_shortcuts_present(desktop, "linux", list(SHORTCUT_NAMES)),
                 "shortcuts whose TryExec cannot run must be treated as absent",
             )
 
@@ -270,7 +271,7 @@ class TestDesktopShortcuts(unittest.TestCase):
             dead_helper.write_text("#!/bin/sh\n", encoding="utf-8")
             dead_helper.chmod(0o755)
             self.assertTrue(linux_shortcut_is_healthy(desktop / f"{SHORTCUT_NAMES[0]}.desktop"))
-            self.assertTrue(desktop_shortcuts_present(desktop, "linux"))
+            self.assertTrue(desktop_shortcuts_present(desktop, "linux", list(SHORTCUT_NAMES)))
 
     def test_linux_try_exec_is_absolute_not_a_bare_name(self):
         """TryExec must not rely on PATH.

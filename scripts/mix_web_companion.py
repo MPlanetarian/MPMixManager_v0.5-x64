@@ -682,9 +682,9 @@ def get_local_ip() -> str:
 # DESKTOP LAUNCH PAD (Linux)
 #
 # The dashboard runs as a user service, so the phone can be the only thing in
-# front of the user. These four buttons start the desktop suite, show whether
-# each app is already live, and close all four without stopping the tray icon
-# or this companion.
+# front of the user. These buttons start the installed desktop apps, show
+# whether each app is already live, and close them all without stopping the
+# tray icon or this companion.
 # ------------------------------------------------------------------------------
 try:
     import mp_suite_control as suite_control
@@ -4572,7 +4572,7 @@ def render_launch_pad_html() -> str:
         '<div class="launchpad-grid" id="launchPadGrid">'
         + "".join(buttons)
         + '<button type="button" class="launch-btn launch-close" id="launchCloseAll" '
-          'onclick="closeAllApps()" title="Close all four apps, keep the tray icon"'
+          'onclick="closeAllApps()" title="Close all installed apps, keep the tray icon"'
         + disabled + '>'
           '<span class="launch-icon" aria-hidden="true">⏻</span>'
           '<span class="launch-label">Close All</span>'

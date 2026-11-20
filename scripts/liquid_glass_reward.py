@@ -347,13 +347,13 @@ def show_welcome_message(wait_for_input=True):
         "Press L for MP Liquid Player, G for MP Gui, and Z for the MP Liquid Visualizer. Press C to cycle themes. The choice is saved.",
         "Press B on a menu for Bash in that same window, then B on an empty line to come back. Press D twice to clear the open playlist. Esc cancels, and the files stay on disk.",
         "For music on an SMB share, open main menu 2, then option 8, and save the login before option 3 builds the playlists. Enter keeps the login you already saved.",
-        "Add the four MP desktop shortcuts yourself, then run them. Their names are MP Liquid Player, MP Mix Manager, MP Gui, and MP Liquid Visualizer.",
+        "Add the MP desktop shortcuts yourself, then run them. The names are MP Liquid Player, MP Mix Manager, MP Gui, MP Liquid Visualizer, and (on Linux) MP Liquid Mixer.",
     ]
     steps = [
         "Start MP Mix Manager. In a terminal run manager or ./manager.sh. On macOS, open manager_macos.command. On Windows, open MP Mix Manager.exe or manager.bat.",
         "Set up your Mix Archive Folders. On the main menu choose 16, Configure Mix Archive Storage Locations. Choice 1 sets the primary folder, the one that holds your FLAC mixes. Choice 4 adds another Mix Archive folder. Choice 2 picks a folder found on a connected drive. Main menu option 13 shows the space those folders use. Then choose main menu 1, Play DJ Mixes. In the player, press 1 any time to reload the Mix Archive playlist.",
         "Set up your Music Folders. On the main menu choose 2, Play Tracks from MUSIC Folders. Choice 4 adds a local folder or an SMB share. Choice 8 saves the SMB username and password. Choice 3 generates the playlists. Choice 1 plays every Music Folder. In the player, press 2 any time to reload the Music playlist.",
-        "Add the MP desktop shortcuts yourself, then run them to play what you just set up. Put these four on your Desktop: MP Liquid Player, MP Mix Manager, MP Gui, and MP Liquid Visualizer. MP Liquid Player plays the Mix Archive and Music playlists. MP Mix Manager opens this manager. MP Gui opens the manager in the Liquid Glass window. MP Liquid Visualizer draws the picture that follows the audio.",
+        "Add the MP desktop shortcuts yourself, then run them to play what you just set up. Put the ones you use on your Desktop: MP Liquid Player, MP Mix Manager, MP Gui, MP Liquid Visualizer, and on Linux MP Liquid Mixer. MP Liquid Player plays the Mix Archive and Music playlists. MP Mix Manager opens this manager. MP Gui opens the manager in the Liquid Glass window. MP Liquid Visualizer draws the picture that follows the audio. MP Liquid Mixer is the four-channel DJ mixer.",
     ]
 
     banner = [

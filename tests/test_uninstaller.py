@@ -46,7 +46,7 @@ class UninstallFiles(unittest.TestCase):
         self.desktop.mkdir()
         self.menu.mkdir()
         (self.config / "installed_apps").write_text(
-            "manager gui liquid visualizer\n", encoding="utf-8"
+            "manager gui liquid visualizer mixer\n", encoding="utf-8"
         )
         _write(self.config / "liquid_gui_window.json", "{}")
         _write(self.config / "liquid_player_window.json", "{}")
@@ -75,18 +75,31 @@ class UninstallFiles(unittest.TestCase):
 
     def test_uninstall_one_app_keeps_its_settings_and_the_others(self):
         remain = self._apply("uninstall", "gui", delete_config=False)
-        self.assertEqual(remain, ["manager", "liquid", "visualizer"])
+        self.assertEqual(remain, ["manager", "liquid", "visualizer", "mixer"])
         self.assertFalse((self.desktop / "MP Gui.desktop").exists())
         self.assertFalse((self.menu / "MP Gui.desktop").exists())
         self.assertTrue((self.desktop / "MP Liquid Player.desktop").is_file())
         self.assertTrue((self.config / "liquid_gui_window.json").is_file())
         self.assertEqual(
             (self.config / "installed_apps").read_text(encoding="utf-8"),
-            "manager liquid visualizer\n",
+            "manager liquid visualizer mixer\n",
         )
         self.assertTrue(
             (self.home / ".config" / "autostart" / "mp-mix-manager-tray.desktop").is_file()
         )
+
+    def test_a_mixer_only_install_can_be_uninstalled(self):
+        (self.config / "installed_apps").write_text("mixer\n", encoding="utf-8")
+        _write(self.desktop / "MP Liquid Mixer.desktop", "[Desktop Entry]\n")
+        _write(self.menu / "MP Liquid Mixer.desktop", "[Desktop Entry]\n")
+        remain = self._apply("uninstall", "mixer", delete_config=True)
+        self.assertEqual(remain, [])
+        self.assertEqual(
+            (self.config / "installed_apps").read_text(encoding="utf-8"),
+            "none\n",
+        )
+        self.assertFalse((self.desktop / "MP Liquid Mixer.desktop").exists())
+        self.assertFalse((self.menu / "MP Liquid Mixer.desktop").exists())
 
     def test_delete_config_removes_that_apps_settings_only(self):
         self._apply("uninstall", "gui", delete_config=True)
@@ -126,13 +139,13 @@ class UninstallFiles(unittest.TestCase):
 
     def test_reset_clears_settings_and_leaves_the_shortcut(self):
         remain = self._apply("reset", "liquid")
-        self.assertEqual(remain, ["manager", "gui", "liquid", "visualizer"])
+        self.assertEqual(remain, ["manager", "gui", "liquid", "visualizer", "mixer"])
         self.assertFalse((self.config / "liquid_player_window.json").exists())
         self.assertTrue((self.config / "liquid_gui_window.json").is_file())
         self.assertTrue((self.desktop / "MP Liquid Player.desktop").is_file())
         self.assertEqual(
             (self.config / "installed_apps").read_text(encoding="utf-8"),
-            "manager gui liquid visualizer\n",
+            "manager gui liquid visualizer mixer\n",
         )
 
     def test_dry_run_changes_nothing(self):
@@ -255,6 +268,22 @@ class ExitVideoWhileUninstalling(unittest.TestCase):
         while time.time() < deadline and self._alive():
             time.sleep(0.1)
         self.assertEqual(self._alive(), [])
+
+    def test_the_script_uninstalls_the_mixer_on_its_own(self):
+        (self.config / "installed_apps").write_text("manager mixer\n", encoding="utf-8")
+        _write(self.desktop / "MP Mix Manager.desktop", "[Desktop Entry]\n")
+        _write(self.desktop / "MP Liquid Mixer.desktop", "[Desktop Entry]\n")
+        _write(self.menu / "MP Mix Manager.desktop", "[Desktop Entry]\n")
+        _write(self.menu / "MP Liquid Mixer.desktop", "[Desktop Entry]\n")
+        res = self._run("--uninstall", "--apps", "mixer", "--keep-config")
+        self.assertEqual(res.returncode, 0, res.stderr + res.stdout)
+        self.assertFalse((self.desktop / "MP Liquid Mixer.desktop").exists())
+        self.assertFalse((self.menu / "MP Liquid Mixer.desktop").exists())
+        self.assertTrue((self.desktop / "MP Mix Manager.desktop").is_file())
+        self.assertEqual(
+            (self.config / "installed_apps").read_text(encoding="utf-8"),
+            "manager\nmixer=off\n",
+        )
 
     def test_a_player_that_exits_is_started_again_until_the_work_ends(self):
         res = self._run(

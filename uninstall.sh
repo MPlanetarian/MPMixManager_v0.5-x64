@@ -103,7 +103,8 @@ usage() {
     echo "Options:"
     echo "  --reset                   Clear settings for the chosen apps; keep them installed"
     echo "  --uninstall               Remove the chosen apps"
-    echo "  --apps LIST               all, or manager,gui,liquid,visualizer"
+    echo "  --apps LIST               all, or manager,gui,liquid,visualizer,mixer"
+    echo "                            (mixer is Linux only)"
     echo "  --keep-config             Uninstall: keep settings for a later install (default with --yes)"
     echo "  --delete-config           Uninstall: delete that app's saved settings"
     echo "  --yes, -y                 Do not ask for confirmation"
@@ -237,49 +238,105 @@ if [ -z "$MODE" ]; then
     esac
 fi
 
+_mp_mixer_ok=0
+case "$(uname -s 2>/dev/null)" in
+    Linux|FreeBSD) _mp_mixer_ok=1 ;;
+esac
+if [ -n "${WSL_DISTRO_NAME:-}" ] || grep -qi microsoft /proc/version 2>/dev/null; then
+    _mp_mixer_ok=0
+fi
+
 if [ -z "$APPS" ]; then
     if [ ! -t 0 ]; then
         APPS="all"
-        echo -e "${DIM}      • Non-interactive run: all four applications.${NC}"
+        if [ "$_mp_mixer_ok" -eq 1 ]; then
+            echo -e "${DIM}      • Non-interactive run: all five applications.${NC}"
+        else
+            echo -e "${DIM}      • Non-interactive run: all four applications.${NC}"
+        fi
     else
         echo "      Which applications?"
         echo ""
-        echo -e "        ${BOLD}1)${NC} All four"
+        if [ "$_mp_mixer_ok" -eq 1 ]; then
+            echo -e "        ${BOLD}1)${NC} All five"
+        else
+            echo -e "        ${BOLD}1)${NC} All four"
+        fi
         echo -e "        ${BOLD}2)${NC} MP Mix Manager only"
         echo -e "        ${BOLD}3)${NC} MP Gui only"
         echo -e "        ${BOLD}4)${NC} MP Liquid Player only"
         echo -e "        ${BOLD}5)${NC} MP Liquid Visualizer only"
-        echo -e "        ${BOLD}6)${NC} Choose several"
+        if [ "$_mp_mixer_ok" -eq 1 ]; then
+            echo -e "        ${BOLD}6)${NC} MP Liquid Mixer only"
+            echo -e "        ${BOLD}7)${NC} Choose several"
+        else
+            echo -e "        ${BOLD}6)${NC} Choose several"
+        fi
         echo ""
         printf "      Select [1]: "
         read_answer _apps_ans
+        _mp_apps_pick_several=0
         case "${_apps_ans:-1}" in
             2) APPS="manager" ;;
             3) APPS="gui" ;;
             4) APPS="liquid" ;;
             5) APPS="visualizer" ;;
             6)
-                echo ""
-                echo -e "        ${DIM}Numbers separated by spaces, e.g.${NC} 2 3"
-                echo -e "        ${DIM}1)${NC} MP Mix Manager   ${DIM}2)${NC} MP Gui   ${DIM}3)${NC} MP Liquid Player   ${DIM}4)${NC} MP Liquid Visualizer"
-                printf "      Numbers: "
-                read_answer _apps_multi
-                APPS=""
-                for _num in $_apps_multi; do
-                    case "$_num" in
-                        1) APPS="$APPS manager" ;;
-                        2) APPS="$APPS gui" ;;
-                        3) APPS="$APPS liquid" ;;
-                        4) APPS="$APPS visualizer" ;;
-                    esac
-                done
-                APPS="${APPS# }"
-                APPS="${APPS:-all}"
+                if [ "$_mp_mixer_ok" -eq 1 ]; then
+                    APPS="mixer"
+                else
+                    _mp_apps_pick_several=1
+                fi
+                ;;
+            7)
+                if [ "$_mp_mixer_ok" -eq 1 ]; then
+                    _mp_apps_pick_several=1
+                else
+                    APPS="all"
+                fi
                 ;;
             *) APPS="all" ;;
         esac
+        if [ "$_mp_apps_pick_several" -eq 1 ]; then
+            echo ""
+            echo -e "        ${DIM}Numbers separated by spaces, e.g.${NC} 2 3"
+            if [ "$_mp_mixer_ok" -eq 1 ]; then
+                echo -e "        ${DIM}1)${NC} MP Mix Manager   ${DIM}2)${NC} MP Gui   ${DIM}3)${NC} MP Liquid Player   ${DIM}4)${NC} MP Liquid Visualizer   ${DIM}5)${NC} MP Liquid Mixer"
+            else
+                echo -e "        ${DIM}1)${NC} MP Mix Manager   ${DIM}2)${NC} MP Gui   ${DIM}3)${NC} MP Liquid Player   ${DIM}4)${NC} MP Liquid Visualizer"
+            fi
+            printf "      Numbers: "
+            read_answer _apps_multi
+            APPS=""
+            for _num in $_apps_multi; do
+                case "$_num" in
+                    1) APPS="$APPS manager" ;;
+                    2) APPS="$APPS gui" ;;
+                    3) APPS="$APPS liquid" ;;
+                    4) APPS="$APPS visualizer" ;;
+                    5)
+                        if [ "$_mp_mixer_ok" -eq 1 ]; then
+                            APPS="$APPS mixer"
+                        fi
+                        ;;
+                esac
+            done
+            APPS="${APPS# }"
+            APPS="${APPS:-all}"
+            unset _apps_multi
+        fi
+        unset _apps_ans _mp_apps_pick_several
     fi
 fi
+
+case "$(printf '%s' "$APPS" | tr '[:upper:]' '[:lower:]')" in
+    *mixer*)
+        if [ "$_mp_mixer_ok" -ne 1 ]; then
+            echo "MP Liquid Mixer is Linux only (it needs X11/XWayland, VTE and ALSA)." >&2
+            exit 1
+        fi
+        ;;
+esac
 
 if [ "$MODE" = "uninstall" ] && [ -z "$CONFIG_CHOICE" ]; then
     if [ "$ASSUME_YES" -eq 1 ] || [ ! -t 0 ]; then
@@ -470,7 +527,7 @@ if [ "$NO_STOP" -eq 0 ] && [ "$DRY_RUN" -eq 0 ] && [ "${_remaining:-none}" = "no
     if command -v pkill >/dev/null 2>&1; then
         pkill -f "mp_system_tray\\.py" >/dev/null 2>&1 || true
         pkill -f "windows_tray\\.ps1" >/dev/null 2>&1 || true
-        # The tray and the companion are independent of the four apps, so a
+        # The tray and the companion are independent of the five apps, so a
         # full uninstall stops them too; leaving them running would let them
         # rewrite the state that was just deleted.
         pkill -f "MP_Liquid_Mixer\\.py" >/dev/null 2>&1 || true

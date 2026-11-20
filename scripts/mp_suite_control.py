@@ -3,10 +3,10 @@
 
 The companion usually runs as a systemd user service, so the phone may be the
 only interface in front of the user. These helpers let the dashboard start
-**MP Gui**, the **MP Mix Manager (CLI)**, **MP Liquid Player**, and the
-**MP Liquid Visualizer**, report which of them are live (so the dashboard can
-paint a pressed button), and close all four without stopping the shared tray
-icon or the companion itself.
+**MP Gui**, the **MP Mix Manager (CLI)**, **MP Liquid Player**, the
+**MP Liquid Visualizer**, and the Linux-only **MP Liquid Mixer**, report which
+of them are live (so the dashboard can paint a pressed button), and close all
+five without stopping the shared tray icon or the companion itself.
 
 Linux only: the process table comes from ``/proc`` and the launch commands are
 the same shell launchers the tray menu and desktop shortcuts use. Process
@@ -14,8 +14,8 @@ classification is delegated to :mod:`mp_system_tray` when it is importable, so
 the dashboard cannot disagree with the icon about what is running (in
 particular, a manager hosted inside the MP Gui window is not the CLI).
 
-There is also a fifth control, the **MP Visualizer** button at the bottom of
-the dashboard. It is not a launch/focus toggle like the four suite buttons: it
+There is also a separate control, the **MP Visualizer** button at the bottom of
+the dashboard. It is not a launch/focus toggle like the five suite buttons: it
 owns exactly one window for its whole life — press once to open it, again to
 take that same window fullscreen, and again to close it. See
 :mod:`mp_visualizer_control` for the state file and the signals, and
@@ -46,14 +46,16 @@ ROLE_GUI = "gui"
 ROLE_MANAGER = "manager"
 ROLE_LIQUID = "liquid"
 ROLE_VISUALIZER = "visualizer"
+ROLE_MIXER = "mixer"
 
-ROLE_ORDER = (ROLE_GUI, ROLE_MANAGER, ROLE_LIQUID, ROLE_VISUALIZER)
+ROLE_ORDER = (ROLE_GUI, ROLE_MANAGER, ROLE_LIQUID, ROLE_VISUALIZER, ROLE_MIXER)
 
 APP_LABELS = {
     ROLE_GUI: "MP Gui",
     ROLE_MANAGER: "MP Mix Manager (CLI)",
     ROLE_LIQUID: "MP Liquid Player",
     ROLE_VISUALIZER: "MP Liquid Visualizer",
+    ROLE_MIXER: "MP Liquid Mixer",
 }
 
 APP_ICONS = {
@@ -61,6 +63,7 @@ APP_ICONS = {
     ROLE_MANAGER: "⌨",
     ROLE_LIQUID: "🎵",
     ROLE_VISUALIZER: "🌌",
+    ROLE_MIXER: "🎛",
 }
 
 # Window titles used for "already running, bring it forward".
@@ -69,9 +72,10 @@ FOCUS_TITLES = {
     ROLE_MANAGER: "MP Mix Archive Manager",
     ROLE_LIQUID: "MP Audio Player (Liquid Glass",
     ROLE_VISUALIZER: "MP Liquid Visualizer",
+    ROLE_MIXER: "MP Liquid Mixer",
 }
 
-# The visualizer is not one of the tray's three roles, so it is matched here.
+# The visualizer is not one of the tray's roles, so it is matched here.
 _VISUALIZER_MARKERS = (
     "MP_Liquid_Visualizer",
     "mp_liquid_visualizer_vulkan",
@@ -84,6 +88,7 @@ _FALLBACK_MARKERS = {
     ROLE_MANAGER: ("Mix_Archive_Manager.sh", "mix-archive-manager", "launch-manager"),
     ROLE_LIQUID: ("MP_Audio_Player_Liquid_Glass", "launch-liquid-glass", "launch_liquid_glass"),
     ROLE_VISUALIZER: _VISUALIZER_MARKERS,
+    ROLE_MIXER: ("MP_Liquid_Mixer.py", "launch_liquid_mixer", "launch-liquid-mixer"),
 }
 
 _CLOSE_TIMEOUT_SECONDS = 3.0
@@ -130,7 +135,7 @@ def tty_mode_active() -> bool:
 
 
 def installed_components() -> set[str]:
-    """The apps this install set up; all four when nothing was recorded."""
+    """The apps this install set up; every supported app when not recorded."""
     try:
         scripts = str(_scripts_dir())
         if scripts not in sys.path:
@@ -203,7 +208,7 @@ def visualizer_running(processes: Iterable) -> bool:
 
 
 def running_roles(processes: Optional[Sequence] = None) -> set[str]:
-    """Which of the four apps are live right now."""
+    """Which of the five apps are live right now."""
     if not is_supported():
         return set()
     table = list(processes) if processes is not None else _process_table()
@@ -327,6 +332,11 @@ def launch_argv(role: str, base: Optional[Path] = None) -> list[str]:
         if launcher.is_file():
             return ["bash", str(launcher)]
         return [sys.executable, str(base / "MP_Liquid_Visualizer.py")]
+    if role == ROLE_MIXER:
+        launcher = base / "scripts" / "launch_liquid_mixer.sh"
+        if launcher.is_file():
+            return ["bash", str(launcher)]
+        return ["bash", str(base / "MP_Liquid_Mixer" / "run.sh")]
     raise ValueError(f"unknown app role: {role}")
 
 
@@ -444,7 +454,7 @@ def launch_app(role: str) -> dict:
 # ------------------------------------------------------------------------------
 # MP VISUALIZER (the Web Companion's own window)
 #
-# The four suite buttons focus what is already open; this one is a three-state
+# The five suite buttons focus what is already open; this one is a three-state
 # control over exactly one window. The window is identified by a random
 # instance token that is passed in its environment and echoed in its command
 # line, and the published state file carries the pid. Every signal is sent to
@@ -631,7 +641,7 @@ def _ensure_tray(base: Path) -> None:
 
 
 def _fallback_close(base: Path) -> None:
-    """Close the four apps when the tray helpers are unavailable."""
+    """Close the five apps when the tray helpers are unavailable."""
     script = base / "scripts" / "kill_all_mp_audio_players.sh"
     if not script.is_file():
         script = base / "kill_all_mp_audio_players.sh"
@@ -648,7 +658,13 @@ def _fallback_close(base: Path) -> None:
             )
         except (OSError, subprocess.TimeoutExpired):
             pass
-    for pattern in ("Mix_Archive_Manager\\.sh", "mix-archive-manager", "launch-manager"):
+    for pattern in (
+        "Mix_Archive_Manager\\.sh",
+        "mix-archive-manager",
+        "launch-manager",
+        "MP_Liquid_Mixer\\.py",
+        "launch_liquid_mixer",
+    ):
         try:
             subprocess.run(
                 ["pkill", "-TERM", "-f", pattern],
@@ -663,7 +679,7 @@ def _fallback_close(base: Path) -> None:
 
 
 def _close_suite(base: Path, before: set[str]) -> tuple[set[str], set[str]]:
-    """Stop the four apps and confirm they are gone. Blocking, by design.
+    """Stop the five apps and confirm they are gone. Blocking, by design.
 
     Contains everything the close actually does, so the dashboard can run it off
     the request thread and the tray menu can run it inline without either one
@@ -743,9 +759,9 @@ def _start_background_close(base: Path) -> bool:
 
 
 def close_all_apps(base: Optional[Path] = None, wait: bool = True) -> dict:
-    """Close MP Gui, the CLI manager, the player, and the visualizer.
+    """Close MP Gui, the CLI manager, the player, the visualizer, and the mixer.
 
-    The shared tray icon is deliberately left alone: it is not one of the four
+    The shared tray icon is deliberately left alone: it is not one of the five
     roles, so ``shutdown_suite`` never signals it. The dashboard also asks the
     tray to stay, because a tray started by a shortcut (rather than autostart)
     otherwise quits a few seconds after the last window closes.

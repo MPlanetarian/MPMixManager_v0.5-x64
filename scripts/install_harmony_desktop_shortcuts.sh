@@ -4,7 +4,7 @@
 # Purpose: Put the MP Harmony Agent and MP Reporter shortcuts on the Desktop.
 #
 # These programs are separate from MP Mix Manager, so their shortcuts are
-# not written by install_desktop_shortcuts.py (which owns the four manager
+# not written by install_desktop_shortcuts.py (which owns the five MP
 # entries). This script owns theirs and can be re-run at any time: existing
 # entries are replaced, so an old path is corrected rather than duplicated.
 #

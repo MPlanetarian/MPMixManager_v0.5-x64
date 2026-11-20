@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Shared system tray for MP Mix Manager, MP Gui, and MP Liquid Player.
+# Shared system tray for MP Mix Manager, MP Gui, MP Liquid Player, and MP Liquid Mixer.
 # --ensure   start the tray in the background when it is not already running
 # --status   exit 0 when the tray is running
-# --stay     keep the icon up even if none of the three apps is open
+# --stay     keep the icon up even if none of the apps is open
 
 _RESOLVED_SRC="${BASH_SOURCE[0]}"
 while [ -h "$_RESOLVED_SRC" ]; do

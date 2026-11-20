@@ -8,14 +8,15 @@ Desktop and in the application menu:
   MP Mix Manager
   MP Gui
   MP Liquid Visualizer
-  MP Liquid Mixer      (Linux only; installed beside any non-empty selection)
+  MP Liquid Mixer      (Linux only)
 
-The installer can be told to set up only some of them (``--components``, or the
-stored selection in ``scripts/mp_app_selection.py``), in which case only those
-shortcuts are written and the others are removed. ``SHORTCUT_NAMES`` stays the
-full catalogue in display order. The mixer is not one of the four selectable
-apps because it cannot run on macOS or Windows, but Linux installs get its
-shortcut with any selection, including "only MP Gui".
+All five are selectable, including the mixer alone on Linux. The installer can
+be told to set up only some of them (``--components``, or the stored selection
+in ``scripts/mp_app_selection.py``), in which case only those shortcuts are
+written and the others are removed. ``SHORTCUT_NAMES`` stays the full catalogue
+in display order. macOS and Windows have no mixer entry because it needs
+X11/XWayland, VTE and ALSA; a mixer-only selection there installs nothing
+rather than falling back to the other apps.
 
 On macOS, MP Mix Manager stays a Terminal .command file. The other three are
 application bundles, so opening them does not open a Terminal window. All four
@@ -60,38 +61,47 @@ COMPONENT_BY_NAME = {
     "MP Liquid Mixer": "mixer",
 }
 
-# Linux-only extras ship with the suite but are not one of the four selectable
-# apps: the mixer needs X11/XWayland, VTE and ALSA, so macOS and Windows get no
-# shortcut for it. On Linux every install (any app selection except "none")
-# receives it beside the selected shortcuts.
-LINUX_ONLY_COMPONENTS = frozenset({"mixer"})
-
-
 def selected_names(components=None, platform_name: str | None = None) -> tuple[str, ...]:
     """The shortcut names this install should have.
 
     ``components`` wins when given. Otherwise the stored selection is used, and
-    a missing or unreadable file means all four. A file the uninstaller wrote
-    as ``none`` means no shortcuts: the next launch must not put them back.
+    a missing or unreadable file means every app this platform supports. A file
+    the uninstaller wrote as ``none`` means no shortcuts: the next launch must
+    not put them back.
 
-    ``platform_name`` defaults to the current platform. Pass it explicitly when
-    the caller is writing for another OS, because the Linux-only extras are
-    filtered out everywhere else.
+    ``platform_name`` defaults to the current platform. The mixer is filtered
+    out everywhere except Linux, because macOS and Windows cannot run it.
     """
+    platform_name = platform_name or detect_platform()
     if components is None and app_selection.file_says_none():
         return tuple()
-    chosen = set(components) if components is not None else set(app_selection.read())
+    chosen = (
+        set(components)
+        if components is not None
+        else set(app_selection.read(platform_name=platform_name))
+    )
     # An empty answer must never leave the Desktop bare.
     if not chosen:
-        return SHORTCUT_NAMES
-    include_linux_only = (platform_name or detect_platform()) == "linux"
+        chosen = set(app_selection.supported_components(platform_name))
     names = tuple(
+        name for name in SHORTCUT_NAMES if COMPONENT_BY_NAME.get(name) in chosen
+    )
+    if platform_name != "linux":
+        names = tuple(
+            name for name in names if COMPONENT_BY_NAME.get(name) != "mixer"
+        )
+    if names:
+        return names
+    # A mixer-only selection on macOS/Windows has no valid entry. Do not turn
+    # that into "install all four"; report nothing so the caller can leave the
+    # Desktop alone (the installer refuses the choice before it gets here).
+    if chosen == {"mixer"}:
+        return tuple()
+    return tuple(
         name
         for name in SHORTCUT_NAMES
-        if COMPONENT_BY_NAME.get(name) in chosen
-        or (include_linux_only and COMPONENT_BY_NAME.get(name) in LINUX_ONLY_COMPONENTS)
+        if COMPONENT_BY_NAME.get(name) in set(app_selection.supported_components(platform_name))
     )
-    return names or SHORTCUT_NAMES
 
 STALE_SHORTCUT_NAMES = (
     "MP_Liquid.desktop",
@@ -684,7 +694,7 @@ def _remove_deselected(directory: Path, keep: tuple[str, ...]) -> None:
     """Delete the shortcuts of the apps this install was not asked to set up.
 
     Every extension a shortcut can carry is removed here, because a user who
-    switches from "all four" to "only MP Gui" must not be left with a dead
+    switches from "all five" to "only MP Gui" must not be left with a dead
     Liquid Player icon on the Desktop and in the menu.
     """
     if not directory.is_dir():
@@ -999,11 +1009,15 @@ def install_desktop_shortcuts(
     ``components`` is a list of ids from ``mp_app_selection``; when omitted the
     stored selection is used. Shortcuts for the components that were *not*
     selected are removed, so switching to "only MP Gui" on a machine that
-    previously had all four does not leave three dead icons behind.
+    previously had all five does not leave four dead icons behind.
     """
     root = Path(root) if root else ROOT
     platform_name = platform_name or detect_platform()
     names = selected_names(components, platform_name)
+    # A mixer-only selection where the mixer cannot run has nothing to write.
+    # Leave existing shortcuts alone instead of deleting every entry.
+    if not names:
+        return []
     if _delegate_windows_shortcuts(platform_name, desktop_dir, apps_dir, launcher_dir, link_writer):
         code = run_windows_user_integration(root, "Install", components)
         if code in (0, 3):

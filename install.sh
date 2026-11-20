@@ -80,7 +80,7 @@ fi
 # --apps value from "$2" (the second word of the command line), so any option
 # placed before it swallowed the value: `./install.sh --reinstall --apps gui`
 # set MP_INSTALL_APPS="--apps" and then skipped "gui". The selection was
-# silently lost and all four apps were installed.
+# silently lost and every supported app was installed.
 REINSTALL=0
 REINSTALL_ARGS=()
 MP_DRY_RUN="${MP_DRY_RUN:-0}"
@@ -100,9 +100,10 @@ while [ $# -gt 0 ]; do
             echo "  --version, -V             Print the installer version and exit"
             echo "  --install-harmony         Install the optional MP Harmony Agent (default)"
             echo "  --no-harmony              Skip the optional MP Harmony Agent"
-            echo "  --apps LIST               Set up all four apps (--apps all) or only"
-            echo "                            the ones named: --apps gui"
-            echo "                            (manager, gui, liquid, visualizer; comma-separated)"
+            echo "  --apps LIST               Set up every app (--apps all) or only the"
+            echo "                            ones named: --apps gui, --apps mixer"
+            echo "                            (manager, gui, liquid, visualizer, mixer;"
+            echo "                            comma-separated. Mixer is Linux only.)"
             echo "  --reinstall               Wipe this user's configuration and reinstall"
             echo "                            from a first-install state"
             echo "  --preserve-playlists      Reinstall: keep playlists and favorites"
@@ -140,7 +141,7 @@ while [ $# -gt 0 ]; do
             ;;
         --apps|--components)
             if [ $# -lt 2 ] || [ -z "${2:-}" ]; then
-                echo "--apps needs a value: all, manager, gui, liquid, visualizer" >&2
+                echo "--apps needs a value: all, manager, gui, liquid, visualizer, mixer" >&2
                 exit 1
             fi
             MP_INSTALL_APPS="$2"
@@ -149,7 +150,7 @@ while [ $# -gt 0 ]; do
             ;;
         --apps=*|--components=*)
             if [ -z "${1#*=}" ]; then
-                echo "--apps needs a value: all, manager, gui, liquid, visualizer" >&2
+                echo "--apps needs a value: all, manager, gui, liquid, visualizer, mixer" >&2
                 exit 1
             fi
             MP_INSTALL_APPS="${1#*=}"
@@ -1165,16 +1166,44 @@ echo ""
 # (and a tray started at login) agrees.
 #
 # MP_INSTALL_APPS selects without a prompt:
-#   all | manager | gui | liquid | visualizer | gui,liquid | ...
+#   all | manager | gui | liquid | visualizer | mixer | gui,liquid | ...
 # An unset value asks; a non-interactive run takes "all".
+#
+# The mixer needs X11/XWayland, VTE and ALSA, so it is offered only on Linux
+# and FreeBSD. macOS, Windows and WSL get the other four and refuse an explicit
+# `--apps mixer` instead of silently installing a different set.
+_mp_mixer_ok=0
+case "$HOST_OS" in
+    linux|freebsd) _mp_mixer_ok=1 ;;
+esac
+_mp_apps_supported="manager gui liquid visualizer"
+if [ "$_mp_mixer_ok" -eq 1 ]; then
+    _mp_apps_supported="$_mp_apps_supported mixer"
+fi
+
 echo -e "${BOLD}${BLUE}[9/10] Choosing the MP Applications to Install...${NC}"
 MP_APPS_CHOICE="${MP_INSTALL_APPS:-}"
-MP_APPS_SELECTION="manager gui liquid visualizer"
+MP_APPS_SELECTION="$_mp_apps_supported"
 MP_APPS_INTERACTIVE=0
 if [ -n "$MP_APPS_CHOICE" ]; then
+    # Refuse `--apps mixer` where the mixer cannot run. The parser drops the
+    # id on those platforms, which would otherwise fall back to every app.
+    case "$(printf '%s' "$MP_APPS_CHOICE" | tr '[:upper:]' '[:lower:]')" in
+        *mixer*)
+            if [ "$_mp_mixer_ok" -ne 1 ]; then
+                echo -e "${RED}MP Liquid Mixer is Linux only (it needs X11/XWayland, VTE and ALSA).${NC}" >&2
+                echo "Choose all, manager, gui, liquid, or visualizer on this platform." >&2
+                exit 1
+            fi
+            ;;
+    esac
     MP_APPS_INTERACTIVE=1
 elif [ ! -t 0 ]; then
-    echo -e "${DIM}      • Non-interactive run: installing all four MP applications.${NC}"
+    if [ "$_mp_mixer_ok" -eq 1 ]; then
+        echo -e "${DIM}      • Non-interactive run: installing all five MP applications.${NC}"
+    else
+        echo -e "${DIM}      • Non-interactive run: installing all four MP applications.${NC}"
+    fi
 else
     MP_APPS_INTERACTIVE=1
 fi
@@ -1182,40 +1211,73 @@ fi
 if [ "$MP_APPS_INTERACTIVE" -eq 1 ] && [ -z "$MP_APPS_CHOICE" ]; then
     echo "      Which applications should this install set up?"
     echo ""
-    echo -e "        ${BOLD}1)${NC} All four  ${DIM}MP Mix Manager, MP Gui, MP Liquid Player, MP Liquid Visualizer${NC}"
+    if [ "$_mp_mixer_ok" -eq 1 ]; then
+        echo -e "        ${BOLD}1)${NC} All five  ${DIM}MP Mix Manager, MP Gui, MP Liquid Player, MP Liquid Visualizer, MP Liquid Mixer${NC}"
+    else
+        echo -e "        ${BOLD}1)${NC} All four  ${DIM}MP Mix Manager, MP Gui, MP Liquid Player, MP Liquid Visualizer${NC}"
+    fi
     echo -e "        ${BOLD}2)${NC} MP Mix Manager only        ${DIM}(the terminal manager)${NC}"
     echo -e "        ${BOLD}3)${NC} MP Gui only                ${DIM}(the Liquid Glass manager window)${NC}"
     echo -e "        ${BOLD}4)${NC} MP Liquid Player only      ${DIM}(the audio player + visualizer host)${NC}"
     echo -e "        ${BOLD}5)${NC} MP Liquid Visualizer only  ${DIM}(the standalone 3D visualizer)${NC}"
-    echo -e "        ${BOLD}6)${NC} Choose several            ${DIM}(pick more than one)${NC}"
+    if [ "$_mp_mixer_ok" -eq 1 ]; then
+        echo -e "        ${BOLD}6)${NC} MP Liquid Mixer only       ${DIM}(the four-channel DJ mixer)${NC}"
+        echo -e "        ${BOLD}7)${NC} Choose several            ${DIM}(pick more than one)${NC}"
+    else
+        echo -e "        ${BOLD}6)${NC} Choose several            ${DIM}(pick more than one)${NC}"
+    fi
     echo ""
     read -r -p "      Select [1]: " _mp_apps_ans || true
+    _mp_apps_pick_several=0
     case "${_mp_apps_ans:-1}" in
         2) MP_APPS_CHOICE="manager" ;;
         3) MP_APPS_CHOICE="gui" ;;
         4) MP_APPS_CHOICE="liquid" ;;
         5) MP_APPS_CHOICE="visualizer" ;;
         6)
-            echo ""
-            echo -e "        ${DIM}Enter the numbers you want, separated by spaces, e.g.${NC} 2 3"
-            echo -e "        ${DIM}  1)${NC} MP Mix Manager   ${DIM}2)${NC} MP Gui   ${DIM}3)${NC} MP Liquid Player   ${DIM}4)${NC} MP Liquid Visualizer"
-            read -r -p "      Numbers: " _mp_apps_multi || true
-            _mp_apps_picked=""
-            for _mp_app_num in $_mp_apps_multi; do
-                case "$_mp_app_num" in
-                    1) _mp_apps_picked="$_mp_apps_picked manager" ;;
-                    2) _mp_apps_picked="$_mp_apps_picked gui" ;;
-                    3) _mp_apps_picked="$_mp_apps_picked liquid" ;;
-                    4) _mp_apps_picked="$_mp_apps_picked visualizer" ;;
-                esac
-            done
-            # No valid number means the safe default, not an empty install.
-            MP_APPS_CHOICE="${_mp_apps_picked:-all}"
-            unset _mp_apps_picked _mp_app_num _mp_apps_multi
+            if [ "$_mp_mixer_ok" -eq 1 ]; then
+                MP_APPS_CHOICE="mixer"
+            else
+                _mp_apps_pick_several=1
+            fi
+            ;;
+        7)
+            if [ "$_mp_mixer_ok" -eq 1 ]; then
+                _mp_apps_pick_several=1
+            else
+                MP_APPS_CHOICE="all"
+            fi
             ;;
         *) MP_APPS_CHOICE="all" ;;
     esac
-    unset _mp_apps_ans
+    if [ "$_mp_apps_pick_several" -eq 1 ]; then
+        echo ""
+        echo -e "        ${DIM}Enter the numbers you want, separated by spaces, e.g.${NC} 2 3"
+        if [ "$_mp_mixer_ok" -eq 1 ]; then
+            echo -e "        ${DIM}  1)${NC} MP Mix Manager   ${DIM}2)${NC} MP Gui   ${DIM}3)${NC} MP Liquid Player   ${DIM}4)${NC} MP Liquid Visualizer   ${DIM}5)${NC} MP Liquid Mixer"
+        else
+            echo -e "        ${DIM}  1)${NC} MP Mix Manager   ${DIM}2)${NC} MP Gui   ${DIM}3)${NC} MP Liquid Player   ${DIM}4)${NC} MP Liquid Visualizer"
+        fi
+        read -r -p "      Numbers: " _mp_apps_multi || true
+        _mp_apps_picked=""
+        for _mp_app_num in $_mp_apps_multi; do
+            case "$_mp_app_num" in
+                1) _mp_apps_picked="$_mp_apps_picked manager" ;;
+                2) _mp_apps_picked="$_mp_apps_picked gui" ;;
+                3) _mp_apps_picked="$_mp_apps_picked liquid" ;;
+                4) _mp_apps_picked="$_mp_apps_picked visualizer" ;;
+                5)
+                    if [ "$_mp_mixer_ok" -eq 1 ]; then
+                        _mp_apps_picked="$_mp_apps_picked mixer"
+                    fi
+                    ;;
+            esac
+        done
+        # No valid number means the safe default, not an empty install.
+        MP_APPS_CHOICE="${_mp_apps_picked:-all}"
+        unset _mp_apps_picked _mp_app_num _mp_apps_multi
+    fi
+    unset _mp_apps_ans _mp_apps_pick_several
 fi
 MP_APPS_CHOICE="${MP_APPS_CHOICE:-all}"
 
@@ -1231,7 +1293,7 @@ else
     # a selection no shortcut installer understood and installed nothing.
     case "$MP_APPS_CHOICE" in
         all|"")
-            MP_APPS_SELECTION="manager gui liquid visualizer"
+            MP_APPS_SELECTION="$_mp_apps_supported"
             ;;
         *)
             _mp_apps_parsed=""
@@ -1241,15 +1303,20 @@ else
                     gui|mp-gui|mp_gui)                     _mp_apps_parsed="$_mp_apps_parsed gui" ;;
                     liquid|player|mp-liquid-player)        _mp_apps_parsed="$_mp_apps_parsed liquid" ;;
                     visualizer|mp-liquid-visualizer)       _mp_apps_parsed="$_mp_apps_parsed visualizer" ;;
+                    mixer|mp-liquid-mixer)
+                        if [ "$_mp_mixer_ok" -eq 1 ]; then
+                            _mp_apps_parsed="$_mp_apps_parsed mixer"
+                        fi
+                        ;;
                 esac
             done
             unset _mp_token
-            # Empty means the value named nothing valid; fall back to all four,
-            # matching the Python parser (an empty install is never intended).
-            MP_APPS_SELECTION="${_mp_apps_parsed:-manager gui liquid visualizer}"
+            # Empty means the value named nothing valid; fall back to every
+            # supported app, matching the Python parser.
+            MP_APPS_SELECTION="${_mp_apps_parsed:-$_mp_apps_supported}"
             # Rebuild in the canonical order, which is what the parser stores.
             _mp_apps_ordered=""
-            for _mp_want in manager gui liquid visualizer; do
+            for _mp_want in manager gui liquid visualizer mixer; do
                 case " $MP_APPS_SELECTION " in
                     *" $_mp_want "*) _mp_apps_ordered="$_mp_apps_ordered $_mp_want" ;;
                 esac
@@ -1261,10 +1328,18 @@ else
     esac
     # Record the choice here too. Previously only the step-10 shortcut installer
     # wrote this file, so a failure there silently lost the selection (the tray
-    # and the phone launch pad reverted to all four).
+    # and the phone launch pad reverted to every app).
     _mp_apps_state="$HOME/.config/mix-manager"
     mkdir -p "$_mp_apps_state" 2>/dev/null || true
     printf '%s\n' "$MP_APPS_SELECTION" > "$_mp_apps_state/installed_apps" 2>/dev/null || true
+    # A deliberate selection without the mixer must not later be mistaken for
+    # a legacy file that predates the selectable mixer.
+    if [ "$_mp_mixer_ok" -eq 1 ]; then
+        case " $MP_APPS_SELECTION " in
+            *" mixer "*) ;;
+            *) printf 'mixer=off\n' >> "$_mp_apps_state/installed_apps" 2>/dev/null || true ;;
+        esac
+    fi
     unset _mp_apps_state
 fi
 export MP_APPS_SELECTION
@@ -1278,25 +1353,29 @@ for _mp_app in $MP_APPS_SELECTION; do
         gui)        _mp_apps_headline="$_mp_apps_headline|MP Gui" ;;
         liquid)     _mp_apps_headline="$_mp_apps_headline|MP Liquid Player" ;;
         visualizer) _mp_apps_headline="$_mp_apps_headline|MP Liquid Visualizer" ;;
+        mixer)      _mp_apps_headline="$_mp_apps_headline|MP Liquid Mixer" ;;
     esac
 done
 _mp_apps_headline="${_mp_apps_headline#|}"
 _mp_apps_headline="${_mp_apps_headline//|/, }"
 MP_APPS_LABELS="$_mp_apps_headline"
 export MP_APPS_LABELS
-if [ "$_mp_apps_count" -eq 4 ]; then
-    echo -e "${GREEN}      ✓ Installing all four: ${CYAN}${_mp_apps_headline}${NC}"
+_mp_apps_total=4
+if [ "$_mp_mixer_ok" -eq 1 ]; then
+    _mp_apps_total=5
+fi
+if [ "$_mp_apps_count" -eq "$_mp_apps_total" ]; then
+    _mp_apps_all_word="all four"
+    [ "$_mp_apps_total" -eq 5 ] && _mp_apps_all_word="all five"
+    echo -e "${GREEN}      ✓ Installing ${_mp_apps_all_word}: ${CYAN}${_mp_apps_headline}${NC}"
 elif [ "$_mp_apps_count" -eq 1 ]; then
     echo -e "${GREEN}      ✓ Installing one application: ${CYAN}${_mp_apps_headline}${NC}"
 else
     echo -e "${GREEN}      ✓ Installing ${_mp_apps_count} applications: ${CYAN}${_mp_apps_headline}${NC}"
 fi
 echo -e "${DIM}        Selection saved to ~/.config/mix-manager/installed_apps${NC}"
-if [ "$(uname -s 2>/dev/null)" = "Linux" ]; then
-    echo -e "${DIM}        The Linux MP Liquid Mixer shortcut is added beside the selection.${NC}"
-fi
 echo -e "${DIM}        Change it later: ./install.sh --apps all      (or --apps gui)${NC}"
-unset _mp_apps_count _mp_app _mp_apps_ans
+unset _mp_apps_count _mp_app _mp_apps_ans _mp_apps_total _mp_apps_all_word
 echo ""
 
 # 10. Desktop Integration
@@ -1314,8 +1393,10 @@ if [ "$HOST_OS" = "windows" ] || [ "$HOST_OS" = "wsl" ]; then
 elif [ -n "$MP_PYTHON" ]; then
     if "$MP_PYTHON" "$SCRIPT_DIR/scripts/install_desktop_shortcuts.py" --root "$SCRIPT_DIR" --components "$MP_APPS_SELECTION"; then
         echo -e "${GREEN}      ✓ Desktop shortcuts: ${MP_APPS_LABELS:-MP Mix Manager}${NC}"
-        if [ "$(uname -s 2>/dev/null)" = "Linux" ]; then
-            echo -e "${GREEN}      ✓ MP Liquid Mixer shortcut installed.${NC}"
+        if [ "$_mp_mixer_ok" -eq 1 ]; then
+            case " $MP_APPS_SELECTION " in
+                *" mixer "*) echo -e "${GREEN}      ✓ MP Liquid Mixer shortcut installed.${NC}" ;;
+            esac
         fi
     else
         echo -e "${YELLOW}      ⚠ Desktop shortcuts could not be created.${NC}"
@@ -1435,6 +1516,7 @@ for _mp_app in $MP_APPS_SELECTION; do
         gui)        echo -e "  ${BOLD}${CYAN}MP Gui${NC}" ;;
         liquid)     echo -e "  ${BOLD}${CYAN}MP Liquid Player${NC}" ;;
         visualizer) echo -e "  ${BOLD}${CYAN}MP Liquid Visualizer${NC}" ;;
+        mixer)      echo -e "  ${BOLD}${CYAN}MP Liquid Mixer${NC}" ;;
     esac
 done
 echo ""
@@ -1445,6 +1527,7 @@ for _mp_app in $MP_APPS_SELECTION; do
         gui)        echo -e "  ${BOLD}${CYAN}MP Gui${NC}" ;;
         liquid)     echo -e "  ${BOLD}${CYAN}MP Liquid Player${NC}" ;;
         visualizer) echo -e "  ${BOLD}${CYAN}MP Liquid Visualizer${NC}" ;;
+        mixer)      echo -e "  ${BOLD}${CYAN}MP Liquid Mixer${NC}" ;;
     esac
 done
 echo -e "  ${BOLD}${CYAN}MP Liquid Player VR Mode${NC} (Windows + Bigscreen, or the VR launcher)"

@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""One system tray icon shared by MP Mix Manager, MP Gui, and MP Liquid Player.
+"""One system tray icon shared by the MP applications.
 
-Right-click the icon to launch any of the three, or to close the console
-manager and everything that belongs to it (the GUI, the Liquid Player,
-playback, and the visualizer). The icon stays while at least one of the
-three is open. MP Gui and MP Liquid Player open up to four windows; a fifth
-launch focuses a window that is already open.
+Right-click the icon to launch any installed app, or to close the console
+manager and everything that belongs to it (the GUI, the Liquid Player, the
+Linux-only MP Liquid Mixer, playback, and the visualizer). The icon stays
+while at least one app is open. MP Gui and MP Liquid Player open up to four
+windows; a fifth launch focuses a window that is already open.
 """
 
 from __future__ import annotations
@@ -26,6 +26,8 @@ from pathlib import Path
 ROLE_MANAGER = "manager"
 ROLE_GUI = "gui"
 ROLE_LIQUID = "liquid"
+ROLE_MIXER = "mixer"
+ROLE_VISUALIZER = "visualizer"
 
 # MP Gui and MP Liquid Player are capped at four windows. The console manager
 # is not: it is one window and the tray only ever focuses it.
@@ -46,7 +48,9 @@ except ImportError:  # pragma: no cover - the tray lives beside the helper
 
 MENU_LAUNCH_GUI = "Launch MP Gui"
 MENU_LAUNCH_LIQUID = "Launch MP Liquid Player"
-MENU_LAUNCH_MANAGER = "Launch MP Mix Manager"
+MENU_LAUNCH_MANAGER = "Launch MP Mix Manager (CLI)"
+MENU_LAUNCH_MIXER = "Launch MP Liquid Mixer"
+MENU_LAUNCH_VISUALIZER = "Launch MP Visualizer"
 MENU_CLOSE_ALL = "Close MP Mix Manager (Closes everything)"
 # Label is filled in from the live service state: Stop while the companion is
 # serving, Start while it is not. Several dashboards may be connected, which is
@@ -65,7 +69,9 @@ MENU_UNMUTE_AUDIO = "Unmute MP Player Audio"
 MENU_ENTRIES = (
     ("launch-gui", MENU_LAUNCH_GUI),
     ("launch-liquid", MENU_LAUNCH_LIQUID),
+    ("launch-mixer", MENU_LAUNCH_MIXER),
     ("launch-manager", MENU_LAUNCH_MANAGER),
+    ("launch-visualizer", MENU_LAUNCH_VISUALIZER),
     ("web-audio", MENU_WEB_AUDIO),
     ("rescan-archive", MENU_RESCAN_ARCHIVE),
     ("rescan-music", MENU_RESCAN_MUSIC),
@@ -80,6 +86,8 @@ ENTRY_COMPONENTS = {
     "launch-gui": "gui",
     "launch-liquid": "liquid",
     "launch-manager": "manager",
+    "launch-mixer": "mixer",
+    "launch-visualizer": "visualizer",
 }
 
 
@@ -97,24 +105,23 @@ def app_selection_module():
 
 
 def installed_components() -> set[str]:
-    """The apps this install set up. All four when the file is absent."""
+    """The apps this install set up. Every supported app when absent."""
     selection = app_selection_module()
     if selection is None:
-        return {"manager", "gui", "liquid", "visualizer"}
+        return {"manager", "gui", "liquid", "visualizer", "mixer"}
     try:
         return set(selection.read())
     except Exception:
-        return {"manager", "gui", "liquid", "visualizer"}
+        return {"manager", "gui", "liquid", "visualizer", "mixer"}
 
 
 def menu_entries(components: set[str] | None = None) -> tuple[tuple[str, str], ...]:
     """The menu entries that belong to the installed apps.
 
-    Close All and the Web Companion entry stay: they are not tied to one of
-    the four apps.
+    Close All and the Web Companion entry stay: they are not tied to one app.
     """
     chosen = installed_components() if components is None else set(components)
-    if {"manager", "gui", "liquid"} <= chosen:
+    if {"manager", "gui", "liquid", "visualizer", "mixer"} <= chosen:
         return MENU_ENTRIES
     return tuple(
         (ident, label)
@@ -126,12 +133,16 @@ FOCUS_TITLES = {
     ROLE_GUI: "MP Mix Manager (Liquid Glass",
     ROLE_LIQUID: "MP Audio Player (Liquid Glass",
     ROLE_MANAGER: "MP Mix Archive Manager",
+    ROLE_MIXER: "MP Liquid Mixer",
+    ROLE_VISUALIZER: "MP Liquid Visualizer",
 }
 
 CLOSE_WINDOW_TITLES = (
     "MP Mix Archive Manager",
     "MP Mix Manager (Liquid Glass",
     "MP Audio Player (Liquid Glass",
+    "MP Liquid Mixer",
+    "MP Liquid Visualizer",
 )
 
 LIQUID_HOSTS = (
@@ -153,6 +164,11 @@ _CLASSIFY_MARKERS = (
     "Mix_Archive_Manager.sh",
     "mix-archive-manager",
     "launch-manager",
+    "MP_Liquid_Mixer",
+    "launch_liquid_mixer",
+    "MP_Liquid_Visualizer",
+    "mp_liquid_visualizer",
+    "launch_liquid_visualizer",
 )
 
 # Processes that belong to the suite but hold no capped role of their own:
@@ -175,6 +191,8 @@ SUITE_HELPER_SCRIPTS = (
     "launch_mp_gui",
     "MP_Gui.sh",
     "mp_liquid_visualizer_vulkan",
+    "launch_liquid_mixer",
+    "launch_liquid_mixer.sh",
 )
 
 # MP Gui and MP Liquid Player may have at most four windows. Launching a fifth
@@ -184,8 +202,8 @@ MAX_CAPPED_INSTANCES = 4
 ABSENT_QUIT_SECONDS = 8
 LAUNCH_GRACE_SECONDS = 20
 
-# The Web Companion's "Close All" button closes the three apps but must keep
-# the icon up. A tray started by a shortcut (not the autostart entry) normally
+# The Web Companion's "Close All" button closes every installed app but must
+# keep the icon up. A tray started by a shortcut (not the autostart entry) normally
 # quits once nothing is open, so the companion drops this marker first and the
 # poll loop below honours it until the dashboard is done with the icon.
 KEEPALIVE_FILE = "mp_system_tray.keepalive"
@@ -489,6 +507,15 @@ def classify_process(
         return ROLE_GUI
     if invoked_script(cmdline, "launch-liquid-glass") or invoked_script(cmdline, "launch_liquid_glass.sh"):
         return ROLE_LIQUID
+    for name in (
+        "MP_Liquid_Visualizer.py",
+        "mp_liquid_visualizer_vulkan.py",
+        "mp_liquid_visualizer_metal.py",
+        "launch_liquid_visualizer",
+        "launch_liquid_visualizer.sh",
+    ):
+        if invoked_script(cmdline, name):
+            return ROLE_VISUALIZER
     if (
         invoked_script(cmdline, "Mix_Archive_Manager.sh")
         or invoked_script(cmdline, "mix-archive-manager")
@@ -499,6 +526,12 @@ def classify_process(
         return ROLE_MANAGER
     if _dedicated_manager_konsole(proc.cmdline):
         return ROLE_MANAGER
+    if (
+        invoked_script(cmdline, "MP_Liquid_Mixer.py")
+        or invoked_script(cmdline, "launch_liquid_mixer.sh")
+        or invoked_script(cmdline, "launch-liquid-mixer")
+    ):
+        return ROLE_MIXER
     return None
 
 
@@ -639,6 +672,16 @@ def launch_plan(
         if not launcher.is_file():
             launcher = base / "scripts" / "launch_liquid_glass.sh"
         argv = [str(launcher)]
+    elif role == ROLE_VISUALIZER:
+        launcher = base / "scripts" / "launch_liquid_visualizer.sh"
+        if not launcher.is_file():
+            launcher = base / "launch_liquid_visualizer.sh"
+        argv = ["bash", str(launcher)]
+    elif role == ROLE_MIXER:
+        launcher = base / "scripts" / "launch_liquid_mixer.sh"
+        if not launcher.is_file():
+            launcher = base / "MP_Liquid_Mixer" / "run.sh"
+        argv = ["bash", str(launcher)]
     elif host == "darwin":
         command = base / "manager_macos.command"
         if not command.is_file():
@@ -913,7 +956,7 @@ def play_exit_video(base: Path) -> bool:
 
 
 def shutdown_suite(base: Path, play_exit: bool = True, verify: bool = True) -> list[int]:
-    """Stop playback, the GUI, the Liquid Player, and the console manager.
+    """Stop playback, the GUI, the players, the mixer, and the console manager.
 
     `play_exit` shows `Exit_MP_Video.mp4` first, because the close below is a
     hard kill that leaves the windows no chance to show it themselves. While
@@ -1632,9 +1675,15 @@ def perform_menu_action(base: Path, action_id: str) -> int:
         return 2
     component = ENTRY_COMPONENTS.get(action_id)
     if component is not None and component not in installed_components():
+        role = {
+            "launch-gui": ROLE_GUI,
+            "launch-liquid": ROLE_LIQUID,
+            "launch-manager": ROLE_MANAGER,
+            "launch-mixer": ROLE_MIXER,
+            "launch-visualizer": ROLE_VISUALIZER,
+        }[action_id]
         print(
-            f"{FOCUS_TITLES[{'launch-gui': ROLE_GUI, 'launch-liquid': ROLE_LIQUID, 'launch-manager': ROLE_MANAGER}[action_id]]} "
-            "was not installed by this setup.",
+            f"{FOCUS_TITLES[role]} was not installed by this setup.",
             file=sys.stderr,
         )
         return 1
@@ -1666,6 +1715,8 @@ def perform_menu_action(base: Path, action_id: str) -> int:
         "launch-gui": ROLE_GUI,
         "launch-liquid": ROLE_LIQUID,
         "launch-manager": ROLE_MANAGER,
+        "launch-mixer": ROLE_MIXER,
+        "launch-visualizer": ROLE_VISUALIZER,
     }[action_id]
     return _launch_role(base, role)
 
@@ -2323,6 +2374,8 @@ def run_tray(base: Path, config: Path, stay: bool = False) -> int:
             "launch-gui": ROLE_GUI,
             "launch-liquid": ROLE_LIQUID,
             "launch-manager": ROLE_MANAGER,
+            "launch-mixer": ROLE_MIXER,
+            "launch-visualizer": ROLE_VISUALIZER,
         }[action_id]
         processes = read_proc_table()
         self_pids = {os.getpid()}

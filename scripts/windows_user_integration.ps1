@@ -494,6 +494,10 @@ function Install-MpUserShortcuts {
     # which is what an older caller (and a plain install) gets. An unselected
     # app also has its shortcut deleted, so switching to "only MP Gui" does
     # not leave three dead icons behind.
+    #
+    # "mixer" is accepted but ignored: the MP Liquid Mixer is Linux only, so a
+    # mixer-only answer falls back to every Windows app instead of deleting all
+    # four shortcuts.
     $idToName = @{
         "manager" = "MP Mix Manager"
         "gui" = "MP Gui"
@@ -506,6 +510,7 @@ function Install-MpUserShortcuts {
             $trimmed = $part.Trim()
             if (-not $trimmed) { continue }
             $key = $trimmed.ToLowerInvariant()
+            if ($key -eq "mixer" -or $key -eq "mp-liquid-mixer") { continue }
             if ($idToName.ContainsKey($key)) {
                 $wanted += $idToName[$key]
             } else {

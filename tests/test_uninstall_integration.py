@@ -73,7 +73,7 @@ class IntegrationCleanup(unittest.TestCase):
         helper = self.home / ".local" / "bin" / "mp-desktop-exec"
         helper.parent.mkdir(parents=True)
         helper.symlink_to(ROOT / "bin" / "mp-desktop-exec")
-        _write(self.config / "installed_apps", "gui\n")
+        _write(self.config / "installed_apps", "gui\nmixer=off\n")
 
         remain = uninstall_apps.apply_changes(
             mode="uninstall",
@@ -226,7 +226,9 @@ class ResetKeepsIntegration(unittest.TestCase):
         home = tmp / "home"
         config = home / ".config" / "mix-manager"
         config.mkdir(parents=True)
-        (config / "installed_apps").write_text("manager gui liquid visualizer\n", encoding="utf-8")
+        (config / "installed_apps").write_text(
+            "manager gui liquid visualizer mixer\n", encoding="utf-8"
+        )
         unit = home / ".config" / "systemd" / "user" / "mp-web-companion.service"
         _write(unit, "[Unit]\n")
         bashrc = home / ".bashrc"
@@ -244,7 +246,7 @@ class ResetKeepsIntegration(unittest.TestCase):
             dry_run=False,
         )
 
-        self.assertEqual(remain, ["manager", "gui", "liquid", "visualizer"])
+        self.assertEqual(remain, ["manager", "gui", "liquid", "visualizer", "mixer"])
         self.assertTrue(unit.exists())
         self.assertIn("Dynamic MOTD", bashrc.read_text(encoding="utf-8"))
 
@@ -255,7 +257,7 @@ class LibraryAndLogs(unittest.TestCase):
         self.addCleanup(lambda: __import__("shutil").rmtree(self.tmp, ignore_errors=True))
         self.config = self.tmp / "config"
         self.config.mkdir()
-        (self.config / "installed_apps").write_text("gui\n", encoding="utf-8")
+        (self.config / "installed_apps").write_text("gui\nmixer=off\n", encoding="utf-8")
 
     def _apply(self, delete_config: bool):
         return uninstall_apps.apply_changes(

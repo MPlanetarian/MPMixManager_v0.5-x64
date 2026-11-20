@@ -1,4 +1,4 @@
-"""Shared system tray for MP Mix Manager, MP Gui, and MP Liquid Player."""
+"""Shared system tray for MP Mix Manager, MP Gui, MP Liquid Player, and the mixer."""
 
 import os
 import subprocess
@@ -35,6 +35,11 @@ class TestPrefilter(unittest.TestCase):
         "Mix_Archive_Manager.sh",
         "mix-archive-manager",
         "launch-manager",
+        "MP_Liquid_Mixer.py",
+        "launch_liquid_mixer.sh",
+        "MP_Liquid_Visualizer.py",
+        "mp_liquid_visualizer_vulkan.py",
+        "launch_liquid_visualizer.sh",
     )
 
     def test_every_checked_name_is_in_the_prefilter(self):
@@ -84,7 +89,15 @@ class TestClassify(unittest.TestCase):
             "setsid env -u MP_GUI_SESSION -u LINES -u COLUMNS "
             "python3 /opt/MP_Audio_Player_Liquid_Glass.py --play /tmp/a.flac",
         )
-        processes = [gui, gui_shell, console, konsole, liquid, launcher, player_launcher, detached]
+        mixer = proc(17, 1, "python3 /opt/MP_Liquid_Mixer/MP_Liquid_Mixer.py")
+        mixer_launcher = proc(18, 1, "bash /opt/scripts/launch_liquid_mixer.sh")
+        visualizer = proc(19, 1, "python3 /opt/MP_Liquid_Visualizer.py")
+        visualizer_launcher = proc(20, 1, "bash /opt/scripts/launch_liquid_visualizer.sh")
+        processes = [
+            gui, gui_shell, console, konsole, liquid, launcher,
+            player_launcher, detached, mixer, mixer_launcher,
+            visualizer, visualizer_launcher,
+        ]
         by_pid = tray.index_processes(processes)
 
         self.assertEqual(tray.classify_process(gui, by_pid), tray.ROLE_GUI)
@@ -95,9 +108,19 @@ class TestClassify(unittest.TestCase):
         self.assertEqual(tray.classify_process(launcher, by_pid), tray.ROLE_GUI)
         self.assertEqual(tray.classify_process(player_launcher, by_pid), tray.ROLE_LIQUID)
         self.assertEqual(tray.classify_process(detached, by_pid), tray.ROLE_LIQUID)
+        self.assertEqual(tray.classify_process(mixer, by_pid), tray.ROLE_MIXER)
+        self.assertEqual(tray.classify_process(mixer_launcher, by_pid), tray.ROLE_MIXER)
+        self.assertEqual(tray.classify_process(visualizer, by_pid), tray.ROLE_VISUALIZER)
+        self.assertEqual(tray.classify_process(visualizer_launcher, by_pid), tray.ROLE_VISUALIZER)
         self.assertEqual(
             tray.roles_present(processes),
-            {tray.ROLE_GUI, tray.ROLE_LIQUID, tray.ROLE_MANAGER},
+            {
+                tray.ROLE_GUI,
+                tray.ROLE_LIQUID,
+                tray.ROLE_MANAGER,
+                tray.ROLE_MIXER,
+                tray.ROLE_VISUALIZER,
+            },
         )
 
     def test_gui_session_environment_is_not_the_console_manager(self):
@@ -132,7 +155,9 @@ class TestMenu(unittest.TestCase):
             [
                 "Launch MP Gui",
                 "Launch MP Liquid Player",
-                "Launch MP Mix Manager",
+                "Launch MP Liquid Mixer",
+                "Launch MP Mix Manager (CLI)",
+                "Launch MP Visualizer",
                 "Start / Stop MP Audio Player (Web)",
                 "Rescan Mix Archive Folders",
                 "Rescan Music Folders",
@@ -189,6 +214,25 @@ class TestMenu(unittest.TestCase):
             tray.ROLE_MANAGER, ROOT, set(), counts={tray.ROLE_MANAGER: 99}
         )
         self.assertEqual(plan["action"], "spawn")
+
+    def test_the_mixer_launch_uses_the_shared_launcher(self):
+        plan = tray.launch_plan(tray.ROLE_MIXER, ROOT, set())
+        self.assertEqual(plan["action"], "spawn")
+        self.assertEqual(plan["title"], "MP Liquid Mixer")
+        self.assertEqual(plan["argv"][0], "bash")
+        self.assertTrue(str(plan["argv"][1]).endswith("launch_liquid_mixer.sh"))
+
+    def test_the_visualizer_launch_uses_the_shared_launcher(self):
+        plan = tray.launch_plan(tray.ROLE_VISUALIZER, ROOT, set())
+        self.assertEqual(plan["action"], "spawn")
+        self.assertEqual(plan["title"], "MP Liquid Visualizer")
+        self.assertEqual(plan["argv"][0], "bash")
+        self.assertTrue(str(plan["argv"][1]).endswith("launch_liquid_visualizer.sh"))
+
+    def test_a_running_visualizer_is_focused_instead_of_duplicated(self):
+        plan = tray.launch_plan(tray.ROLE_VISUALIZER, ROOT, {tray.ROLE_VISUALIZER})
+        self.assertEqual(plan["action"], "focus")
+        self.assertEqual(plan["title"], "MP Liquid Visualizer")
 
     def test_macos_manager_launch_opens_terminal(self):
         plan = tray.launch_plan(tray.ROLE_MANAGER, ROOT, set(), platform_name="darwin")
@@ -328,7 +372,10 @@ class TestMacMenuBar(unittest.TestCase):
         self.assertIn("NSStatusItem", source)
         self.assertIn("NSStatusBar", source)
         self.assertIn("setActivationPolicy(.accessory)", source)
-        for _ident, label in tray.MENU_ENTRIES:
+        for ident, label in tray.MENU_ENTRIES:
+            if tray.ENTRY_COMPONENTS.get(ident) == "mixer":
+                # The mixer cannot run on macOS, so the native menu bar omits it.
+                continue
             self.assertIn(label, source)
         self.assertIn("--stay", source)
         self.assertIn("mp_system_tray.py", source)

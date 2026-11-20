@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Reset or uninstall a subset of the four MP applications.
+"""Reset or uninstall a subset of the MP applications.
 
 Reset clears that app's saved window and playback settings and leaves it
 installed. Uninstall removes its shortcuts. Saved settings are deleted only
-when asked, so a later install can come back with them.
+when asked, so a later install can come back with them. All five apps are
+supported, including the Linux-only MP Liquid Mixer on its own.
 
 Removing the last app also clears the per-user integration the installer
 added outside this tree (services, login agents, icons, KDE rules, shell
@@ -86,34 +87,34 @@ SHARED_GLOBS = {
     "liquid_ui_size.*": ("gui", "liquid"),
     "audio_volume.cache*": ("liquid",),
     # The tray, the Web Companion and the bridge publish one small record
-    # each. Any of the four windows can start them, so they go with the last
+    # each. Any of the five windows can start them, so they go with the last
     # one uninstalled.
-    "mp_system_tray.*": ("manager", "gui", "liquid", "visualizer"),
-    "web_companion*": ("manager", "gui", "liquid", "visualizer"),
-    "bridge_status.json": ("manager", "gui", "liquid", "visualizer"),
-    ".bridge_perm_test": ("manager", "gui", "liquid", "visualizer"),
-    "track_durations.json": ("manager", "gui", "liquid", "visualizer"),
-    "user_activity.jsonl": ("manager", "gui", "liquid", "visualizer"),
-    "theme": ("manager", "gui", "liquid", "visualizer"),
-    "MP_Error.log": ("manager", "gui", "liquid", "visualizer"),
-    # The mixer is a Linux-only extra, but its lock, state and logs are written
-    # by the same suite and belong to no single one of the four apps. This glob
-    # also owns the Settings window's liquid_mixer_settings.json.
-    "liquid_mixer*": ("manager", "gui", "liquid", "visualizer"),
+    "mp_system_tray.*": ("manager", "gui", "liquid", "visualizer", "mixer"),
+    "web_companion*": ("manager", "gui", "liquid", "visualizer", "mixer"),
+    "bridge_status.json": ("manager", "gui", "liquid", "visualizer", "mixer"),
+    ".bridge_perm_test": ("manager", "gui", "liquid", "visualizer", "mixer"),
+    "track_durations.json": ("manager", "gui", "liquid", "visualizer", "mixer"),
+    "user_activity.jsonl": ("manager", "gui", "liquid", "visualizer", "mixer"),
+    "theme": ("manager", "gui", "liquid", "visualizer", "mixer"),
+    "MP_Error.log": ("manager", "gui", "liquid", "visualizer", "mixer"),
+    # The mixer's lock, state and logs belong to the mixer alone now that it
+    # is a selectable app. This glob also owns the Settings window's
+    # liquid_mixer_settings.json and the MIDI overrides file.
+    "liquid_mixer*": ("mixer",),
     # The one-row playlist a first-run mixer deck opens with. Derived state:
     # it is written again only while no library is configured.
-    "first_run_mix_playlist.m3u8": ("manager", "gui", "liquid", "visualizer"),
+    "first_run_mix_playlist.m3u8": ("mixer",),
     # MP Black Glass panes and the visualizers they attach publish one small
-    # record per live process. They belong to no single app: any of the four
+    # record per live process. They belong to no single app: any of the five
     # windows can open a pane, so they go with the last one uninstalled.
-    "black_glass": ("gui", "liquid", "visualizer"),
-    "black_glass_window.*.json": ("gui", "liquid", "visualizer"),
-    "black_glass_visualizer.*.json": ("gui", "liquid", "visualizer"),
-    "black_glass_visualizer_state.*.json": ("gui", "liquid", "visualizer"),
+    "black_glass": ("gui", "liquid", "visualizer", "mixer"),
+    "black_glass_window.*.json": ("gui", "liquid", "visualizer", "mixer"),
+    "black_glass_visualizer.*.json": ("gui", "liquid", "visualizer", "mixer"),
+    "black_glass_visualizer_state.*.json": ("gui", "liquid", "visualizer", "mixer"),
     "gui_window_shape.*": ("gui",),
     "visualizer-presets": ("visualizer",),
     "visualizer-spirv": ("visualizer",),
-    "visualizer_preset": ("gui", "liquid", "visualizer"),
+    "visualizer_preset": ("gui", "liquid", "visualizer", "mixer"),
     "scheduled_mixes.json": ("manager",),
     "scheduler_daemon.*": ("manager",),
     ".first_run_sample_prevent_autoplay": ("gui", "liquid"),
@@ -159,20 +160,27 @@ TRAY_PATHS = (
 def parse_targets(text: str) -> list[str]:
     """The apps named by the uninstaller. An unknown word is an error.
 
-    ``all`` is every app. Anything else must be a real spelling of one or more
-    apps. A typo must not silently select all four.
+    ``all`` is every app this platform supports. Anything else must be a real
+    spelling of one or more apps. A typo must not silently select everything.
     """
     raw = str(text).strip().lower()
+    supported = selection.supported_components()
     if raw in ("all", "everything", "full"):
-        return list(selection.COMPONENTS)
+        return list(supported)
     if not raw:
-        raise SystemExit("Choose at least one app: all, manager, gui, liquid, visualizer")
+        raise SystemExit(
+            "Choose at least one app: all, manager, gui, liquid, visualizer, mixer"
+        )
     found: set[str] = set()
     for token in raw.replace(",", " ").replace(";", " ").split():
         ident = selection.identify(token)
         if ident is None:
             raise SystemExit(
-                f"Unknown app {token!r}. Use all, manager, gui, liquid, or visualizer."
+                f"Unknown app {token!r}. Use all, manager, gui, liquid, visualizer, or mixer."
+            )
+        if ident not in supported:
+            raise SystemExit(
+                f"{selection.LABELS[ident]} is not supported on this platform."
             )
         found.add(ident)
     if not found:
@@ -253,8 +261,8 @@ def state_paths(config_dir: Path, clearing: list[str], installed: list[str]) -> 
 def _shortcut_keep(remain: list[str]) -> tuple[str, ...]:
     if not remain:
         return tuple()
-    # selected_names() also keeps the Linux-only extras, so uninstalling one of
-    # the four apps cannot delete the mixer shortcut.
+    # The selection is explicit now, so uninstalling one app removes only that
+    # app's shortcut. The mixer stays only while it is in `remain`.
     return selected_names(remain, detect_platform())
 
 
@@ -312,7 +320,7 @@ def apply_changes(
         raise SystemExit(f"Refusing to edit the install tree: {config_dir}")
 
     state_file = config_dir / selection.STATE_FILE
-    # A missing file means all four, matching the rest of the suite.
+    # A missing file means every supported app, matching the rest of the suite.
     current = selection.read(state_file)
     video_alive = "yes" if _pid_alive(video_pid) else "no"
     print(f"Exit video playing: {video_alive}")
@@ -362,7 +370,11 @@ def apply_changes(
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Reset or uninstall MP applications.")
     parser.add_argument("--mode", required=True, choices=("reset", "uninstall"))
-    parser.add_argument("--apps", required=True, help="all, or manager,gui,liquid,visualizer")
+    parser.add_argument(
+        "--apps",
+        required=True,
+        help="all, or manager,gui,liquid,visualizer,mixer (mixer is Linux only)",
+    )
     parser.add_argument("--keep-config", action="store_true")
     parser.add_argument("--delete-config", action="store_true")
     parser.add_argument("--config-dir", required=True)

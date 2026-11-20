@@ -9,6 +9,7 @@
 #  - MP_Audio_Player_Liquid_Glass*.py (Liquid Glass OpenGL/Vulkan/Metal players)
 #  - launch_liquid_glass.sh / launch-liquid-glass
 #  - MP_Liquid_Visualizer.py / mp_liquid_visualizer_vulkan.py
+#  - MP_Liquid_Mixer.py and launch_liquid_mixer.sh (Linux only)
 #  - dj_s4_midi.py (MIDI controller companion)
 #  - Bluetooth pactl subscribe monitors spawned by player
 # Cleans up lock, socket, PID, and state files.
@@ -168,6 +169,8 @@ if [[ ! "$UNAME_S" =~ (MINGW|MSYS|CYGWIN) ]]; then
         "mp_liquid_visualizer"
         "launch_liquid_glass"
         "launch-liquid-glass"
+        "MP_Liquid_Mixer\.py"
+        "launch_liquid_mixer"
         "launch_liquid_visualizer"
         "dj_s4_midi\.py"
         "get_mp_audio_player_file"
@@ -180,7 +183,7 @@ if [[ ! "$UNAME_S" =~ (MINGW|MSYS|CYGWIN) ]]; then
     done
 
     # Fallback to ps inspection to catch full commandlines
-    ps_pids="$(ps -eo pid,command 2>/dev/null | grep -iE '(MP_Audio_Player|Liquid_Glass|Liquid_Visualizer|launch-liquid-glass|launch_liquid_glass)' | grep -v -E "(grep|kill_all_mp_audio_players|$SCRIPT_PID)" | awk '{print $1}' || true)"
+    ps_pids="$(ps -eo pid,command 2>/dev/null | grep -iE '(MP_Audio_Player|Liquid_Glass|MP_Liquid_Mixer|Liquid_Visualizer|launch-liquid-glass|launch_liquid_glass|launch_liquid_mixer)' | grep -v -E "(grep|kill_all_mp_audio_players|$SCRIPT_PID)" | awk '{print $1}' || true)"
     [ -n "$ps_pids" ] && RAW_PIDS="${RAW_PIDS}"$'\n'"${ps_pids}"
 
     if [ -n "$RAW_PIDS" ]; then
@@ -241,6 +244,8 @@ else
     pkill -9 -f "MP_Liquid_Visualizer" 2>/dev/null || true
     pkill -9 -f "mp_liquid_visualizer_vulkan" 2>/dev/null || true
     pkill -9 -f "launch[-_]liquid[-_]glass" 2>/dev/null || true
+    pkill -9 -f "MP_Liquid_Mixer\.py" 2>/dev/null || true
+    pkill -9 -f "launch[-_]liquid[-_]mixer" 2>/dev/null || true
     pkill -9 -f "launch_liquid_visualizer" 2>/dev/null || true
     pkill -9 -f "dj_s4_midi\.py" 2>/dev/null || true
 
@@ -250,7 +255,7 @@ else
     # Close matching GUI / X11 / Wayland windows if wmctrl is available
     if command -v wmctrl &>/dev/null; then
         wmctrl -lp 2>/dev/null | while read -r win_id desktop_num win_pid host win_title; do
-            if [[ "$win_title" == *"MP Audio Player"* || "$win_title" == *"MP Mini Audio Player"* || "$win_title" == *"MP Micro Audio Player"* || "$win_title" == *"Liquid Glass"* || "$win_title" == *"MP_Liquid"* ]]; then
+            if [[ "$win_title" == *"MP Audio Player"* || "$win_title" == *"MP Mini Audio Player"* || "$win_title" == *"MP Micro Audio Player"* || "$win_title" == *"Liquid Glass"* || "$win_title" == *"MP_Liquid"* || "$win_title" == *"MP Liquid Mixer"* ]]; then
                 wmctrl -c "$win_id" 2>/dev/null || true
             fi
         done
@@ -260,7 +265,7 @@ fi
 # ------------------------------------------------------------------------------
 # 4. Cleanup runtime, PID, and socket files
 # ------------------------------------------------------------------------------
-rm -f "$PID_FILE" "$PORT_FILE" "$SOCK_FILE" "$S4_PID_FILE" 2>/dev/null || true
+rm -f "$PID_FILE" "$PORT_FILE" "$SOCK_FILE" "$S4_PID_FILE" "$CONFIG_DIR/liquid_mixer.lock" 2>/dev/null || true
 
 # Atomically update state file to stopped
 if [ -f "$STATE_FILE" ] && [ -n "$PY" ]; then
