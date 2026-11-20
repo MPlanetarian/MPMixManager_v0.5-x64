@@ -354,6 +354,63 @@ class TestWindowMoveAndResize(unittest.TestCase):
         self.assertEqual(mixer.window.resized, (2020, 1140))
 
 
+class TestOpacityBarHover(unittest.TestCase):
+    def _mixer(self):
+        import MP_Liquid_Mixer as app
+        mixer = app.LiquidMixer()
+        mixer.model = mixer_core.MixerModel()
+        mixer.model.save = lambda *a, **k: None
+        mixer.area = FakeArea()
+        mixer.window = FakeWindow()
+        mixer.Gdk = FakeGdk
+        return mixer
+
+    def test_the_bar_starts_hidden(self):
+        mixer = self._mixer()
+        self.assertEqual(mixer._opacity_bar_alpha, 0.0)
+        self.assertEqual(mixer._opacity_bar_target, 0.0)
+
+    def test_hovering_the_track_and_readout_targets_full_alpha(self):
+        mixer = self._mixer()
+        # Pretend the fade clock is already running; the assertions below are
+        # about the hover map, not about GLib scheduling.
+        mixer._opacity_bar_fade_source = 1
+        x, y, width, height = mixer.boxes["opacity"]
+        mixer._update_opacity_bar_hover(FakeEvent(x=x + width / 2, y=y + height / 2))
+        self.assertEqual(mixer._opacity_bar_target, 1.0)
+
+        mixer._update_opacity_bar_hover(FakeEvent(x=x + width / 2, y=y - 40))
+        self.assertEqual(mixer._opacity_bar_target, 0.0)
+
+        # The readout sits just above and right of the track.
+        mixer._update_opacity_bar_hover(FakeEvent(x=x + width + 20, y=y + height / 2))
+        self.assertEqual(mixer._opacity_bar_target, 1.0)
+
+    def test_dragging_the_bar_keeps_it_visible_outside_the_track(self):
+        mixer = self._mixer()
+        mixer._opacity_bar_fade_source = 1
+        mixer.drag = ("opacity", "")
+        mixer._update_opacity_bar_hover(FakeEvent(x=400, y=20))
+        self.assertEqual(mixer._opacity_bar_target, 1.0)
+
+    def test_the_fade_tick_advances_and_settles_on_the_target(self):
+        mixer = self._mixer()
+        mixer._opacity_bar_fade_source = 1
+        mixer._opacity_bar_fade_from = 0.0
+        mixer._opacity_bar_target = 1.0
+        mixer._opacity_bar_fade_started = (
+            time.monotonic() - mixer.OPACITY_BAR_FADE_IN_SECONDS / 2.0)
+        self.assertTrue(mixer._opacity_bar_fade_tick())
+        self.assertGreater(mixer._opacity_bar_alpha, 0.0)
+        self.assertLess(mixer._opacity_bar_alpha, 1.0)
+
+        mixer._opacity_bar_fade_started = (
+            time.monotonic() - mixer.OPACITY_BAR_FADE_IN_SECONDS - 0.01)
+        self.assertFalse(mixer._opacity_bar_fade_tick())
+        self.assertEqual(mixer._opacity_bar_alpha, 1.0)
+        self.assertEqual(mixer._opacity_bar_fade_source, 0)
+
+
 class TestPitchAndSync(unittest.TestCase):
     def test_pitch_persists(self):
         with tempfile.TemporaryDirectory() as tmp:

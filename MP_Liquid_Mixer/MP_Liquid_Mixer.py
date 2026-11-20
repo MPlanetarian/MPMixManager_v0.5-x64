@@ -196,6 +196,13 @@ class LiquidMixer(GlassHost):
 
     TITLE = "MP Liquid Mixer"
 
+    # The transparency track stays out of the way until the pointer finds it.
+    # A dedicated short clock keeps the fade smooth even though the main tick
+    # only runs every 120 ms.
+    OPACITY_BAR_FADE_IN_SECONDS = 0.20
+    OPACITY_BAR_FADE_OUT_SECONDS = 0.35
+    OPACITY_BAR_FRAME_MS = 16
+
     def __init__(self, theme: Optional[str] = None, fullscreen: Optional[bool] = None,
                  with_visualizer: Optional[bool] = None, font: Optional[str] = None) -> None:
         super().__init__(argv=[], embed_check=False, mode="NORMAL", cli_theme=theme, font=font)
@@ -273,6 +280,13 @@ class LiquidMixer(GlassHost):
         self._eq_dirty = True
         self._knob_drag = None
         self._last_knob = ("", 0.0)
+        # The transparency bar is hover-only: alpha 0 is hidden, 1 is fully
+        # shown, and a short GLib clock tweens between the two.
+        self._opacity_bar_alpha = 0.0
+        self._opacity_bar_target = 0.0
+        self._opacity_bar_fade_from = 0.0
+        self._opacity_bar_fade_started = 0.0
+        self._opacity_bar_fade_source = 0
         self._window_drag = None
         self._window_resize = None
         self._window_target = None
@@ -659,10 +673,12 @@ class LiquidMixer(GlassHost):
             | Gdk.EventMask.BUTTON_RELEASE_MASK
             | Gdk.EventMask.POINTER_MOTION_MASK
             | Gdk.EventMask.SCROLL_MASK
+            | Gdk.EventMask.LEAVE_NOTIFY_MASK
         )
         window.connect("button-press-event", self._on_press)
         window.connect("button-release-event", self._on_release)
         window.connect("motion-notify-event", self._on_motion)
+        window.connect("leave-notify-event", self._on_leave)
         window.connect("scroll-event", self._on_scroll)
         window.set_opacity(self.model.opacity)
 
@@ -2395,6 +2411,7 @@ class LiquidMixer(GlassHost):
             self._drag_master(x)
             return True
         if core.inside(x, y, self.boxes["opacity"]):
+            self._set_opacity_bar_shown(True)
             self.drag = ("opacity", "")
             self._drag_opacity(x)
             return True
@@ -2448,6 +2465,7 @@ class LiquidMixer(GlassHost):
                 self._schedule_publish()
                 return True
             return False
+        self._update_opacity_bar_hover(event)
         if not self.drag:
             return False
         kind, channel = self.drag
@@ -2468,7 +2486,77 @@ class LiquidMixer(GlassHost):
             self._set_knob(group, channel, start_value + delta)
         return True
 
-    def _on_release(self, _widget, _event) -> bool:
+    def _on_leave(self, _widget, _event) -> bool:
+        # Moving the pointer out of the window is the one exit that has no
+        # motion event, so hide the bar here too.
+        if not (self.drag and self.drag[0] == "opacity"):
+            self._set_opacity_bar_shown(False)
+        return False
+
+    def _opacity_bar_hover_box(self) -> Tuple[float, float, float, float]:
+        """The track plus its percentage readout and a little hover room.
+
+        The bar is only 24 design pixels tall at the bottom edge. The readout
+        sits just above and to the right of it, so both are part of the area
+        that brings the bar back.
+        """
+        x, y, width, height = self.boxes["opacity"]
+        scale = self._ui_scale
+        return (x, y - 8 * scale, width + 64 * scale, height + 8 * scale)
+
+    def _update_opacity_bar_hover(self, event) -> None:
+        try:
+            x, y = float(event.x), float(event.y)
+        except (AttributeError, TypeError, ValueError):
+            return
+        # Keep it on screen while the user is dragging, even if the pointer
+        # drifts above or below the track.
+        dragging = bool(self.drag and self.drag[0] == "opacity")
+        self._set_opacity_bar_shown(
+            dragging or core.inside(x, y, self._opacity_bar_hover_box()))
+
+    def _set_opacity_bar_shown(self, shown: bool) -> None:
+        target = 1.0 if shown else 0.0
+        if target == self._opacity_bar_target:
+            return
+        self._opacity_bar_target = target
+        self._opacity_bar_fade_from = self._opacity_bar_alpha
+        self._opacity_bar_fade_started = time.monotonic()
+        if self._opacity_bar_fade_source or self._closing:
+            return
+        try:
+            from gi.repository import GLib
+            self._opacity_bar_fade_source = GLib.timeout_add(
+                self.OPACITY_BAR_FRAME_MS, self._opacity_bar_fade_tick)
+        except Exception:
+            # No running GTK loop (unit tests): settle immediately.
+            self._opacity_bar_alpha = target
+            if self.area is not None:
+                self.area.queue_draw()
+
+    def _opacity_bar_fade_tick(self) -> bool:
+        if self._closing:
+            self._opacity_bar_fade_source = 0
+            return False
+        now = time.monotonic()
+        target = self._opacity_bar_target
+        duration = (self.OPACITY_BAR_FADE_IN_SECONDS
+                    if target >= self._opacity_bar_fade_from
+                    else self.OPACITY_BAR_FADE_OUT_SECONDS)
+        progress = (now - self._opacity_bar_fade_started) / max(0.001, duration)
+        progress = 0.0 if progress < 0.0 else (1.0 if progress > 1.0 else progress)
+        eased = progress * progress * (3.0 - 2.0 * progress)
+        self._opacity_bar_alpha = (self._opacity_bar_fade_from
+                                   + (target - self._opacity_bar_fade_from) * eased)
+        if self.area is not None:
+            self.area.queue_draw()
+        if progress >= 1.0:
+            self._opacity_bar_alpha = target
+            self._opacity_bar_fade_source = 0
+            return False
+        return True
+
+    def _on_release(self, _widget, event=None) -> bool:
         if self._window_resize is not None:
             self._window_resize = None
             if self.window is not None:
@@ -2501,6 +2589,8 @@ class LiquidMixer(GlassHost):
                 self.area.queue_draw()
             else:
                 self._vol_dirty = True
+        if event is not None:
+            self._update_opacity_bar_hover(event)
         return False
 
     def _set_knob(self, group: str, channel: str, value: float) -> None:
@@ -4039,25 +4129,28 @@ class LiquidMixer(GlassHost):
         cr.rectangle(box[0], box[1], box[2], max(1.0, 1.0 * s))
         cr.fill()
 
-        track = self.boxes["opacity"]
-        cy = track[1] + track[3] / 2
-        cr.set_source_rgba(*_rgba(glass_ink, 0.22))
-        cr.set_line_width(max(5.0, 6.0 * s))
-        cr.set_line_cap(1)
-        cr.move_to(track[0], cy)
-        cr.line_to(track[0] + track[2], cy)
-        cr.stroke()
-        thumb_x = core.x_from_opacity(self.model.opacity, track)
-        cr.set_source_rgba(*_rgba(accent, 0.85))
-        cr.set_line_width(max(5.0, 6.0 * s))
-        cr.move_to(track[0], cy)
-        cr.line_to(thumb_x, cy)
-        cr.stroke()
-        cr.set_source_rgba(*_rgba((245, 248, 252), 0.98))
-        cr.arc(thumb_x, cy, max(7.0, 8.0 * s), 0, 6.2832)
-        cr.fill()
-        self._text(cr, track[0] + track[2] + 16 * s, cy - 7 * s, f"{int(round(self.model.opacity * 100))}%",
-                   10 * s, glass_ink, 0.75, bold=True)
+        fade = self._opacity_bar_alpha
+        if fade > 0.001:
+            track = self.boxes["opacity"]
+            cy = track[1] + track[3] / 2
+            cr.set_source_rgba(*_rgba(glass_ink, 0.22 * fade))
+            cr.set_line_width(max(5.0, 6.0 * s))
+            cr.set_line_cap(1)
+            cr.move_to(track[0], cy)
+            cr.line_to(track[0] + track[2], cy)
+            cr.stroke()
+            thumb_x = core.x_from_opacity(self.model.opacity, track)
+            cr.set_source_rgba(*_rgba(accent, 0.85 * fade))
+            cr.set_line_width(max(5.0, 6.0 * s))
+            cr.move_to(track[0], cy)
+            cr.line_to(thumb_x, cy)
+            cr.stroke()
+            cr.set_source_rgba(*_rgba((245, 248, 252), 0.98 * fade))
+            cr.arc(thumb_x, cy, max(7.0, 8.0 * s), 0, 6.2832)
+            cr.fill()
+            self._text(cr, track[0] + track[2] + 16 * s, cy - 7 * s,
+                       f"{int(round(self.model.opacity * 100))}%", 10 * s, glass_ink,
+                       0.75 * fade, bold=True)
 
         if not self.start_fullscreen and self.area is not None:
             width, height = self.area.get_allocated_width(), self.area.get_allocated_height()
