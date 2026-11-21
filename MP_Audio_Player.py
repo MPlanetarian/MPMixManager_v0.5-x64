@@ -528,6 +528,10 @@ def split_key_burst(data: bytes) -> tuple:
     return keys, b""
 
 _LIMITED_GLYPHS = os.name == "nt" or sys.platform in ("win32", "cygwin") or bool(os.environ.get("MSYSTEM"))
+if _LIMITED_GLYPHS:
+    # The Windows console font draws ► as a replacement box (and may count it
+    # double), which pushed playlist rows past the panel border.
+    PLAYLIST_ACTIVE_MARK = ">"
 def _use_limited_console_glyphs() -> bool: return _LIMITED_GLYPHS
 def prism_level_glyph(eighth: int) -> str: return (_PRISM_LEVELS_LIMITED if _use_limited_console_glyphs() else _PRISM_LEVELS_FULL)[max(0, min(8, int(eighth)))]
 def prism_peak_glyph(hot: bool, column: int = 0) -> str:
@@ -5093,6 +5097,44 @@ def _tty_size(fallback: Tuple[int, int] = (80, 24)) -> Tuple[int, int]:
         return fallback
 
 def _win_visible_size(fallback: Tuple[int, int] = (80, 24)) -> Tuple[int, int]:
+    """The visible console window, not the (often wider) screen buffer.
+
+    os.get_terminal_size reports the buffer width on Windows. The glass host
+    keeps a buffer wider than the window in some modes, so the player drew
+    panel borders and playlist rows for a wider canvas than the window showed;
+    the rows then wrapped outside the visible panel.
+    """
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            import msvcrt
+            from ctypes import wintypes
+
+            class COORD(ctypes.Structure):
+                _fields_ = [("X", ctypes.c_short), ("Y", ctypes.c_short)]
+
+            class SMALL_RECT(ctypes.Structure):
+                _fields_ = [
+                    ("Left", ctypes.c_short), ("Top", ctypes.c_short),
+                    ("Right", ctypes.c_short), ("Bottom", ctypes.c_short),
+                ]
+
+            class CSBI(ctypes.Structure):
+                _fields_ = [
+                    ("dwSize", COORD), ("dwCursorPosition", COORD),
+                    ("wAttributes", wintypes.WORD), ("srWindow", SMALL_RECT),
+                    ("dwMaximumWindowSize", COORD),
+                ]
+
+            handle = msvcrt.get_osfhandle(sys.stdout.fileno())
+            info = CSBI()
+            if ctypes.windll.kernel32.GetConsoleScreenBufferInfo(handle, ctypes.byref(info)):
+                cols = int(info.srWindow.Right) - int(info.srWindow.Left) + 1
+                rows = int(info.srWindow.Bottom) - int(info.srWindow.Top) + 1
+                if cols >= 20 and rows >= 5:
+                    return cols, rows
+        except Exception:
+            pass
     return _tty_size(fallback)
 
 def _win_hide_console_scrollbar():
@@ -12123,7 +12165,10 @@ class TerminalPlayerUI:
                     act, sel = (path == st.get("path")), (i == self.selected_row)
                     qi = q_index.get(path)
                     in_q = qi is not None
-                    rn = str(m.get("name", ""))
+                    rn = "".join(
+                        ch if ch.isprintable() else " "
+                        for ch in str(m.get("name", ""))
+                    )
                     if act:
                         pfx = f"{PLAYLIST_ACTIVE_MARK} "
                     elif in_q:
