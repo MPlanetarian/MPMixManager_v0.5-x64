@@ -41,7 +41,17 @@ if [ -f "$CODEBASE_DIR/config.env" ]; then
     source "$CODEBASE_DIR/config.env"
 fi
 
-TARGET_DIR="${MIX_ARCHIVE_DIR:-$CODEBASE_DIR}"
+# Where to start the console. Archive storage is optional: the MIX_ARCHIVE drive
+# (and any MUSIC_FOLDERS share) may be offline, and that must never keep the
+# user out of the manager. An unavailable MIX_ARCHIVE_DIR falls back to the
+# application tree, where the manager can still open, play local mixes, and let
+# the user mount/configure storage from its own menus.
+_ARCHIVE_DIR="${MIX_ARCHIVE_DIR:-}"
+case "$_ARCHIVE_DIR" in
+    "") ;;
+    /*|[A-Za-z]:[\\/]*) ;;
+    *) _ARCHIVE_DIR="$CODEBASE_DIR/${_ARCHIVE_DIR#./}" ;;
+esac
 SCRIPT="$CODEBASE_DIR/Mix_Archive_Manager.sh"
 
 # Fast-path CLI commands that don't need archive storage mounted
@@ -120,10 +130,13 @@ elif [ "${1:-}" = "unblock-internet" ] || [ "${1:-}" = "--unblock-internet" ]; t
 fi
 
 
-# If an external drive was specified in config, wait briefly for mount
-if [ -n "${MIX_ARCHIVE_DIR:-}" ] && [ ! -d "$MIX_ARCHIVE_DIR" ]; then
+# Give a drive that is still settling at login a short, bounded grace period.
+# This wait is never fatal and can be skipped with MP_ARCHIVE_MOUNT_WAIT=0: if
+# the archive (or a MUSIC_FOLDERS share) is simply not mounted, the manager
+# still opens from the application tree.
+if [ -n "$_ARCHIVE_DIR" ] && [ ! -d "$_ARCHIVE_DIR" ]; then
     _is_offline=0
-    case "$MIX_ARCHIVE_DIR" in
+    case "$_ARCHIVE_DIR" in
         *GoogleDrive*|*google-drive*|*rclone*|*Dropbox*|*iCloud*|*OneDrive*|*Nextcloud*)
             if ! timeout 0.8 bash -c 'cat < /dev/null > /dev/tcp/1.1.1.1/53' 2>/dev/null; then
                 _is_offline=1
@@ -133,24 +146,30 @@ if [ -n "${MIX_ARCHIVE_DIR:-}" ] && [ ! -d "$MIX_ARCHIVE_DIR" ]; then
     if [ "$_is_offline" -eq 1 ]; then
         echo "Notice: Configured archive storage is cloud-hosted and internet is offline. Proceeding with local storage..."
     else
-        echo "Waiting for archive storage to mount..."
-        for i in {1..15}; do
-            if [ -d "$MIX_ARCHIVE_DIR" ]; then
-                break
-            fi
-            sleep 1
-        done
+        _mount_wait="${MP_ARCHIVE_MOUNT_WAIT:-2}"
+        if [[ "$_mount_wait" =~ ^[0-9]+$ ]] && [ "$_mount_wait" -gt 0 ]; then
+            echo "Archive storage is not mounted yet; waiting up to ${_mount_wait}s (set MP_ARCHIVE_MOUNT_WAIT=0 to skip)..."
+            for (( _i=0; _i<_mount_wait; _i++ )); do
+                [ -d "$_ARCHIVE_DIR" ] && break
+                sleep 1
+            done
+        fi
+    fi
+fi
+
+TARGET_DIR="$_ARCHIVE_DIR"
+if [ -z "$TARGET_DIR" ] || [ ! -d "$TARGET_DIR" ]; then
+    TARGET_DIR="$CODEBASE_DIR"
+    if [ -n "$_ARCHIVE_DIR" ]; then
+        echo "Notice: archive storage '${_ARCHIVE_DIR}' is not mounted; starting in '${CODEBASE_DIR}'."
     fi
 fi
 
 if [ -f "$SCRIPT" ]; then
     printf '\033]0;%s\007' "MP Mix Archive Manager" 2>/dev/null || true
-    # `cd && exec` as the last statement of the if-branch meant a failed `cd`
-    # (archive unmounted after the 15 s wait) exited 0 with no output at all.
-    cd "$TARGET_DIR" || {
-        echo "Error: cannot enter '$TARGET_DIR' (is the archive mounted?)" >&2
-        exit 1
-    }
+    # If the archive disappeared between the check and here, stay in the
+    # application tree instead of exiting with no manager at all.
+    cd "$TARGET_DIR" 2>/dev/null || cd "$CODEBASE_DIR" 2>/dev/null || true
     exec bash "$SCRIPT" "$@"
 else
     echo "Error: MP Mix Archive Manager main script not found at '$SCRIPT'."
