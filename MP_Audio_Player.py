@@ -4654,7 +4654,7 @@ def _kill_player_processes() -> List[int]:
         if pid == me:
             continue
         try:
-            os.kill(pid, signal.SIGKILL)
+            os.kill(pid, getattr(signal, "SIGKILL", signal.SIGTERM))
             killed.append(pid)
         except OSError:
             continue
@@ -6406,8 +6406,18 @@ class EqualizerVisualizer:
         # expensive thing in this effect, and this is the default effect.
         buf_offset = self._sof_buffer.shape[1] - cw
         if cw > 0 and H > 0:
-            row_sel = np.array([min(15, int(r * (16.0 / max(1, H)))) for r in range(H)])
-            energy = self._sof_buffer[row_sel, buf_offset:buf_offset + cw]
+            # Give every displayed row a slice of the whole 16-band history and
+            # keep the loudest band in it. The old nearest-row lookup skipped
+            # bands (seven rows never reached band 15, sixteen rows reached it
+            # but left the gaps between them blank), which is why the effect
+            # could look like it only filled half the panel vertically.
+            edges = np.linspace(0, 16, H + 1)
+            energy = np.zeros((H, cw), dtype=float)
+            for r in range(H):
+                lo = min(15, int(edges[r]))
+                hi = min(16, max(lo + 1, int(round(edges[r + 1]))))
+                energy[r] = self._sof_buffer[
+                    lo:hi, buf_offset:buf_offset + cw].max(axis=0)
 
             # Hue drifts with time, and across the row and down the columns.
             cols = np.arange(cw, dtype=float)

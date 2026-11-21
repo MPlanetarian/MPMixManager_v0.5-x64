@@ -984,7 +984,7 @@ def shutdown_suite(base: Path, play_exit: bool = True, verify: bool = True) -> l
         time.sleep(0.15)
         alive = _still_alive(pids)
     if alive:
-        _signal_pids(alive, signal.SIGKILL)
+        _signal_pids(alive, getattr(signal, "SIGKILL", signal.SIGTERM))
     close_windows()
     if verify:
         pids = _verify_suite_closed(base, pids)
@@ -1037,7 +1037,7 @@ def _verify_suite_closed(base: Path, first_wave: list[int]) -> list[int]:
     # Second pass: re-run the script (it also clears pid/state files) and
     # SIGKILL every role pid still visible.
     _run_kill_script(base)
-    _signal_pids(remaining, signal.SIGKILL)
+    _signal_pids(remaining, getattr(signal, "SIGKILL", signal.SIGTERM))
     report.extend(pid for pid in remaining if pid not in report)
     deadline = time.time() + 2.0
     while remaining and time.time() < deadline:
@@ -1256,7 +1256,7 @@ def stop_tray_holder(lock_path: Path, self_pid: int | None = None) -> None:
             return
         time.sleep(0.1)
     try:
-        os.kill(pid, signal.SIGKILL)
+        os.kill(pid, getattr(signal, "SIGKILL", signal.SIGTERM))
     except OSError:
         return
 

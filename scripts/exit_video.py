@@ -58,6 +58,34 @@ PLAYER_MODES = ("NORMAL", "VERTICAL", "MINI", "MICRO")
 EXIT_SCRIPT_NAME = "display_loader_video.sh"
 
 
+def _bash_executable() -> str:
+    """A real Bash, never the Windows Store stub.
+
+    ``bash`` on a stock Windows PATH is ``WindowsApps\\bash.exe``, a WSL
+    launcher that prints "install WSL" and exits immediately. The movie then
+    looked like it was launched (Popen succeeded) but nothing ever played.
+    The loader also needs Git Bash's POSIX tools, so use the same absolute
+    finder the rest of the suite uses.
+    """
+    if sys.platform == "win32":
+        find_bash = None
+        try:
+            from windows_bash import find_bash
+        except ImportError:
+            try:
+                from scripts.windows_bash import find_bash
+            except ImportError:
+                find_bash = None
+        if find_bash is not None:
+            try:
+                found = str(find_bash() or "")
+                if found and "windowsapps" not in found.lower():
+                    return found
+            except Exception:
+                pass
+    return "bash"
+
+
 def _config_candidates(root: Path) -> list[Path]:
     return [
         Path(os.environ.get("MP_CONFIG", "")) if os.environ.get("MP_CONFIG") else Path("/nonexistent"),
@@ -350,7 +378,7 @@ class PlayerIntro:
             kwargs["start_new_session"] = True
         try:
             self.process = subprocess.Popen(
-                ["bash", str(script), INTRO_SCRIPT_ARG],
+                [_bash_executable(), str(script), INTRO_SCRIPT_ARG],
                 cwd=str(self.root),
                 env=env,
                 stdin=None if attached else subprocess.DEVNULL,
@@ -460,7 +488,7 @@ class ExitVideo:
         env["MP_EXIT_VIDEO_NO_TTY"] = "1"
         try:
             self.process = subprocess.Popen(
-                ["bash", str(script), "--exit"],
+                [_bash_executable(), str(script), "--exit"],
                 cwd=str(self.root),
                 env=env,
                 stdin=subprocess.DEVNULL,

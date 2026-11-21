@@ -484,6 +484,12 @@ def _companion_already_running() -> bool:
 def ensure_random_visualizer_started() -> bool:
     """Automatically start MP Liquid Visualizer with a random preset if not already running."""
     try:
+        from liquid_visualizer_session import companion_visualizer_enabled
+        if not companion_visualizer_enabled():
+            return False
+    except Exception:
+        pass
+    try:
         import shutil, subprocess
         if not _companion_already_running() and shutil.which("pgrep") and sys.platform != "linux":
             # macOS and Windows have no /proc, so fall back to the process list.

@@ -921,7 +921,7 @@ def stop_daemon():
                 except OSError:
                     break
             else:
-                os.kill(target, signal.SIGKILL)
+                os.kill(target, getattr(signal, "SIGKILL", signal.SIGTERM))
             stopped.append(target)
         except OSError as e:
             failed.append(f"{target}: {e}")

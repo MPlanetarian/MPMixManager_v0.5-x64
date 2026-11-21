@@ -4776,8 +4776,13 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             --accent-secondary: hsl(calc(var(--rainbow-hue) + 150) 92% 60%);
             --accent-tertiary: hsl(calc(var(--rainbow-hue) + 310) 88% 62%);
             --accent-crimson: hsl(calc(var(--rainbow-hue) + 28) 95% 56%);
-            --card-border: hsl(var(--rainbow-hue) 80% 66% / 0.55);
-            --card-bg: hsl(var(--rainbow-hue) 42% 14% / 0.72);
+            --card-border: rgba(255, 255, 255, 0.18);
+            /* Low-alpha neutral, not a violet at 0.72: #rainbowWash sits
+               behind the dashboard, so a translucent card is tinted by the
+               same moving light as the page. The old opaque purple hid the
+               wash and left every panel one fixed colour while only the top
+               background appeared to animate. */
+            --card-bg: rgba(6, 5, 14, 0.32);
             --card-shadow: 0 14px 40px hsl(var(--rainbow-hue) 80% 42% / 0.38);
             --badge-bg: hsl(var(--rainbow-hue) 80% 60% / 0.22);
             --badge-color: hsl(calc(var(--rainbow-hue) + 150) 92% 62%);

@@ -25,6 +25,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 
+import liquid_visualizer_session as vis_session  # noqa: E402
 import mp_raspberry_pi as pi  # noqa: E402
 
 MGR = ROOT / "Mix_Archive_Manager.sh"
@@ -124,6 +125,72 @@ class FpsCapSettingTest(unittest.TestCase):
         fn = text[start:text.index("\n}\n", start)]
         self.assertIn('save_config_setting "MP_VISUALIZER_FPS_CAP"', fn)
         self.assertIn('export MP_VISUALIZER_FPS_CAP', fn)
+
+
+class VisualizerCompanionSettingTest(unittest.TestCase):
+    """MP Gui and the Liquid Player can leave their background visualizer off."""
+
+    def test_absent_key_keeps_the_historical_default(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = Path(tmp) / "config.env"
+            cfg.write_text('LIQUID_GLASS_BACKEND="opengl"\n', encoding="utf-8")
+            with patch.dict(os.environ, {}, clear=False):
+                os.environ.pop("MP_VISUALIZER_COMPANION_ENABLED", None)
+                self.assertTrue(vis_session.companion_visualizer_enabled(cfg))
+
+    def test_config_env_can_disable_it(self):
+        import tempfile
+        for value in ("0", "no", "false", "off", "disabled"):
+            with tempfile.TemporaryDirectory() as tmp:
+                cfg = Path(tmp) / "config.env"
+                cfg.write_text(
+                    f'MP_VISUALIZER_COMPANION_ENABLED="{value}"\n', encoding="utf-8")
+                with patch.dict(os.environ, {}, clear=False):
+                    os.environ.pop("MP_VISUALIZER_COMPANION_ENABLED", None)
+                    self.assertFalse(
+                        vis_session.companion_visualizer_enabled(cfg), value)
+
+    def test_environment_wins_over_the_file(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = Path(tmp) / "config.env"
+            cfg.write_text('MP_VISUALIZER_COMPANION_ENABLED="0"\n', encoding="utf-8")
+            with patch.dict(os.environ, {"MP_VISUALIZER_COMPANION_ENABLED": "1"}):
+                self.assertTrue(vis_session.companion_visualizer_enabled(cfg))
+
+    def test_both_hosts_check_it_before_spawning(self):
+        for name in ("MP_Audio_Player_Liquid_Glass.py",
+                     "MP_Audio_Player_Liquid_Glass_OpenGL.py",
+                     "MP_Audio_Player_Liquid_Glass_macOS.py"):
+            text = (ROOT / name).read_text(encoding="utf-8")
+            self.assertIn("companion_visualizer_enabled", text, name)
+
+    def test_launchers_honour_it(self):
+        for name in ("MP_Gui.sh",
+                     "scripts/launch_liquid_glass.sh",
+                     "scripts/launch_liquid_glass.bat",
+                     "scripts/launch_mp_gui.bat"):
+            text = (ROOT / name).read_text(encoding="utf-8")
+            self.assertIn("VISUALIZER_COMPANION", text, name)
+
+    def test_settings_menu_offers_the_toggle(self):
+        text = MGR.read_text(encoding="utf-8")
+        self.assertIn("configure_visualizer_companion() {", text)
+        self.assertIn('[9]="configure_visualizer_companion"', text)
+        self.assertIn('"9|MP Visualizer Background Window|', text)
+        start = text.index("configure_visualizer_companion() {")
+        fn = text[start:text.index("\n}\n", start)]
+        self.assertIn('save_config_setting "MP_VISUALIZER_COMPANION_ENABLED"', fn)
+        self.assertIn("Slow Graphics Card / System", fn)
+
+    def test_installer_offers_the_choice_with_the_warning(self):
+        text = (ROOT / "install.sh").read_text(encoding="utf-8")
+        self.assertIn("MP_VISUALIZER_COMPANION_ENABLED", text)
+        self.assertIn("MP Visualizer background window", text)
+        self.assertIn(
+            "(You might want to disable this if you are running on a Slow "
+            "Graphics Card / System)", text)
 
 
 if __name__ == "__main__":

@@ -56,13 +56,17 @@ _mp_python_candidates() {
             [ -n "$item" ] && printf '%s\n' "$item"
         done <<< "$raw"
     fi
-    if [ -n "${SCRIPT_DIR:-}" ]; then
+    local root
+    for root in "${SCRIPT_DIR:-}" "${BASE_DIR:-}"; do
+        [ -n "$root" ] || continue
         printf '%s\n' \
-            "${SCRIPT_DIR}/venv/bin/python3" \
-            "${SCRIPT_DIR}/venv/bin/python" \
-            "${SCRIPT_DIR}/.venv/bin/python3" \
-            "${SCRIPT_DIR}/.venv/bin/python"
-    fi
+            "${root}/venv/Scripts/python.exe" \
+            "${root}/venv/bin/python3" \
+            "${root}/venv/bin/python" \
+            "${root}/.venv/Scripts/python.exe" \
+            "${root}/.venv/bin/python3" \
+            "${root}/.venv/bin/python"
+    done
     printf '%s\n' \
         "${HOME}/.local/share/mp-mix-manager/python-env/bin/python3" \
         "${HOME}/.local/share/mp-mix-manager/python-env/bin/python" \
@@ -211,13 +215,17 @@ resolve_mp_python() {
         done <<< "$raw"
     fi
 
-    if [ -n "${SCRIPT_DIR:-}" ]; then
+    for root in "${SCRIPT_DIR:-}" "${BASE_DIR:-}"; do
+        [ -n "$root" ] || continue
         cands+=(
-            "${SCRIPT_DIR}/venv/Scripts/python.exe"
-            "${SCRIPT_DIR}/venv/bin/python3"
-            "${SCRIPT_DIR}/venv/bin/python"
+            "${root}/venv/Scripts/python.exe"
+            "${root}/venv/bin/python3"
+            "${root}/venv/bin/python"
+            "${root}/.venv/Scripts/python.exe"
+            "${root}/.venv/bin/python3"
+            "${root}/.venv/bin/python"
         )
-    fi
+    done
 
     for pyver in 313 312 311 310; do
         cands+=(

@@ -47,6 +47,21 @@ unset _RESOLVED_SRC _RESOLVED_DIR _c _found _lib
 CONFIG_FILE="$HOME/.config/mix-manager/config.env"
 [ ! -f "$CONFIG_FILE" ] && CONFIG_FILE="$BASE_DIR/config.env"
 
+# The setup prompt and the Settings menu can turn off the background MP
+# Visualizer for both MP Gui and the Liquid Player. Unset/unknown keeps the
+# historical default (enabled), so a machine without the key behaves as before.
+_mp_visualizer_companion_enabled() {
+    local value="${MP_VISUALIZER_COMPANION_ENABLED:-}"
+    if [ -z "$value" ] && [ -f "$CONFIG_FILE" ]; then
+        value="$(grep -E '^MP_VISUALIZER_COMPANION_ENABLED=' "$CONFIG_FILE" 2>/dev/null \
+            | tail -n 1 | cut -d'=' -f2- | tr -d '"'\'' ' | tr '[:upper:]' '[:lower:]')"
+    fi
+    case "$value" in
+        0|no|false|off|disabled|none) return 1 ;;
+    esac
+    return 0
+}
+
 # Raspberry Pi / low-power ARM detection. A Pi cannot run the Vulkan host
 # (liquid_glass_vulkan.py refuses every non-NVIDIA device), so the backend
 # choice is corrected here instead of opening a dead window.
@@ -238,7 +253,7 @@ _mp_vis_running() {
     pgrep -f "python[^ ]* [^ ]*MP_Liquid_Visualizer\.py" >/dev/null 2>&1 \
         || pgrep -f "python[^ ]* [^ ]*mp_liquid_visualizer_vulkan\.py" >/dev/null 2>&1
 }
-if ! _mp_vis_running; then
+if _mp_visualizer_companion_enabled && ! _mp_vis_running; then
     VIS_PY="$BASE_DIR/MP_Liquid_Visualizer.py"
     [ ! -f "$VIS_PY" ] && VIS_PY="$BASE_DIR/scripts/mp_liquid_visualizer_vulkan.py"
     if [ -f "$VIS_PY" ]; then

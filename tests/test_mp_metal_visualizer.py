@@ -455,5 +455,34 @@ class TestCLIIntegration(unittest.TestCase):
         metal_test.assert_called_once()
 
 
+class TestMacCompanionStacking(unittest.TestCase):
+    """The owned companion must sit behind MP Gui / the Liquid Player.
+
+    The host and the visualizer are separate processes. Ordering the
+    visualizer's window "back" inside its own process does not move it behind
+    another application, so macOS needs a window level below normal as well as
+    a non-focusing launch.
+    """
+
+    def test_a_companion_is_below_normal_and_does_not_take_focus(self):
+        text = (ROOT / "scripts" / "mp_liquid_visualizer_metal.py").read_text(
+            encoding="utf-8")
+        self.assertIn('"setLevel:"', text)
+        self.assertIn("c_long(-1)", text)
+        self.assertIn('"orderBack:"', text)
+        self.assertIn("focus = GLFW_FALSE if companion else GLFW_TRUE", text)
+
+    def test_a_free_window_still_comes_to_the_front(self):
+        text = (ROOT / "scripts" / "mp_liquid_visualizer_metal.py").read_text(
+            encoding="utf-8")
+        self.assertIn('"makeKeyAndOrderFront:"', text)
+        # The call must be in the non-companion branch, not applied to every
+        # window: a standalone visualizer is meant to be interactive.
+        companion = text.index('if getattr(self, "_bond_locked", False):')
+        block = text[companion:companion + 900]
+        self.assertIn('"orderBack:"', block)
+        self.assertIn('"makeKeyAndOrderFront:"', block)
+
+
 if __name__ == "__main__":
     unittest.main()

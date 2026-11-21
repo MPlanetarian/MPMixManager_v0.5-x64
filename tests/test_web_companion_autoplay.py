@@ -793,6 +793,22 @@ class ThemeSelectionTest(unittest.TestCase):
     def test_unknown_theme_is_rejected(self):
         self.assertIsNone(mwc.set_web_theme("no_such_theme"))
 
+    def test_dynamic_theme_lets_the_wash_tint_the_panels(self):
+        """The cards must not hide the animated wash behind an opaque violet.
+
+        Only #rainbowWash rotates its hue (a compositor filter). The panels are
+        above it, so an opaque --card-bg kept them one fixed purple colour.
+        A low-alpha neutral background lets the same moving light show through.
+        """
+        page = mwc.render_html_page(mwc.THEMES["dynamic_rainbow_liquid_glass"])
+        self.assertIn("--card-bg: rgba(6, 5, 14, 0.32)", page)
+        self.assertIn("body.dynamic-rainbow-glass-active #rainbowWash", page)
+        self.assertIn("background-color: var(--card-bg)", page)
+        # No opaque violet card fill is left in the dynamic body rule.
+        dynamic = page.split("body.dynamic-rainbow-glass-active {", 1)[1]
+        dynamic = dynamic.split("}", 1)[0]
+        self.assertNotIn("--card-bg: hsl(", dynamic)
+
     def test_saved_choice_survives_and_wins_over_manager_theme(self):
         mwc.set_web_theme("dreamworlds")
         with mock.patch.dict(os.environ, {"CURRENT_THEME": "cosmic_supernova"}):

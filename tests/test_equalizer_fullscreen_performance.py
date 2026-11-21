@@ -292,5 +292,29 @@ class TestFullscreenCadence(EqualizerTestBase):
         )
 
 
+class TestDynamicSpectrogramUsesTheWholeHeight(EqualizerTestBase):
+    """A seven-row panel must show the top frequency band, not stop at band 13."""
+
+    def test_the_top_row_is_lit_by_the_highest_band(self):
+        viz = self.viz("stream_of_frequency_eq")
+        only_top = status()
+        only_top["levels"] = [0.0] * 23 + [1.0]
+        only_top["levels_left"] = list(only_top["levels"])
+        only_top["levels_right"] = list(only_top["levels"])
+        with patch("MP_Audio_Player.time.time", return_value=1000.0):
+            for _ in range(160):
+                viz.render(only_top, width=40, height=5)
+            lines = viz.render(only_top, width=40, height=5)
+        body = [ANSI.sub("", line) for line in lines[1:-1]]
+        self.assertEqual(len(body), 5)
+        self.assertGreater(
+            sum(1 for ch in body[0] if ch not in " │"), 0,
+            "the top row never read the highest frequency band: " + repr(body[0]),
+        )
+        # Particles may drift into other rows; only the top band is asserted:
+        # the old nearest-row lookup never read it at this height.
+
+
+
 if __name__ == "__main__":
     unittest.main()

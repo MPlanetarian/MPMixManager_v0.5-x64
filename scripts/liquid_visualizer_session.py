@@ -17,6 +17,36 @@ from typing import Optional
 
 _VISUALIZER_MARK = "MP_Liquid_Visualizer|mp_liquid_visualizer_vulkan"
 _PLAYER_MARK = "MP_Audio_Player_Liquid_Glass"
+_CONFIG_ENV = Path.home() / ".config" / "mix-manager" / "config.env"
+
+
+def _config_value(key: str, path: Optional[Path] = None) -> str:
+    """Read ``KEY=value`` from config.env without importing the manager."""
+    target = Path(path) if path is not None else Path(
+        os.environ.get("MP_CONFIG_ENV") or _CONFIG_ENV)
+    try:
+        text = target.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith(key + "="):
+            return line.split("=", 1)[1].strip().strip("'\"")
+    return ""
+
+
+def companion_visualizer_enabled(path: Optional[Path] = None) -> bool:
+    """True when the player and MP Gui should open their background visualizer.
+
+    ``MP_VISUALIZER_COMPANION_ENABLED=0`` in config.env turns the automatic
+    companion off for both hosts, for a slow GPU or a system the user wants
+    to keep quiet. The environment wins (launchers and tests use it), and any
+    missing or unrecognised value keeps the historical default: enabled.
+    """
+    raw = (os.environ.get("MP_VISUALIZER_COMPANION_ENABLED") or "").strip()
+    if not raw:
+        raw = _config_value("MP_VISUALIZER_COMPANION_ENABLED", path)
+    return raw.strip().lower() not in ("0", "no", "false", "off", "disabled", "none")
 
 
 def _quiet_kwargs() -> dict:
@@ -69,6 +99,61 @@ def _pgrep(pattern: str) -> list[int]:
             continue
         if any(needle in cmd for needle in needles):
             found.append(int(entry.name))
+    return found
+
+
+def _windows_visualizer_window_pids() -> list[int]:
+    """PIDs of visible MP Liquid Visualizer windows.
+
+    The command-line probe can be slow on a cold Windows 10 machine: the CIM
+    query may exceed its timeout, and then the closing host found no window to
+    stop. Asking the window manager is immediate and cannot be missed.
+    """
+    if sys.platform != "win32":
+        return []
+    try:
+        import ctypes
+        from ctypes import wintypes
+    except Exception:
+        return []
+    user32 = ctypes.windll.user32
+    try:
+        user32.GetWindowTextLengthW.argtypes = [ctypes.c_void_p]
+        user32.GetWindowTextLengthW.restype = ctypes.c_int
+        user32.GetWindowTextW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_int]
+        user32.GetWindowTextW.restype = ctypes.c_int
+        user32.GetWindowThreadProcessId.argtypes = [ctypes.c_void_p, ctypes.POINTER(wintypes.DWORD)]
+        user32.GetWindowThreadProcessId.restype = wintypes.DWORD
+        user32.IsWindowVisible.argtypes = [ctypes.c_void_p]
+        user32.IsWindowVisible.restype = wintypes.BOOL
+    except Exception:
+        return []
+    found: list[int] = []
+
+    def _visit(hwnd, _lparam):
+        try:
+            if not user32.IsWindowVisible(hwnd):
+                return True
+            length = int(user32.GetWindowTextLengthW(hwnd))
+            if length <= 0:
+                return True
+            buf = ctypes.create_unicode_buffer(length + 1)
+            user32.GetWindowTextW(hwnd, buf, length + 1)
+            if "MP Liquid Visualizer" not in buf.value:
+                return True
+            pid = wintypes.DWORD()
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+            if pid.value and int(pid.value) not in found:
+                found.append(int(pid.value))
+        except Exception:
+            pass
+        return True
+
+    try:
+        callback = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)(_visit)
+        user32.EnumWindows(callback, 0)
+    except Exception:
+        return found
     return found
 
 
@@ -157,6 +242,14 @@ def companion_visualizer_pids(for_gui: bool) -> list[int]:
     direction: a companion is still retired on macOS and Windows.
     """
     pids = visualizer_pids()
+    if sys.platform == "win32":
+        # The visible window is the authoritative answer. The command-line
+        # probe also matches the short-lived python launcher that `start`
+        # creates, but that process has no window; the window's own PID always
+        # closes the thing the user is looking at.
+        for pid in _windows_visualizer_window_pids():
+            if pid not in pids:
+                pids.append(pid)
     if not _has_proc_environ():
         return pids
     return [pid for pid in pids

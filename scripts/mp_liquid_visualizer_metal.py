@@ -38,7 +38,7 @@ import re
 import sys
 import time
 from ctypes import (POINTER, Structure, byref, c_char_p, c_double, c_int,
-                    c_void_p)
+                    c_long, c_void_p)
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -706,13 +706,19 @@ class LiquidVisualizerMetalRenderer(MonitorSpanMixin, RandomPresetMixin, PlayerB
         # The owned companion opens unmapped when the Visualization button is
         # already off, so no frame flashes before the first poll hides it.
         start_visible = 0 if self._bond_should_start_hidden() else 1
+        # A companion is a background layer. Asking for focus made it the
+        # frontmost app on launch, which is why MP Gui and the player opened
+        # hidden behind their own visualizer on macOS. A free window still
+        # takes focus normally.
+        companion = bool(getattr(self, "_bond_locked", False))
+        focus = GLFW_FALSE if companion else GLFW_TRUE
         for hint, value in (
             (GLFW_CLIENT_API, GLFW_NO_API),
             (GLFW_RESIZABLE, GLFW_FALSE),
             (GLFW_DECORATED, GLFW_FALSE),
             (GLFW_VISIBLE, start_visible),
-            (GLFW_FOCUSED, GLFW_TRUE),
-            (GLFW_FOCUS_ON_SHOW, GLFW_TRUE),
+            (GLFW_FOCUSED, focus),
+            (GLFW_FOCUS_ON_SHOW, focus),
             (GLFW_AUTO_ICONIFY, GLFW_FALSE),
         ):
             g.glfwWindowHint(hint, value)
@@ -765,8 +771,20 @@ class LiquidVisualizerMetalRenderer(MonitorSpanMixin, RandomPresetMixin, PlayerB
         objc.send(content, "setLayer:", layer, restype=None, argtypes=[c_void_p])
         objc.send(nswindow, "setReleasedWhenClosed:", c_int(0), restype=None, argtypes=[c_int])
         objc.send(nswindow, "setOpaque:", c_int(0), restype=None, argtypes=[c_int])
-        objc.send(nswindow, "makeKeyAndOrderFront:", c_void_p(0), restype=None,
-                  argtypes=[c_void_p])
+        if getattr(self, "_bond_locked", False):
+            # The owned companion must sit *behind* its host. ``orderBack``
+            # alone only reorders windows inside this process, so the host in
+            # another app still ended up underneath. A window level just below
+            # normal is the cross-application way to keep the host in front,
+            # and it also keeps the visualizer from covering the host when the
+            # user raises the host window.
+            objc.send(nswindow, "setLevel:", c_long(-1), restype=None,
+                      argtypes=[c_long])
+            objc.send(nswindow, "orderBack:", c_void_p(0), restype=None,
+                      argtypes=[c_void_p])
+        else:
+            objc.send(nswindow, "makeKeyAndOrderFront:", c_void_p(0), restype=None,
+                      argtypes=[c_void_p])
 
         # Retina: the drawable must be in backing pixels or the layer renders
         # at half resolution on every Apple Silicon laptop and Studio Display.

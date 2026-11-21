@@ -60,27 +60,6 @@ if [[ ! -f "Mix_Archive_Manager.sh" ]]; then
     exit 1
 fi
 
-# A plain run opens MP Gui. Named commands (update, --help, --version, and
-# the other Mix_Archive_Manager.sh actions) stay on the CLI script.
-_launch_gui=1
-if [[ $# -gt 0 ]]; then
-    case "$1" in
-        --keep-theme|--no-visualizer|--theme|-t|--theme=*)
-            _launch_gui=1
-            ;;
-        *)
-            _launch_gui=0
-            ;;
-    esac
-fi
-
-if [[ "$_launch_gui" -eq 1 ]]; then
-    if [[ ! -f "MP_Gui.sh" ]]; then
-        echo "Error: MP_Gui.sh not found in: $DIR"
-        read -rp "Press Enter to exit..."
-        exit 1
-    fi
-    exec bash "MP_Gui.sh" "$@"
-fi
-
+# manager.sh is the console app. It always opens the Mix Archive Manager CLI;
+# the Liquid Glass GUI has its own launcher (MP_Gui.sh / MP Gui shortcut).
 exec bash "Mix_Archive_Manager.sh" "$@"

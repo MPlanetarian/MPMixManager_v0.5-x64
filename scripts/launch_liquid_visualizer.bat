@@ -21,6 +21,13 @@ if not defined PYTHON_BIN (
     pause
     exit /b 1
 )
+:: pythonw keeps the launcher from allocating a visible console next to the
+:: borderless visualizer window.
+set "PYTHONW_BIN=%PYTHON_BIN%"
+if /I "%PYTHON_BIN:~-10%"=="python.exe" (
+    set "PYTHONW_TRY=!PYTHON_BIN:python.exe=pythonw.exe!"
+    if exist "!PYTHONW_TRY!" set "PYTHONW_BIN=!PYTHONW_TRY!"
+)
 
 set "TARGET_PY=%BASE_DIR%\MP_Liquid_Visualizer.py"
 if not exist "%TARGET_PY%" set "TARGET_PY=%BASE_DIR%\scripts\mp_liquid_visualizer_vulkan.py"
@@ -39,5 +46,5 @@ set "PYTHONIOENCODING=utf-8"
 :: that is not running. Same flag the player uses for its free windows.
 set "MP_VISUALIZER_DETACHED=1"
 
-start "" "%PYTHON_BIN%" "%TARGET_PY%" %*
+start "" "%PYTHONW_BIN%" "%TARGET_PY%" %*
 exit /b 0

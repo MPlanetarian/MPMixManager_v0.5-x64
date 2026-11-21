@@ -1378,6 +1378,68 @@ echo -e "${DIM}        Change it later: ./install.sh --apps all      (or --apps 
 unset _mp_apps_count _mp_app _mp_apps_ans _mp_apps_total _mp_apps_all_word
 echo ""
 
+# 9b. The background MP Visualizer for the two hosts that draw one
+#
+# MP Gui and the MP Liquid Player each open a companion raymarch window behind
+# themselves. It is the prettiest part of the suite and also its heaviest GPU
+# work, so the setup offers to leave it off on a slow card or a machine that
+# should stay quiet. The choice is a normal config.env key, and the Settings
+# menu can change it later without reinstalling.
+_mp_installer_save_config_setting() {
+    local key="$1" val="$2" f line found out newline
+    local -a targets=("$SCRIPT_DIR/config.env")
+    [ -d "$HOME/.config/mix-manager" ] && targets+=("$HOME/.config/mix-manager/config.env")
+    for f in "${targets[@]}"; do
+        [ -f "$f" ] || continue
+        newline=$'\n'
+        grep -q $'\r' "$f" 2>/dev/null && newline=$'\r\n'
+        found=0; out=""
+        while IFS= read -r line || [ -n "$line" ]; do
+            line="${line%$'\r'}"
+            if [[ "$line" =~ ^[[:space:]]*${key}= ]]; then
+                out+="${key}=\"${val}\"${newline}"; found=1
+            else
+                out+="${line}${newline}"
+            fi
+        done < "$f"
+        (( !found )) && out+="${key}=\"${val}\"${newline}"
+        printf '%s' "$out" > "$f" 2>/dev/null || true
+    done
+}
+
+_mp_vis_hosts=0
+case " $MP_APPS_SELECTION " in
+    *" gui "*|*" liquid "*) _mp_vis_hosts=1 ;;
+esac
+MP_VIS_COMPANION="${MP_VISUALIZER_COMPANION_ENABLED:-}"
+if [ "$_mp_vis_hosts" -eq 1 ]; then
+    if [ -z "$MP_VIS_COMPANION" ] && [ "$MP_APPS_INTERACTIVE" -eq 1 ] && [ -t 0 ]; then
+        echo -e "      Enable the MP Visualizer background window for MP Gui and MP Liquid Player?"
+        echo -e "      ${DIM}(You might want to disable this if you are running on a Slow Graphics Card / System)${NC}"
+        read -r -p "      Enable MP Visualizer? [Y/n]: " _mp_vis_ans || true
+        case "${_mp_vis_ans:-y}" in
+            n|N|no|NO|0|false|FALSE|off|OFF) MP_VIS_COMPANION=0 ;;
+            *) MP_VIS_COMPANION=1 ;;
+        esac
+        unset _mp_vis_ans
+    fi
+    MP_VIS_COMPANION="${MP_VIS_COMPANION:-1}"
+    case "$MP_VIS_COMPANION" in
+        0|no|NO|false|FALSE|off|OFF|disabled) MP_VIS_COMPANION=0; _mp_vis_word="disabled" ;;
+        *) MP_VIS_COMPANION=1; _mp_vis_word="enabled" ;;
+    esac
+    _mp_installer_save_config_setting MP_VISUALIZER_COMPANION_ENABLED "$MP_VIS_COMPANION"
+    if [ "$MP_VIS_COMPANION" -eq 0 ]; then
+        echo -e "${GREEN}      ✓ MP Visualizer background window: ${YELLOW}disabled${NC}${GREEN} for MP Gui and MP Liquid Player.${NC}"
+    else
+        echo -e "${GREEN}      ✓ MP Visualizer background window: enabled for MP Gui and MP Liquid Player.${NC}"
+    fi
+    echo -e "${DIM}        Change it later: Mix Manager >> Settings >> MP Visualizer Background Window${NC}"
+    unset _mp_vis_word
+fi
+unset _mp_vis_hosts MP_VIS_COMPANION MP_VISUALIZER_COMPANION_ENABLED
+echo ""
+
 # 10. Desktop Integration
 echo -e "${BOLD}${BLUE}[10/10] Installing Desktop Integration...${NC}"
 if [ "$HOST_OS" = "windows" ] || [ "$HOST_OS" = "wsl" ]; then

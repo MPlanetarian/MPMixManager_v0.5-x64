@@ -5038,6 +5038,56 @@ while true; do
 done
 }
 
+# MP Visualizer background window
+#
+# MP Gui and the MP Liquid Player each open a companion raymarch window behind
+# themselves. It is the heaviest GPU work in the suite, so it can be turned off
+# here (and during setup) without reinstalling anything.
+configure_visualizer_companion() {
+while true; do
+    local cur="1" f v
+    for f in "${SCRIPT_DIR:-$PWD}/config.env" "$HOME/.config/mix-manager/config.env"; do
+        [ -f "$f" ] || continue
+        v="$(grep -E '^MP_VISUALIZER_COMPANION_ENABLED=' "$f" 2>/dev/null \
+            | tail -n 1 | cut -d'=' -f2- | tr -d '"'\'' ' | tr '[:upper:]' '[:lower:]')"
+        [ -n "$v" ] && cur="$v"
+    done
+    case "$cur" in
+        0|no|false|off|disabled|none) cur=0 ;;
+        *) cur=1 ;;
+    esac
+    local label hdr
+    if [ "$cur" -eq 1 ]; then label="${GREEN}Enabled${NC}"; else label="${YELLOW}Disabled${NC}"; fi
+    hdr="  Current MP Visualizer background window: ${BOLD}${label}\n"
+    hdr+="  ${DIM}MP Gui and MP Liquid Player open it behind their own window.${NC}\n"
+    hdr+="  ${DIM}(You might want to disable this if you are running on a Slow Graphics Card / System)${NC}\n"
+    local opts=(
+        "1|Enable|(Show the MP Visualizer behind MP Gui and MP Liquid Player)"
+        "2|Disable|(No background raymarch - best for a Slow Graphics Card / System)"
+        "0|Return to Settings|(or Esc / q)"
+    )
+    run_interactive_submenu "MP VISUALIZER BACKGROUND WINDOW" "$hdr" opts 0
+    local chosen=""
+    case "$REPLY" in
+        1) chosen=1 ;;
+        2) chosen=0 ;;
+        0|[qQ]|[eE][xX][iI][tT]|ESC) return 0 ;;
+        *) echo -e "\n${RED}Invalid option!${NC}"; sleep 1; continue ;;
+    esac
+    save_config_setting "MP_VISUALIZER_COMPANION_ENABLED" "$chosen"
+    export MP_VISUALIZER_COMPANION_ENABLED="$chosen"
+    if [ "$chosen" -eq 1 ]; then
+        echo -e "\n${GREEN}✓ MP Visualizer background window ${BOLD}enabled${NC}${GREEN}.${NC}"
+        echo -e "${DIM}MP Gui and MP Liquid Player will show it the next time they open.${NC}\n"
+    else
+        echo -e "\n${GREEN}✓ MP Visualizer background window ${BOLD}disabled${NC}${GREEN}.${NC}"
+        echo -e "${DIM}Close an open MP Visualizer window to stop the current one.${NC}\n"
+    fi
+    sleep 1.4
+    return 0
+done
+}
+
 configure_liquid_glass_backend() {
 local cur="${LIQUID_GLASS_BACKEND:-opengl}"
 while true; do
@@ -10410,7 +10460,7 @@ manage_motd_and_tools() {
 local -A _MENU_ACT=([1]="manage_system_motd_menu" [2]="burn_iso_to_usb"); _m_loop "MOTD BANNER MANAGER & SYSTEM UTILITIES" "" "1|Dynamic System MOTD Banner Manager|(Last 3 Mixes, Date/Time, Size, Format & Specs)" "2|Burn ISO Image to USB Drive|(dd / diskutil with safety checks)" "0|Return to Main Menu|(or Esc / q)"
 }
 manage_settings_and_system() {
-local rb="systemctl reboot with confirmation"; case "$OS_TYPE" in macos) rb="macOS restart with confirmation" ;; windows|wsl) rb="Windows restart with confirmation" ;; freebsd) rb="FreeBSD restart with confirmation" ;; esac; local -A _MENU_ACT=([1]="manage_themes" [2]="manage_installation_and_config" [3]="configure_daily_reports_settings" [4]="manage_mix_reports_menu" [5]="run_bash_cli" [6]="reboot_system" [7]="configure_liquid_glass_backend" [8]="configure_visualizer_fps_cap"); _m_loop "MANAGER SETTINGS, THEMES & SYSTEM SHELL" "" "1|Manager Themes & Color Palette Switcher|(21 Themes: Dreamworlds, Blood Moon, Sensorium...)" "2|Manage Installation & Configuration|(Migrate Path, Backup, Export, Import & Reinstall)" "3|Automated Daily Reports & Continuous Telemetry Settings|(Schedule Time, On/Off, Catch-Up)" "4|Daily Mix Reports, Telemetry & Predictive Analytics Suite|(PDF Reports, Multi-Archive Stats, Math Models)" "5|Run Bash CLI Commands|(Interactive Shell & Direct Runner)" "6|Reboot System|(${rb})" "7|Configure Liquid Glass Player Backend|(OpenGL [Default • AMD Radeon/Intel/Older Cards] or Vulkan)" "8|MP Visualizer Frame-Rate Cap|(30 / 60 / 120 / 144 FPS, or follow the display)" "0|Return to Main Menu|(or Esc / q)"
+local rb="systemctl reboot with confirmation"; case "$OS_TYPE" in macos) rb="macOS restart with confirmation" ;; windows|wsl) rb="Windows restart with confirmation" ;; freebsd) rb="FreeBSD restart with confirmation" ;; esac; local -A _MENU_ACT=([1]="manage_themes" [2]="manage_installation_and_config" [3]="configure_daily_reports_settings" [4]="manage_mix_reports_menu" [5]="run_bash_cli" [6]="reboot_system" [7]="configure_liquid_glass_backend" [8]="configure_visualizer_fps_cap" [9]="configure_visualizer_companion"); _m_loop "MANAGER SETTINGS, THEMES & SYSTEM SHELL" "" "1|Manager Themes & Color Palette Switcher|(21 Themes: Dreamworlds, Blood Moon, Sensorium...)" "2|Manage Installation & Configuration|(Migrate Path, Backup, Export, Import & Reinstall)" "3|Automated Daily Reports & Continuous Telemetry Settings|(Schedule Time, On/Off, Catch-Up)" "4|Daily Mix Reports, Telemetry & Predictive Analytics Suite|(PDF Reports, Multi-Archive Stats, Math Models)" "5|Run Bash CLI Commands|(Interactive Shell & Direct Runner)" "6|Reboot System|(${rb})" "7|Configure Liquid Glass Player Backend|(OpenGL [Default • AMD Radeon/Intel/Older Cards] or Vulkan)" "8|MP Visualizer Frame-Rate Cap|(30 / 60 / 120 / 144 FPS, or follow the display)" "9|MP Visualizer Background Window|(On/Off for MP Gui & MP Liquid Player - disable for a Slow Graphics Card / System)" "0|Return to Main Menu|(or Esc / q)"
 }
 # MP Gui paints each header value after a label colon truecolor white.
 # The label, through the colon, keeps its own colour. A │ or | ends the

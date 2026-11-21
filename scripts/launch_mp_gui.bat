@@ -77,6 +77,23 @@ if exist "%CONFIG_FILE%" (
     )
 )
 
+:: The setup prompt and the Settings menu can turn off the background MP
+:: Visualizer. Unset/unknown keeps the historical default (enabled).
+set "VISUALIZER_COMPANION=1"
+if exist "%CONFIG_FILE%" (
+    for /f "tokens=1,2 delims==" %%A in ('type "%CONFIG_FILE%" ^| findstr /r "^MP_VISUALIZER_COMPANION_ENABLED="') do (
+        set "VCOMP=%%B"
+        set "VCOMP=!VCOMP:"=!"
+        set "VCOMP=!VCOMP:'=!"
+        set "VCOMP=!VCOMP: =!"
+        if /i "!VCOMP!"=="0" set "VISUALIZER_COMPANION=0"
+        if /i "!VCOMP!"=="no" set "VISUALIZER_COMPANION=0"
+        if /i "!VCOMP!"=="false" set "VISUALIZER_COMPANION=0"
+        if /i "!VCOMP!"=="off" set "VISUALIZER_COMPANION=0"
+        if /i "!VCOMP!"=="disabled" set "VISUALIZER_COMPANION=0"
+    )
+)
+
 set "TARGET_PY=%BASE_DIR%\MP_Audio_Player_Liquid_Glass_OpenGL.py"
 if /i "%BACKEND%"=="vulkan" (
     if exist "%BASE_DIR%\MP_Audio_Player_Liquid_Glass.py" (
@@ -105,7 +122,7 @@ if /I "%PYTHON_BIN:~-10%"=="python.exe" (
     if exist "!PYTHONW_TRY!" set "PYTHONW_BIN=!PYTHONW_TRY!"
 )
 
-if "!NO_VISUALIZER!"=="0" (
+if "!NO_VISUALIZER!"=="0" if "!VISUALIZER_COMPANION!"=="1" (
     set "VIS_PY=%BASE_DIR%\MP_Liquid_Visualizer.py"
     if not exist "!VIS_PY!" set "VIS_PY=%BASE_DIR%\scripts\mp_liquid_visualizer_vulkan.py"
     if exist "!VIS_PY!" (
@@ -118,7 +135,7 @@ if "!NO_VISUALIZER!"=="0" (
             if /i "!BACKEND!"=="vulkan" set "VIS_BACKEND=vulkan"
             set "MP_VISUALIZER_COMPANION=1"
             set "MP_VISUALIZER_MATCH_GUI=1"
-            start "" "%PYTHON_BIN%" "!VIS_PY!" --preset random --backend !VIS_BACKEND!
+            start "" "%PYTHONW_BIN%" "!VIS_PY!" --preset random --backend !VIS_BACKEND!
             set "MP_VISUALIZER_COMPANION="
             set "MP_VISUALIZER_MATCH_GUI="
         )

@@ -75,8 +75,15 @@ open_readme() {
             ;;
         MINGW*|MSYS*|CYGWIN*)
             # cmd.exe start resolves the shell association for .md.
+            #
+            # ``//c`` is deliberate. Git Bash / MSYS rewrites a lone ``/c``
+            # into a Windows path, so ``cmd.exe /c start ...`` actually
+            # launches an *interactive* cmd.exe. That prompt opens over the
+            # installer's window, swallows the rest of the log, and returns 0
+            # even though nothing was opened. The doubled slash survives the
+            # rewrite and reaches cmd.exe as the real switch.
             if command -v cmd.exe >/dev/null 2>&1; then
-                cmd.exe /c start "" "$(cygpath -w "$file" 2>/dev/null || printf '%s' "$file")" >/dev/null 2>&1 && return 0
+                cmd.exe //c start "" "$(cygpath -w "$file" 2>/dev/null || printf '%s' "$file")" >/dev/null 2>&1 && return 0
             fi
             ;;
     esac
@@ -100,6 +107,9 @@ print_path_hint() {
     echo -e "    ${DIM}less \"$file\"${NC}"
     case "$(uname -s 2>/dev/null)" in
         Darwin) echo -e "    ${DIM}open \"$file\"${NC}" ;;
+        MINGW*|MSYS*|CYGWIN*)
+            echo -e "    ${DIM}cmd.exe //c start \"\" \"$(cygpath -w "$file" 2>/dev/null || printf '%s' "$file")\"${NC}"
+            ;;
         *)      echo -e "    ${DIM}xdg-open \"$file\"${NC}" ;;
     esac
     echo ""
@@ -136,6 +146,7 @@ esac
 if [ "$MODE" = "open" ]; then
     if has_desktop_session && open_readme "$README_FILE"; then
         echo -e "  ${GREEN}✓ Opened the manual.${NC}"
+        echo -e "  ${DIM}The installation log continues in this window.${NC}"
     else
         print_path_hint "$README_FILE"
     fi
@@ -161,6 +172,7 @@ if has_desktop_session; then
         *)
             if open_readme "$README_FILE"; then
                 echo -e "  ${GREEN}✓ Opened the manual.${NC}"
+                echo -e "  ${DIM}The installation log continues in this window.${NC}"
             else
                 echo -e "  ${YELLOW}⚠ No handler would open it.${NC}"
                 print_path_hint "$README_FILE"

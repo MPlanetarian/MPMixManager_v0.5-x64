@@ -194,7 +194,7 @@ def _kill_player_processes() -> List[int]:
         if pid == me:
             continue
         try:
-            os.kill(pid, signal.SIGKILL)
+            os.kill(pid, getattr(signal, "SIGKILL", signal.SIGTERM))
             killed.append(pid)
         except OSError:
             continue
@@ -326,13 +326,28 @@ def _import_gtk():
     return GLib, Gtk, Vte
 
 
+def _console_python() -> str:
+    """A python.exe for the child terminal, even when the host is pythonw.
+
+    The host runs windowless on Windows so it does not add a stray console.
+    The terminal UI it embeds is a console application, so handing it
+    pythonw.exe would leave it with no console to draw in.
+    """
+    exe = sys.executable
+    if sys.platform == "win32" and exe.lower().endswith("pythonw.exe"):
+        candidate = exe[:-len("pythonw.exe")] + "python.exe"
+        if Path(candidate).is_file():
+            return candidate
+    return exe
+
+
 def manager_argv():
     from windows_bash import find_bash
     return [find_bash(), str(ROOT / "Mix_Archive_Manager.sh")]
 
 
 def player_argv(mode="NORMAL", extra_args=None):
-    cmd = [sys.executable, str(ROOT / "MP_Audio_Player.py"), "--interactive"]
+    cmd = [_console_python(), str(ROOT / "MP_Audio_Player.py"), "--interactive"]
     if mode in ("VERTICAL", "MINI", "MICRO"):
         cmd.append(f"--{mode.lower()}")
     if extra_args:
@@ -780,6 +795,43 @@ class CustomGlassRenderer(LiquidGlassRendererOpenGL):
             glUseProgram(0)
         except Exception as e:
             print(f"Slider draw error: {e}", flush=True)
+
+
+def _child_console_hwnd(pid: int, timeout: float = 5.0) -> int:
+    """HWND of the console created for ``pid``, or 0.
+
+    On Windows 10 the top-level console window is reported under
+    ``conhost.exe`` by ``GetWindowThreadProcessId``, so the EnumWindows-by-PID
+    scan found nothing and the terminal stayed a separate hidden window behind
+    the glass. A windowless host (pythonw) can attach to the child's console
+    and ask ``GetConsoleWindow`` for the real HWND instead.
+    """
+    try:
+        import ctypes
+        import time
+
+        user32 = ctypes.windll.user32
+        user32.GetConsoleWindow.restype = ctypes.c_void_p
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.AttachConsole.argtypes = [ctypes.c_uint32]
+        kernel32.AttachConsole.restype = ctypes.c_int
+        kernel32.FreeConsole.restype = ctypes.c_int
+        own_console = int(user32.GetConsoleWindow() or 0)
+        deadline = time.monotonic() + max(0.2, float(timeout))
+        while time.monotonic() < deadline:
+            if not own_console:
+                if kernel32.AttachConsole(ctypes.c_uint32(int(pid))):
+                    hwnd = int(user32.GetConsoleWindow() or 0)
+                    kernel32.FreeConsole()
+                    if hwnd:
+                        return hwnd
+                elif ctypes.get_last_error() == 5:
+                    # Already attached to something: drop it and retry.
+                    kernel32.FreeConsole()
+            time.sleep(0.05)
+    except Exception:
+        pass
+    return 0
 
 
 def _reveal_windows_console(user32, hwnd, glass_hwnd, pid):
@@ -1545,30 +1597,34 @@ class GlassHost:
         self._sync_windows_drag()
         proc = subprocess.Popen(self.argv, cwd=str(ROOT), env=_child_env(as_dict=True), creationflags=0x00000010)
         self.child_pid = proc.pid
-        child_hwnd = None
-        try:
-            user32 = ctypes.windll.user32
-            ENUM_PROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
-            found = []
+        user32 = ctypes.windll.user32
+        # Ask the console API first. Windows 10 reports the console window
+        # under conhost.exe, so the by-PID EnumWindows scan can find nothing
+        # and leave the terminal as a separate window hidden behind the glass.
+        child_hwnd = _child_console_hwnd(proc.pid, timeout=5.0) or None
+        if not child_hwnd:
+            try:
+                ENUM_PROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+                found = []
 
-            def _enum_win(hwnd, _lparam):
-                pid = ctypes.c_uint32()
-                user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-                if pid.value == proc.pid and user32.IsWindowVisible(hwnd):
-                    found.append(hwnd)
-                return True
+                def _enum_win(hwnd, _lparam):
+                    pid = ctypes.c_uint32()
+                    user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+                    if pid.value == proc.pid and user32.IsWindowVisible(hwnd):
+                        found.append(hwnd)
+                    return True
 
-            cb = ENUM_PROC(_enum_win)
-            for _ in range(50):
-                if proc.poll() is not None:
-                    break
-                user32.EnumWindows(cb, 0)
-                if found:
-                    child_hwnd = found[0]
-                    break
-                time.sleep(0.02)
-        except Exception:
-            pass
+                cb = ENUM_PROC(_enum_win)
+                for _ in range(50):
+                    if proc.poll() is not None:
+                        break
+                    user32.EnumWindows(cb, 0)
+                    if found:
+                        child_hwnd = found[0]
+                        break
+                    time.sleep(0.02)
+            except Exception:
+                pass
 
         self.child_xid = child_hwnd or 0
         if child_hwnd:
@@ -2015,6 +2071,19 @@ def _host_is_manager() -> bool:
 
 
 def ensure_random_visualizer_started() -> bool:
+    try:
+        from liquid_visualizer_session import companion_visualizer_enabled
+        if not companion_visualizer_enabled():
+            return False
+    except ImportError:
+        try:
+            from scripts.liquid_visualizer_session import companion_visualizer_enabled
+            if not companion_visualizer_enabled():
+                return False
+        except Exception:
+            pass
+    except Exception:
+        pass
     try:
         if sys.platform == "win32":
             try:

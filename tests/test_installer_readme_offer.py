@@ -28,8 +28,14 @@ class TestReadmePath(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         value = proc.stdout.strip()
         self.assertTrue(value, "no path printed")
-        self.assertTrue(os.path.isabs(value), f"not absolute: {value}")
-        self.assertTrue(os.path.isfile(value), f"does not exist: {value}")
+        # The helper prints the path in the shell's own namespace. On Windows
+        # that is an MSYS path such as /x/MPMixManager/README.md, which
+        # os.path.isabs() rejects, so ask the same shell to confirm it.
+        check = subprocess.run(
+            ["bash", "-c", 'case "$1" in /*) ;; *) exit 1 ;; esac; test -f "$1"', "_", value],
+            capture_output=True, text=True, timeout=60,
+        )
+        self.assertEqual(check.returncode, 0, f"not an absolute file: {value}")
         self.assertTrue(value.endswith(".md"), value)
 
     @unittest.skipUnless(HELPER.is_file(), f"helper missing at {HELPER}")
@@ -122,6 +128,29 @@ class TestInstallerWiring(unittest.TestCase):
     def test_final_summary_names_the_manual(self):
         text = INSTALLER.read_text(encoding="utf-8")
         self.assertIn("Manual:", text)
+
+    @unittest.skipUnless(HELPER.is_file(), "helper missing")
+    def test_windows_opener_uses_the_double_slash_switch(self):
+        """A lone ``/c`` is rewritten by Git Bash into a Windows path.
+
+        ``cmd.exe /c start ...`` therefore launched an interactive cmd.exe
+        prompt over the installer's window; the README never opened and the
+        rest of the install log was hidden. ``//c`` survives the MSYS rewrite
+        and reaches cmd.exe as the real switch.
+        """
+        text = HELPER.read_text(encoding="utf-8")
+        # Ignore the explanatory comment, which quotes the broken form.
+        code = "\n".join(
+            line for line in text.splitlines() if not line.lstrip().startswith("#")
+        )
+        self.assertIn("cmd.exe //c start", code)
+        self.assertNotIn("cmd.exe /c start", code)
+
+    @unittest.skipUnless(HELPER.is_file(), "helper missing")
+    def test_readme_offer_says_the_log_continues(self):
+        """The installer must tell the user the log keeps running."""
+        text = HELPER.read_text(encoding="utf-8")
+        self.assertIn("The installation log continues in this window.", text)
 
     @unittest.skipUnless(HELPER.is_file(), "helper missing")
     def test_helper_shell_syntax(self):

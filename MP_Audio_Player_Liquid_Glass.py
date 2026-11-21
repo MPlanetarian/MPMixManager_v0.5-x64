@@ -1236,6 +1236,19 @@ def _host_is_manager() -> bool:
 
 def ensure_random_visualizer_started() -> bool:
     try:
+        from liquid_visualizer_session import companion_visualizer_enabled
+        if not companion_visualizer_enabled():
+            return False
+    except ImportError:
+        try:
+            from scripts.liquid_visualizer_session import companion_visualizer_enabled
+            if not companion_visualizer_enabled():
+                return False
+        except Exception:
+            pass
+    except Exception:
+        pass
+    try:
         if IS_WIN:
             try:
                 if subprocess.check_output(['powershell.exe', '-NoProfile', '-Command',
@@ -1328,7 +1341,7 @@ def _stop_other_players() -> None:
                 targets.append(pid)
     for pid in targets:
         try:
-            os.kill(pid, signal.SIGKILL)
+            os.kill(pid, getattr(signal, "SIGKILL", signal.SIGTERM))
         except OSError:
             continue
 
