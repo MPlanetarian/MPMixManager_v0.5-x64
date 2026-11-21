@@ -921,5 +921,21 @@ class TestTrayMute(unittest.TestCase):
         self.assertIn("$LASTEXITCODE", fn)
 
 
+class TestTrayWebCompanion(unittest.TestCase):
+    def test_windows_tray_launches_the_web_companion(self):
+        source = (ROOT / "scripts" / "windows_tray.ps1").read_text(encoding="utf-8")
+        self.assertIn('Label = "Launch MP Web Companion"', source)
+        self.assertIn('$ActionId -eq "web"', source)
+        self.assertIn("launch_web_companion.bat", source)
+        self.assertIn("mix_web_companion.py", source)
+        # Clicking it is idempotent: an already-running server is opened, not
+        # started a second time.
+        fn = source.split("function Start-MpWebCompanion", 1)[1].split(
+            "\nfunction ", 1
+        )[0]
+        self.assertIn("Get-MpCompanionProcess", fn)
+        self.assertIn("Start-Process -FilePath $url", fn)
+
+
 if __name__ == "__main__":
     unittest.main()

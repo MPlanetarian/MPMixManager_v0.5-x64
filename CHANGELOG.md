@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **The Windows tray can launch the MP Web Companion** (`scripts/windows_tray.ps1`, `tests/test_mp_system_tray.py`):
+  - **Launch MP Web Companion** in the MP Tray menu starts `launch_web_companion.bat` when the server is not already up, then opens the dashboard at its LAN URL (or `localhost` when no LAN address exists). The launcher window stays hidden.
+  - The action is idempotent: an already-running companion is detected by its `mix_web_companion.py` command line and the browser is opened without starting a second server. The tray balloon reports whether it started, was already running, or the request was sent.
 - **MP Liquid Mixer: a Settings window for every configurable preference** (`MP_Liquid_Mixer/mixer_settings.py`, `MP_Liquid_Mixer/mixer_settings_dialog.py`, `MP_Liquid_Mixer/mixer_recording.py`, `MP_Liquid_Mixer/MP_Liquid_Mixer.py`, `MP_Liquid_Mixer/mixer_core.py`, `MP_Liquid_Mixer/README.md`, `tests/test_liquid_mixer_settings.py`, `tests/test_liquid_mixer.py`):
   - **One window, one file.** The **SETTINGS** button in the top bar (or `S`) opens a modal window; **Save Settings** applies the snapshot live where that has a meaning and stores it in `~/.config/mix-manager/liquid_mixer_settings.json`. The file is plain JSON and is validated on load, so an unknown format, part size, theme or preset falls back to the documented default instead of breaking a launch.
   - **Recording.** The output folder (with a **Use default** button that keeps following `MIX_ARCHIVE`), `WAV`/`FLAC`, and the **part size: 4 GB (the WAV maximum, the default), 2 GB or 1 GB**. `mixer_recording` reads `recording_part_limit_gib` and every part (including `_PART_2`, `_PART_3`) is capped at the chosen ceiling, with the FLAC limit held 16 MiB below it for encoder buffering. The capture source can be the master output or any device's monitor.

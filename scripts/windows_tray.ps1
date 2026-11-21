@@ -614,9 +614,89 @@ function Show-MpRescanResult {
     Show-MpNotice -Title "Rescan Music Folders" -Message "$saved music folder(s) refreshed | $tracks tracks in ALL"
 }
 
+function Get-MpCompanionProcess {
+    foreach ($name in @("pythonw.exe", "python.exe")) {
+        foreach ($proc in @(Get-CimInstance Win32_Process -Filter "Name = '$name'" -ErrorAction SilentlyContinue)) {
+            if ($proc.CommandLine -and $proc.CommandLine -like "*mix_web_companion.py*") {
+                return $proc
+            }
+        }
+    }
+    return $null
+}
+
+function Get-MpCompanionPort {
+    $port = 8888
+    $config = Join-Path $Root "config.env"
+    if (-not (Test-Path -LiteralPath $config)) {
+        $config = Join-Path $env:USERPROFILE ".config\mix-manager\config.env"
+    }
+    if (Test-Path -LiteralPath $config) {
+        foreach ($line in Get-Content -LiteralPath $config -ErrorAction SilentlyContinue) {
+            if ($line -match '^\s*WEB_COMPANION_PORT\s*=\s*"?(\d+)"?') {
+                $port = [int]$Matches[1]
+                break
+            }
+        }
+    }
+    return $port
+}
+
+function Get-MpCompanionUrl {
+    $port = Get-MpCompanionPort
+    $lan = ""
+    try {
+        $lan = (Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+                Where-Object { $_.IPAddress -notlike "127.*" -and $_.IPAddress -notlike "169.254.*" } |
+                Select-Object -First 1 -ExpandProperty IPAddress)
+    } catch {
+        $lan = ""
+    }
+    if (-not $lan) { $lan = "localhost" }
+    return "http://${lan}:$port"
+}
+
+function Start-MpWebCompanion {
+    $proc = Get-MpCompanionProcess
+    $started = $false
+    if (-not $proc) {
+        $bat = Join-Path $Root "launch_web_companion.bat"
+        if (-not (Test-Path -LiteralPath $bat)) {
+            Show-MpNotice -Title "MP Web Companion" -Message "launch_web_companion.bat was not found."
+            Write-MpTrayLog "web companion: launcher missing at $bat"
+            return
+        }
+        try {
+            # Hidden cmd keeps the launcher itself from flashing; it hands off
+            # to pythonw.exe in the background.
+            Start-Process -FilePath (Join-Path $env:SystemRoot "System32\cmd.exe") `
+                -ArgumentList @("/c", "`"$bat`"") `
+                -WorkingDirectory $Root -WindowStyle Hidden | Out-Null
+            $deadline = (Get-Date).AddSeconds(12)
+            while ((Get-Date) -lt $deadline) {
+                if (Get-MpCompanionProcess) { $started = $true; break }
+                Start-Sleep -Milliseconds 300
+            }
+        } catch {
+            Show-MpNotice -Title "MP Web Companion" -Message $_.Exception.Message
+            Write-MpTrayLog "web companion start failed: $($_.Exception.Message)"
+            return
+        }
+    }
+    $url = Get-MpCompanionUrl
+    try { Start-Process -FilePath $url | Out-Null } catch { }
+    $state = if ($started) { "started" } elseif ($proc) { "already running" } else { "start request sent" }
+    Show-MpNotice -Title "MP Web Companion" -Message "$state - $url"
+    Write-MpTrayLog "web companion $state at $url"
+}
+
 function Invoke-MpTrayAction {
     param([string]$ActionId)
     if ($script:closing) { return }
+    if ($ActionId -eq "web") {
+        Start-MpWebCompanion
+        return
+    }
     if ($ActionId -eq "rescan-archive" -or $ActionId -eq "rescan-music") {
         Start-MpRescanProcess -ActionId $ActionId
         return
@@ -1005,6 +1085,7 @@ try {
         @{ Id = "liquid"; Label = "Launch MP Liquid Player"; Component = "liquid" },
         @{ Id = "manager"; Label = "Launch MP Mix Manager (CLI)"; Component = "manager" },
         @{ Id = "visualizer"; Label = "Launch MP Visualizer"; Component = "visualizer" },
+        @{ Id = "web"; Label = "Launch MP Web Companion"; Component = "" },
         @{ Id = "rescan-archive"; Label = "Rescan Mix Archive Folders"; Component = "" },
         @{ Id = "rescan-music"; Label = "Rescan Music Folders"; Component = "" },
         @{ Id = "mute-audio"; Label = "Mute MP Player Audio"; Component = "" },
