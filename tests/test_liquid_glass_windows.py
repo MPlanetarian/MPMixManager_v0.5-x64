@@ -157,18 +157,20 @@ class TestWindowsPlayerHosts(unittest.TestCase):
             self.assertIsNone(vte)
 
     def test_the_windows_console_receives_keyboard_focus(self):
-        """Arrow keys belong to the menu, not the glass frame.
+        """Arrow keys belong to the console, not the glass frame.
 
         The console is a glass-owned window. If the glass keeps focus, every
         keystroke goes to GLFW and Up/Down do nothing.
         """
-        host = (ROOT / "MP_Audio_Player_Liquid_Glass_OpenGL.py").read_text(
-            encoding="utf-8", errors="replace"
-        )
-        placed = host.split("_reveal_windows_console(user32, child_hwnd", 1)[1].split(
-            "self._sync_windows_drag", 1
-        )[0]
-        self.assertIn("focus_window(self.child_xid)", placed)
+        for name in (
+            "MP_Audio_Player_Liquid_Glass_OpenGL.py",
+            "MP_Audio_Player_Liquid_Glass.py",
+        ):
+            host = (ROOT / name).read_text(encoding="utf-8", errors="replace")
+            self.assertIn("focus_window(self.child_xid)", host, name)
+            windows = host.split("def _run_windows", 1)[1]
+            self.assertIn("GetForegroundWindow", windows, name)
+            self.assertIn("focus_at = now + 0.25", windows, name)
         opengl = (ROOT / "scripts" / "liquid_glass_opengl.py").read_text(
             encoding="utf-8", errors="replace"
         )

@@ -936,9 +936,24 @@ class GlassHost:
         origin, press_screen, theme, theme_at = r.window_pos(), (0, 0), read_player_theme(), 0.0
         monotonic, sleep, draw, poll = time.monotonic, time.sleep, r.draw, r.poll
         scroll_at = 0.0
+        focus_at = 0.0
+        try:
+            u32.GetForegroundWindow.restype = ctypes.c_void_p
+        except Exception:
+            pass
         try:
             while not r.should_close and proc.poll() is None:
                 now = monotonic()
+                if child_hwnd and now >= focus_at:
+                    # Keep the keyboard on the console even if Windows
+                    # activates the glass after the launch-time focus call.
+                    focus_at = now + 0.25
+                    if not getattr(self, "_os_dragging", False):
+                        try:
+                            if int(u32.GetForegroundWindow() or 0) == int(r.win32_window() or 0):
+                                r.focus_window(self.child_xid)
+                        except Exception:
+                            pass
                 if child_hwnd and now >= scroll_at:
                     from windows_console_scroll import hide_process_console_scrollbar
                     hide_process_console_scrollbar(proc.pid, int(child_hwnd))

@@ -1582,9 +1582,27 @@ class GlassHost:
         down = dragging = False
         origin, press_screen, theme, theme_at = self.renderer.window_pos(), (0, 0), read_player_theme(), 0.0
         scroll_at = 0.0
+        focus_at = 0.0
+        try:
+            user32.GetForegroundWindow.restype = ctypes.c_void_p
+        except Exception:
+            pass
         try:
             while not self.renderer.should_close and proc.poll() is None:
                 now = time.monotonic()
+                if child_hwnd and now >= focus_at:
+                    # Windows can activate the glass after the launch-time
+                    # focus call and hand the keyboard back to GLFW, where the
+                    # menu/player never sees C or the arrow keys. Hand focus to
+                    # the console whenever the glass is the foreground window,
+                    # except while the user is dragging it.
+                    focus_at = now + 0.25
+                    if not getattr(self, "_os_dragging", False):
+                        try:
+                            if int(user32.GetForegroundWindow() or 0) == int(self.renderer.win32_window() or 0):
+                                self.renderer.focus_window(self.child_xid)
+                        except Exception:
+                            pass
                 if child_hwnd and now >= scroll_at:
                     from windows_console_scroll import hide_process_console_scrollbar
                     hide_process_console_scrollbar(proc.pid, int(child_hwnd))
