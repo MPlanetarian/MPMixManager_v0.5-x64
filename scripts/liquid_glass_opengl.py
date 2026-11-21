@@ -988,7 +988,15 @@ class LiquidGlassRendererOpenGL:
             except Exception:
                 pass
             return
-        target = max(float(getattr(self, "clear_opacity", 0.70)), 0.94)
+        # On macOS the visualizer is a *separate* window behind the glass, not
+        # a layer inside it. Nearly solid glass hid that window and made the
+        # player look like a dark slab; keep the normal glass alpha so the
+        # scene shows through. The in-window layer on Linux/Windows still
+        # needs the solid target to keep its text readable.
+        if is_macos():
+            target = float(getattr(self, "clear_opacity", 0.70))
+        else:
+            target = max(float(getattr(self, "clear_opacity", 0.70)), 0.94)
         if getattr(self, "_vis_gl_opacity", None) == target:
             return
         try:
