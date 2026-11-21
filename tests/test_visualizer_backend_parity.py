@@ -110,6 +110,28 @@ class TestVisualizerBackendSelection(unittest.TestCase):
                 os.environ.pop("VISUALIZER_BACKEND", None)
                 self.assertEqual(visualizer_backend.configured_backend(path), "vulkan")
 
+    def test_config_env_opengl_beats_nvidia_auto_detection(self):
+        """A user who writes VISUALIZER_BACKEND=opengl gets OpenGL.
+
+        The NVIDIA auto-detect exists to pick a *default* on a fresh install;
+        it must never override the visualizer's own setting. This is the
+        supported way to move the standalone visualizer off Vulkan without a
+        command line flag, so it has to survive a machine with a Vulkan GPU.
+        """
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.env"
+            path.write_text('VISUALIZER_BACKEND="opengl"\n', encoding="utf-8")
+            with patch.dict(os.environ, {}, clear=False):
+                os.environ.pop("VISUALIZER_BACKEND", None)
+                os.environ.pop("LIQUID_GLASS_BACKEND", None)
+                with patch.object(visualizer_backend, "vulkan_devices",
+                                  return_value=[{"vendor_id": visualizer_backend.NVIDIA_VENDOR_ID}]):
+                    self.assertEqual(visualizer_backend.resolve(config_path=path), "opengl")
+                    # The install recommendation is unchanged: still Vulkan on
+                    # this hardware. Only the explicit user choice moved.
+                    self.assertEqual(visualizer_backend.recommended_backend(), "vulkan")
+
 
 class TestVulkanProbe(unittest.TestCase):
     """The probe must actually enumerate devices.
