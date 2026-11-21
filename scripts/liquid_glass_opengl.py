@@ -988,13 +988,15 @@ class LiquidGlassRendererOpenGL:
             except Exception:
                 pass
             return
-        # On macOS the visualizer is a *separate* window behind the glass, not
-        # a layer inside it. Nearly solid glass hid that window and made the
-        # player look like a dark slab; keep the normal glass alpha so the
-        # scene shows through. The in-window layer on Linux/Windows still
-        # needs the solid target to keep its text readable.
+        # The host must stay readable over the visualizer. 0.94 is the same
+        # near-solid glass the other platforms use; MP_MACOS_GLASS_OPACITY
+        # lets a Mac user trade a little text contrast for more of the scene.
         if is_macos():
-            target = float(getattr(self, "clear_opacity", 0.70))
+            try:
+                target = float(os.environ.get("MP_MACOS_GLASS_OPACITY", "0.94"))
+            except (TypeError, ValueError):
+                target = 0.94
+            target = max(0.60, min(1.0, target))
         else:
             target = max(float(getattr(self, "clear_opacity", 0.70)), 0.94)
         if getattr(self, "_vis_gl_opacity", None) == target:
