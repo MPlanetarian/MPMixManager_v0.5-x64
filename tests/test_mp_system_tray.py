@@ -924,7 +924,7 @@ class TestTrayMute(unittest.TestCase):
 class TestTrayWebCompanion(unittest.TestCase):
     def test_windows_tray_launches_the_web_companion(self):
         source = (ROOT / "scripts" / "windows_tray.ps1").read_text(encoding="utf-8")
-        self.assertIn('Label = "Launch MP Web Companion"', source)
+        self.assertIn('Label = "Launch MP Audio Player (Web Service)"', source)
         self.assertIn('$ActionId -eq "web"', source)
         self.assertIn("launch_web_companion.bat", source)
         self.assertIn("mix_web_companion.py", source)

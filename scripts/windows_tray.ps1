@@ -1085,7 +1085,7 @@ try {
         @{ Id = "liquid"; Label = "Launch MP Liquid Player"; Component = "liquid" },
         @{ Id = "manager"; Label = "Launch MP Mix Manager (CLI)"; Component = "manager" },
         @{ Id = "visualizer"; Label = "Launch MP Visualizer"; Component = "visualizer" },
-        @{ Id = "web"; Label = "Launch MP Web Companion"; Component = "" },
+        @{ Id = "web"; Label = "Launch MP Audio Player (Web Service)"; Component = "" },
         @{ Id = "rescan-archive"; Label = "Rescan Mix Archive Folders"; Component = "" },
         @{ Id = "rescan-music"; Label = "Rescan Music Folders"; Component = "" },
         @{ Id = "mute-audio"; Label = "Mute MP Player Audio"; Component = "" },
