@@ -9378,6 +9378,7 @@ def render_html_page(theme: Dict[str, Any]) -> str:
         let spectroShiftAcc = 0;
         let captureSilenceFrames = 0;
         let captureSawSignal = false;
+        let spectrumSourceFile = '';
 
         function phoneIsAudible() {{
             const audioEl = document.getElementById('mobileAudioStream');
@@ -9473,40 +9474,50 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             analyser.maxDecibels = -20;
             let source = null;
             let mode = '';
-            const captureFn = audioEl.captureStream || audioEl.webkitCaptureStream;
-            if (captureFn) {{
-                try {{
-                    const stream = captureFn.call(audioEl);
-                    const tracks = stream && stream.getAudioTracks ? stream.getAudioTracks() : [];
-                    if (tracks && tracks.length) {{
-                        source = ctx.createMediaStreamSource(stream);
-                        mode = 'capture';
+            // A MediaElementSource follows the element across a src change, so
+            // the analyser keeps seeing the next track. Chrome's captureStream
+            // track goes silent once the element loads a new source, which left
+            // the equaliser and the spectrogram flat after Next. Prefer the
+            // element source; captureStream remains the fallback for an element
+            // that refuses the node.
+            try {{
+                // Progressive FLAC/WAV, and desktop browsers. Routing the
+                // element through the context is what lets the analyser see
+                // it, and the gain node is the only level Safari will honour.
+                // Connect the destination in this same turn or the mix goes
+                // silent.
+                source = ctx.createMediaElementSource(audioEl);
+                mode = 'element';
+                mixGain = ctx.createGain();
+                mixGain.gain.value = mixLoudness();
+                source.connect(analyser);
+                analyser.connect(mixGain);
+                mixGain.connect(ctx.destination);
+            }} catch (e) {{
+                source = null;
+                mode = '';
+            }}
+            if (!source) {{
+                const captureFn = audioEl.captureStream || audioEl.webkitCaptureStream;
+                if (captureFn) {{
+                    try {{
+                        const stream = captureFn.call(audioEl);
+                        const tracks = stream && stream.getAudioTracks ? stream.getAudioTracks() : [];
+                        if (tracks && tracks.length) {{
+                            source = ctx.createMediaStreamSource(stream);
+                            mode = 'capture';
+                            source.connect(analyser);
+                        }}
+                    }} catch (e) {{
+                        source = null;
+                        mode = '';
                     }}
-                }} catch (e) {{
-                    source = null;
                 }}
             }}
-            try {{
-                if (source) {{
-                    source.connect(analyser);
-                }} else {{
-                    // Progressive FLAC/WAV, and every iPhone. Routing the
-                    // element through the context is what lets the analyser
-                    // see it, and the gain node is the only level Safari will
-                    // honour. Connect the destination in this same turn or
-                    // the mix goes silent.
-                    source = ctx.createMediaElementSource(audioEl);
-                    mode = 'element';
-                    mixGain = ctx.createGain();
-                    mixGain.gain.value = mixLoudness();
-                    source.connect(analyser);
-                    analyser.connect(mixGain);
-                    mixGain.connect(ctx.destination);
-                }}
-            }} catch (e) {{
-                // An element with no source yet can refuse the node. Remember
-                // the failure only once a real stream is loaded, so the
-                // playing event still gets a chance to connect it.
+            if (!source) {{
+                // Both paths refused. Remember the failure only once a real
+                // stream is loaded, so the playing event still gets a chance
+                // to connect it.
                 const src = audioEl.currentSrc || audioEl.src || '';
                 if (src.indexOf('/api/stream') !== -1) audioGraph = {{ failed: true }};
                 return null;
@@ -9545,7 +9556,8 @@ def render_html_page(theme: Dict[str, Any]) -> str:
                 source.connect(analyser);
                 analyser.connect(mixGain);
                 mixGain.connect(audioCtx.destination);
-                attachSpectrumPull(audioCtx, analyser);
+                // The audible connection pulls this element source, so it
+                // needs no muted ScriptProcessorNode (see attachSpectrumPull).
                 freqBins = new Uint8Array(analyser.frequencyBinCount);
                 timeBins = new Uint8Array(analyser.fftSize);
                 audioGraph = {{ analyser: analyser, source: source, mode: 'element', gain: mixGain }};
@@ -9686,6 +9698,15 @@ def render_html_page(theme: Dict[str, Any]) -> str:
         }}
 
         function sampleLiveSpectrum() {{
+            // A captureStream track can end when the element loads the next
+            // track. Forget that the old file produced signal so the silent
+            // fallback is allowed to promote the graph to an element source
+            // instead of staying flat forever after Next.
+            if (activeAudioFile !== spectrumSourceFile) {{
+                spectrumSourceFile = activeAudioFile;
+                captureSawSignal = false;
+                captureSilenceFrames = 0;
+            }}
             // The context is created in the tap. Finishing a missing graph
             // here is safe after that. Building a brand-new context from this
             // frame leaves it suspended on iPhone, and the mix goes silent
