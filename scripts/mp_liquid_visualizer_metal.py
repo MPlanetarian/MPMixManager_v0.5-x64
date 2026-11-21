@@ -31,6 +31,7 @@ from __future__ import annotations
 import ctypes
 import ctypes.util
 import hashlib
+import json
 import math
 import os
 import platform
@@ -44,6 +45,99 @@ from typing import Any, Dict, List, Optional, Tuple
 
 ROOT = Path(__file__).resolve().parent.parent
 SHADER_DIR = ROOT / "shaders"
+
+
+def _macos_window_for_pid(pid: int):
+    """(CGWindowID, x, y, width, height) for the largest normal window of pid.
+
+    ``glfwGetCocoaWindow`` gives the NSWindow, but its ``windowNumber`` came
+    back as 0 for this borderless host, so the companion could not anchor to
+    it. The window server's own list always carries the real number and
+    rectangle. Only normal-layer windows larger than a dialog are considered,
+    so helper windows never win.
+    """
+    if sys.platform != "darwin" or int(pid or 0) <= 0:
+        return None
+    try:
+        import ctypes
+
+        class CGPoint(ctypes.Structure):
+            _fields_ = [("x", ctypes.c_double), ("y", ctypes.c_double)]
+
+        class CGSize(ctypes.Structure):
+            _fields_ = [("width", ctypes.c_double), ("height", ctypes.c_double)]
+
+        class CGRect(ctypes.Structure):
+            _fields_ = [("origin", CGPoint), ("size", CGSize)]
+
+        cg = ctypes.CDLL(
+            "/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics")
+        cf = ctypes.CDLL(
+            "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")
+        cg.CGWindowListCopyWindowInfo.restype = ctypes.c_void_p
+        cg.CGWindowListCopyWindowInfo.argtypes = [ctypes.c_uint32, ctypes.c_uint32]
+        cg.CGRectMakeWithDictionaryRepresentation.restype = ctypes.c_bool
+        cg.CGRectMakeWithDictionaryRepresentation.argtypes = [
+            ctypes.c_void_p, ctypes.POINTER(CGRect)]
+        cf.CFArrayGetCount.restype = ctypes.c_long
+        cf.CFArrayGetCount.argtypes = [ctypes.c_void_p]
+        cf.CFArrayGetValueAtIndex.restype = ctypes.c_void_p
+        cf.CFArrayGetValueAtIndex.argtypes = [ctypes.c_void_p, ctypes.c_long]
+        cf.CFDictionaryGetValue.restype = ctypes.c_void_p
+        cf.CFDictionaryGetValue.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        cf.CFNumberGetValue.restype = ctypes.c_bool
+        cf.CFNumberGetValue.argtypes = [
+            ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p]
+        cf.CFRelease.argtypes = [ctypes.c_void_p]
+        cf.CFRelease.restype = None
+
+        def key(name):
+            return ctypes.c_void_p.in_dll(cg, name).value
+
+        def number(value, kind=4):
+            out = ctypes.c_int64()
+            if not value or not cf.CFNumberGetValue(
+                    value, kind, ctypes.byref(out)):
+                return 0
+            return int(out.value)
+
+        keys = {
+            "pid": key("kCGWindowOwnerPID"),
+            "layer": key("kCGWindowLayer"),
+            "number": key("kCGWindowNumber"),
+            "bounds": key("kCGWindowBounds"),
+        }
+        array = cg.CGWindowListCopyWindowInfo(1 | 16, 0)
+        if not array:
+            return None
+        best = None
+        try:
+            for index in range(cf.CFArrayGetCount(array)):
+                record = cf.CFArrayGetValueAtIndex(array, index)
+                if not record:
+                    continue
+                if number(cf.CFDictionaryGetValue(record, keys["pid"]), 3) != int(pid):
+                    continue
+                if number(cf.CFDictionaryGetValue(record, keys["layer"]), 3) != 0:
+                    continue
+                bounds = cf.CFDictionaryGetValue(record, keys["bounds"])
+                rect = CGRect()
+                if not bounds or not cg.CGRectMakeWithDictionaryRepresentation(
+                        bounds, ctypes.byref(rect)):
+                    continue
+                width, height = int(rect.size.width), int(rect.size.height)
+                if width < 200 or height < 200:
+                    continue
+                wid = number(cf.CFDictionaryGetValue(record, keys["number"]))
+                area = width * height
+                if best is None or area > best[0]:
+                    best = (area, wid, int(rect.origin.x), int(rect.origin.y),
+                            width, height)
+        finally:
+            cf.CFRelease(array)
+        return best[1:] if best else None
+    except Exception:
+        return None
 
 try:  # imported as ``scripts.mp_liquid_visualizer_metal``
     from mp_metal_bridge import AutoreleasePool, MetalBridge, ObjC, CGSize, MetalError
@@ -1242,6 +1336,8 @@ class LiquidVisualizerMetalRenderer(MonitorSpanMixin, RandomPresetMixin, PlayerB
         self._mac_sync_at = now + 0.5
         try:
             from liquid_player_visualizer import (
+                gui_window_size_path,
+                player_window_size_path,
                 read_published_gui_window_geometry,
                 read_published_gui_window_id,
                 read_published_player_window_geometry,
@@ -1249,6 +1345,8 @@ class LiquidVisualizerMetalRenderer(MonitorSpanMixin, RandomPresetMixin, PlayerB
             )
         except ImportError:
             from scripts.liquid_player_visualizer import (
+                gui_window_size_path,
+                player_window_size_path,
                 read_published_gui_window_geometry,
                 read_published_gui_window_id,
                 read_published_player_window_geometry,
@@ -1259,6 +1357,19 @@ class LiquidVisualizerMetalRenderer(MonitorSpanMixin, RandomPresetMixin, PlayerB
                     else read_published_player_window_geometry())
         host_wid = (read_published_gui_window_id() if gui
                     else read_published_player_window_id())
+        # The published pid is enough for the window-server lookup, which
+        # returns the real CGWindowID and rectangle even when this host's
+        # NSWindow windowNumber reads as 0.
+        host_pid = 0
+        try:
+            path = gui_window_size_path() if gui else player_window_size_path()
+            host_pid = int(json.loads(path.read_text(encoding="utf-8")).get("pid") or 0)
+        except Exception:
+            host_pid = 0
+        host_window = _macos_window_for_pid(host_pid)
+        if host_window:
+            host_wid, x, y, width, height = host_window
+            geometry = (x, y, width, height)
         if geometry:
             x, y, width, height = (int(value) for value in geometry)
             if (x, y, width, height) != getattr(self, "_mac_host_geom", None):
