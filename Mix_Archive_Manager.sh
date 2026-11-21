@@ -819,8 +819,73 @@ _menu_restore_input() {
 _nav_pull() {
 local _to="$1" _dest="$2"; if [[ -n "$_nav_pending" ]]; then printf -v "$_dest" '%s' "${_nav_pending:0:1}"; _nav_pending="${_nav_pending:1}"; return 0; fi; local _ch="" _rc=0; IFS= read -rsn1 -t "$_to" _ch; _rc=$?; if [[ "$_rc" -eq 0 ]]; then printf -v "$_dest" '%s' "$_ch"; return 0; fi; printf -v "$_dest" '%s' ""; return "$_rc"
 }
-_discard_buffered_vertical_arrows() {
-local guard=0 b1="" b2="" b3="" b4="" seq="" cur="" steps=0 discard_it=0 ready_rc=0 empties=0; while [[ "$guard" -lt 200 ]]; do ((guard++)); b1=""; _nav_take_ready b1; ready_rc=$?; if [[ "$ready_rc" -eq 2 ]]; then if [[ "${_NAV_WIN_CON:-0}" -ne 1 ]]; then _nav_pending=$'\n'"${_nav_pending}"; return 0; fi; ((empties++)); [[ "$empties" -ge 2 ]] && return 0; continue; fi; [[ "$ready_rc" -eq 0 ]] || return 0; if [[ "${_NAV_WIN_CON:-0}" -eq 1 && ( "$b1" == "A" || "$b1" == "B" || "$b1" == $'\r' ) ]]; then continue; fi; if [[ "$b1" != $'\e' ]]; then _nav_push_front "$b1"; return 0; fi; if ! _nav_take_ready b2 || [[ "$b2" != "[" && "$b2" != "O" ]]; then _nav_push_front "${b1}${b2:-}"; return 0; fi; if [[ "$b2" == "[" ]]; then if ! _nav_take_ready b3 || [[ "$b3" != "A" && "$b3" != "B" ]]; then if [[ "$b3" == "[" ]]; then if ! _nav_take_ready b4 || [[ "$b4" != "A" && "$b4" != "B" ]]; then _nav_push_front "${b1}${b2}${b3}${b4:-}"; return 0; fi; discard_it=1; else seq="${b1}${b2}${b3}"; while [[ "$steps" -lt 16 ]]; do ((steps++)); cur=""; if ! _nav_take_ready cur; then _nav_push_front "$seq"; return 0; fi; seq+="$cur"; if [[ "$cur" == "A" || "$cur" == "B" ]]; then discard_it=1; break; fi; if [[ "$cur" =~ [A-Za-z~] ]]; then _nav_push_front "$seq"; return 0; fi; done; [[ "$discard_it" -ne 1 ]] && { _nav_push_front "$seq"; return 0; }; fi; fi; elif [[ "$b2" == "O" ]]; then if ! _nav_take_ready b3 || [[ "$b3" != "A" && "$b3" != "B" ]]; then _nav_push_front "${b1}${b2}${b3:-}"; return 0; fi; fi; done
+_defer_buffered_vertical_arrows() {
+    # Hand a buffered vertical arrow back to read_nav_key instead of draining
+    # it. The old drain hid a Windows echo character, but it also swallowed
+    # every extra press when the user tapped Up/Down quickly, so a burst of
+    # five presses moved the highlight only once. Echo is already suppressed
+    # for the whole menu by _menu_quiet_input, and the lone A/B/CR echo bytes
+    # are still discarded below.
+    local b1="" b2="" b3="" b4="" seq="" cur="" guard=0 steps=0 empties=0 rc=0
+    while (( guard < 200 )); do
+        ((guard++))
+        b1=""
+        _nav_take_ready b1
+        rc=$?
+        if (( rc == 2 )); then
+            if [[ "${_NAV_WIN_CON:-0}" -ne 1 ]]; then
+                _nav_pending=$'\n'"${_nav_pending}"
+                return 0
+            fi
+            ((empties++))
+            (( empties >= 2 )) && return 0
+            continue
+        fi
+        (( rc == 0 )) || return 0
+        if [[ "${_NAV_WIN_CON:-0}" -eq 1 && ( "$b1" == "A" || "$b1" == "B" || "$b1" == $'\r' ) ]]; then
+            continue
+        fi
+        if [[ "$b1" != $'\e' ]]; then
+            _nav_push_front "$b1"
+            return 0
+        fi
+        b2=""
+        if ! _nav_take_ready b2 || [[ "$b2" != "[" && "$b2" != "O" ]]; then
+            _nav_push_front "${b1}${b2}"
+            return 0
+        fi
+        b3=""
+        if ! _nav_take_ready b3; then
+            _nav_push_front "${b1}${b2}"
+            return 0
+        fi
+        if [[ "$b3" == "A" || "$b3" == "B" ]]; then
+            _nav_push_front "${b1}${b2}${b3}"
+            return 0
+        fi
+        if [[ "$b2" == "O" ]]; then
+            _nav_push_front "${b1}${b2}${b3}"
+            return 0
+        fi
+        if [[ "$b3" == "[" ]]; then
+            b4=""
+            _nav_take_ready b4 || true
+            _nav_push_front "${b1}${b2}${b3}${b4}"
+            return 0
+        fi
+        # Parameterised CSI such as ESC [ 1 ; 5 A. Consume to its terminator
+        # so the tail is not read as text, then hand the sequence back.
+        seq="${b1}${b2}${b3}"
+        while (( steps < 16 )); do
+            ((steps++))
+            cur=""
+            _nav_take_ready cur || break
+            seq+="$cur"
+            [[ "$cur" =~ [A-Za-z~] ]] && break
+        done
+        _nav_push_front "$seq"
+        return 0
+    done
 }
 _NAV_MOUSE_EVENT=""
 _nav_parse_sgr_mouse() {
@@ -2527,7 +2592,7 @@ printf -v l1_sp '%*s' "$l1_pad" ''; player_banner+="  ${BOLD}${MAGENTA}│${NC} 
         while [ "$_gap_n" -gt 0 ]; do frame_buf+="\033[K\n"; _menu_row=$((_menu_row + 1)); _gap_n=$((_gap_n - 1)); done
     fi;
     _menu_item_row[$idx]=$((_menu_row++)); if [ "$o_key" = "SECTION" ]; then local sec_rem=$(( inner_w - ${#o_label} - 8 )); [ "$sec_rem" -lt 4 ] && sec_rem=4; local sec_dashes; printf -v sec_dashes '%*s' "$sec_rem" ''; sec_dashes="${sec_dashes// /─}"; frame_buf+="  ${BOLD}${BLUE}─── [ ${o_label} ] ${sec_dashes}\033[K${NC}\n"; continue; elif [ "$o_key" = "SEP" ]; then frame_buf+="  ${BOLD}${BLUE}${menu_rule}\033[K${NC}\n"; continue; fi; if [ "$idx" -eq "$cur_idx" ]; then local sel_color_idx="${selectable_map[$cur_idx]:-0}"; local h_line=""; highlight_menu_line "$o_key" "$o_label" "$o_extra" "$sel_color_idx" h_line "$box_w"; frame_buf+="${h_line}\n"; else local key_formatted; printf -v key_formatted "[%2s]" "$o_key"; local key_display="${MENU_INK}${BOLD}${key_formatted}${NC}"; local label_display="${MENU_INK}${o_label}"; local extra_display=""; local _fitted_extra=""; _fitted_extra="$(_fit_menu_extra "$o_key" "$o_label" "$o_extra" "$(( box_w + 2 ))")"; [ -n "$_fitted_extra" ] && extra_display="${MENU_INK}  ${_fitted_extra}"
-frame_buf+="     ${key_display} ${label_display}${extra_display}\033[K\n"; fi; done; _menu_status_row=$((_menu_row + 2)); _menu_fast_ok=1; local remaining_below=$(( total_opts - 1 - view_end )); if [ "$remaining_below" -gt 0 ]; then frame_buf+="  ${BOLD}${YELLOW}▼  (${remaining_below} more option$([ "$remaining_below" -gt 1 ] && echo "s") below - press ↓ to scroll)\033[K${NC}\n"; else frame_buf+="\033[K\n"; fi; frame_buf+="  ${BOLD}${BLUE}${menu_rule}\033[K${NC}\n"; frame_buf+="$_status_line"; if [ "$frame_buf" != "$_last_menu_frame" ]; then _last_menu_frame="$frame_buf"; printf '\033[?25l\033[?12l\033[?7l\033[H%b\033[J\r\033[?25l' "$frame_buf"; else printf '\033[?25l\033[?12l\033[?7l'; fi; if [ "${STARTUP_AUTOPLAY_EXECUTED:-0}" -eq 0 ]; then run_deferred_startup; fi; _MENU_FRAME_FRESH=1; fi; fi; if [ "${_ARROW_HOLD:-0}" -eq 1 ]; then _discard_buffered_vertical_arrows; _ARROW_HOLD=0; fi; local key_action=""; read_nav_key key_action; if [ "$key_action" != "TICK" ]; then _MENU_FRAME_FRESH=0; _LAST_NAV_TIME="${SECONDS:-0}"; if [ "$_IS_BREATHING" -eq 1 ]; then _IS_BREATHING=0; _BREATH_STEP=0; _BREATH_TICK_DIV=0; fi; fi; case "$key_action" in MOUSE:*) if _menu_handle_mouse "$key_action"; then if [ "${_MENU_MOUSE_ACTIVATE:-0}" -eq 1 ]; then cleanup_submenu_screen; clear; if [ "$search_mode" -eq 1 ] || [ -n "$search_query" ]; then IFS='|' read -r sel_key _ _ <<< "${_opts_ref[$cur_idx]}"; REPLY="$sel_key"; elif [ -n "$typed_buffer" ]; then REPLY="$typed_buffer"; else IFS='|' read -r sel_key _ _ <<< "${_opts_ref[$cur_idx]}"; REPLY="$sel_key"; fi; return 0; fi; _MENU_FRAME_FRESH=0; fi; continue ;; MOUSE_RELEASE) continue ;; TOGGLE_FULLSCREEN) toggle_manager_fullscreen; _TERM_RESIZED=1; last_term_lines=0; _last_menu_frame=""; printf '\033[?25l\033[?12l\033[?7l'; continue ;; 
+frame_buf+="     ${key_display} ${label_display}${extra_display}\033[K\n"; fi; done; _menu_status_row=$((_menu_row + 2)); _menu_fast_ok=1; local remaining_below=$(( total_opts - 1 - view_end )); if [ "$remaining_below" -gt 0 ]; then frame_buf+="  ${BOLD}${YELLOW}▼  (${remaining_below} more option$([ "$remaining_below" -gt 1 ] && echo "s") below - press ↓ to scroll)\033[K${NC}\n"; else frame_buf+="\033[K\n"; fi; frame_buf+="  ${BOLD}${BLUE}${menu_rule}\033[K${NC}\n"; frame_buf+="$_status_line"; if [ "$frame_buf" != "$_last_menu_frame" ]; then _last_menu_frame="$frame_buf"; printf '\033[?25l\033[?12l\033[?7l\033[H%b\033[J\r\033[?25l' "$frame_buf"; else printf '\033[?25l\033[?12l\033[?7l'; fi; if [ "${STARTUP_AUTOPLAY_EXECUTED:-0}" -eq 0 ]; then run_deferred_startup; fi; _MENU_FRAME_FRESH=1; fi; fi; if [ "${_ARROW_HOLD:-0}" -eq 1 ]; then _defer_buffered_vertical_arrows; _ARROW_HOLD=0; fi; local key_action=""; read_nav_key key_action; if [ "$key_action" != "TICK" ]; then _MENU_FRAME_FRESH=0; _LAST_NAV_TIME="${SECONDS:-0}"; if [ "$_IS_BREATHING" -eq 1 ]; then _IS_BREATHING=0; _BREATH_STEP=0; _BREATH_TICK_DIV=0; fi; fi; case "$key_action" in MOUSE:*) if _menu_handle_mouse "$key_action"; then if [ "${_MENU_MOUSE_ACTIVATE:-0}" -eq 1 ]; then cleanup_submenu_screen; clear; if [ "$search_mode" -eq 1 ] || [ -n "$search_query" ]; then IFS='|' read -r sel_key _ _ <<< "${_opts_ref[$cur_idx]}"; REPLY="$sel_key"; elif [ -n "$typed_buffer" ]; then REPLY="$typed_buffer"; else IFS='|' read -r sel_key _ _ <<< "${_opts_ref[$cur_idx]}"; REPLY="$sel_key"; fi; return 0; fi; _MENU_FRAME_FRESH=0; fi; continue ;; MOUSE_RELEASE) continue ;; TOGGLE_FULLSCREEN) toggle_manager_fullscreen; _TERM_RESIZED=1; last_term_lines=0; _last_menu_frame=""; printf '\033[?25l\033[?12l\033[?7l'; continue ;;
 
 RESIZE) 
     update_terminal_geometry 1
