@@ -484,7 +484,7 @@ class TestMacCompanionStacking(unittest.TestCase):
         # window: a standalone visualizer is meant to be interactive.
         companion = text.index('if getattr(self, "_bond_locked", False):')
         block = text[companion:companion + 900]
-        self.assertIn('"orderBack:"', block)
+        self.assertIn('"orderFront:"', block)
         self.assertIn('"makeKeyAndOrderFront:"', block)
 
 

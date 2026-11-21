@@ -866,10 +866,11 @@ class LiquidVisualizerMetalRenderer(MonitorSpanMixin, RandomPresetMixin, PlayerB
         objc.send(nswindow, "setReleasedWhenClosed:", c_int(0), restype=None, argtypes=[c_int])
         objc.send(nswindow, "setOpaque:", c_int(0), restype=None, argtypes=[c_int])
         if getattr(self, "_bond_locked", False):
-            # Keep the normal level; the host orders this window directly
-            # beneath itself through the window server. A level below normal
-            # put it behind Finder/Terminal, and a level above normal covered
-            # the host, so neither can be the whole answer.
+            # Stay at the normal level and sit at the front of it. The host
+            # raises only its visible window to level 1, so this companion is
+            # above Finder/Terminal and immediately below the host. A level
+            # below normal put it behind other apps; a level above covered the
+            # host.
             objc.send(nswindow, "orderFront:", c_void_p(0), restype=None,
                       argtypes=[c_void_p])
         else:
