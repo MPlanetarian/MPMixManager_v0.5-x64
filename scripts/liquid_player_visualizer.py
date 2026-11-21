@@ -1764,6 +1764,9 @@ class LiquidVisualizerOpenGLRenderer(MonitorSpanMixin, RandomPresetMixin, Player
         self.target_4k = bool(target_4k)
         self.should_close = False
         self.is_fullscreen = False
+        # True when fullscreen went through glfwSetWindowMonitor rather than a
+        # plain resize; leaving it must use the same call with a NULL monitor.
+        self._fullscreen_monitor_mode = False
         self.screensaver = False
         self._wake_event = False
         # R toggles random mode: one new random preset per minute.
@@ -2265,7 +2268,27 @@ class LiquidVisualizerOpenGLRenderer(MonitorSpanMixin, RandomPresetMixin, Player
         return int(wx + self.cursor[0]), int(wy + self.cursor[1])
 
     def root_pointer(self) -> tuple:
-        """Pointer position from the X server, or (0, 0) when unavailable."""
+        """Pointer position in screen coordinates, or (0, 0) when unavailable.
+
+        Dragging a borderless window needs the cursor in *screen* space. The
+        fallback below (window position + window-relative cursor) is useless
+        while dragging: as the window follows the pointer the two cancel out,
+        so the window never moves. Windows has to ask the OS for the real
+        cursor, exactly as the Vulkan renderer does.
+        """
+        if sys.platform.startswith("win"):
+            try:
+                import ctypes
+
+                class _POINT(ctypes.Structure):
+                    _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+
+                point = _POINT()
+                if ctypes.windll.user32.GetCursorPos(ctypes.byref(point)):
+                    return int(point.x), int(point.y)
+            except Exception:
+                pass
+            return self.window_pos()
         if not sys.platform.startswith("linux"):
             return (0, 0)
         x11 = getattr(self, "_x11", None)
@@ -2447,8 +2470,44 @@ class LiquidVisualizerOpenGLRenderer(MonitorSpanMixin, RandomPresetMixin, Player
         if self._window:
             self._glfw.glfwSetWindowShouldClose(self._window, 1)
 
+    def _leave_fullscreen_geometry(self, x: int, y: int, width: int, height: int) -> None:
+        """Put the window back at a windowed size/position.
+
+        ``glfwSetWindowSize``/``glfwSetWindowPos`` alone cannot leave a window
+        that entered fullscreen through ``glfwSetWindowMonitor``; GLFW only
+        drops that mode when it is called again with a NULL monitor. Doing the
+        resize without this left the scene stretched over the desktop.
+        """
+        g, w = getattr(self, "_glfw", None), getattr(self, "_window", None)
+        width, height = max(64, int(width)), max(64, int(height))
+        x, y = int(x), int(y)
+        if g and w:
+            try:
+                g.glfwSetWindowSizeLimits(w, -1, -1, -1, -1)
+            except Exception:
+                pass
+            if getattr(self, "_fullscreen_monitor_mode", False) and hasattr(g, "glfwSetWindowMonitor"):
+                try:
+                    g.glfwSetWindowMonitor(w, None, x, y, width, height, 0)
+                except Exception:
+                    pass
+            try:
+                g.glfwSetWindowSize(w, width, height)
+                g.glfwSetWindowPos(w, x, y)
+            except Exception:
+                pass
+        self._fullscreen_monitor_mode = False
+        self._cur_pos = (x, y)
+
     def toggle_fullscreen(self) -> bool:
-        from mp_liquid_visualizer_vulkan import RENDER_1080P_WIDTH, RENDER_1080P_HEIGHT
+        from mp_liquid_visualizer_vulkan import (
+            GLFW_AUTO_ICONIFY,
+            GLFW_FALSE,
+            GLFW_FLOATING,
+            GLFW_TRUE,
+            RENDER_1080P_HEIGHT,
+            RENDER_1080P_WIDTH,
+        )
         g, w = self._glfw, self._window
         if not g or not w:
             self.is_fullscreen = not self.is_fullscreen
@@ -2456,6 +2515,8 @@ class LiquidVisualizerOpenGLRenderer(MonitorSpanMixin, RandomPresetMixin, Player
         if not self.is_fullscreen:
             self._saved_pos = self.window_pos()
             fw, fh = RENDER_1080P_WIDTH, RENDER_1080P_HEIGHT
+            refresh = 0
+            mon = None
             try:
                 mon = self.span_monitor() or g.glfwGetPrimaryMonitor()
                 mode = g.glfwGetVideoMode(mon) if hasattr(g, "glfwGetVideoMode") else None
@@ -2464,6 +2525,7 @@ class LiquidVisualizerOpenGLRenderer(MonitorSpanMixin, RandomPresetMixin, Player
                     # A 4K panel stays at 1080p, matching the Vulkan renderer.
                     if md.width and md.height and (md.width < 3840 or md.height < 2160):
                         fw, fh = int(md.width), int(md.height)
+                    refresh = int(md.refreshRate or 0)
             except Exception:
                 pass
             self.is_fullscreen = True
@@ -2471,17 +2533,30 @@ class LiquidVisualizerOpenGLRenderer(MonitorSpanMixin, RandomPresetMixin, Player
                 g.glfwSetWindowSizeLimits(w, -1, -1, -1, -1)
             except Exception:
                 pass
+            # Resizing a borderless window to the screen still leaves it
+            # *behind* the Windows taskbar, which is topmost, so a strip of the
+            # desktop stays visible at the bottom. A real monitor fullscreen
+            # window makes the shell hide the taskbar. The monitor-spanning
+            # windows already did this; now Windows always does too.
+            use_monitor_mode = (
+                mon is not None
+                and hasattr(g, "glfwSetWindowMonitor")
+                and (bool(self._span_bounds) or sys.platform.startswith("win"))
+            )
             filled = False
-            if self._span_bounds and mon and hasattr(g, "glfwSetWindowMonitor"):
-                # Fill exactly the monitor this window was assigned to, using
-                # that monitor's own mode rather than the global default.
+            if use_monitor_mode:
                 try:
-                    md = g.glfwGetVideoMode(mon).contents
-                    g.glfwSetWindowMonitor(w, mon, 0, 0, int(md.width), int(md.height), int(md.refreshRate or 0))
-                    fw, fh = int(md.width), int(md.height)
+                    g.glfwSetWindowMonitor(w, mon, 0, 0, fw, fh, refresh)
                     filled = True
                 except Exception:
                     filled = False
+            self._fullscreen_monitor_mode = filled
+            if filled and hasattr(g, "glfwSetWindowAttrib"):
+                try:
+                    g.glfwSetWindowAttrib(w, GLFW_AUTO_ICONIFY, GLFW_FALSE)
+                    g.glfwSetWindowAttrib(w, GLFW_FLOATING, GLFW_TRUE)
+                except Exception:
+                    pass
             if not filled:
                 try:
                     g.glfwSetWindowPos(w, 0, 0)
@@ -2493,9 +2568,14 @@ class LiquidVisualizerOpenGLRenderer(MonitorSpanMixin, RandomPresetMixin, Player
             x, y = getattr(self, "_saved_pos", self._cur_pos)
             ww, wh = self._size
             self.is_fullscreen = False
+            if hasattr(g, "glfwSetWindowAttrib"):
+                try:
+                    g.glfwSetWindowAttrib(w, GLFW_FLOATING, GLFW_FALSE)
+                except Exception:
+                    pass
+            self._leave_fullscreen_geometry(int(x), int(y), ww, wh)
             try:
-                g.glfwSetWindowSize(w, ww, wh)
-                g.glfwSetWindowPos(w, int(x), int(y))
+                g.glfwSetWindowSizeLimits(w, ww, wh, ww, wh)
             except Exception:
                 pass
             self._cur_pos = (int(x), int(y))
@@ -2512,13 +2592,14 @@ class LiquidVisualizerOpenGLRenderer(MonitorSpanMixin, RandomPresetMixin, Player
     def _z_apply_windowed(self, width: int, height: int, x: int, y: int) -> None:
         """Place the window at width/height/x/y and leave fullscreen.
 
-        This backend's ``toggle_fullscreen`` fills the monitor by moving and
-        resizing a borderless window rather than by a GLFW monitor mode, so
-        leaving it is the same two calls in reverse.
+        ``toggle_fullscreen`` may have entered a real GLFW monitor fullscreen
+        (Windows always, and monitor-spanning elsewhere), so leaving it has to
+        go back through ``glfwSetWindowMonitor`` before the windowed resize.
         """
         g, w = self._glfw, self._window
         self.is_fullscreen = False
         self._resize_window(width, height)
+        self._leave_fullscreen_geometry(int(x), int(y), width, height)
         if g and w:
             try:
                 g.glfwSetWindowPos(w, int(x), int(y))

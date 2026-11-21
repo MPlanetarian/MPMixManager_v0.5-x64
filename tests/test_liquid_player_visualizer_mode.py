@@ -997,6 +997,77 @@ class TestStandaloneVisualizerPresentation(unittest.TestCase):
         renderer._on_mouse(None, 0, 1, 0)
         self.assertFalse(renderer._drag_active)
 
+    def test_windows_root_pointer_reads_the_os_cursor(self):
+        """Dragging needs screen coordinates.
+
+        The window-relative fallback (window position + cursor position) is
+        self-cancelling while dragging: the window follows the pointer, so the
+        delta stays zero and the window cannot be moved. Windows has to ask
+        the OS, which is what the Vulkan renderer already did.
+        """
+        renderer = object.__new__(vis.LiquidVisualizerOpenGLRenderer)
+        renderer._cur_pos = (160, 80)
+        renderer.cursor = (0.0, 0.0)
+
+        def _get_cursor_pos(pointer):
+            pointer._obj.x = 640
+            pointer._obj.y = 360
+            return 1
+
+        user32 = MagicMock()
+        user32.GetCursorPos.side_effect = _get_cursor_pos
+        with patch("sys.platform", "win32"), \
+             patch("ctypes.windll", MagicMock(user32=user32), create=True):
+            self.assertEqual(renderer.root_pointer(), (640, 360))
+
+    def _fullscreen_renderer(self):
+        renderer = object.__new__(vis.LiquidVisualizerOpenGLRenderer)
+        glfw = MagicMock()
+        window = MagicMock()
+        monitor = MagicMock()
+        mode = MagicMock()
+        mode.contents.width = 1920
+        mode.contents.height = 1080
+        mode.contents.refreshRate = 60
+        glfw.glfwGetPrimaryMonitor.return_value = monitor
+        glfw.glfwGetVideoMode.return_value = mode
+        renderer._glfw = glfw
+        renderer._window = window
+        renderer._cur_pos = (160, 80)
+        renderer._size = (700, 700)
+        renderer._span_bounds = None
+        renderer.is_fullscreen = False
+        renderer._fullscreen_monitor_mode = False
+        renderer.width = 700
+        renderer.height = 700
+        renderer.span_monitor = lambda: None
+        return renderer, glfw, window, monitor
+
+    def test_windows_fullscreen_asks_for_a_real_monitor_mode(self):
+        """Resizing a borderless window leaves the taskbar on top.
+
+        The user saw a strip of the desktop at the bottom of the screen; only
+        ``glfwSetWindowMonitor`` makes Windows hide the taskbar, which is what
+        the Vulkan renderer does.
+        """
+        renderer, glfw, window, monitor = self._fullscreen_renderer()
+        with patch("sys.platform", "win32"):
+            self.assertTrue(renderer.toggle_fullscreen())
+        glfw.glfwSetWindowMonitor.assert_called_once_with(
+            window, monitor, 0, 0, 1920, 1080, 60
+        )
+        self.assertTrue(renderer._fullscreen_monitor_mode)
+
+    def test_leaving_fullscreen_passes_a_null_monitor(self):
+        """GLFW only drops fullscreen through SetWindowMonitor(NULL, ...)."""
+        renderer, glfw, window, _monitor = self._fullscreen_renderer()
+        with patch("sys.platform", "win32"):
+            renderer.toggle_fullscreen()
+            self.assertFalse(renderer.toggle_fullscreen())
+        args = glfw.glfwSetWindowMonitor.call_args[0]
+        self.assertIsNone(args[1], "leaving fullscreen must pass a NULL monitor")
+        self.assertEqual(args[2:], (160, 80, 700, 700, 0))
+
     def test_glfw_is_pinned_to_x11_on_linux(self):
         """A Wayland GLFW window has no X11 handle, so it cannot be placed or moved."""
         src = (SCRIPTS / "liquid_player_visualizer.py").read_text(encoding="utf-8")

@@ -550,7 +550,9 @@ class TestMPLiquidVisualizer(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as td:
             out_png = Path(td) / "self_test_1400.png"
-            summary = vis.run_self_test(out_png)
+            # Pin the backend: the user's config.env may deliberately select
+            # OpenGL, and this test is about the Vulkan renderer path.
+            summary = vis.run_self_test(out_png, backend="vulkan")
             self.assertIn("MP_Liquid_Visualizer Vulkan device:", summary)
             match = re.search(r"Window: (\d+)x(\d+) Fixed Borderless", summary)
             self.assertIsNotNone(match)

@@ -156,7 +156,17 @@ class TestRendererWindowHandlesAndPointer(unittest.TestCase):
     def test_root_pointer_win32_fallback(self):
         renderer = vis.LiquidVisualizerVulkanRenderer()
         renderer._cur_pos = (200, 300)
-        with patch("sys.platform", "win32"), patch("platform.system", return_value="Windows"):
+        # ``_IS_WIN`` is fixed at import time, so patching sys.platform alone
+        # only simulated the other platforms on a Linux or macOS host. Ask
+        # GetCursorPos to fail so the documented fallback is what runs here.
+        user32 = MagicMock()
+        user32.GetCursorPos.return_value = 0
+        with patch("sys.platform", "win32"), \
+             patch("platform.system", return_value="Windows"), \
+             patch.object(vis, "_IS_WIN", True), \
+             patch.object(vis, "_IS_MAC", False), \
+             patch.object(vis, "_IS_LINUX", False), \
+             patch("ctypes.windll", MagicMock(user32=user32), create=True):
             pos = renderer.root_pointer()
             self.assertEqual(pos, (200, 300))
 
@@ -164,7 +174,11 @@ class TestRendererWindowHandlesAndPointer(unittest.TestCase):
         renderer = vis.LiquidVisualizerVulkanRenderer()
         renderer._cur_pos = (150, 250)
         renderer.cursor = (50.0, 75.0)
-        with patch("sys.platform", "darwin"), patch("platform.system", return_value="Darwin"):
+        with patch("sys.platform", "darwin"), \
+             patch("platform.system", return_value="Darwin"), \
+             patch.object(vis, "_IS_WIN", False), \
+             patch.object(vis, "_IS_MAC", True), \
+             patch.object(vis, "_IS_LINUX", False):
             pos = renderer.root_pointer()
             self.assertEqual(pos, (200, 325))
 
