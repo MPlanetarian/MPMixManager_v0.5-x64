@@ -870,7 +870,7 @@ class LiquidVisualizerMetalRenderer(MonitorSpanMixin, RandomPresetMixin, PlayerB
             # beneath itself through the window server. A level below normal
             # put it behind Finder/Terminal, and a level above normal covered
             # the host, so neither can be the whole answer.
-            objc.send(nswindow, "orderBack:", c_void_p(0), restype=None,
+            objc.send(nswindow, "orderFront:", c_void_p(0), restype=None,
                       argtypes=[c_void_p])
         else:
             objc.send(nswindow, "makeKeyAndOrderFront:", c_void_p(0), restype=None,
@@ -1392,9 +1392,16 @@ class LiquidVisualizerMetalRenderer(MonitorSpanMixin, RandomPresetMixin, PlayerB
             # raises it, and the companion must stay its immediate neighbour.
             self._mac_host_wid = int(host_wid)
             self._order_below_host(int(host_wid))
-        # The host places this window directly beneath itself. Do not reorder
-        # here: orderBack would put it behind Finder/Terminal, and a level
-        # above normal would cover the host.
+        # The host is raised to level 1; this window stays at level 0 but is
+        # kept at the front of that level, above Finder/Terminal and below the
+        # host. Reassert because activating another app can reorder level 0.
+        nswindow = getattr(self, "_nswindow", None)
+        if nswindow:
+            try:
+                self._bridge.objc.send(nswindow, "orderFront:", c_void_p(0),
+                                       restype=None, argtypes=[c_void_p])
+            except Exception:
+                pass
 
     def poll(self) -> bool:
         if not self._alive or not self._window:

@@ -1521,6 +1521,36 @@ class OpenGLGlassHost:
             own = macos_window_for_pid(os.getpid())
             if not own:
                 return
+            own_wid = int(own[0])
+            # The GLFW-window pointer is not the visible NSWindow (its
+            # windowNumber is 0), so setLevel: on it was ignored. Resolve the
+            # real window from the number the window server reports, then
+            # raise just that one above normal applications.
+            try:
+                objc = ctypes.CDLL("/usr/lib/libobjc.A.dylib")
+                objc.objc_getClass.restype = ctypes.c_void_p
+                objc.objc_getClass.argtypes = [ctypes.c_char_p]
+                objc.sel_registerName.restype = ctypes.c_void_p
+                objc.sel_registerName.argtypes = [ctypes.c_char_p]
+                send = objc.objc_msgSend
+
+                def sel(name):
+                    return ctypes.c_void_p(objc.sel_registerName(name))
+
+                send.restype = ctypes.c_void_p
+                send.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+                nsapp = send(
+                    ctypes.c_void_p(objc.objc_getClass(b"NSApplication")),
+                    sel(b"sharedApplication"))
+                send.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_long]
+                window = send(nsapp, sel(b"windowWithWindowNumber:"),
+                              ctypes.c_long(own_wid)) if nsapp else 0
+                if window:
+                    send.restype = None
+                    send.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_long]
+                    send(window, sel(b"setLevel:"), ctypes.c_long(1))
+            except Exception:
+                pass
             cg = ctypes.CDLL(
                 "/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight")
             cg.CGSMainConnectionID.restype = ctypes.c_int
