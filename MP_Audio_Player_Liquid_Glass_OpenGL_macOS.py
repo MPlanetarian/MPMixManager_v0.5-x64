@@ -1489,7 +1489,10 @@ class OpenGLGlassHost:
                 return 0
             glfw.glfwGetCocoaWindow.argtypes = [ctypes.c_void_p]
             glfw.glfwGetCocoaWindow.restype = ctypes.c_void_p
-            nswindow = glfw.glfwGetCocoaWindow(ctypes.c_void_p(window))
+            # The renderer stores the GLFW window as a c_void_p already;
+            # wrapping it again raises "cannot be converted to pointer".
+            handle = window if isinstance(window, ctypes.c_void_p) else ctypes.c_void_p(window)
+            nswindow = glfw.glfwGetCocoaWindow(handle)
             if not nswindow:
                 return 0
             objc = ctypes.CDLL("/usr/lib/libobjc.A.dylib")
@@ -1497,9 +1500,10 @@ class OpenGLGlassHost:
             objc.sel_registerName.argtypes = [ctypes.c_char_p]
             objc.objc_msgSend.restype = ctypes.c_long
             objc.objc_msgSend.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
-            sel = objc.sel_registerName(b"windowNumber")
-            return int(objc.objc_msgSend(ctypes.c_void_p(nswindow),
-                                         ctypes.c_void_p(sel)))
+            sel = ctypes.c_void_p(objc.sel_registerName(b"windowNumber"))
+            ns_handle = (nswindow if isinstance(nswindow, ctypes.c_void_p)
+                         else ctypes.c_void_p(nswindow))
+            return int(objc.objc_msgSend(ns_handle, sel))
         except Exception:
             return 0
 
