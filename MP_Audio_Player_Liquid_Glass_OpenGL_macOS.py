@@ -1479,6 +1479,47 @@ class OpenGLGlassHost:
             self.renderer.set_window_size(self._window_w, self._window_h)
             self._sync_panels()
 
+    def _host_window_number(self) -> int:
+        """CGWindowID of this host window (the NSWindow number), or 0."""
+        try:
+            r = self.renderer
+            glfw = getattr(r, "_glfw", None)
+            window = getattr(r, "_window", None)
+            if not glfw or not window:
+                return 0
+            glfw.glfwGetCocoaWindow.argtypes = [ctypes.c_void_p]
+            glfw.glfwGetCocoaWindow.restype = ctypes.c_void_p
+            nswindow = glfw.glfwGetCocoaWindow(ctypes.c_void_p(window))
+            if not nswindow:
+                return 0
+            objc = ctypes.CDLL("/usr/lib/libobjc.A.dylib")
+            objc.sel_registerName.restype = ctypes.c_void_p
+            objc.sel_registerName.argtypes = [ctypes.c_char_p]
+            objc.objc_msgSend.restype = ctypes.c_long
+            objc.objc_msgSend.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+            sel = objc.sel_registerName(b"windowNumber")
+            return int(objc.objc_msgSend(ctypes.c_void_p(nswindow),
+                                         ctypes.c_void_p(sel)))
+        except Exception:
+            return 0
+
+    def _publish_window_geometry(self) -> None:
+        """Record the host rectangle so the macOS companion can match it."""
+        if self.mode == "TRACKLIST" or self.renderer is None:
+            return
+        try:
+            x, y = self.renderer.window_pos()
+            width, height = self.renderer.window_size()
+            wid = self._host_window_number()
+            if self.mode == "MANAGER":
+                from liquid_player_visualizer import publish_liquid_gui_window_geometry
+                publish_liquid_gui_window_geometry(x, y, width, height, wid=wid)
+            else:
+                from liquid_player_visualizer import publish_liquid_player_window_geometry
+                publish_liquid_player_window_geometry(x, y, width, height, wid=wid)
+        except Exception:
+            pass
+
     def run(self):
         self.master_fd, slave_fd = pty.openpty()
         winsize = struct.pack("HHHH", self._target_rows, self._target_cols, 0, 0)
@@ -1530,6 +1571,7 @@ class OpenGLGlassHost:
         theme = read_player_theme()
         self.overlay.set_theme_text(theme)
         theme_at = 0.0
+        geom_at = 0.0
         # open() raises once. The visualizer raises itself when its window
         # appears, which can be later, so raise again for a few seconds.
         raise_left = 6
@@ -1547,6 +1589,9 @@ class OpenGLGlassHost:
                     theme = read_player_theme()
                     self.overlay.set_theme_text(theme)
                     theme_at = now
+                if now - geom_at > 0.10:
+                    self._publish_window_geometry()
+                    geom_at = now
 
                 if self.master_fd is not None:
                     r, _, _ = select.select([self.master_fd], [], [], 0.0)

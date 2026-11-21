@@ -772,14 +772,12 @@ class LiquidVisualizerMetalRenderer(MonitorSpanMixin, RandomPresetMixin, PlayerB
         objc.send(nswindow, "setReleasedWhenClosed:", c_int(0), restype=None, argtypes=[c_int])
         objc.send(nswindow, "setOpaque:", c_int(0), restype=None, argtypes=[c_int])
         if getattr(self, "_bond_locked", False):
-            # The owned companion must sit *behind* its host. ``orderBack``
-            # alone only reorders windows inside this process, so the host in
-            # another app still ended up underneath. A window level just below
-            # normal is the cross-application way to keep the host in front,
-            # and it also keeps the visualizer from covering the host when the
-            # user raises the host window.
-            objc.send(nswindow, "setLevel:", c_long(-1), restype=None,
-                      argtypes=[c_long])
+            # Keep the companion at the normal level and order it directly
+            # beneath the host once the host publishes its window number
+            # (_sync_macos_host). A window level below normal put it behind
+            # Finder and Terminal too, so the glass showed those instead of
+            # the visualizer. orderBack here only keeps it from covering the
+            # host during the first frame.
             objc.send(nswindow, "orderBack:", c_void_p(0), restype=None,
                       argtypes=[c_void_p])
         else:
@@ -1192,6 +1190,97 @@ class LiquidVisualizerMetalRenderer(MonitorSpanMixin, RandomPresetMixin, PlayerB
         except Exception:
             return 0
 
+    def _window_number(self) -> int:
+        """CGWindowID of this window (the NSWindow number), or 0."""
+        nswindow = self.cocoa_window()
+        if not nswindow:
+            return 0
+        try:
+            return int(self._bridge.objc.send(
+                nswindow, "windowNumber", restype=c_long, argtypes=[]))
+        except Exception:
+            return 0
+
+    def _order_below_host(self, host_wid: int) -> None:
+        """Place this window directly beneath ``host_wid`` in the global stack.
+
+        ``NSWindow orderWindow:relativeTo:`` only accepts a window in the same
+        process. The window server's CGSOrderWindow works across processes, so
+        the glass host can stay in front while the companion is immediately
+        behind it, above every unrelated app.
+        """
+        mine = self._window_number()
+        if not mine or not host_wid:
+            return
+        for library in (
+            "/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight",
+            "/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics",
+        ):
+            try:
+                cg = ctypes.CDLL(library)
+                cg.CGSMainConnectionID.restype = ctypes.c_int
+                cg.CGSOrderWindow.argtypes = [
+                    ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int]
+                cg.CGSOrderWindow.restype = ctypes.c_int
+                connection = int(cg.CGSMainConnectionID())
+                if connection:
+                    # -1 == below the relative window.
+                    cg.CGSOrderWindow(connection, mine, -1, int(host_wid))
+                    return
+            except Exception:
+                continue
+
+    def _sync_macos_host(self) -> None:
+        """Match the host rectangle and sit directly behind its window."""
+        if sys.platform != "darwin" or not getattr(self, "_bond_locked", False):
+            return
+        if self.is_fullscreen:
+            return
+        now = time.monotonic()
+        if now < getattr(self, "_mac_sync_at", 0.0):
+            return
+        self._mac_sync_at = now + 0.5
+        try:
+            from liquid_player_visualizer import (
+                read_published_gui_window_geometry,
+                read_published_gui_window_id,
+                read_published_player_window_geometry,
+                read_published_player_window_id,
+            )
+        except ImportError:
+            from scripts.liquid_player_visualizer import (
+                read_published_gui_window_geometry,
+                read_published_gui_window_id,
+                read_published_player_window_geometry,
+                read_published_player_window_id,
+            )
+        gui = os.environ.get("MP_VISUALIZER_MATCH_GUI") == "1"
+        geometry = (read_published_gui_window_geometry() if gui
+                    else read_published_player_window_geometry())
+        host_wid = (read_published_gui_window_id() if gui
+                    else read_published_player_window_id())
+        if geometry:
+            x, y, width, height = (int(value) for value in geometry)
+            if (x, y, width, height) != getattr(self, "_mac_host_geom", None):
+                self._mac_host_geom = (x, y, width, height)
+                try:
+                    self._glfw.glfwSetWindowSizeLimits(
+                        self._window, width, height, width, height)
+                except Exception:
+                    pass
+                self._set_windowed_size(width, height)
+                try:
+                    self._glfw.glfwSetWindowPos(self._window, x, y)
+                    self._glfw.glfwSetWindowSize(self._window, width, height)
+                    self.width, self.height = width, height
+                except Exception:
+                    pass
+        if host_wid:
+            # Reassert below the host on every sync: activating the host
+            # raises it, and the companion must stay its immediate neighbour.
+            self._mac_host_wid = int(host_wid)
+            self._order_below_host(int(host_wid))
+
     def poll(self) -> bool:
         if not self._alive or not self._window:
             return not self.should_close
@@ -1199,6 +1288,10 @@ class LiquidVisualizerMetalRenderer(MonitorSpanMixin, RandomPresetMixin, PlayerB
         if self._glfw.glfwWindowShouldClose(self._window):
             self.should_close = True
         self._sync_drawable_size()
+        try:
+            self._sync_macos_host()
+        except Exception:
+            pass
         try:
             self.poll_monitor_span()
         except Exception:

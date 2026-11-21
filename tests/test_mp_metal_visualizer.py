@@ -464,12 +464,15 @@ class TestMacCompanionStacking(unittest.TestCase):
     a non-focusing launch.
     """
 
-    def test_a_companion_is_below_normal_and_does_not_take_focus(self):
+    def test_a_companion_is_ordered_below_the_host_and_does_not_take_focus(self):
         text = (ROOT / "scripts" / "mp_liquid_visualizer_metal.py").read_text(
             encoding="utf-8")
-        self.assertIn('"setLevel:"', text)
-        self.assertIn("c_long(-1)", text)
-        self.assertIn('"orderBack:"', text)
+        # A level below normal put the window behind Finder/Terminal too; the
+        # host's own CGWindowID is the correct anchor.
+        self.assertIn("CGSOrderWindow", text)
+        self.assertIn("_sync_macos_host", text)
+        self.assertIn("read_published_gui_window_id", text)
+        self.assertNotIn('"setLevel:"', text)
         self.assertIn("focus = GLFW_FALSE if companion else GLFW_TRUE", text)
 
     def test_a_free_window_still_comes_to_the_front(self):
