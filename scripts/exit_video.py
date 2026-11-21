@@ -42,6 +42,10 @@ from pathlib import Path
 EXIT_VIDEO_NAME = "Exit_MP_Video.mp4"
 EXIT_VIDEO_TIMEOUT_SECONDS = 90
 
+# The host is usually pythonw.exe, which has no console. A bare `bash` helper
+# then allocates one and flashes a terminal while the window is closing.
+_NO_WINDOW_FLAGS = 0x08000000 if sys.platform == "win32" else 0
+
 # The first MP Liquid Player window and the first MP Gui window play the same
 # movie as an intro. Later windows of that kind (two to four) open straight
 # away and never show it.
@@ -341,7 +345,7 @@ class PlayerIntro:
         # fresh session instead and left to finish, time out, or be closed by
         # clicking its own window.
         attached = _has_tty()
-        kwargs = {}
+        kwargs = {"creationflags": _NO_WINDOW_FLAGS}
         if not attached:
             kwargs["start_new_session"] = True
         try:
@@ -463,6 +467,7 @@ class ExitVideo:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 start_new_session=True,
+                creationflags=_NO_WINDOW_FLAGS,
             )
         except (OSError, subprocess.SubprocessError):
             self.process = None

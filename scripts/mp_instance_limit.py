@@ -292,6 +292,9 @@ def _proc_table_from_windows() -> list[tuple[int, str]]:
             text=True,
             timeout=15,
             check=False,
+            # The close path calls this from pythonw, where a visible console
+            # would flash on the desktop for every window that closes.
+            creationflags=0x08000000,
         )
     except (OSError, subprocess.SubprocessError):
         return []

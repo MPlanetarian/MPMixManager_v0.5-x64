@@ -19,6 +19,18 @@ _VISUALIZER_MARK = "MP_Liquid_Visualizer|mp_liquid_visualizer_vulkan"
 _PLAYER_MARK = "MP_Audio_Player_Liquid_Glass"
 
 
+def _quiet_kwargs() -> dict:
+    """Keep helper consoles invisible on Windows.
+
+    These run while a glass window is closing, from a pythonw process that
+    has no console of its own. Without CREATE_NO_WINDOW every PowerShell or
+    taskkill call allocates a console window that flashes on the desktop.
+    """
+    if sys.platform == "win32":
+        return {"creationflags": 0x08000000}
+    return {}
+
+
 def _pgrep(pattern: str) -> list[int]:
     me = os.getpid()
     found: list[int] = []
@@ -27,7 +39,7 @@ def _pgrep(pattern: str) -> list[int]:
             out = subprocess.check_output(
                 ["powershell.exe", "-NoProfile", "-Command",
                  f'Get-CimInstance Win32_Process | Where-Object {{ $_.CommandLine -like "*{pattern.split("|")[0]}*" -or $_.CommandLine -like "*{pattern.split("|")[-1]}*" }} | Select-Object -ExpandProperty ProcessId'],
-                stderr=subprocess.DEVNULL, text=True, timeout=4,
+                stderr=subprocess.DEVNULL, text=True, timeout=4, **_quiet_kwargs(),
             )
         except (OSError, subprocess.SubprocessError):
             return found
@@ -204,7 +216,7 @@ def _signal_visualizer(pid: int, sig: int) -> None:
     if sys.platform == "win32":
         # taskkill /F is the Windows equivalent of SIGKILL. signal.SIGKILL
         # does not exist here, so the stop path must not read that attribute.
-        subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **_quiet_kwargs())
         return
     try:
         pgid = os.getpgid(pid)
