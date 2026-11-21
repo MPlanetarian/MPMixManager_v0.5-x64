@@ -1516,21 +1516,41 @@ class OpenGLGlassHost:
         glass instead of behind unrelated apps.
         """
         try:
-            from liquid_player_visualizer import macos_window_for_pid
-            window = macos_window_for_pid(os.getpid())
-            if not window:
+            objc = ctypes.CDLL("/usr/lib/libobjc.A.dylib")
+            objc.objc_getClass.restype = ctypes.c_void_p
+            objc.objc_getClass.argtypes = [ctypes.c_char_p]
+            objc.sel_registerName.restype = ctypes.c_void_p
+            objc.sel_registerName.argtypes = [ctypes.c_char_p]
+            send = objc.objc_msgSend
+
+            def sel(name):
+                return ctypes.c_void_p(objc.sel_registerName(name))
+
+            send.restype = ctypes.c_void_p
+            send.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+            nsapp = send(
+                ctypes.c_void_p(objc.objc_getClass(b"NSApplication")),
+                sel(b"sharedApplication"))
+            if not nsapp:
                 return
-            wid = int(window[0])
-            # NSWindow setLevel: on the GLFW pointer is ignored here: the
-            # pointer's windowNumber is 0 and the visible window is a
-            # different one. The window server level applies to the real id.
-            cg = ctypes.CDLL(
-                "/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight")
-            cg.CGSMainConnectionID.restype = ctypes.c_int
-            cg.CGSSetWindowLevel.argtypes = [
-                ctypes.c_int, ctypes.c_int, ctypes.c_int]
-            cg.CGSSetWindowLevel.restype = ctypes.c_int
-            cg.CGSSetWindowLevel(int(cg.CGSMainConnectionID()), wid, int(level))
+            windows = send(nsapp, sel(b"windows"))
+            if not windows:
+                return
+            send.restype = ctypes.c_ulong
+            send.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+            count = int(send(windows, sel(b"count")))
+            # The visible window can be a child of the GLFW window whose own
+            # windowNumber is 0. Setting the level on every window NSApp owns
+            # reaches the one the user sees.
+            for index in range(count):
+                send.restype = ctypes.c_void_p
+                send.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_ulong]
+                window = send(windows, sel(b"objectAtIndex:"), ctypes.c_ulong(index))
+                if not window:
+                    continue
+                send.restype = None
+                send.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_long]
+                send(window, sel(b"setLevel:"), ctypes.c_long(int(level)))
         except Exception:
             pass
 
