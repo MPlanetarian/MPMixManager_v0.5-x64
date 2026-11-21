@@ -467,12 +467,13 @@ class TestMacCompanionStacking(unittest.TestCase):
     def test_a_companion_is_ordered_below_the_host_and_does_not_take_focus(self):
         text = (ROOT / "scripts" / "mp_liquid_visualizer_metal.py").read_text(
             encoding="utf-8")
-        # A level below normal put the window behind Finder/Terminal too; the
-        # host's own CGWindowID is the correct anchor.
+        # The host and companion share level 1; the companion is ordered back
+        # inside that level, above Finder/Terminal and directly behind the host.
+        self.assertIn('"setLevel:"', text)
+        self.assertIn("c_long(1)", text)
         self.assertIn("CGSOrderWindow", text)
         self.assertIn("_sync_macos_host", text)
         self.assertIn("read_published_gui_window_id", text)
-        self.assertNotIn('"setLevel:"', text)
         self.assertIn("focus = GLFW_FALSE if companion else GLFW_TRUE", text)
 
     def test_a_free_window_still_comes_to_the_front(self):
