@@ -1507,7 +1507,7 @@ class OpenGLGlassHost:
         except Exception:
             return 0
 
-    def _set_window_level(self, level: int = 1) -> None:
+    def _order_visualizer_behind(self, level: int = 0) -> None:
         """Raise the glass host above normal windows.
 
         The companion sits at the same level and is ordered behind it. macOS
@@ -1516,41 +1516,29 @@ class OpenGLGlassHost:
         glass instead of behind unrelated apps.
         """
         try:
-            objc = ctypes.CDLL("/usr/lib/libobjc.A.dylib")
-            objc.objc_getClass.restype = ctypes.c_void_p
-            objc.objc_getClass.argtypes = [ctypes.c_char_p]
-            objc.sel_registerName.restype = ctypes.c_void_p
-            objc.sel_registerName.argtypes = [ctypes.c_char_p]
-            send = objc.objc_msgSend
-
-            def sel(name):
-                return ctypes.c_void_p(objc.sel_registerName(name))
-
-            send.restype = ctypes.c_void_p
-            send.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
-            nsapp = send(
-                ctypes.c_void_p(objc.objc_getClass(b"NSApplication")),
-                sel(b"sharedApplication"))
-            if not nsapp:
+            from liquid_player_visualizer import macos_window_for_pid
+            from liquid_visualizer_session import visualizer_pids
+            own = macos_window_for_pid(os.getpid())
+            if not own:
                 return
-            windows = send(nsapp, sel(b"windows"))
-            if not windows:
+            cg = ctypes.CDLL(
+                "/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight")
+            cg.CGSMainConnectionID.restype = ctypes.c_int
+            cg.CGSOrderWindow.argtypes = [
+                ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int]
+            cg.CGSOrderWindow.restype = ctypes.c_int
+            connection = int(cg.CGSMainConnectionID())
+            if not connection:
                 return
-            send.restype = ctypes.c_ulong
-            send.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
-            count = int(send(windows, sel(b"count")))
-            # The visible window can be a child of the GLFW window whose own
-            # windowNumber is 0. Setting the level on every window NSApp owns
-            # reaches the one the user sees.
-            for index in range(count):
-                send.restype = ctypes.c_void_p
-                send.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_ulong]
-                window = send(windows, sel(b"objectAtIndex:"), ctypes.c_ulong(index))
-                if not window:
-                    continue
-                send.restype = None
-                send.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_long]
-                send(window, sel(b"setLevel:"), ctypes.c_long(int(level)))
+            # The host owns the relative window, so the window server accepts
+            # ordering the companion immediately beneath it. Doing this from
+            # the companion's side was silently ignored on this macOS.
+            for visualizer_pid in visualizer_pids():
+                window = macos_window_for_pid(visualizer_pid)
+                if window:
+                    cg.CGSOrderWindow(connection, int(window[0]), -1,
+                                      int(own[0]))
+                    break
         except Exception:
             pass
 
@@ -1568,7 +1556,7 @@ class OpenGLGlassHost:
             else:
                 from liquid_player_visualizer import publish_liquid_player_window_geometry
                 publish_liquid_player_window_geometry(x, y, width, height, wid=wid)
-            self._set_window_level(1)
+            self._order_visualizer_behind()
         except Exception:
             pass
 

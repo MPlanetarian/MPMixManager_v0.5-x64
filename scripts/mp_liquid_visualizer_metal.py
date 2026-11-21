@@ -866,13 +866,10 @@ class LiquidVisualizerMetalRenderer(MonitorSpanMixin, RandomPresetMixin, PlayerB
         objc.send(nswindow, "setReleasedWhenClosed:", c_int(0), restype=None, argtypes=[c_int])
         objc.send(nswindow, "setOpaque:", c_int(0), restype=None, argtypes=[c_int])
         if getattr(self, "_bond_locked", False):
-            # The host and companion share level 1 (see the macOS host), which
-            # is above every normal app window. Ordering the two against each
-            # other inside that level keeps the companion immediately behind
-            # the host. A level below normal put it behind Finder and Terminal;
-            # CGSOrderWindow across two processes is ignored on this macOS.
-            objc.send(nswindow, "setLevel:", c_long(1), restype=None,
-                      argtypes=[c_long])
+            # Keep the normal level; the host orders this window directly
+            # beneath itself through the window server. A level below normal
+            # put it behind Finder/Terminal, and a level above normal covered
+            # the host, so neither can be the whole answer.
             objc.send(nswindow, "orderBack:", c_void_p(0), restype=None,
                       argtypes=[c_void_p])
         else:
@@ -1395,15 +1392,9 @@ class LiquidVisualizerMetalRenderer(MonitorSpanMixin, RandomPresetMixin, PlayerB
             # raises it, and the companion must stay its immediate neighbour.
             self._mac_host_wid = int(host_wid)
             self._order_below_host(int(host_wid))
-        nswindow = getattr(self, "_nswindow", None)
-        if nswindow:
-            try:
-                self._bridge.objc.send(nswindow, "setLevel:", c_long(1),
-                                       restype=None, argtypes=[c_long])
-                self._bridge.objc.send(nswindow, "orderBack:", c_void_p(0),
-                                       restype=None, argtypes=[c_void_p])
-            except Exception:
-                pass
+        # The host places this window directly beneath itself. Do not reorder
+        # here: orderBack would put it behind Finder/Terminal, and a level
+        # above normal would cover the host.
 
     def poll(self) -> bool:
         if not self._alive or not self._window:
