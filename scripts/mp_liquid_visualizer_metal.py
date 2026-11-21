@@ -1303,7 +1303,10 @@ class LiquidVisualizerMetalRenderer(MonitorSpanMixin, RandomPresetMixin, PlayerB
         the glass host can stay in front while the companion is immediately
         behind it, above every unrelated app.
         """
-        mine = self._window_number()
+        # NSWindow windowNumber reads 0 for this borderless window, so ask the
+        # window server for our own id as well as the host's.
+        own = _macos_window_for_pid(os.getpid())
+        mine = own[0] if own else self._window_number()
         if not mine or not host_wid:
             return
         for library in (
