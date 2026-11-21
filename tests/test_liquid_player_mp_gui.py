@@ -51,6 +51,8 @@ def _status():
 
 
 class TestLiquidPlayerMpGuiShortcut(unittest.TestCase):
+    @unittest.skipUnless(sys.platform == "darwin",
+                         "the macOS host imports fcntl/termios")
     def test_macos_opengl_player_child_is_marked_liquid_glass(self):
         import MP_Audio_Player_Liquid_Glass_OpenGL_macOS as host
 
@@ -220,7 +222,9 @@ class TestLiquidPlayerMpGuiShortcut(unittest.TestCase):
         self.assertEqual(cmd[0], "bash")
         self.assertTrue(str(cmd[1]).endswith("MP_Gui.sh"))
         self.assertEqual(cmd[2], "--keep-theme")
-        self.assertTrue(popen.call_args.kwargs.get("start_new_session"))
+        # POSIX detaches with start_new_session; Windows uses a flag.
+        self.assertTrue(popen.call_args.kwargs.get("start_new_session")
+                        or popen.call_args.kwargs.get("creationflags"))
 
     def test_launch_mp_gui_finds_the_script_beside_the_player(self):
         with patch.object(player.subprocess, "run", return_value=MagicMock(returncode=1)), \

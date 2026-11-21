@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **A Windows 10 sweep for the Mix Archive Manager menu** (`tests/test_windows_manager_menu.py`, `tests/test_liquid_player_mp_gui.py`):
+  - Parses the live `main_opts` array (37 actionable rows), proves every row has a dispatch branch (AI is the Shift+A keyboard row), and proves every helper those branches call is defined.
+  - Runs the manager's one-shot forms on Windows 10 through Git Bash: `--version`, `--help`, `--rescan-archive`, `--report-status`, `--beszel-status`, `--ollama-status`, the app-selection parser, the visualizer backend resolver, and the `38` Exit Manager action. Each must exit 0 with no traceback, shell syntax error, `command not found`, unbound variable, `NameError`, `TypeError`, or `AttributeError`.
+  - The macOS-only `fcntl` test now skips on Windows, and the launcher test accepts either `start_new_session` or the Windows creation flag.
 - **The setup can turn off the background MP Visualizer, and Settings can change it later** (`install.sh`, `config.env.example`, `MP_Gui.sh`, `scripts/launch_liquid_glass.sh`, `scripts/launch_*.bat`, `MP_Audio_Player_Liquid_Glass*.py`, `scripts/liquid_visualizer_session.py`, `Mix_Archive_Manager.sh`, `tests/test_visualizer_platform_and_fps.py`):
   - The setup asks **"Enable the MP Visualizer background window for MP Gui and MP Liquid Player?"** with the note **"(You might want to disable this if you are running on a Slow Graphics Card / System)"**, and writes `MP_VISUALIZER_COMPANION_ENABLED=0` when declined.
   - **Settings → MP Visualizer Background Window** (option 9) turns it back on or off without reinstalling. Both hosts, `MP_Gui.sh`, and the Windows launchers honour the key; an absent key keeps the historical default (enabled).
