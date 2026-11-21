@@ -1507,6 +1507,40 @@ class OpenGLGlassHost:
         except Exception:
             return 0
 
+    def _set_window_level(self, level: int = 1) -> None:
+        """Raise the glass host above normal windows.
+
+        The companion sits at the same level and is ordered behind it. macOS
+        ignores cross-process ``CGSOrderWindow`` in practice, so a shared level
+        above Finder/Terminal is what keeps the visualizer directly behind the
+        glass instead of behind unrelated apps.
+        """
+        try:
+            r = self.renderer
+            glfw = getattr(r, "_glfw", None)
+            window = getattr(r, "_window", None)
+            if not glfw or not window:
+                return
+            glfw.glfwGetCocoaWindow.argtypes = [ctypes.c_void_p]
+            glfw.glfwGetCocoaWindow.restype = ctypes.c_void_p
+            handle = (window if isinstance(window, ctypes.c_void_p)
+                      else ctypes.c_void_p(window))
+            nswindow = glfw.glfwGetCocoaWindow(handle)
+            if not nswindow:
+                return
+            objc = ctypes.CDLL("/usr/lib/libobjc.A.dylib")
+            objc.sel_registerName.restype = ctypes.c_void_p
+            objc.sel_registerName.argtypes = [ctypes.c_char_p]
+            objc.objc_msgSend.restype = None
+            objc.objc_msgSend.argtypes = [
+                ctypes.c_void_p, ctypes.c_void_p, ctypes.c_long]
+            sel = ctypes.c_void_p(objc.sel_registerName(b"setLevel:"))
+            ns_handle = (nswindow if isinstance(nswindow, ctypes.c_void_p)
+                         else ctypes.c_void_p(nswindow))
+            objc.objc_msgSend(ns_handle, sel, ctypes.c_long(int(level)))
+        except Exception:
+            pass
+
     def _publish_window_geometry(self) -> None:
         """Record the host rectangle so the macOS companion can match it."""
         if self.mode == "TRACKLIST" or self.renderer is None:
@@ -1521,6 +1555,7 @@ class OpenGLGlassHost:
             else:
                 from liquid_player_visualizer import publish_liquid_player_window_geometry
                 publish_liquid_player_window_geometry(x, y, width, height, wid=wid)
+            self._set_window_level(1)
         except Exception:
             pass
 

@@ -866,12 +866,13 @@ class LiquidVisualizerMetalRenderer(MonitorSpanMixin, RandomPresetMixin, PlayerB
         objc.send(nswindow, "setReleasedWhenClosed:", c_int(0), restype=None, argtypes=[c_int])
         objc.send(nswindow, "setOpaque:", c_int(0), restype=None, argtypes=[c_int])
         if getattr(self, "_bond_locked", False):
-            # Keep the companion at the normal level and order it directly
-            # beneath the host once the host publishes its window number
-            # (_sync_macos_host). A window level below normal put it behind
-            # Finder and Terminal too, so the glass showed those instead of
-            # the visualizer. orderBack here only keeps it from covering the
-            # host during the first frame.
+            # The host and companion share level 1 (see the macOS host), which
+            # is above every normal app window. Ordering the two against each
+            # other inside that level keeps the companion immediately behind
+            # the host. A level below normal put it behind Finder and Terminal;
+            # CGSOrderWindow across two processes is ignored on this macOS.
+            objc.send(nswindow, "setLevel:", c_long(1), restype=None,
+                      argtypes=[c_long])
             objc.send(nswindow, "orderBack:", c_void_p(0), restype=None,
                       argtypes=[c_void_p])
         else:
@@ -1394,6 +1395,15 @@ class LiquidVisualizerMetalRenderer(MonitorSpanMixin, RandomPresetMixin, PlayerB
             # raises it, and the companion must stay its immediate neighbour.
             self._mac_host_wid = int(host_wid)
             self._order_below_host(int(host_wid))
+        nswindow = getattr(self, "_nswindow", None)
+        if nswindow:
+            try:
+                self._bridge.objc.send(nswindow, "setLevel:", c_long(1),
+                                       restype=None, argtypes=[c_long])
+                self._bridge.objc.send(nswindow, "orderBack:", c_void_p(0),
+                                       restype=None, argtypes=[c_void_p])
+            except Exception:
+                pass
 
     def poll(self) -> bool:
         if not self._alive or not self._window:
