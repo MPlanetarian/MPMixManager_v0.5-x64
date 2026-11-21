@@ -60,6 +60,19 @@ class TestLiquidPlayerMpGuiShortcut(unittest.TestCase):
         self.assertEqual(env["MP_LIQUID_GLASS"], "1")
         self.assertEqual(env["MP_LIQUID_GLASS_BACKEND"], "opengl")
 
+    def test_macos_host_defines_the_grid_helper_it_uses(self):
+        """A missing helper crashed the macOS host, leaving only the visualizer.
+
+        The constructor and the follow-child-size path both call
+        ``_mode_grid``; the file used to call it without defining or importing
+        it, so MP Gui and the player exited with NameError after the companion
+        window had already opened.
+        """
+        text = (ROOT / "MP_Audio_Player_Liquid_Glass_OpenGL_macOS.py").read_text(
+            encoding="utf-8")
+        self.assertIn("def _mode_grid(", text)
+        self.assertGreaterEqual(text.count("_mode_grid("), 3)
+
     def test_g_opens_mp_gui_only_inside_liquid_player(self):
         ui = _ui()
         with patch.dict(os.environ, {"MP_LIQUID_GLASS": "1"}), \

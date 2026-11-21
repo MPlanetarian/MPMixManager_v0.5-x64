@@ -106,8 +106,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`manager.sh` is a CLI launcher again and works in Git Bash** (`manager.sh`, `scripts/resolve_mp_python.sh`, `MP_Gui.sh`):
   - It always opens `Mix_Archive_Manager.sh`; the Liquid Glass GUI keeps its own `MP_Gui.sh`/MP Gui shortcut.
   - The shared Python resolver now also checks `BASE_DIR/venv/Scripts/python.exe`, so MP Gui no longer picks an unrelated Anaconda Python and fails to import GLFW/PyOpenGL.
-- **The macOS companion visualizer stays behind MP Gui / the Liquid Player** (`scripts/mp_liquid_visualizer_metal.py`, `tests/test_mp_metal_visualizer.py`):
-  - The owned companion is created without focus and at a window level just below normal, so the host (a normal-level window in another process) is always in front. A free visualizer still comes to the front normally.
+- **MP Gui and MP Liquid Player load on macOS again** (`MP_Audio_Player_Liquid_Glass_OpenGL_macOS.py`, `scripts/mp_liquid_visualizer_metal.py`, `tests/test_liquid_player_mp_gui.py`, `tests/test_mp_metal_visualizer.py`):
+  - **Root cause of "only the visualizer shows".** The macOS OpenGL host called `_mode_grid()` in its constructor and follow-size path without defining or importing it, so it exited with `NameError: name '_mode_grid' is not defined` immediately after the companion visualizer had opened. The helper is now defined beside the grid constants.
+  - **Stacking corrected as well.** The owned Metal companion is created without focus and at a window level just below normal, so the host (a normal-level window in another process) stays in front. A free visualizer still comes to the front normally.
 - **The installer log continues after reading the README** (`scripts/mp_show_readme.sh`, `tests/test_installer_readme_offer.py`):
   - Git Bash rewrote `cmd.exe /c` into a Windows path, so it launched an interactive `cmd.exe` prompt over the installer instead of `start`. The Windows opener now uses `//c`, which survives the MSYS rewrite. The helper also says the installation log continues in the window.
 - **Dynamic Liquid Glass animates the panels, not only the page background** (`scripts/mix_web_companion.py`, `tests/test_web_companion_autoplay.py`):

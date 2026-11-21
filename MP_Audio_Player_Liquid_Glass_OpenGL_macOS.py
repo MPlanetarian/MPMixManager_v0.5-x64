@@ -384,6 +384,24 @@ CHAR_H = 18
 VERTICAL_COLS, VERTICAL_ROWS = 56, 52
 
 
+def _mode_grid(mode):
+    """Terminal grid for a window mode.
+
+    The Linux/Windows OpenGL host defines this beside its panel geometry; this
+    macOS host used the helper without carrying it, so the constructor raised
+    ``NameError: _mode_grid`` and only the companion visualizer appeared.
+    """
+    if mode == "TRACKLIST":
+        return 100, 35
+    if mode == "VERTICAL":
+        return VERTICAL_COLS, VERTICAL_ROWS
+    if mode == "MINI":
+        return 74, 14
+    if mode == "MICRO":
+        return 74, 7
+    return COLS, ROWS
+
+
 def player_panel_rects(cols=COLS, rows=ROWS, char_w=CHAR_W, char_h=CHAR_H, origin_x=0, origin_y=0, mode="NORMAL"):
     def box(col, row, box_cols, box_rows):
         return (
