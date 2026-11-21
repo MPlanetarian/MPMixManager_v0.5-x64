@@ -332,7 +332,8 @@ class LiquidPlayerVisualizerModeTests(unittest.TestCase):
         self.assertEqual(vis.march_target_size(1094, 778, platform="linux"), (1094, 778))
         self.assertEqual(vis.march_target_size(100, 80, platform="linux"), (100, 80))
         self.assertEqual(vis.march_target_size(700, 700, platform="win32"), (700, 700))
-        self.assertEqual(vis.march_target_size(1920, 1080, platform="win32"), (960, 540))
+        self.assertEqual(vis.march_target_size(1920, 1080, platform="win32"), (1920, 1080))
+        self.assertEqual(vis.march_target_size(2560, 1440, platform="win32"), (1920, 1080))
         self.assertEqual(vis.march_target_size(1094, 734, platform="darwin"), (768, 515))
         # The unfolded shader fallback asks for the old cap explicitly.
         self.assertEqual(vis.march_target_size(700, 700, long_edge=224), (224, 224))
@@ -341,6 +342,21 @@ class LiquidPlayerVisualizerModeTests(unittest.TestCase):
             self.assertEqual(vis.march_target_size(2784, 1685, platform="linux"), (512, 310))
         finally:
             os.environ.pop("MP_VISUALIZER_GL_LONG_EDGE", None)
+
+    def test_config_env_can_set_the_resolution(self):
+        """The desktop setting lives in config.env, not only the environment."""
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = Path(tmp) / "config.env"
+            cfg.write_text("MP_VISUALIZER_GL_LONG_EDGE=1280\n", encoding="utf-8")
+            os.environ.pop("MP_VISUALIZER_GL_LONG_EDGE", None)
+            os.environ["MP_CONFIG_ENV"] = str(cfg)
+            try:
+                self.assertEqual(
+                    vis.march_target_size(1920, 1080, platform="win32"),
+                    (1280, 720),
+                )
+            finally:
+                os.environ.pop("MP_CONFIG_ENV", None)
 
     def test_windows_renders_with_the_folded_preset_module(self):
         """Windows used to skip the folded modules and cap the march at 224.

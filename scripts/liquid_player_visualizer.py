@@ -290,15 +290,14 @@ def write_player_visualizer_state(active: bool, preset: Dict[str, Any],
 # is 768, so a 1094×734 window is drawn at 768×515 and scaled up. A
 # full-window march of this shader is about 9 fps through MoltenVK.
 # Linux marches at the framebuffer size, one raymarch pixel per window
-# pixel, so the picture stays sharp. Windows used to keep a 224 cap because
-# only the unfolded thirteen-scene shader was available there; the shipped
-# per-preset SPIR-V modules now fold on Windows too, so the march runs at
-# 960 and a normal 700×700 window is drawn at its native size.
-# MP_VISUALIZER_GL_LONG_EDGE still overrides the long edge.
+# pixel, so the picture stays sharp. Windows now does the same up to 1920:
+# the shipped folded modules make the full 1080p march practical, and the
+# default 700×700 window is never upscaled.
+# MP_VISUALIZER_GL_LONG_EDGE (or config.env) still overrides the long edge.
 # MP_VISUALIZER_GL_MARCH_STEPS clamps to 24..84.
 MACOS_FULLSCREEN_SIZE = (1920, 1080)
 _MACOS_LONG_EDGE = 768
-_WINDOWS_LONG_EDGE = 960
+_WINDOWS_LONG_EDGE = 1920
 _UNFOLDED_LONG_EDGE = 224
 _FULL_MARCH_STEPS = 84
 _MACOS_MARCH_STEPS = 64
@@ -317,8 +316,24 @@ void main() {
 """
 
 
+def _config_env_value(name: str) -> str:
+    """Read one key from the shared config.env when the environment is empty."""
+    path = Path(os.environ.get("MP_CONFIG_ENV", "") or
+                (Path.home() / ".config" / "mix-manager" / "config.env"))
+    try:
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            line = line.strip()
+            if line.startswith(name + "="):
+                return line.split("=", 1)[1].strip().strip("'\"")
+    except OSError:
+        pass
+    return ""
+
+
 def _env_int(name: str, default: int, low: int, high: int) -> int:
     raw = (os.environ.get(name) or "").strip()
+    if not raw:
+        raw = _config_env_value(name)
     if not raw:
         return default
     try:
@@ -976,7 +991,8 @@ def march_target_size(
     """
     host = sys.platform if platform is None else platform
     width_i, height_i = max(2, int(width)), max(2, int(height))
-    if long_edge is not None or bool((os.environ.get("MP_VISUALIZER_GL_LONG_EDGE") or "").strip()):
+    configured_edge = (os.environ.get("MP_VISUALIZER_GL_LONG_EDGE") or "").strip() or _config_env_value("MP_VISUALIZER_GL_LONG_EDGE")
+    if long_edge is not None or configured_edge:
         cap = macos_visualizer_long_edge() if long_edge is None else max(160, int(long_edge))
         return _scale_long_edge(width_i, height_i, cap)
     if host == "darwin":
@@ -1031,7 +1047,10 @@ def visualizer_internal_size(
         macos = sys.platform == "darwin"
     # An explicit long edge applies on every platform, as it already does for the
     # Vulkan march. Without one, only macOS caps the march.
-    explicit_cap = long_edge is not None or bool((os.environ.get("MP_VISUALIZER_GL_LONG_EDGE") or "").strip())
+    explicit_cap = long_edge is not None or bool(
+        (os.environ.get("MP_VISUALIZER_GL_LONG_EDGE") or "").strip()
+        or _config_env_value("MP_VISUALIZER_GL_LONG_EDGE")
+    )
     if not macos and not explicit_cap:
         return fw_i, fh_i
     if explicit_cap:
