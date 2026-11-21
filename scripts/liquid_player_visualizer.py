@@ -574,6 +574,98 @@ def read_published_gui_window_geometry() -> Optional[tuple]:
     return _read_published_window_geometry(gui_window_size_path())
 
 
+def macos_window_for_pid(pid: int):
+    """(CGWindowID, x, y, width, height) for the largest normal window of pid.
+
+    macOS returns 0 from ``NSWindow windowNumber`` for the glass host's
+    borderless window, and level changes aimed at that NSWindow are ignored.
+    The window server's on-screen list always has the visible window's real
+    number and rectangle, which is what the companion must anchor to.
+    """
+    if sys.platform != "darwin" or int(pid or 0) <= 0:
+        return None
+    try:
+        import ctypes
+
+        class CGPoint(ctypes.Structure):
+            _fields_ = [("x", ctypes.c_double), ("y", ctypes.c_double)]
+
+        class CGSize(ctypes.Structure):
+            _fields_ = [("width", ctypes.c_double), ("height", ctypes.c_double)]
+
+        class CGRect(ctypes.Structure):
+            _fields_ = [("origin", CGPoint), ("size", CGSize)]
+
+        cg = ctypes.CDLL(
+            "/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics")
+        cf = ctypes.CDLL(
+            "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")
+        cg.CGWindowListCopyWindowInfo.restype = ctypes.c_void_p
+        cg.CGWindowListCopyWindowInfo.argtypes = [ctypes.c_uint32, ctypes.c_uint32]
+        cg.CGRectMakeWithDictionaryRepresentation.restype = ctypes.c_bool
+        cg.CGRectMakeWithDictionaryRepresentation.argtypes = [
+            ctypes.c_void_p, ctypes.POINTER(CGRect)]
+        cf.CFArrayGetCount.restype = ctypes.c_long
+        cf.CFArrayGetCount.argtypes = [ctypes.c_void_p]
+        cf.CFArrayGetValueAtIndex.restype = ctypes.c_void_p
+        cf.CFArrayGetValueAtIndex.argtypes = [ctypes.c_void_p, ctypes.c_long]
+        cf.CFDictionaryGetValue.restype = ctypes.c_void_p
+        cf.CFDictionaryGetValue.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        cf.CFNumberGetValue.restype = ctypes.c_bool
+        cf.CFNumberGetValue.argtypes = [
+            ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p]
+        cf.CFRelease.argtypes = [ctypes.c_void_p]
+        cf.CFRelease.restype = None
+
+        def key(name):
+            return ctypes.c_void_p.in_dll(cg, name).value
+
+        def number(value, kind=4):
+            out = ctypes.c_int64()
+            if not value or not cf.CFNumberGetValue(
+                    value, kind, ctypes.byref(out)):
+                return 0
+            return int(out.value)
+
+        keys = {
+            "pid": key("kCGWindowOwnerPID"),
+            "layer": key("kCGWindowLayer"),
+            "number": key("kCGWindowNumber"),
+            "bounds": key("kCGWindowBounds"),
+        }
+        array = cg.CGWindowListCopyWindowInfo(1 | 16, 0)
+        if not array:
+            return None
+        best = None
+        try:
+            for index in range(cf.CFArrayGetCount(array)):
+                record = cf.CFArrayGetValueAtIndex(array, index)
+                if not record:
+                    continue
+                if number(cf.CFDictionaryGetValue(record, keys["pid"]), 3) != int(pid):
+                    continue
+                if number(cf.CFDictionaryGetValue(record, keys["layer"]), 3) not in (0, 1, 2):
+                    continue
+                bounds = cf.CFDictionaryGetValue(record, keys["bounds"])
+                rect = CGRect()
+                if not bounds or not cg.CGRectMakeWithDictionaryRepresentation(
+                        bounds, ctypes.byref(rect)):
+                    continue
+                width, height = int(rect.size.width), int(rect.size.height)
+                if width < 200 or height < 200:
+                    continue
+                wid = number(cf.CFDictionaryGetValue(record, keys["number"]))
+                area = width * height
+                if best is None or area > best[0]:
+                    best = (area, wid, int(rect.origin.x), int(rect.origin.y),
+                            width, height)
+        finally:
+            cf.CFRelease(array)
+        return best[1:] if best else None
+    except Exception:
+        return None
+
+
 def _read_published_window_geometry(path: Path) -> Optional[tuple]:
     """(x, y, width, height) for a publisher that is still running."""
     record = _read_published_window_record(path)

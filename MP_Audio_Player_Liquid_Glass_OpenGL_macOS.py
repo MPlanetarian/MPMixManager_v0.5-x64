@@ -1516,28 +1516,21 @@ class OpenGLGlassHost:
         glass instead of behind unrelated apps.
         """
         try:
-            r = self.renderer
-            glfw = getattr(r, "_glfw", None)
-            window = getattr(r, "_window", None)
-            if not glfw or not window:
+            from liquid_player_visualizer import macos_window_for_pid
+            window = macos_window_for_pid(os.getpid())
+            if not window:
                 return
-            glfw.glfwGetCocoaWindow.argtypes = [ctypes.c_void_p]
-            glfw.glfwGetCocoaWindow.restype = ctypes.c_void_p
-            handle = (window if isinstance(window, ctypes.c_void_p)
-                      else ctypes.c_void_p(window))
-            nswindow = glfw.glfwGetCocoaWindow(handle)
-            if not nswindow:
-                return
-            objc = ctypes.CDLL("/usr/lib/libobjc.A.dylib")
-            objc.sel_registerName.restype = ctypes.c_void_p
-            objc.sel_registerName.argtypes = [ctypes.c_char_p]
-            objc.objc_msgSend.restype = None
-            objc.objc_msgSend.argtypes = [
-                ctypes.c_void_p, ctypes.c_void_p, ctypes.c_long]
-            sel = ctypes.c_void_p(objc.sel_registerName(b"setLevel:"))
-            ns_handle = (nswindow if isinstance(nswindow, ctypes.c_void_p)
-                         else ctypes.c_void_p(nswindow))
-            objc.objc_msgSend(ns_handle, sel, ctypes.c_long(int(level)))
+            wid = int(window[0])
+            # NSWindow setLevel: on the GLFW pointer is ignored here: the
+            # pointer's windowNumber is 0 and the visible window is a
+            # different one. The window server level applies to the real id.
+            cg = ctypes.CDLL(
+                "/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight")
+            cg.CGSMainConnectionID.restype = ctypes.c_int
+            cg.CGSSetWindowLevel.argtypes = [
+                ctypes.c_int, ctypes.c_int, ctypes.c_int]
+            cg.CGSSetWindowLevel.restype = ctypes.c_int
+            cg.CGSSetWindowLevel(int(cg.CGSMainConnectionID()), wid, int(level))
         except Exception:
             pass
 

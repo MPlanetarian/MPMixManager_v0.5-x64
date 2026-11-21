@@ -118,7 +118,7 @@ def _macos_window_for_pid(pid: int):
                     continue
                 if number(cf.CFDictionaryGetValue(record, keys["pid"]), 3) != int(pid):
                     continue
-                if number(cf.CFDictionaryGetValue(record, keys["layer"]), 3) != 0:
+                if number(cf.CFDictionaryGetValue(record, keys["layer"]), 3) not in (0, 1, 2):
                     continue
                 bounds = cf.CFDictionaryGetValue(record, keys["bounds"])
                 rect = CGRect()
