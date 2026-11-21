@@ -38,7 +38,7 @@ def _pgrep(pattern: str) -> list[int]:
         try:
             out = subprocess.check_output(
                 ["powershell.exe", "-NoProfile", "-Command",
-                 f'Get-CimInstance Win32_Process | Where-Object {{ $_.CommandLine -like "*{pattern.split("|")[0]}*" -or $_.CommandLine -like "*{pattern.split("|")[-1]}*" }} | Select-Object -ExpandProperty ProcessId'],
+                 f'Get-CimInstance Win32_Process | Where-Object {{ $_.Name -like "python*" -and ($_.CommandLine -like "*{pattern.split("|")[0]}*" -or $_.CommandLine -like "*{pattern.split("|")[-1]}*") }} | Select-Object -ExpandProperty ProcessId'],
                 stderr=subprocess.DEVNULL, text=True, timeout=4, **_quiet_kwargs(),
             )
         except (OSError, subprocess.SubprocessError):

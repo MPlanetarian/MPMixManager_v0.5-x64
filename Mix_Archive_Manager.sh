@@ -726,6 +726,7 @@ _resize_pending() {
 local win_l win_c
 if _win_console_size win_l win_c; then 
     if [[ "$win_l" != "${_TERM_LINES:-}" || "$win_c" != "${_TERM_COLS:-}" ]]; then 
+        [[ "${MP_MENU_TIMING:-0}" == "1" ]] && printf 'resize-mismatch win=%sx%s term=%sx%s\n' "$win_l" "$win_c" "${_TERM_LINES:-}" "${_TERM_COLS:-}" >> "$HOME/.config/mix-manager/menu_timing.log"
         _TERM_RESIZED=1
         return 0
     fi
@@ -770,7 +771,7 @@ _nav_just_arrowed() {
     return 1
 }
 _nav_mark_console() {
-[[ -n "${_NAV_WIN_CON:-}" ]] && return 0; case "$(tty 2>/dev/null)" in /dev/cons*) _NAV_WIN_CON=1 ;; *) _NAV_WIN_CON=0 ;; esac
+[[ -n "${_NAV_WIN_CON:-}" ]] && return 0; if [[ "${OS_TYPE:-}" == "windows" || "${OS_TYPE:-}" == "wsl" || "${UNAME_S:-}" =~ (MINGW|MSYS|CYGWIN) ]]; then _NAV_WIN_CON=1; return 0; fi; case "$(tty 2>/dev/null)" in /dev/cons*) _NAV_WIN_CON=1 ;; *) _NAV_WIN_CON=0 ;; esac
 }
 _nav_take_ready() {
 local _dest="$1" _ch; _nav_mark_console; if [[ -n "$_nav_pending" ]]; then _ch="${_nav_pending:0:1}"; _nav_pending="${_nav_pending:1}"; elif IFS= read -rsn1 -t 0.001 _ch; then [[ -z "$_ch" ]] && return 2; else return 1; fi; printf -v "$_dest" '%s' "$_ch"
@@ -995,15 +996,25 @@ read_nav_key() {
     
     # A key from a game controller is taken before the keyboard.
     if _gamepad_take _k; then _emit_key "$_k"; return 0; fi
-    # Initial read for the first byte
-    _nav_pull 0.05 _k
-    read_rc=$?
+    # Initial read for the first byte. A timed read on the Windows console
+    # only wakes on a polling tick (50-120 ms, often more), which is exactly
+    # the menu's input delay. Block instead: conhost wakes the reader as soon
+    # as a key arrives. TICKs are not needed while idle on Windows.
+    if [[ "${_NAV_WIN_CON:-0}" -eq 1 ]]; then
+        IFS= read -rsn1 _k
+        read_rc=$?
+    else
+        _nav_pull 0.05 _k
+        read_rc=$?
+    fi
 
     if [[ "$read_rc" -ne 0 ]]; then
         if _resize_pending; then
+            [[ "${MP_MENU_TIMING:-0}" == "1" ]] && printf 'timeout-resize read_rc=%s\n' "$read_rc" >> "$HOME/.config/mix-manager/menu_timing.log"
             _emit_key "RESIZE"
             return 0
         fi
+        [[ "${MP_MENU_TIMING:-0}" == "1" ]] && printf 'timeout-tick read_rc=%s\n' "$read_rc" >> "$HOME/.config/mix-manager/menu_timing.log"
         if [[ "$read_rc" -gt 128 ]]; then
             _emit_key "TICK"
             return 0
@@ -2397,11 +2408,18 @@ _compose_menu_status() {
 local _out="$1"; local cur_key="" cur_lbl="" cur_ext=""; local line=""; IFS='|' read -r cur_key cur_lbl cur_ext <<< "${_opts_ref[$cur_idx]}"; if [ "${search_mode:-0}" -eq 1 ] || [ -n "${search_query:-}" ]; then line="  ${BOLD}${CYAN}Filter / Search:${NC} ${MENU_WHITE}${BOLD}[${search_query}█]${NC} ▏ [Option ${cur_key}: ${cur_lbl}] ▏ (Type to search, ↑/↓ Navigate, Enter: Select, Esc: Clear)\033[K"; elif [ -n "$typed_buffer" ]; then if [ -n "$menu_title" ]; then line="  ${BOLD}${CYAN}Selection:${NC}${MENU_WHITE} ${BOLD}${typed_buffer} ▏ (Press Enter to confirm, Esc to return)\033[K"; else line="  ${BOLD}${CYAN}Selection:${NC}${MENU_WHITE} ${BOLD}${typed_buffer} ▏ (Press Enter to confirm, 'q' to exit)\033[K"; fi; else if [ -n "$menu_title" ]; then line="  ${BOLD}${CYAN}Selection:${NC}${MENU_WHITE} [Option ${cur_key}: ${cur_lbl}] ▏ [↑/↓ to Navigate, [/] to Search, Enter to Select, Esc to Return]\033[K"; else line="  ${BOLD}${CYAN}Selection:${NC}${MENU_WHITE} [Option ${cur_key}: ${cur_lbl}] ▏ [↑/↓ to Navigate, [/] to Search, Enter to Select, ${_menu_exit_hint}]\033[K"; fi; fi; printf -v "$_out" '%s' "$line"
 }
 _menu_line_plain() {
-local idx="$1"; local _out="$2"; local o_key="" o_label="" o_extra=""; IFS='|' read -r o_key o_label o_extra <<< "${_opts_ref[$idx]}"; local key_formatted=""; printf -v key_formatted "[%2s]" "$o_key"; local extra_display=""; local _fitted_extra=""; _fitted_extra="$(_fit_menu_extra "$o_key" "$o_label" "$o_extra" "$(( box_w + 2 ))")"; printf -v "$_out" '%s' "     ${MENU_INK}${BOLD}${key_formatted}${NC}${MENU_INK} ${o_label}${extra_display}\033[K"
+local idx="$1"; local _out="$2"; local o_key="" o_label="" o_extra=""; IFS='|' read -r o_key o_label o_extra <<< "${_opts_ref[$idx]}"; local key_formatted=""; printf -v key_formatted "[%2s]" "$o_key"; local extra_display=""; printf -v "$_out" '%s' "     ${MENU_INK}${BOLD}${key_formatted}${NC}${MENU_INK} ${o_label}${extra_display}\033[K"
 }
-_menu_fast_paint_selection() {
+_menu_fast_paint_selection_impl() {
 local old_idx="$1"; [ "${_menu_fast_ok:-0}" -eq 1 ] || return 1; if [ "${_MS_ON:-0}" -eq 1 ]; then _ms_fast_paint_selection "$old_idx" && return 0; return 1; fi; [[ "${_TERM_LINES:-}" =~ ^[0-9]+$ ]] || return 1; [ "$_menu_status_row" -ge 1 ] && [ "$_menu_status_row" -lt "$_TERM_LINES" ] || return 1; [ "${_menu_item_row[$old_idx]:-0}" -ge 1 ] && [ "${_menu_item_row[$old_idx]}" -lt "$_TERM_LINES" ] || return 1; [ "${_menu_item_row[$cur_idx]:-0}" -ge 1 ] && [ "${_menu_item_row[$cur_idx]}" -lt "$_TERM_LINES" ] || return 1; [[ "${view_top:-}" =~ ^[0-9]+$ && "${view_end:-}" =~ ^[0-9]+$ ]] || return 1; [ -n "${_menu_item_row[$old_idx]:-}" ] || return 1; [ -n "${_menu_item_row[$cur_idx]:-}" ] || return 1; [ "$cur_idx" -ge "$view_top" ] && [ "$cur_idx" -le "$view_end" ] || return 1; [ "$old_idx" -ge "$view_top" ] && [ "$old_idx" -le "$view_end" ] || return 1; local plain sel status; _menu_line_plain "$old_idx" plain
 IFS='|' read -r o_key o_label o_extra <<< "${_opts_ref[$cur_idx]}"; highlight_menu_line "$o_key" "$o_label" "$o_extra" "${selectable_map[$cur_idx]:-0}" sel "$box_w"; _compose_menu_status status; printf '\033[?25l\033[?12l\033[?7l\033[0m\033[%s;1H%b\033[0m\033[%s;1H%b\033[0m\033[%s;1H%b\r\033[?25l' "${_menu_item_row[$old_idx]}" "$plain" "${_menu_item_row[$cur_idx]}" "$sel" "${_menu_status_row}" "$status"; return 0
+}
+_menu_fast_paint_selection() {
+    local _mt0="" _mrc=0
+    [[ "${MP_MENU_TIMING:-0}" == "1" ]] && _mt0="$(date +%s%N)"
+    _menu_fast_paint_selection_impl "$@" || _mrc=$?
+    [[ "${MP_MENU_TIMING:-0}" == "1" ]] && printf 'paint %s rc=%s\n' "$(( ($(date +%s%N) - _mt0) / 1000000 ))" "$_mrc" >> "$HOME/.config/mix-manager/menu_timing.log"
+    return "$_mrc"
 }
 _menu_mouse_row_to_idx() {
     local _row="$1" _dest="$2" i
@@ -2605,7 +2623,7 @@ printf -v l1_sp '%*s' "$l1_pad" ''; player_banner+="  ${BOLD}${MAGENTA}│${NC} 
         while [ "$_gap_n" -gt 0 ]; do frame_buf+="\033[K\n"; _menu_row=$((_menu_row + 1)); _gap_n=$((_gap_n - 1)); done
     fi;
     _menu_item_row[$idx]=$((_menu_row++)); if [ "$o_key" = "SECTION" ]; then local sec_rem=$(( inner_w - ${#o_label} - 8 )); [ "$sec_rem" -lt 4 ] && sec_rem=4; local sec_dashes; printf -v sec_dashes '%*s' "$sec_rem" ''; sec_dashes="${sec_dashes// /─}"; frame_buf+="  ${BOLD}${BLUE}─── [ ${o_label} ] ${sec_dashes}\033[K${NC}\n"; continue; elif [ "$o_key" = "SEP" ]; then frame_buf+="  ${BOLD}${BLUE}${menu_rule}\033[K${NC}\n"; continue; fi; if [ "$idx" -eq "$cur_idx" ]; then local sel_color_idx="${selectable_map[$cur_idx]:-0}"; local h_line=""; highlight_menu_line "$o_key" "$o_label" "$o_extra" "$sel_color_idx" h_line "$box_w"; frame_buf+="${h_line}\n"; else local key_formatted; printf -v key_formatted "[%2s]" "$o_key"; local key_display="${MENU_INK}${BOLD}${key_formatted}${NC}"; local label_display="${MENU_INK}${o_label}"; local extra_display=""; local _fitted_extra=""; _fitted_extra="$(_fit_menu_extra "$o_key" "$o_label" "$o_extra" "$(( box_w + 2 ))")"; [ -n "$_fitted_extra" ] && extra_display="${MENU_INK}  ${_fitted_extra}"
-frame_buf+="     ${key_display} ${label_display}${extra_display}\033[K\n"; fi; done; _menu_status_row=$((_menu_row + 2)); _menu_fast_ok=1; local remaining_below=$(( total_opts - 1 - view_end )); if [ "$remaining_below" -gt 0 ]; then frame_buf+="  ${BOLD}${YELLOW}▼  (${remaining_below} more option$([ "$remaining_below" -gt 1 ] && echo "s") below - press ↓ to scroll)\033[K${NC}\n"; else frame_buf+="\033[K\n"; fi; frame_buf+="  ${BOLD}${BLUE}${menu_rule}\033[K${NC}\n"; frame_buf+="$_status_line"; if [ "$frame_buf" != "$_last_menu_frame" ]; then _last_menu_frame="$frame_buf"; printf '\033[?25l\033[?12l\033[?7l\033[H%b\033[J\r\033[?25l' "$frame_buf"; else printf '\033[?25l\033[?12l\033[?7l'; fi; if [ "${STARTUP_AUTOPLAY_EXECUTED:-0}" -eq 0 ]; then run_deferred_startup; fi; _MENU_FRAME_FRESH=1; fi; fi; if [ "${_ARROW_HOLD:-0}" -eq 1 ]; then _defer_buffered_vertical_arrows; _ARROW_HOLD=0; fi; local key_action=""; read_nav_key key_action; if [ "$key_action" != "TICK" ]; then _MENU_FRAME_FRESH=0; _LAST_NAV_TIME="${SECONDS:-0}"; if [ "$_IS_BREATHING" -eq 1 ]; then _IS_BREATHING=0; _BREATH_STEP=0; _BREATH_TICK_DIV=0; fi; fi; case "$key_action" in MOUSE:*) if _menu_handle_mouse "$key_action"; then if [ "${_MENU_MOUSE_ACTIVATE:-0}" -eq 1 ]; then cleanup_submenu_screen; clear; if [ "$search_mode" -eq 1 ] || [ -n "$search_query" ]; then IFS='|' read -r sel_key _ _ <<< "${_opts_ref[$cur_idx]}"; REPLY="$sel_key"; elif [ -n "$typed_buffer" ]; then REPLY="$typed_buffer"; else IFS='|' read -r sel_key _ _ <<< "${_opts_ref[$cur_idx]}"; REPLY="$sel_key"; fi; return 0; fi; _MENU_FRAME_FRESH=0; fi; continue ;; MOUSE_RELEASE) continue ;; TOGGLE_FULLSCREEN) toggle_manager_fullscreen; _TERM_RESIZED=1; last_term_lines=0; _last_menu_frame=""; printf '\033[?25l\033[?12l\033[?7l'; continue ;;
+frame_buf+="     ${key_display} ${label_display}${extra_display}\033[K\n"; fi; done; _menu_status_row=$((_menu_row + 2)); _menu_fast_ok=1; local remaining_below=$(( total_opts - 1 - view_end )); if [ "$remaining_below" -gt 0 ]; then frame_buf+="  ${BOLD}${YELLOW}▼  (${remaining_below} more option$([ "$remaining_below" -gt 1 ] && echo "s") below - press ↓ to scroll)\033[K${NC}\n"; else frame_buf+="\033[K\n"; fi; frame_buf+="  ${BOLD}${BLUE}${menu_rule}\033[K${NC}\n"; frame_buf+="$_status_line"; if [ "$frame_buf" != "$_last_menu_frame" ]; then _last_menu_frame="$frame_buf"; printf '\033[?25l\033[?12l\033[?7l\033[H%b\033[J\r\033[?25l' "$frame_buf"; else printf '\033[?25l\033[?12l\033[?7l'; fi; if [ "${STARTUP_AUTOPLAY_EXECUTED:-0}" -eq 0 ]; then run_deferred_startup; fi; _MENU_FRAME_FRESH=1; fi; fi; if [ "${_ARROW_HOLD:-0}" -eq 1 ]; then _defer_buffered_vertical_arrows; _ARROW_HOLD=0; fi; local key_action=""; local _mr0=""; [[ "${MP_MENU_TIMING:-0}" == "1" ]] && _mr0="$(date +%s%N)"; read_nav_key key_action; [[ "${MP_MENU_TIMING:-0}" == "1" ]] && printf 'read %s key=%s\n' "$(( ($(date +%s%N) - _mr0) / 1000000 ))" "$key_action" >> "$HOME/.config/mix-manager/menu_timing.log"; if [ "$key_action" != "TICK" ]; then _MENU_FRAME_FRESH=0; _LAST_NAV_TIME="${SECONDS:-0}"; if [ "$_IS_BREATHING" -eq 1 ]; then _IS_BREATHING=0; _BREATH_STEP=0; _BREATH_TICK_DIV=0; fi; fi; case "$key_action" in MOUSE:*) if _menu_handle_mouse "$key_action"; then if [ "${_MENU_MOUSE_ACTIVATE:-0}" -eq 1 ]; then cleanup_submenu_screen; clear; if [ "$search_mode" -eq 1 ] || [ -n "$search_query" ]; then IFS='|' read -r sel_key _ _ <<< "${_opts_ref[$cur_idx]}"; REPLY="$sel_key"; elif [ -n "$typed_buffer" ]; then REPLY="$typed_buffer"; else IFS='|' read -r sel_key _ _ <<< "${_opts_ref[$cur_idx]}"; REPLY="$sel_key"; fi; return 0; fi; _MENU_FRAME_FRESH=0; fi; continue ;; MOUSE_RELEASE) continue ;; TOGGLE_FULLSCREEN) toggle_manager_fullscreen; _TERM_RESIZED=1; last_term_lines=0; _last_menu_frame=""; printf '\033[?25l\033[?12l\033[?7l'; continue ;;
 
 RESIZE) 
     update_terminal_geometry 1
@@ -10515,6 +10533,35 @@ function next_visible_is_sep(s, i,    n, b, ni) {
   fi
   _whiten_dest="${_whiten_out%$'\034'}"
 }
+_mp_console_icons() {
+    # Emoji are drawn as squares with question marks by the Windows console
+    # fonts (Consolas/Lucida). Replace the header icons with short ASCII tags
+    # there; every other terminal keeps the colour emoji.
+    local text="$1"
+    case "${OS_TYPE:-}" in
+        windows|wsl) ;;
+        *) [[ "${UNAME_S:-}" =~ (MINGW|MSYS|CYGWIN) ]] || { printf '%s' "$text"; return 0; } ;;
+    esac
+    text="${text//🪟/[PC]}"
+    text="${text//☁️/[CLOUD]}"
+    text="${text//☁/[CLOUD]}"
+    text="${text//⚡/[CPU]}"
+    text="${text//🧠/[RAM]}"
+    text="${text//💾/[DISK]}"
+    text="${text//🔄/[UPD]}"
+    text="${text//🌐/[NET]}"
+    text="${text//🐚/[SH]}"
+    text="${text//⚠️/[!]}"
+    text="${text//⚠/[!]}"
+    text="${text//🎛️/[MIDI]}"
+    text="${text//🏆/[TOP5]}"
+    text="${text//⏰/[ALARM]}"
+    text="${text//🌍/[GEO]}"
+    text="${text//🌦/[WX]}"
+    text="${text//☀️/[SUN]}"
+    text="${text//🪐/[PLANET]}"
+    printf '%s' "$text"
+}
 render_main_header() {
 local cur_box_w="${1:-}" _hdr_cap; _set_menu_box_width _hdr_cap "${_TERM_COLS:-80}"; [[ -z "$cur_box_w" || "$cur_box_w" -gt "$_hdr_cap" ]] && cur_box_w="$_hdr_cap"; (( cur_box_w < 1 )) && cur_box_w=1;
 local inner_w=$(( cur_box_w - 2 )) text_w=$(( cur_box_w - 4 ))
@@ -10599,7 +10646,7 @@ fi; local _s4_conn=0; _s4_hardware_connected && _s4_conn=1; if [ "$_s4_conn" -eq
 hdr+=$'\n\n  '"${BOLD}${GREEN}🎛️  Kontrol S4 Hardware MIDI Device Detected (auto-detected ALSA port)!${NC}
   ${BOLD}${CYAN}Please navigate to Option 19 (Studio Hardware & MIDI) to enable and configure Kontrol S4 MIDI Device Mapping Controls.${NC}
   ${DIM}${GREEN}(Control player transport, mixer, and pitch sliders directly from your S4 hardware)${NC}"
-fi; fi; get_manager_uptime >/dev/null; hdr+=$'\n  '"${_MANAGER_UPTIME_LINE}"; if [ "${MP_GUI_SESSION:-0}" = "1" ] && type _whiten_header_data_fields >/dev/null 2>&1; then _whiten_header_data_fields hdr; fi; _fit_block_to_panel _RENDERED_MAIN_HEADER "$hdr" "$(( cur_box_w + 2 ))"; printf '%b\n' "$_RENDERED_MAIN_HEADER"
+fi; fi; get_manager_uptime >/dev/null; hdr+=$'\n  '"${_MANAGER_UPTIME_LINE}"; if [ "${MP_GUI_SESSION:-0}" = "1" ] && type _whiten_header_data_fields >/dev/null 2>&1; then _whiten_header_data_fields hdr; fi; hdr="$(_mp_console_icons "$hdr")"; _fit_block_to_panel _RENDERED_MAIN_HEADER "$hdr" "$(( cur_box_w + 2 ))"; printf '%b\n' "$_RENDERED_MAIN_HEADER"
 }
 # True only when the DJ application itself is running.
 # Do not search the full command line: dj_s4_midi.py and dj_monitor

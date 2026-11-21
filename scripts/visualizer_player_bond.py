@@ -20,6 +20,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -137,7 +138,9 @@ class PlayerBondMixin:
             from mp_liquid_visualizer_vulkan import _IS_LINUX, _vr_visualizer_side
         except ImportError:
             from scripts.mp_liquid_visualizer_vulkan import _IS_LINUX, _vr_visualizer_side
-        if not _IS_LINUX:
+        # Windows uses the same separate companion window as Linux. macOS has
+        # its own placement path, so it stays out of this bond.
+        if not _IS_LINUX and sys.platform != "win32":
             return False
         try:
             if _vr_visualizer_side():
@@ -499,6 +502,26 @@ class PlayerBondMixin:
         else happened to be beneath it instead of with the visualizer. Stack it
         against the player as a sibling instead, which keeps the two adjacent.
         """
+        if sys.platform == "win32":
+            # Place this HWND directly behind the host HWND. Passing the host
+            # as hWndInsertAfter keeps the two adjacent; HWND_BOTTOM would put
+            # the visualizer under every other application. No move, resize or
+            # activation: the geometry pass and the player keep their state.
+            try:
+                import ctypes
+                host = int(self._bond_read_host_window_id() or 0)
+                mine = int(self.win32_window() or 0)
+            except Exception:
+                return
+            if host and mine:
+                try:
+                    ctypes.windll.user32.SetWindowPos(
+                        mine, host, 0, 0, 0, 0,
+                        0x0001 | 0x0002 | 0x0010,  # NOSIZE | NOMOVE | NOACTIVATE
+                    )
+                except Exception:
+                    pass
+            return
         try:
             import ctypes
             from ctypes import c_char_p, c_int, c_uint, c_uint64, c_void_p

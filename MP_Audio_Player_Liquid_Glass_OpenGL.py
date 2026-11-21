@@ -1003,14 +1003,22 @@ class GlassHost:
         publish_liquid_player_window_size(width_i, height_i)
 
     def _host_window_id(self):
-        """This host's own X11 window id, or 0 when it cannot be read.
+        """This host's own window id, or 0 when it cannot be read.
 
         Published with the bond geometry so the companion stacks against this
-        exact window. Without it the visualizer picks the first window whose
-        title matches, which is wrong as soon as a Liquid Player and MP Gui are
-        both open.
+        exact window. X11 uses the XID; Windows uses the HWND, which
+        ``SetWindowPos`` consumes directly. Without it the visualizer picks the
+        first window whose title matches, which is wrong as soon as a Liquid
+        Player and MP Gui are both open.
         """
-        if not sys.platform.startswith("linux") or self.renderer is None:
+        if self.renderer is None:
+            return 0
+        if sys.platform == "win32":
+            try:
+                return int(self.renderer.win32_window() or 0)
+            except Exception:
+                return 0
+        if not sys.platform.startswith("linux"):
             return 0
         try:
             return int(self.renderer.x11_window() or 0)
@@ -1032,7 +1040,7 @@ class GlassHost:
         published instead of the half-applied one, so the visualizer moves
         straight to the new mode instead of stepping through it.
         """
-        if self.mode == "TRACKLIST" or not sys.platform.startswith("linux") or self.renderer is None:
+        if self.mode == "TRACKLIST" or self.renderer is None:
             return
         try:
             x, y = self.renderer.window_pos()
@@ -1577,11 +1585,20 @@ class GlassHost:
                 self.renderer.focus_window(self.child_xid)
             except Exception:
                 pass
+            # The Windows bond reads the same geometry records Linux uses.
+            self._publish_player_window_geometry()
+            # Hide the scrollbar once. Repeating this every 0.5 s attaches and
+            # detaches the host from the console, which stalls the menu's
+            # printf/read for a moment and made every key feel delayed.
+            try:
+                from windows_console_scroll import hide_process_console_scrollbar
+                hide_process_console_scrollbar(proc.pid, int(child_hwnd))
+            except Exception:
+                pass
 
         self._sync_windows_drag()
         down = dragging = False
         origin, press_screen, theme, theme_at = self.renderer.window_pos(), (0, 0), read_player_theme(), 0.0
-        scroll_at = 0.0
         focus_at = 0.0
         try:
             user32.GetForegroundWindow.restype = ctypes.c_void_p
@@ -1603,14 +1620,12 @@ class GlassHost:
                                 self.renderer.focus_window(self.child_xid)
                         except Exception:
                             pass
-                if child_hwnd and now >= scroll_at:
-                    from windows_console_scroll import hide_process_console_scrollbar
-                    hide_process_console_scrollbar(proc.pid, int(child_hwnd))
-                    scroll_at = now + 0.5
                 if now - theme_at > 0.4:
                     theme, theme_at = read_player_theme(), now
                 if self._poll_due("_ui_size_poll_at", 0.10, now):
                     self._follow_child_ui_size()
+                if self._poll_due("_geom_publish_at", 0.10, now):
+                    self._publish_player_window_geometry()
                 self._sync_panels()
                 self._pump_windows_drag()
                 self.renderer.draw(theme)
@@ -2005,8 +2020,9 @@ def ensure_random_visualizer_started() -> bool:
             try:
                 out = subprocess.check_output(
                     ["powershell.exe", "-NoProfile", "-Command",
-                     'Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like "*MP_Liquid_Visualizer*" -or $_.CommandLine -like "*mp_liquid_visualizer_vulkan*" } | Select-Object -ExpandProperty ProcessId'],
+                     'Get-CimInstance Win32_Process | Where-Object { $_.Name -like "python*" -and ($_.CommandLine -like "*MP_Liquid_Visualizer*" -or $_.CommandLine -like "*mp_liquid_visualizer_vulkan*") } | Select-Object -ExpandProperty ProcessId'],
                     stderr=subprocess.DEVNULL, text=True,
+                    creationflags=0x08000000,
                 ).strip()
                 if out:
                     return False

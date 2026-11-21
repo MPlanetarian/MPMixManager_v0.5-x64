@@ -98,7 +98,7 @@ set "VIS_PY=%BASE_DIR%\MP_Liquid_Visualizer.py"
 if not exist "%VIS_PY%" set "VIS_PY=%BASE_DIR%\scripts\mp_liquid_visualizer_vulkan.py"
 if exist "%VIS_PY%" (
     set "VIS_RUNNING=0"
-    for /f "tokens=*" %%P in ('powershell.exe -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*MP_Liquid_Visualizer*' -or $_.CommandLine -like '*mp_liquid_visualizer_vulkan*' } | Select-Object -ExpandProperty ProcessId" 2^>nul') do (
+    for /f "tokens=*" %%P in ('powershell.exe -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $_.Name -like 'python*' -and ($_.CommandLine -like '*MP_Liquid_Visualizer*' -or $_.CommandLine -like '*mp_liquid_visualizer_vulkan*') } | Select-Object -ExpandProperty ProcessId" 2^>nul') do (
         if not "%%P"=="" set "VIS_RUNNING=1"
     )
     if "!VIS_RUNNING!"=="0" (
