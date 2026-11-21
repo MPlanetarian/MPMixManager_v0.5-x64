@@ -153,9 +153,14 @@ STREAM_WAVES_VERTICAL_ID = 12
 
 def _mk_preset(pid: int, key: str, name: str, album: str, c_asset: str, c_cov: str, extra: Optional[Path] = None,
                vid: Optional[str] = None, url: str = _BC, aliases: Tuple[str, ...] = ()) -> Dict[str, Any]:
+    cover_paths = [ASSETS_DIR / c_asset, COVERS_DIR / c_cov] + ([extra] if extra else [])
+    # A preset must never brick its backend because one artwork file is absent.
+    fallback = ASSETS_DIR / "mp_liquid_glass_icon.png"
+    if fallback.is_file():
+        cover_paths.append(fallback)
     p: Dict[str, Any] = {
         "id": pid, "key": key, "name": name, "album": album, "bandcamp_url": url,
-        "cover_paths": [ASSETS_DIR / c_asset, COVERS_DIR / c_cov] + ([extra] if extra else []),
+        "cover_paths": cover_paths,
         "_aliases": aliases,
     }
     if vid:
@@ -581,7 +586,10 @@ def load_preset_cover_rgba(preset: Dict[str, Any], tex_size: int = 1024) -> Tupl
     # is paper white, so that is the fill.
     if str(preset.get("key", "")).startswith("stream_of_frequency_dynamic_waves"):
         return tex_size, tex_size, bytes([0xFF]) * (tex_size * tex_size * 4)
-    raise FileNotFoundError(f"Cover art file not found for preset '{preset.get('name')}'")
+    # Cover art is a texture accent, not a dependency of the raymarch. A
+    # preset whose artwork is missing used to raise here and stop the Vulkan
+    # backend from opening at all; use the abyssal indigo pane instead.
+    return tex_size, tex_size, bytes((8, 7, 17, 255)) * (tex_size * tex_size)
 
 
 class AudioTelemetryBridge:
