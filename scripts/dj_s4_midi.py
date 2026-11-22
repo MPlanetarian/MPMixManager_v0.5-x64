@@ -887,8 +887,9 @@ def start_daemon(port: Optional[str] = None):
         print(f"{GREEN}✓ Kontrol S4 detected on {resolved}{f' ({details})' if details else ''}{NC}")
 
     cmd = [sys.executable, str(Path(__file__).resolve()), "--daemon", "--port", resolved]
+    kwargs = {"creationflags": 0x08000000} if sys.platform == "win32" else {}
     with open(LOG_FILE, "a", encoding="utf-8") as out:
-        p = subprocess.Popen(cmd, stdout=out, stderr=out, start_new_session=True)
+        p = subprocess.Popen(cmd, stdout=out, stderr=out, start_new_session=True, **kwargs)
 
     PID_FILE.write_text(str(p.pid), encoding="utf-8")
     FIRST_SEEN_FLAG.touch(exist_ok=True)

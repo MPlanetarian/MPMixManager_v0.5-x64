@@ -20,6 +20,20 @@ def _get_app_version() -> str:
 
 VERSION = _get_app_version()
 
+_WIN_NO_WINDOW = 0x08000000
+
+def _no_console() -> dict:
+    """Keep console tools windowless when the host itself has no console.
+
+    A pythonw parent makes a console-subsystem child (ffmpeg, ffprobe, flac)
+    allocate a fresh console window unless CREATE_NO_WINDOW is set. The Windows
+    MP Liquid Mixer runs four deck engines windowless, so without this every
+    decoder left its own black CLI window on screen.
+    """
+    if sys.platform == "win32":
+        return {"creationflags": _WIN_NO_WINDOW}
+    return {}
+
 try:
     from mp_activity_tracker import record_activity
     from mp_logging import log_error as mp_log_error
@@ -1407,7 +1421,7 @@ def generate_track_spek(audio_path: str, mode: str = "MIX_ARCHIVE", output_dir: 
              "-lavfi", "showspectrumpic=s=1920x1080:mode=combined:color=intensity:scale=log:legend=1:saturation=1.2",
              "-frames:v", "1", str(spek_file)],
             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
-            timeout=_timeout,
+            timeout=_timeout, **_no_console(),
         )
         if proc.returncode == 0 and spek_file.is_file() and spek_file.stat().st_size > 0:
             return True, str(spek_file.resolve())
@@ -2294,7 +2308,7 @@ class FFmpegAudioSource(AudioSource):
 
     def _probe_frames(self) -> int:
         try:
-            out = subprocess.check_output(["ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries", "stream=sample_rate:format=duration", "-of", "default=noprint_wrappers=1:nokey=1", self.path], stderr=subprocess.DEVNULL, timeout=6).decode().splitlines()
+            out = subprocess.check_output(["ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries", "stream=sample_rate:format=duration", "-of", "default=noprint_wrappers=1:nokey=1", self.path], stderr=subprocess.DEVNULL, timeout=6, **_no_console()).decode().splitlines()
             if len(out) >= 2 and out[0].strip().isdigit(): self.samplerate = int(out[0].strip())
             dur = float(out[-1].strip()) if out else 0.0
             return int(dur * self.samplerate)
@@ -2304,7 +2318,7 @@ class FFmpegAudioSource(AudioSource):
         self.close()
         cmd = ["ffmpeg", "-v", "error"] + (["-ss", f"{start_sec:.3f}"] if start_sec > 0 else []) + ["-i", self.path, "-vn", "-f", "f32le", "-ac", "2", "-ar", str(self.samplerate), "pipe:1"]
         try:
-            self.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=131072)
+            self.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=131072, **_no_console())
             self._current_frame = int(start_sec * self.samplerate)
         except Exception as e:
             try: mp_log_error("MP_Audio_Player", f"Failed starting FFmpeg reader: {self.path}", e)
@@ -2373,7 +2387,7 @@ class DSDiffAudioSource(AudioSource):
                "-f", "f32le", "-ac", "2", "-ar", str(self.samplerate), "pipe:1"]
         try:
             self.proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                         stderr=subprocess.DEVNULL, bufsize=131072)
+                                         stderr=subprocess.DEVNULL, bufsize=131072, **_no_console())
         except Exception as exc:
             try: mp_log_error("MP_Audio_Player", f"Failed starting DSDIFF reader: {self.path}", exc)
             except Exception: pass
@@ -10105,7 +10119,7 @@ class TerminalPlayerUI:
                 subprocess.Popen(
                     [sys.executable, str(script), "--preset", str(preset.get("key") or "random")],
                     cwd=str(root), stdin=subprocess.DEVNULL, stdout=log, stderr=log,
-                    start_new_session=True, env=child_env,
+                    start_new_session=True, env=child_env, **_no_console(),
                 )
         except Exception:
             pass
@@ -12584,13 +12598,13 @@ def _spawn_player_daemon(file_path: Optional[str] = None, auto_bluetooth: bool =
     if cleaned:
         cmd.append(cleaned)
     try:
-        proc = subprocess.Popen(cmd, cwd=str(get_base_dir()), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        proc = subprocess.Popen(cmd, cwd=str(get_base_dir()), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True, **_no_console())
         # Auto-start DJ S4 MIDI controller service if configured
         try:
             s4_script = Path(__file__).resolve().parent / "scripts" / "dj_s4_midi.py"
             if not s4_script.is_file(): s4_script = Path(__file__).resolve().parent / "dj_s4_midi.py"
             if s4_script.is_file() and os.environ.get("MIDI_CONTROL_ENABLED", "true").lower() != "false":
-                subprocess.Popen([sys.executable, str(s4_script), "--start"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                subprocess.Popen([sys.executable, str(s4_script), "--start"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **_no_console())
         except Exception: pass
         return proc.pid
     except Exception as exc:

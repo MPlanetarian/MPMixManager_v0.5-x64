@@ -71,6 +71,7 @@ MP Audio Player; no separate audio install is needed.
 | `L` / `G` / `M` | Launch MP Liquid Player / MP Gui / MP Mix Manager |
 | `F11` or double-click | Full screen / 1440x810 windowed |
 | Drag empty surface | Move the window in windowed mode (the visualizer follows) |
+| Transparency bar | Drag or wheel the bottom slider: 50 % see-through to 100 % solid |
 | `Esc` | Leave full screen, then close |
 
 ## Kontrol S4 / S3 MIDI
@@ -106,8 +107,9 @@ Windows bond places itself directly behind the mixer. It follows moves and
 resizes. `V` hides/shows it; closing the mixer closes it.
 
 The mixer window uses the alpha in
-`~/.config/mix-manager/liquid_mixer_windows.json` (default `0.94`). Lower it to
-`0.88` for more of the scene, or raise it to `1.0` for a fully solid window.
+`~/.config/mix-manager/liquid_mixer_windows.json` (default `0.94`), and the
+**TRANSPARENCY** slider on the bottom ribbon changes and saves it live. Lower it
+to `0.88` for more of the scene, or raise it to `1.0` for a fully solid window.
 Without a visualizer the window is forced solid so the desktop cannot bleed in.
 
 ## Recording

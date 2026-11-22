@@ -216,6 +216,46 @@ class TestTheInstallerOffersTheMixerOnWindows(unittest.TestCase):
         self.assertTrue((ROOT / "scripts" / "launch_liquid_mixer.bat").is_file())
 
 
+class TestNoConsoleWindows(unittest.TestCase):
+    def test_the_player_hides_ffmpeg_and_ffprobe_children(self):
+        text = (ROOT / "MP_Audio_Player.py").read_text(encoding="utf-8")
+        self.assertIn("def _no_console()", text)
+        self.assertIn("timeout=6, **_no_console()", text)
+        self.assertIn("bufsize=131072, **_no_console()", text)
+        self.assertIn("start_new_session=True, **_no_console()", text)
+
+    def test_deck_engines_are_windowless_and_skip_the_alsa_helper(self):
+        with patch.object(mixer.subprocess, "Popen") as popen:
+            engine = mixer.DeckEngine("A")
+            engine.start()
+        kwargs = popen.call_args.kwargs
+        self.assertEqual(kwargs["env"]["MIDI_CONTROL_ENABLED"], "false")
+        self.assertTrue(kwargs["creationflags"] & 0x08000000)
+        if sys.platform == "win32":
+            self.assertTrue(str(popen.call_args.args[0][0]).lower().endswith(
+                "pythonw.exe"))
+
+
+class TestTransparencyBar(unittest.TestCase):
+    def test_the_bottom_ribbon_has_a_transparency_slider(self):
+        app = mixer.LiquidMixerWindows([])
+        app.root = MagicMock()
+        app.canvas = MagicMock()
+        app._w, app._h = 1440, 810
+        app._draw()
+        kinds = [hit[4] for hit in app._hits]
+        self.assertIn("opacity", kinds)
+
+    def test_dragging_the_slider_sets_the_window_alpha(self):
+        app = mixer.LiquidMixerWindows([])
+        app.root = MagicMock()
+        app.visualizer_enabled = True
+        app._draw = MagicMock()
+        app._drag_opacity(75.0, (0.0, 100.0))
+        self.assertAlmostEqual(app.alpha, 0.875)
+        app.root.attributes.assert_called_with("-alpha", 0.875)
+
+
 class TestWindowDrag(unittest.TestCase):
     def _app(self, fullscreen=False):
         app = mixer.LiquidMixerWindows([])

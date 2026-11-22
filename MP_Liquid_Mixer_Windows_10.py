@@ -314,6 +314,9 @@ class DeckEngine:
         env["MP_PLAYER_NAMESPACE"] = self.namespace
         env["PYTHONIOENCODING"] = "utf-8"
         env["PYTHONUTF8"] = "1"
+        # The mixer talks to the Kontrol S4 through winmm itself. The Linux
+        # ALSA helper would start one extra (console) daemon per deck.
+        env["MIDI_CONTROL_ENABLED"] = "false"
         # Each engine is windowless; the mixer owns the only visible window.
         cmd = [
             _windowless_python(), str(ROOT / "MP_Audio_Player.py"),
@@ -1083,6 +1086,10 @@ class LiquidMixerWindows:
                     event.y_root - self.root.winfo_y(),
                 )
             return
+        if kind == "opacity":
+            self._drag = ("opacity", data, 0.0, 0.0)
+            self._drag_opacity(event.x, data)
+            return
         if kind == "button":
             self._button_action(data)
             return
@@ -1120,19 +1127,32 @@ class LiquidMixerWindows:
             delta = (start_y - event.y) / 120.0
             self._adjust_knob(key, channel, delta)
             self._drag = ("knob", (key, channel, box, event.y), low, high)
+        elif kind == "opacity":
+            self._drag_opacity(event.x, data)
         self._draw()
 
     def _on_release(self, _event) -> None:
+        was_opacity = bool(self._drag and self._drag[0] == "opacity")
         self._drag = None
         self._window_drag = None
+        if was_opacity:
+            self._save_windows_settings()
 
-    def _on_double(self, _event) -> None:
+    def _on_double(self, event) -> None:
+        kind, _data = self._hit_at(event.x, event.y)
+        if kind == "opacity":
+            return
         self._toggle_fullscreen()
 
     def _on_wheel(self, event) -> None:
         kind, data = self._hit_at(event.x, event.y)
         step = 1 if event.delta > 0 else -1
-        if kind == "fader":
+        if kind == "opacity":
+            self.alpha = _clamp(self.alpha + step * 0.02, 0.5, 1.0)
+            self._apply_alpha()
+            self._save_windows_settings()
+            self._draw()
+        elif kind == "fader":
             channel, box = data
             self._adjust_fader(channel, step * 0.02)
         elif kind == "crossfader":
@@ -1492,6 +1512,7 @@ class LiquidMixerWindows:
         bx += 94
         self._button(bx, y + 12, 86, 26, "LIB B", "library:B",
                      _tone(secondary, 0.35), ink, 8)
+        self._draw_opacity_bar(x + w - 430, y + 62, 410, p)
         notice = self._notice if time.monotonic() < self._notice_until else self._status_line
         self.canvas.create_text(x + 16, y + h - 12, anchor="w",
                                 text=_short(notice, 110), fill=_hex(secondary),
@@ -1499,6 +1520,46 @@ class LiquidMixerWindows:
         self.canvas.create_text(x + w - 16, y + h - 12, anchor="e",
                                 text="C theme  V visual  R rec  S settings  F11 full",
                                 fill=_hex(ink), font=("Consolas", 8))
+
+    def _draw_opacity_bar(self, x: float, y: float, width: float,
+                          p: Dict[str, Any]) -> None:
+        """The window-transparency track, visible on the bottom ribbon."""
+        accent, secondary, ink = p["accent"], p["secondary"], p["ink"]
+        self.canvas.create_text(x, y, anchor="w", text="TRANSPARENCY",
+                                fill=_hex(secondary), font=("Consolas", 7, "bold"))
+        x0, x1 = x + 92, x + width - 42
+        if x1 <= x0:
+            return
+        frac = _clamp((self.alpha - 0.5) / 0.5, 0.0, 1.0)
+        knob = x0 + (x1 - x0) * frac
+        self.canvas.create_line(x0, y, x1, y,
+                                fill=_hex(_tone(accent, 0.32)), width=4,
+                                capstyle="round")
+        self.canvas.create_line(x0, y, knob, y, fill=_hex(accent), width=4,
+                                capstyle="round")
+        self.canvas.create_oval(knob - 6, y - 6, knob + 6, y + 6,
+                                fill=_hex(ink), outline=_hex(accent), width=2)
+        self.canvas.create_text(x + width, y, anchor="e",
+                                text=f"{int(round(self.alpha * 100))}%",
+                                fill=_hex(ink), font=("Consolas", 8, "bold"))
+        self._hits.append((x0 - 8, y - 10, x1 + 8, y + 10,
+                           "opacity", (x0, x1)))
+
+    def _apply_alpha(self) -> None:
+        if self.root is None:
+            return
+        try:
+            self.root.attributes(
+                "-alpha", self.alpha if self.visualizer_enabled else 1.0)
+        except Exception:
+            pass
+
+    def _drag_opacity(self, x: float, track) -> None:
+        x0, x1 = track
+        frac = _clamp((x - x0) / max(1.0, x1 - x0), 0.0, 1.0)
+        self.alpha = 0.5 + 0.5 * frac
+        self._apply_alpha()
+        self._draw()
 
     def _draw_overlay(self, w: int, h: int, p: Dict[str, Any]) -> None:
         if not self._overlay:

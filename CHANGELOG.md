@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **The Windows MP Liquid Mixer ribbon has a transparency slider** (`MP_Liquid_Mixer_Windows_10.py`, `MP_Liquid_Mixer/WINDOWS_10.md`, `tests/test_liquid_mixer_windows.py`):
+  - **TRANSPARENCY** sits on the bottom ribbon beside the master/monitor controls. Drag it or use the wheel to move between 50 % see-through and 100 % solid; the value is applied live and saved to `liquid_mixer_windows.json`.
+  - It follows the same rule as the saved alpha: without the companion visualizer the window stays solid, and turning the visualizer back on restores the chosen value.
 - **The Windows MP Tray can launch MP Liquid Mixer** (`scripts/windows_tray.ps1`, `tests/test_mp_system_tray.py`, `tests/test_liquid_mixer_windows.py`):
   - **Launch MP Liquid Mixer** joins the tray menu in the same position as Linux (after MP Liquid Player) and is filtered by the same installed-app selection.
   - A second click raises the open mixer instead of starting another, and **Close MP Mix Manager** now also stops `MP_Liquid_Mixer_Windows_10.py` and its launcher.
@@ -113,6 +116,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Verified against the real host, not just the HTML.** `tests/test_web_companion_engage_audio.py` drives headless Chrome over DevTools: one test proves a permissive browser starts the mix with no gesture, one proves the clock really advances (a `play()` that resolves on a stalled stream is still silent), one proves the default strict policy offers the tap invitation and that a single mid-page touch starts audio, and one proves a dead mount answers `404` instead of a truncated body. Measured on the affected host: a tap now yields `paused:false` and a clock that advanced 9.0 s → 15.3 s with no banner and no media errors, where before it was `paused:true`, `error.code 4`, and the library banner.
 
 ### Fixed
+- **The Windows mixer no longer leaves a CLI window per deck** (`MP_Audio_Player.py`, `scripts/dj_s4_midi.py`, `MP_Liquid_Mixer_Windows_10.py`, `tests/test_liquid_mixer_windows.py`):
+  - Each deck engine runs windowless, but its FFmpeg reader is a console program; Windows gave every one of them its own console window (four black windows after load). The decoder, FFprobe probe and DSD reader now spawn with `CREATE_NO_WINDOW`, and so do the daemon re-exec and the S4 helper.
+  - The deck engines also set `MIDI_CONTROL_ENABLED=false`: the Windows mixer reads the S4 through `winmm`, so the Linux ALSA helper no longer starts once per deck.
 - **The Windows MP Liquid Mixer window can be moved** (`MP_Liquid_Mixer_Windows_10.py`, `MP_Liquid_Mixer/WINDOWS_10.md`, `tests/test_liquid_mixer_windows.py`):
   - The borderless `overrideredirect` host removed the caption Windows normally drags, so once it left full screen the window stayed where it opened. Pressing an empty part of the surface now moves it, and the companion visualizer follows the new rectangle. Full screen is unchanged, and pressing a fader, knob, button or library row still operates that control instead.
 - **The Web Companion equaliser and Stream of Frequency keep rendering after Next Track** (`scripts/mix_web_companion.py`, `tests/test_web_companion_eq_track_switch.py`):

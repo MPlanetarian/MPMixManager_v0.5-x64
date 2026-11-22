@@ -962,6 +962,7 @@ def verify_audio_path(path: Optional[str], timeout: float = 45.0) -> AudioVerdic
             [probe, "-v", "error", "-count_packets", "-select_streams", "a:0",
              "-show_entries", "stream=nb_read_packets", "-of", "csv=p=0", str(path)],
             capture_output=True, text=True, timeout=float(timeout),
+            **({"creationflags": 0x08000000} if sys.platform == "win32" else {}),
         )
     except subprocess.TimeoutExpired:
         return AudioVerdict(str(path), name, False, "unreadable", "probe timed out")
