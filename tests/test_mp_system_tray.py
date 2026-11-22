@@ -937,5 +937,27 @@ class TestTrayWebCompanion(unittest.TestCase):
         self.assertIn("Start-Process -FilePath $url", fn)
 
 
+class TestTrayLiquidMixer(unittest.TestCase):
+    def test_windows_tray_offers_the_mixer(self):
+        source = (ROOT / "scripts" / "windows_tray.ps1").read_text(encoding="utf-8")
+        self.assertIn(
+            'Id = "mixer"; Label = "Launch MP Liquid Mixer"; Component = "mixer"',
+            source,
+        )
+        self.assertIn('"mixer" { "mixer" }', source)
+        self.assertIn("launch_liquid_mixer.bat", source)
+
+    def test_a_second_click_raises_the_open_mixer(self):
+        source = (ROOT / "scripts" / "windows_tray.ps1").read_text(encoding="utf-8")
+        fn = source.split("function Start-MpRole", 1)[1].split("\nfunction ", 1)[0]
+        self.assertIn('$Role -eq "mixer"', fn)
+        self.assertIn("Show-MpWindow", fn)
+
+    def test_close_all_includes_the_mixer(self):
+        source = (ROOT / "scripts" / "windows_tray.ps1").read_text(encoding="utf-8")
+        self.assertIn('"MP_Liquid_Mixer_Windows_10"', source)
+        self.assertIn('"launch_liquid_mixer"', source)
+
+
 if __name__ == "__main__":
     unittest.main()

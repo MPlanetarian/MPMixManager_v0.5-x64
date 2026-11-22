@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **The Windows MP Tray can launch MP Liquid Mixer** (`scripts/windows_tray.ps1`, `tests/test_mp_system_tray.py`, `tests/test_liquid_mixer_windows.py`):
+  - **Launch MP Liquid Mixer** joins the tray menu in the same position as Linux (after MP Liquid Player) and is filtered by the same installed-app selection.
+  - A second click raises the open mixer instead of starting another, and **Close MP Mix Manager** now also stops `MP_Liquid_Mixer_Windows_10.py` and its launcher.
 - **MP Liquid Mixer 0.0.1 beta now runs on Windows 10 and 11** (`MP_Liquid_Mixer_Windows_10.py`, `MP_Liquid_Mixer/WINDOWS_10.md`, `launch_liquid_mixer.bat`, `scripts/launch_liquid_mixer.bat`, `tests/test_liquid_mixer_windows.py`):
   - **Native Tkinter host.** One borderless glass-style window with four channel strips (fader, TRIM, HI/MID/LOW EQ, FILTER, FLANGER/REVERB/DELAY/GATER/FILTER inserts, FX, cue and meters), an equal-power crossfader, master/monitor trims, two deck panes with transport, a library overlay, settings, and a real-time clock.
   - **Four real decks.** Each channel runs its own `MP_Audio_Player.py --daemon` engine in the existing IPC namespace (`mixerdeck_a` to `mixerdeck_d`), so faders, crossfader, pitch, EQ and inserts are applied by the player engines. The decoder falls back to the Mix Archive library when no Music folder is configured.

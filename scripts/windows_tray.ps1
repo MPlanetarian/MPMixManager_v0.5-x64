@@ -81,7 +81,7 @@ function Get-MpInstalledComponents {
     # The shared selection file is a single space-separated line of ids. When it
     # is absent this is a full install, so every menu entry stays.
     param([string]$InstallRoot)
-    $full = @("manager", "gui", "liquid", "visualizer")
+    $full = @("manager", "gui", "liquid", "visualizer", "mixer")
     $file = Join-Path $env:USERPROFILE ".config\mix-manager\installed_apps"
     if (-not (Test-Path -LiteralPath $file)) { return $full }
     try {
@@ -408,6 +408,8 @@ function Stop-MpSuite {
                 "mp_liquid_visualizer",
                 "launch_liquid_glass",
                 "launch-liquid-glass",
+                "MP_Liquid_Mixer_Windows_10",
+                "launch_liquid_mixer",
                 "launch_liquid_visualizer",
                 "dj_s4_midi",
                 "manager.ps1"
@@ -432,6 +434,7 @@ function Start-MpRole {
     $titles = @{
         gui = "MP Mix Manager (Liquid Glass"
         liquid = "MP Audio Player (Liquid Glass"
+        mixer = "MP Liquid Mixer"
         manager = "MP Mix Archive Manager"
         visualizer = "MP Liquid Visualizer"
     }
@@ -444,6 +447,9 @@ function Start-MpRole {
     }
     if ($Role -eq "manager" -and (Show-MpWindow -TitlePart $titles[$Role])) { return }
     if ($Role -eq "visualizer" -and (Show-MpWindow -TitlePart $titles[$Role])) { return }
+    # The Windows mixer has no single-instance lock yet, so a second click
+    # raises the window that is already open instead of starting another.
+    if ($Role -eq "mixer" -and (Show-MpWindow -TitlePart $titles[$Role])) { return }
     $target = $null
     switch ($Role) {
         "gui" {
@@ -453,6 +459,12 @@ function Start-MpRole {
             }
         }
         "liquid" { $target = Join-Path $Root "launch_liquid_glass.bat" }
+        "mixer" {
+            $target = Join-Path $Root "launch_liquid_mixer.bat"
+            if (-not (Test-Path -LiteralPath $target)) {
+                $target = Join-Path $Root "scripts\launch_liquid_mixer.bat"
+            }
+        }
         "manager" { $target = Join-Path $Root "manager.bat" }
         "visualizer" {
             $target = Join-Path $Root "launch_liquid_visualizer.bat"
@@ -783,6 +795,7 @@ function Invoke-MpTrayAction {
     $role = switch ($ActionId) {
         "gui" { "gui" }
         "liquid" { "liquid" }
+        "mixer" { "mixer" }
         "manager" { "manager" }
         "visualizer" { "visualizer" }
         default { "" }
@@ -1083,6 +1096,7 @@ try {
     $entries = @(
         @{ Id = "gui"; Label = "Launch MP Gui"; Component = "gui" },
         @{ Id = "liquid"; Label = "Launch MP Liquid Player"; Component = "liquid" },
+        @{ Id = "mixer"; Label = "Launch MP Liquid Mixer"; Component = "mixer" },
         @{ Id = "manager"; Label = "Launch MP Mix Manager (CLI)"; Component = "manager" },
         @{ Id = "visualizer"; Label = "Launch MP Visualizer"; Component = "visualizer" },
         @{ Id = "web"; Label = "Launch MP Audio Player (Web Service)"; Component = "" },

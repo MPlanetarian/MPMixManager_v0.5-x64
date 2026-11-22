@@ -201,6 +201,11 @@ class TestTheInstallerOffersTheMixerOnWindows(unittest.TestCase):
         self.assertIn('"mixer" = "MP Liquid Mixer"', text)
         self.assertIn("launch_liquid_mixer.bat", text)
 
+    def test_the_windows_tray_offers_the_mixer(self):
+        text = (ROOT / "scripts" / "windows_tray.ps1").read_text(encoding="utf-8")
+        self.assertIn('Label = "Launch MP Liquid Mixer"', text)
+        self.assertIn('$Role -eq "mixer"', text)
+
     def test_install_sh_accepts_mixer_on_windows(self):
         text = (ROOT / "install.sh").read_text(encoding="utf-8")
         self.assertIn("linux|freebsd|windows) _mp_mixer_ok=1", text)
