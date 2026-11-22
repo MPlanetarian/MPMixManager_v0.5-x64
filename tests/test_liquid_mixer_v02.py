@@ -220,6 +220,17 @@ class TestLayoutAdditions(unittest.TestCase):
         profile = boxes["profile_button"]
         self.assertAlmostEqual((left + right) / 2.0,
                                profile[0] + profile[2] / 2.0, places=3)
+        # One width and one gap: the middle pill (the controller status) sits
+        # on the same centre as the MIXER column and the PROFILE switch.
+        trance, status, settings = (
+            boxes["trance_button"], boxes["status_pill"], boxes["settings_button"]
+        )
+        self.assertAlmostEqual(trance[2], status[2], places=3)
+        self.assertAlmostEqual(status[2], settings[2], places=3)
+        self.assertAlmostEqual(status[0] - (trance[0] + trance[2]),
+                               settings[0] - (status[0] + status[2]), places=3)
+        self.assertAlmostEqual(status[0] + status[2] / 2.0,
+                               profile[0] + profile[2] / 2.0, places=3)
 
     def test_visualizer_is_flush_with_the_right_panel_and_close_is_gone(self):
         boxes = mixer_core.layout(1920, 1080)

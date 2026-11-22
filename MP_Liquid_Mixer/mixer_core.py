@@ -1459,13 +1459,14 @@ def layout(width: int = DESIGN_W, height: int = DESIGN_H) -> Dict[str, Tuple[flo
         # The visualizer toggle takes the far right, flush with the player
         # panel's right edge. The old square close button is gone.
         "visualizer_button": rect(1700, 14, 196, 36),
-        # The controller status, the trance lamp and SETTINGS are one row:
-        # their group centre lines up with the PROFILE A/B switch below, so
-        # the top bar reads as a single centred column over the mixer.
-        "trance_button": rect(583, 14, 300, 36),
-        "settings_button": rect(1193, 14, 144, 36),
+        # The controller status, the trance lamp and SETTINGS are one row.
+        # One width and one gap for all three put the middle pill exactly over
+        # the MIXER column and the PROFILE A/B switch below, while the row
+        # itself stays centred on the window.
+        "trance_button": rect(542, 14, 260, 36),
+        "status_pill": rect(830, 14, 260, 36),
+        "settings_button": rect(1118, 14, 260, 36),
         "profile_button": rect(852, 64, 216, 24),
-        "status_pill": rect(915, 14, 250, 36),
     }
     # Channel strips: FX button, headphone cue, letter, fader, meter. The FX
     # button arms the channel's filter-knob effect, the cue button routes the
