@@ -116,7 +116,7 @@ ${BOLD}AVAILABLE MENU OPTIONS (INTERACTIVE & DIRECT SHORTCUTS):${NC}
    ${BOLD}${CYAN}0${NC}   ${BOLD}Run Any Desktop Shortcuts — Linux${NC}
        Launch or bind KDE Plasma desktop applications, games, audio tools, and servers.
    ${BOLD}${CYAN}1${NC}   ${BOLD}Play DJ Mixes (MP Audio Player — Mix Archive Mode)${NC}
-       Built-in player. In the player: [1] Mix Archive, [2] Music, [3] Favorites, [H] mark, [D][D] clear playlist.
+       Built-in player. In the player: [1] Mix Archive, [2] Music, [3] Favorites, [H] mark, [D][D] clear playlist, Del remove selected row(s), Shift+Up/Down select several.
    ${BOLD}${CYAN}2${NC}   ${BOLD}Play Tracks from MUSIC Folders${NC}
        SMB and local music libraries. Option 3 refreshes playlists. Option 8 sets the SMB login.
    ${BOLD}${CYAN}3${NC}   ${BOLD}MP Audio Player (Liquid Glass Mode)${NC}

@@ -48,6 +48,34 @@ from MP_Audio_Player import (
 )
 
 
+class _ShortReportedSource:
+    """A real decoder whose declared length is longer than the audio it holds.
+
+    This is what libsndfile does for an MP3 whose final frame is truncated: the
+    header promises more frames than ``read()`` can ever deliver.
+    """
+
+    def __init__(self, inner, extra_frames: int):
+        self._inner, self._total = inner, int(inner.total_frames()) + int(extra_frames)
+        self.samplerate, self.channels = inner.samplerate, inner.channels
+        self.frames = self._total
+
+    def read(self, frames):
+        return self._inner.read(frames)
+
+    def seek(self, frame):
+        return self._inner.seek(frame)
+
+    def tell(self):
+        return self._inner.tell()
+
+    def total_frames(self):
+        return self._total
+
+    def close(self):
+        return self._inner.close()
+
+
 class TestAudioPlayerResilience(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
@@ -126,6 +154,82 @@ class TestAudioPlayerResilience(unittest.TestCase):
         # Buffer must NOT have been marked as EOF
         self.assertFalse(buf.eof)
         self.assertGreater(buf.available_frames, 0)
+
+    def test_feeder_flags_eof_when_decoder_ends_before_its_declared_total(self):
+        """A decoder that stops early must still end the track.
+
+        libsndfile reports the frame count an MP3 header declares, which can be
+        longer than the frames it can actually return. The feeder used to wait
+        forever because the position was still "well before" that total, so the
+        deck sat silent at 02:41 of 02:42 and the playlist never advanced.
+        """
+        source = MagicMock()
+        source.samplerate, source.channels = 44100, 2
+        source.total_frames.return_value = 44100 * 60
+        source.tell.return_value = 44100 * 59
+        source.read.return_value = np.zeros((0, 2), dtype=np.float32)
+
+        buf = AudioPrefetchBuffer(44100, buffer_sec=0.2)
+        feeder = AudioFeederThread(source, buf, MagicMock())
+        feeder.eof_stall_grace_sec = 0.25
+        feeder.start()
+        try:
+            deadline = time.time() + 3.0
+            while time.time() < deadline and not buf.eof:
+                time.sleep(0.02)
+            self.assertTrue(buf.eof, "an early decode end must still flag EOF")
+        finally:
+            feeder.stop()
+            feeder.join(timeout=1.0)
+
+    def test_playlist_advances_when_decoder_ends_before_its_declared_length(self):
+        """Reproduces the stuck deck end-to-end, then requires the next track."""
+        playlist = [
+            {"name": "Airbase 48k", "path": self.mix_48k_path, "size_mb": 2.0, "ext": "FLAC"},
+            {"name": "Mix 44k", "path": self.mix_44k_path, "size_mb": 1.0, "ext": "WAV"},
+        ]
+        engine = AudioEngine(playlist, auto_bluetooth=False)
+        engine.repeat_mode = "all"
+
+        def _open_short(path):
+            # Truthfully decodable audio, but a total that runs 3 s long, the
+            # same mismatch libsndfile reports for the real GTA VI MP3.
+            return _ShortReportedSource(SoundFileAudioSource(path), 44100 * 3)
+
+        with patch.object(MP_Audio_Player, "open_audio_source", side_effect=_open_short):
+            self.assertTrue(engine.load_track(0, True))
+            engine.feeder.eof_stall_grace_sec = 0.2
+            outdata = np.zeros((4096, 2), dtype=np.float32)
+            deadline = time.time() + 10.0
+            while time.time() < deadline and not engine.track_ended:
+                engine._render_audio(outdata, 4096)
+                time.sleep(0.001)
+            self.assertTrue(engine.track_ended, "the early end must surface as track_ended")
+            engine.check_track_end()
+            self.assertEqual(engine.current_index, 1)
+            self.assertEqual(engine.state, "playing")
+        engine.shutdown()
+
+    def test_remove_tracks_keeps_playing_and_drops_the_playing_row_cleanly(self):
+        playlist = [
+            {"name": "Airbase 48k", "path": self.mix_48k_path, "size_mb": 2.0, "ext": "FLAC"},
+            {"name": "Mix 44k", "path": self.mix_44k_path, "size_mb": 1.0, "ext": "WAV"},
+        ]
+        engine = AudioEngine(playlist, auto_bluetooth=False)
+        try:
+            self.assertTrue(engine.load_track(0, True))
+            self.assertEqual(engine.remove_tracks([self.mix_44k_path]), 1)
+            self.assertEqual(len(engine.playlist), 1)
+            self.assertEqual(engine.current_index, 0)
+            self.assertEqual(engine.current_track.get("path"), self.mix_48k_path)
+            self.assertEqual(engine.state, "playing")
+
+            self.assertEqual(engine.remove_tracks([self.mix_48k_path]), 1)
+            self.assertEqual(engine.playlist, [])
+            self.assertIsNone(engine.current_track)
+            self.assertEqual(engine.state, "stopped")
+        finally:
+            engine.shutdown()
 
     def test_audio_engine_reloads_and_recovers_after_stop(self):
         """Verifies that calling play() after stop_playback() properly restores playback."""

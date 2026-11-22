@@ -22,6 +22,7 @@ class ClearPlaylistTests(unittest.TestCase):
         self.engine.queue_track(self.tracks[2]["path"])
         self.scanner = MagicMock()
         self.scanner.mixes = list(self.tracks)
+        self.scanner.get_mixes.side_effect = lambda query="": self.scanner.mixes
         self.ui = player.TerminalPlayerUI(self.engine, self.scanner, is_remote=False)
 
     def tearDown(self):
@@ -48,7 +49,7 @@ class ClearPlaylistTests(unittest.TestCase):
         self.ui._process_key(b"d")
         self.assertTrue(self.ui._playlist_clear_armed)
         self.assertEqual(len(self.scanner.mixes), 3)
-        self.assertIn("Press D or Del again", self.ui.notification_msg)
+        self.assertIn("Press D again", self.ui.notification_msg)
 
         self.ui._process_key(b"D")
         self.assertFalse(self.ui._playlist_clear_armed)
@@ -62,11 +63,21 @@ class ClearPlaylistTests(unittest.TestCase):
         self.assertTrue(self.ui.running)
         self.assertTrue(Path(self.tracks[1]["path"]).is_file())
 
-    def test_delete_key_confirms_clear(self):
+    def test_delete_key_removes_only_the_selected_row(self):
+        self.ui.selected_row = 1
         self.ui._process_key(b"\x1b[3~")
+        self.assertEqual([t["name"] for t in self.scanner.mixes], ["Mix_A.flac", "Mix_C.flac"])
+        self.assertEqual([t["name"] for t in self.engine.playlist], ["Mix_A.flac", "Mix_C.flac"])
+        self.assertFalse(self.ui._playlist_clear_armed)
+        self.assertIn("Removed 1", self.ui.notification_msg)
+
+    def test_delete_key_after_d_removes_rows_and_cancels_the_clear(self):
+        self.ui.selected_row = 0
+        self.ui._process_key(b"D")
         self.ui._process_key(b"\x1b[3~")
-        self.assertEqual(self.scanner.mixes, [])
-        self.assertEqual(self.engine.playlist, [])
+        self.assertFalse(self.ui._playlist_clear_armed)
+        self.assertEqual([t["name"] for t in self.scanner.mixes], ["Mix_B.flac", "Mix_C.flac"])
+        self.assertIn("Removed 1", self.ui.notification_msg)
 
     def test_escape_cancels_without_leaving_the_player(self):
         self.ui._process_key(b"D")

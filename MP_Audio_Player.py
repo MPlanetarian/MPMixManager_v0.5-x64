@@ -419,6 +419,9 @@ def _mixer_effect_module():
 # other deck. MP_Liquid_Mixer sets MP_PLAYER_NAMESPACE per deck; every normal
 # launch leaves it empty and keeps the historical file names untouched.
 PLAYER_NAMESPACE = re.sub(r"[^A-Za-z0-9_.-]", "", os.environ.get("MP_PLAYER_NAMESPACE", "").strip())[:40]
+# The resolved script path identifies the build that owns the shared runtime
+# socket, so a 0.5 window never keeps running an older tree's daemon.
+_PLAYER_SCRIPT_PATH = str(Path(__file__).resolve())
 
 
 def _player_file(name: str) -> Path:
@@ -476,6 +479,18 @@ _MOUSE_SGR_RE = re.compile(b"\x1b\\[<(\\d+);(\\d+);(\\d+)([mM])")
 # same way Enter does. Matches the double-click slop the window hosts use.
 PLAYLIST_DOUBLE_CLICK_SECONDS = 0.45
 REC_MAX_FILE_BYTES = 3 * 1024 * 1024 * 1024
+# The daemon request socket is one JSON message with no length prefix. A
+# multi-row Delete sends one path per selected row, so the reader accepts a
+# complete message far beyond the old 4 KiB single recv, but not without limit.
+IPC_MAX_REQUEST_BYTES = 16 * 1024 * 1024
+# A decoder can reach its own end before the length it declared: an MP3 whose
+# final frame is short (libsndfile reports 162.68 s but stops returning audio
+# at 161.78 s), a FLAC carrying a stale STREAMINFO total, a truncated copy.
+# The feeder used to call an empty read this far from the declared end a
+# network stall and retry forever, so the deck sat silent at 02:41 of 02:42
+# and never advanced. Wait out a real stall while prefetched audio remains,
+# then accept the decoder's end once the buffer has drained and stayed empty.
+EOF_STALL_GRACE_SEC = 1.5
 
 
 def _take_escape(buf: bytes) -> tuple:
@@ -1940,6 +1955,19 @@ class FavoritesStore:
             self.save()
         return removed
 
+    def remove_paths(self, paths: Sequence[str]) -> int:
+        """Drop the named rows from the Favorites playlist. Files stay on disk."""
+        drop = {favorite_key(p) for p in (paths or []) if favorite_key(p)}
+        if not drop:
+            return 0
+        kept = [track for track in self._tracks if favorite_key(track.get("path")) not in drop]
+        removed = len(self._tracks) - len(kept)
+        if removed:
+            self._tracks = kept
+            self._keys = {favorite_key(track.get("path")) for track in kept}
+            self.save()
+        return removed
+
     def add_tracks(self, tracks: Sequence[Dict[str, Any]]) -> int:
         """Append tracks that are not already in the one Favorites playlist."""
         added = 0
@@ -2553,6 +2581,8 @@ class AudioFeederThread(threading.Thread):
         self.source, self.audio_buffer, self.engine, self.chunk_frames = source, audio_buffer, engine, chunk_frames
         self._running, self._seek_target, self.current_frame = True, None, 0
         self._seek_lock, self._wake_cond = threading.Lock(), threading.Condition(threading.Lock())
+        # Overridable so a test can shrink the wait without patching a global.
+        self.eof_stall_grace_sec = EOF_STALL_GRACE_SEC
 
     def request_seek(self, frame: int):
         with self._seek_lock: self._seek_target = frame
@@ -2568,6 +2598,7 @@ class AudioFeederThread(threading.Thread):
 
     def run(self):
         cs = self.chunk_frames
+        stall_since = None
         while self._running:
             # The engine drops its reference on stop/load, so a shutdown or a
             # track change can leave this thread without a source. That is a
@@ -2578,6 +2609,7 @@ class AudioFeederThread(threading.Thread):
             with self._seek_lock:
                 st, self._seek_target = self._seek_target, None
             if st is not None:
+                stall_since = None
                 try: source.seek(st); self.current_frame = st; self.audio_buffer.clear()
                 except Exception as e:
                     if not self._running: break
@@ -2589,11 +2621,36 @@ class AudioFeederThread(threading.Thread):
             try: chunk = source.read(cs)
             except Exception: time.sleep(0.2); continue
             if len(chunk) > 0:
+                stall_since = None
                 self.current_frame = source.tell()
                 while self._running and self._seek_target is None and not self.audio_buffer.write(chunk, timeout=0.1): pass
             else:
                 cur_pos, tot = source.tell(), source.total_frames()
-                if tot > 0 and cur_pos < (tot - cs * 2): time.sleep(0.15); continue
+                if tot > 0 and cur_pos < (tot - cs * 2):
+                    # The declared length says more audio should follow, so an
+                    # empty read here is normally a network stall. Keep the
+                    # buffered tail playing and keep retrying; only give up
+                    # after the buffer has drained and the decoder has still
+                    # produced nothing for the grace period. Ending the track
+                    # while audio remains buffered would cut it short.
+                    if self.audio_buffer.available_frames > 0:
+                        stall_since = None
+                        time.sleep(0.15); continue
+                    now = time.monotonic()
+                    if stall_since is None:
+                        stall_since = now
+                        time.sleep(0.15); continue
+                    if now - stall_since < self.eof_stall_grace_sec:
+                        time.sleep(0.15); continue
+                    # The decoder ended early relative to its own declared
+                    # total. Waiting longer leaves the deck silent forever and
+                    # the playlist never advances, so accept the real end.
+                    stall_since = None
+                    self.audio_buffer.set_eof()
+                    while self._running and self._seek_target is None:
+                        with self._wake_cond: self._wake_cond.wait(timeout=0.2)
+                    continue
+                stall_since = None
                 got = False
                 for _ in range(4):
                     time.sleep(0.1)
@@ -3916,6 +3973,47 @@ class AudioEngine:
         self.stop_playback(reset_position=True)
         return removed
 
+    def remove_tracks(self, paths: Sequence[str]) -> int:
+        """Remove the named playlist rows now. Audio files stay on disk.
+
+        The window removes the row from its own list on the same keystroke, so
+        this only has to keep the engine's copy in step. Deleting the playing
+        track stops the deck instead of leaving it claiming a row that is no
+        longer in the list; deleting any other row keeps playback running and
+        recomputes the cursor from the surviving paths, so the next automatic
+        advance still lands on the right track.
+        """
+        drop = {str(p) for p in (paths or []) if p}
+        if not drop:
+            return 0
+        with self._queue_lock:
+            queued_before = len(self.play_queue)
+            self.play_queue[:] = [
+                t for t in self.play_queue if str(t.get("path") or "") not in drop
+            ]
+            queue_changed = len(self.play_queue) != queued_before
+        keep = [t for t in self.playlist if str(t.get("path") or "") not in drop]
+        removed = len(self.playlist) - len(keep)
+        if removed <= 0:
+            if queue_changed:
+                self._sync_state_file()
+            return 0
+        current_path = str((self.current_track or {}).get("path") or "")
+        removed_current = current_path in drop
+        old_index = self.current_index
+        self.playlist = keep
+        if removed_current:
+            self.current_track, self.duration_sec = None, 0.0
+            self.current_index = min(old_index, max(0, len(keep) - 1)) if keep else 0
+            self.stop_playback(reset_position=True)
+        else:
+            for i, track in enumerate(keep):
+                if str(track.get("path") or "") == current_path:
+                    self.current_index = i
+                    break
+        self._sync_state_file(force=True)
+        return removed
+
     def replace_playlist(self, rows: List[Dict[str, Any]], playlist_path: str = "",
                          mode: str = "PLAYLIST", play: bool = True) -> int:
         """Replace the engine's list with ``rows`` and optionally start it.
@@ -4129,6 +4227,10 @@ class AudioEngine:
             "peaks_left": peaks_left, "peaks_right": peaks_right,
             "waveform": waveform,
             "rms_level": round(float(self.rms_level), 4), "peak_db": round(float(self.peak_db), 1), "pid": os.getpid(),
+            # Two install trees share one runtime socket. The window compares
+            # this with its own script so an older daemon cannot silently keep
+            # serving a newer build (and hiding fixes made in it).
+            "player_script": _PLAYER_SCRIPT_PATH,
             "eq_preset": str(self.eq_manager.active_preset),
             "eq_bands": [round(float(x), 1) for x in self.eq_manager.get_current_bands()],
             "eq_is_flat": bool(self.eq_manager.is_flat()),
@@ -4230,9 +4332,37 @@ class PlayerIPCServer:
 
     def _handle_client(self, conn: socket.socket):
         try:
-            conn.settimeout(2.0)
-            if not (data := conn.recv(4096).decode('utf-8')): return
-            req, e, res = json.loads(data), self.engine, {"status": "ok"}
+            conn.settimeout(5.0)
+            # Requests are JSON with no length prefix. A large selection can
+            # name tens of thousands of paths, so a single 4 KiB recv truncated
+            # the message and the daemon discarded the whole command. Read until
+            # the JSON parses, within a bounded size, then handle it once.
+            raw_parts: List[bytes] = []
+            total, req = 0, None
+            while True:
+                part = conn.recv(65536)
+                if not part:
+                    if not raw_parts:
+                        return
+                    break
+                raw_parts.append(part)
+                total += len(part)
+                # A JSON object ends at its closing brace. Parsing only when a
+                # chunk ends there avoids re-parsing the whole message on every
+                # 64 KiB read of a large selection.
+                if not part.rstrip().endswith(b"}"):
+                    if total >= IPC_MAX_REQUEST_BYTES:
+                        raise ValueError(f"IPC request exceeds {IPC_MAX_REQUEST_BYTES} bytes")
+                    continue
+                try:
+                    req = json.loads(b"".join(raw_parts).decode("utf-8"))
+                    break
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    if total >= IPC_MAX_REQUEST_BYTES:
+                        raise ValueError(f"IPC request exceeds {IPC_MAX_REQUEST_BYTES} bytes")
+            if req is None:
+                req = json.loads(b"".join(raw_parts).decode("utf-8"))
+            e, res = self.engine, {"status": "ok"}
             cmd = req.get("cmd")
             if cmd == "status": res["data"] = e.get_status_dict()
             elif cmd == "drop_audio":
@@ -4326,6 +4456,9 @@ class PlayerIPCServer:
             elif cmd == "get_queue": res["queue"] = q = e.get_queue(); res["queue_len"] = len(q)
             elif cmd == "clear_queue": res["cleared"] = e.clear_queue()
             elif cmd == "clear_playlist": res["cleared"] = e.clear_playlist()
+            elif cmd == "remove_tracks":
+                paths = req.get("paths") or ([req.get("path")] if req.get("path") else [])
+                res["removed"] = e.remove_tracks(paths)
             elif cmd == "get_playlist": res["playlist"] = [{"index": i, "name": t["name"], "path": t["path"], "ext": t["ext"]} for i, t in enumerate(e.playlist[:100])]
             elif cmd in ("open_file_manager", "reveal"):
                 t = choose_file_manager_target(req.get("file") or (e.current_track.get("path") if e.current_track else ""))
@@ -4536,6 +4669,46 @@ def is_player_daemon_running() -> bool:
         except (ConnectionRefusedError, OSError): PORT_FILE.unlink(missing_ok=True)
         except Exception: return True
     return False
+
+def _daemon_runs_this_build(status_data: Any) -> bool:
+    """True when the daemon on the shared socket was started from this file.
+
+    The install trees all use ``~/.config/mix-manager/mp_audio_player.sock``.
+    Without this check a 0.5 window adopted a 0.4 daemon and ran that older
+    engine, so a fault fixed and tested in 0.5 kept happening on screen.
+    """
+    if not isinstance(status_data, dict):
+        return False
+    script = str(status_data.get("player_script") or "").strip()
+    if not script:
+        return False
+    try:
+        return Path(script).resolve() == Path(_PLAYER_SCRIPT_PATH)
+    except OSError:
+        return False
+
+def _retire_foreign_player_daemon() -> None:
+    """Stop a daemon from another install that still owns the shared socket."""
+    candidates = set(_audio_player_daemon_pids())
+    try:
+        candidates.add(int(PID_FILE.read_text(encoding="utf-8").strip()))
+    except (OSError, ValueError):
+        pass
+    me = os.getpid()
+    stop_sig = getattr(signal, "SIGKILL", signal.SIGTERM)
+    for pid in candidates:
+        if int(pid) == me:
+            continue
+        try:
+            os.kill(int(pid), stop_sig)
+        except OSError:
+            pass
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline:
+        if not any(_pid_alive(int(p)) for p in candidates if int(p) != me):
+            break
+        time.sleep(0.05)
+    _cleanup_stale_daemon_files()
 
 def _existing_audio_path(raw: Optional[str]) -> str:
     """Return the first real file named by a player argument.
@@ -8501,6 +8674,10 @@ class TerminalPlayerUI:
         # "timeline" or "pitch" while a press on one of them is scrubbing.
         self._transport_drag = ""
         self.selected_row, self.scroll_offset, self.notification_msg, self.notification_time = 0, 0, "", 0.0
+        # Shift+arrows / Shift+click extend one contiguous selection from this
+        # anchor. None means only the cursor row is selected. Del removes every
+        # row in the range in one keystroke.
+        self._selection_anchor: Optional[int] = None
         # True while the visible notice is the "Color Theme: <name>" line, which
         # is drawn in white whatever the active theme is.
         self.notification_is_theme = False
@@ -8654,6 +8831,7 @@ class TerminalPlayerUI:
         self.search_query = ""
         self.selected_row = 0
         self.scroll_offset = 0
+        self._selection_anchor = None
         mixes = list(scanner.mixes)
         if target == "MUSIC":
             self.folder_name = str(getattr(scanner, "folder_name", self.folder_name) or "ALL").upper()
@@ -8794,7 +8972,12 @@ class TerminalPlayerUI:
             self._last_path = cp
             if not self.search_query:
                 for i, m in enumerate(self._get_active_tracks()):
-                    if m["path"] == cp: self.selected_row = i; break
+                    if m["path"] == cp:
+                        self.selected_row = i
+                        # A track change moves the cursor; a Shift selection
+                        # from the previous track must not stretch to it.
+                        self._selection_anchor = None
+                        break
 
     def _remember_eq_bands(self, expires: float = 3.0) -> None:
         """Hold the bands this window just set until the daemon echoes them."""
@@ -8850,6 +9033,7 @@ class TerminalPlayerUI:
                 if f := (kwargs.get("file") or kwargs.get("track")): e.queue_track(f)
             elif cmd == "clear_queue": e.clear_queue()
             elif cmd == "clear_playlist": e.clear_playlist()
+            elif cmd == "remove_tracks": e.remove_tracks(kwargs.get("paths") or [])
             elif cmd == "open_file_manager":
                 if target := choose_file_manager_target(kwargs.get("file") or (e.current_track.get("path") if e.current_track else "")):
                     open_in_file_manager(target)
@@ -9058,13 +9242,6 @@ class TerminalPlayerUI:
         if getattr(self, "notification_is_theme", False):
             return f"{bold_s}{theme_notice_ansi(self.visualizer.theme)}"
         return f"{bold_s}{COLOR_TRAFFIC_GREEN}"
-
-    def _entry_noun(self) -> str:
-        if self.mode == "MUSIC":
-            return "tracks"
-        if self.mode == "FAVORITES":
-            return "favorites"
-        return "mixes"
 
     def _favorites_store(self) -> FavoritesStore:
         store = getattr(self, "favorites", None)
@@ -9415,7 +9592,7 @@ class TerminalPlayerUI:
         """
         n = len(self._get_active_tracks()) if count is None else int(count)
         mode = str(getattr(self, "mode", "")).upper()
-        noun = self._entry_noun().capitalize()
+        noun = self._entry_noun(n).capitalize()
         name = self._opened_playlist_name()
         if name and mode == "PLAYLIST":
             return f"OPENED PLAYLIST — {name} ({n} {noun})"
@@ -9961,6 +10138,7 @@ class TerminalPlayerUI:
                 self.search_mode = False
                 self.search_query = ""
                 self.selected_row = 0
+                self._selection_anchor = None
                 self.scroll_offset = 0
                 self._notify(f"Back to {self._library_label(mode)}", 3.0)
             return
@@ -9978,6 +10156,7 @@ class TerminalPlayerUI:
         self.inspector_hud_active = False
         self.selected_row = 0
         self.scroll_offset = 0
+        self._selection_anchor = None
         self._sync_open_favorites()
         count = len(self._favorites_store())
         if count:
@@ -10439,9 +10618,9 @@ class TerminalPlayerUI:
             self._playlist_drag_index = None
             return
         # Bit 64 is the wheel bit (64 = wheel up, 65 = wheel down); 32 is
-        # motion, 28 a middle/right press and 3 a release or drag. Only a plain
-        # left press may select or play a row.
-        if kind != b"M" or (button & 32) or (button & 28) or (button & 3) or (button & 64):
+        # motion, 8/16 are meta/control and 3 a release or drag. Shift (4) is
+        # allowed through so a Shift+click can extend the playlist selection.
+        if kind != b"M" or (button & 32) or (button & 24) or (button & 3) or (button & 64):
             return
         if self._on_transport_click(col, row):
             return
@@ -10460,10 +10639,11 @@ class TerminalPlayerUI:
         if bass_row and row == bass_row and bass_span[0] <= col <= bass_span[1]:
             self._cycle_bass_mode(1)
             return
-        self._on_favorites_click(col, row)
+        self._on_favorites_click(col, row, shift=bool(button & 4))
 
     def _play_selected_row(self):
         """Play the row under the selection bar. Enter and a playlist double-click share this."""
+        self._selection_anchor = None
         mixes = self._get_active_tracks()
         if not (mixes and 0 <= self.selected_row < len(mixes)):
             return
@@ -10504,7 +10684,7 @@ class TerminalPlayerUI:
                 return
         self._send_cmd("play", file=chosen["path"])
 
-    def _on_favorites_click(self, col: int, row: int):
+    def _on_favorites_click(self, col: int, row: int, shift: bool = False):
         if self._favorites_decision_active():
             return
         button_row = getattr(self, "_favorites_button_row", 0)
@@ -10519,12 +10699,21 @@ class TerminalPlayerUI:
             return
         index = getattr(self, "_playlist_star_rows", {}).get(row)
         star_col = getattr(self, "_playlist_star_col", 14)
+        if index is not None and shift:
+            # Shift+click selects every row between the previous cursor and
+            # this one. It never plays, toggles a star or starts a drag.
+            self._playlist_drag_index = None
+            self._forget_playlist_double_click()
+            self._extend_selection(target=index)
+            return
         if index is not None and abs(col - star_col) <= 1:
+            self._selection_anchor = None
             self.selected_row = index
             self._toggle_favorite()
             self._forget_playlist_double_click()
             return
         if index is not None:
+            self._selection_anchor = None
             self.selected_row = index
             if self._take_playlist_double_click(index):
                 # A second click on the same row plays it, exactly like Enter.
@@ -10709,6 +10898,7 @@ class TerminalPlayerUI:
             item = {"name": os.path.basename(chosen), "path": chosen, "size_mb": os.path.getsize(chosen) / 1048576.0, "mtime": time.time(), "ext": os.path.splitext(chosen)[1].lower()[1:].upper()}
             if not any(m["path"] == chosen for m in self.scanner.mixes): self.scanner.mixes.insert(0, item)
             self.selected_row = 0
+            self._selection_anchor = None
             return self._notify(f"Playing: {os.path.basename(chosen)}", 3.5)
         self._notify("No audio file selected. Press [F] for File Manager.", 3.0)
 
@@ -10764,6 +10954,7 @@ class TerminalPlayerUI:
         self.search_query = ""
         self.selected_row = 0
         self.scroll_offset = 0
+        self._selection_anchor = None
         self._playlist_clear_armed = False
         self._last_playlist_dir = os.path.dirname(path) or self._last_playlist_dir
         if self.is_remote:
@@ -10795,9 +10986,15 @@ class TerminalPlayerUI:
         self._notify(note, 4.0)
         return True
 
-    def _entry_noun(self) -> str:
+    def _entry_noun(self, count: Optional[int] = None) -> str:
         """What this library's rows are called in messages ("mixes"/"tracks")."""
-        return "tracks" if str(getattr(self, "mode", "")).upper() in ("MUSIC", "PLAYLIST") else "mixes"
+        single = count == 1
+        mode = str(getattr(self, "mode", "")).upper()
+        if mode in ("MUSIC", "PLAYLIST"):
+            return "track" if single else "tracks"
+        if mode == "FAVORITES":
+            return "favorite" if single else "favorites"
+        return "mix" if single else "mixes"
 
     def _opened_playlist_name(self) -> str:
         """The file name of the playlist the window is showing, or ""."""
@@ -10815,6 +11012,7 @@ class TerminalPlayerUI:
         self.search_query = ""
         self.selected_row = 0
         self.scroll_offset = 0
+        self._selection_anchor = None
         self._playlist_clear_armed = False
 
     def _drop_notice(self, items: List[Dict[str, Any]], truncated: bool) -> str:
@@ -11019,7 +11217,7 @@ class TerminalPlayerUI:
             return
         self._playlist_clear_armed = True
         self._notify(
-            f"Clear the entire playlist ({removed} {self._entry_noun()})? Press D or Del again to confirm. Esc cancels. Audio files stay on disk.",
+            f"Clear the entire playlist ({removed} {self._entry_noun(removed)})? Press D again to confirm. Esc cancels. Audio files stay on disk.",
             6.0,
         )
 
@@ -11037,6 +11235,7 @@ class TerminalPlayerUI:
         self.search_query = ""
         self.selected_row = 0
         self.scroll_offset = 0
+        self._selection_anchor = None
         self._send_cmd("clear_playlist")
         if isinstance(self.cached_status, dict):
             self.cached_status.update(
@@ -11045,7 +11244,7 @@ class TerminalPlayerUI:
                 queue=[], queue_len=0, total_tracks=0,
             )
         self._notify(
-            f"Playlist cleared — {removed} {self._entry_noun()} removed. Press [1], [2], or [3] to reload. Audio files were not deleted.",
+            f"Playlist cleared — {removed} {self._entry_noun(removed)} removed. Press [1], [2], or [3] to reload. Audio files were not deleted.",
             5.0,
         )
 
@@ -11470,12 +11669,12 @@ class TerminalPlayerUI:
         if self.search_mode:
             if data in (b"\r", b"\n"): self.search_mode = False
             elif data == b"\x1b": self.search_mode, self.search_query = False, ""
-            elif data in (b"\x7f", b"\x08"): self.search_query, self.selected_row = self.search_query[:-1], 0
+            elif data in (b"\x7f", b"\x08"): self.search_query, self.selected_row, self._selection_anchor = self.search_query[:-1], 0, None
             elif data in (b"\x1b[A", b"\x1bOA"): self._navigate_list(-1)
             elif data in (b"\x1b[B", b"\x1bOB"): self._navigate_list(1)
             else:
                 try:
-                    if (c := data.decode("utf-8", "ignore")).isprintable(): self.search_query, self.selected_row = self.search_query + c, 0
+                    if (c := data.decode("utf-8", "ignore")).isprintable(): self.search_query, self.selected_row, self._selection_anchor = self.search_query + c, 0, None
                 except Exception: pass
             return
 
@@ -11564,7 +11763,7 @@ class TerminalPlayerUI:
             if data in (b"g", b"G"): return self._generate_selected_spek()
             if data in (b"\x1b", b"i", b"I", b"\r", b"\n", b"q", b"Q", b" "): self.inspector_hud_active = False; return
         if getattr(self, "_playlist_clear_armed", False) and not self.equalizer_hud_active and not self.inspector_hud_active:
-            if data in (b"d", b"D", b"\x1b[3~"):
+            if data in (b"d", b"D"):
                 self._confirm_clear_playlist()
                 return
             if data == b"\x1b":
@@ -11585,7 +11784,19 @@ class TerminalPlayerUI:
             self.equalizer_hud_active = not self.equalizer_hud_active
             if self.equalizer_hud_active: self.inspector_hud_active = False
             return
-        if data in (b"\x1b[A", b"\x1bOA", b"k"): self._navigate_list(-1)
+        # Shift+arrows extend the playlist selection instead of moving the
+        # cursor alone, so Del can remove several rows in one go. Terminals
+        # disagree on the exact sequence: xterm and Konsole use the `1;2`
+        # modifier form, while a few send the rxvt single-letter forms.
+        if data in (b"\x1b[1;2A", b"\x1b[a"): self._extend_selection(-1)
+        elif data in (b"\x1b[1;2B", b"\x1b[b"): self._extend_selection(1)
+        elif data in (b"\x1b[5;2~",): self._extend_selection(-5)
+        elif data in (b"\x1b[6;2~",): self._extend_selection(5)
+        elif data in (b"\x1b[1;2H", b"\x1b[1;2~", b"\x1b[7;2~"):
+            self._extend_selection(target=0)
+        elif data in (b"\x1b[1;2F", b"\x1b[4;2~", b"\x1b[8;2~"):
+            if flt := self._get_active_tracks(): self._extend_selection(target=len(flt) - 1)
+        elif data in (b"\x1b[A", b"\x1bOA", b"k"): self._navigate_list(-1)
         elif data in (b"\x1b[B", b"\x1bOB", b"j"): self._navigate_list(1)
         elif data == b"J":
             # Shift+J exports the Favorites playlist; lowercase j still scrolls.
@@ -11597,8 +11808,11 @@ class TerminalPlayerUI:
             self._favorites_history_import_begin()
         elif data == b"\x1b[5~": self._navigate_list(-5)
         elif data == b"\x1b[6~": self._navigate_list(5)
-        elif data in (b"\x1b[H", b"\x1b[1~", b"\x1b[7~", b"\x1bOH"): self.selected_row = 0
+        elif data in (b"\x1b[H", b"\x1b[1~", b"\x1b[7~", b"\x1bOH"):
+            self._selection_anchor = None
+            self.selected_row = 0
         elif data in (b"\x1b[F", b"\x1b[4~", b"\x1b[8~", b"\x1bOF"):
+            self._selection_anchor = None
             if flt := self._get_active_tracks(): self.selected_row = len(flt) - 1
         elif data in (b"\x1b[D", b"\x1bOD"):
             # Left/Right always seek, even with the MP Visualizer on behind the
@@ -11766,8 +11980,12 @@ class TerminalPlayerUI:
             self._notify("✦ Opened MP Gui" if ok else "Failed to open MP Gui", 3.0)
         elif data in (b"g", b"G"): self._generate_selected_spek()
         elif data in (b"q", b"Q"): self._queue_selected()
-        elif data in (b"d", b"D", b"\x1b[3~") and not self.equalizer_hud_active and not self.inspector_hud_active:
+        elif data in (b"d", b"D") and not self.equalizer_hud_active and not self.inspector_hud_active:
             self._arm_playlist_clear()
+        elif data == b"\x1b[3~" and not self.equalizer_hud_active and not self.inspector_hud_active:
+            # Delete removes the selected row(s) immediately; D keeps its
+            # long-standing "clear the whole playlist" meaning with a confirm.
+            self._delete_selected_tracks()
         elif data in (b"x", b"X"):
             # X opens MP Liquid Mixer, matching MP Gui and the console manager.
             # Esc, q and Ctrl+C remain the exit keys. A mixer that is already
@@ -11793,7 +12011,95 @@ class TerminalPlayerUI:
             self._notify(_liquid_mixer_notice(result), 3.5)
 
     def _navigate_list(self, delta: int):
+        self._selection_anchor = None
         if m := self._get_active_tracks(): self.selected_row = max(0, min(len(m) - 1, self.selected_row + delta))
+
+    def _selection_bounds(self, tracks: Optional[List[Dict[str, Any]]] = None) -> Optional[Tuple[int, int]]:
+        """Inclusive row range the selection covers, clamped to the visible list."""
+        rows = tracks if tracks is not None else self._get_active_tracks()
+        if not rows:
+            return None
+        last = len(rows) - 1
+        cursor = max(0, min(last, int(self.selected_row)))
+        if self._selection_anchor is None:
+            return cursor, cursor
+        anchor = max(0, min(last, int(self._selection_anchor)))
+        return min(anchor, cursor), max(anchor, cursor)
+
+    def _selected_indices(self, tracks: Optional[List[Dict[str, Any]]] = None) -> List[int]:
+        bounds = self._selection_bounds(tracks)
+        return list(range(bounds[0], bounds[1] + 1)) if bounds else []
+
+    def _extend_selection(self, delta: Optional[int] = None, target: Optional[int] = None):
+        """Move the cursor and keep the anchor, selecting every row between."""
+        tracks = self._get_active_tracks()
+        if not tracks:
+            return
+        last = len(tracks) - 1
+        if self._selection_anchor is None:
+            self._selection_anchor = max(0, min(last, int(self.selected_row)))
+        if target is not None:
+            self.selected_row = max(0, min(last, int(target)))
+        else:
+            self.selected_row = max(0, min(last, self.selected_row + int(delta or 0)))
+
+    def _delete_selected_tracks(self):
+        """Delete the rows under the selection at once. Audio files stay on disk.
+
+        Del is deliberately immediate: the old binding armed a whole-playlist
+        clear and asked for a second press, which read as "nothing happened".
+        A window looking at the engine also sends the same paths over IPC so
+        the daemon's list and the next automatic advance agree with the rows
+        that are now on screen.
+        """
+        self._playlist_clear_armed = False
+        tracks = self._get_active_tracks()
+        indices = self._selected_indices(tracks)
+        paths = [str(tracks[i].get("path") or "") for i in indices if 0 <= i < len(tracks)]
+        paths = [p for p in paths if p]
+        if not paths:
+            self._notify("No track selected to remove.", 2.5)
+            return
+        noun = self._entry_noun(len(paths))
+        self._forget_playlist_double_click()
+        self._selection_anchor = None
+        if self.mode == "FAVORITES":
+            removed = self._favorites_store().remove_paths(paths)
+            self._sync_open_favorites()
+            self._selection_anchor = None
+            self._notify(
+                f"Removed {removed} {noun} from Favorites. Audio files were not deleted.",
+                3.5,
+            )
+            return
+        drop = set(paths)
+        rows = getattr(self.scanner, "mixes", None)
+        if not isinstance(rows, list):
+            return
+        keep = [track for track in rows if str(track.get("path") or "") not in drop]
+        removed = len(rows) - len(keep)
+        if removed <= 0:
+            self._notify("Those rows are no longer in the playlist.", 2.5)
+            return
+        self.scanner.mixes = keep
+        if hasattr(self.scanner, "_search_cache_initialized"):
+            self.scanner._search_cache_initialized = None
+        self._send_cmd("remove_tracks", paths=paths)
+        remaining = self._get_active_tracks()
+        self.selected_row = min(self.selected_row, max(0, len(remaining) - 1)) if remaining else 0
+        self.scroll_offset = min(self.scroll_offset, self.selected_row)
+        # If the removed row was the one on the deck, paint the empty deck now
+        # instead of leaving the old title up until the daemon's next poll.
+        if isinstance(self.cached_status, dict) and str(self.cached_status.get("path") or "") in drop:
+            self.cached_status.update(
+                title="No Track Loaded", path="", state="stopped",
+                position_fmt="00:00", duration_fmt="00:00", progress_pct=0.0,
+            )
+            self._last_path = ""
+        self._notify(
+            f"Removed {removed} {noun} from the playlist. Audio files were not deleted.",
+            3.5,
+        )
 
     def _follow_visualizer_preset(self):
         """Adopt a preset chosen inside the MP Visualizer window.
@@ -12183,10 +12489,12 @@ class TerminalPlayerUI:
                     if _qp not in q_index:
                         q_index[_qp] = _qi
                 theme_name = self.visualizer.theme
+                sel_bounds = self._selection_bounds(active_tracks)
                 for i in range(self.scroll_offset, min(len(active_tracks), self.scroll_offset + vrows)):
                     m = active_tracks[i]
                     path = m["path"]
                     act, sel = (path == st.get("path")), (i == self.selected_row)
+                    in_sel = bool(sel_bounds and sel_bounds[0] <= i <= sel_bounds[1])
                     qi = q_index.get(path)
                     in_q = qi is not None
                     rn = "".join(
@@ -12216,8 +12524,8 @@ class TerminalPlayerUI:
                     # 0.1-second tick. Every other row keeps a stable key and
                     # stays cached.
                     bar_tick = round(self.visualizer.frame_time(), 1)
-                    cache_key = (i, path, rn, ext_s, f_str, act, sel, in_q, pfx, iw, avail_name, theme_name, bold_s, self.mode, fav, _LIMITED_GLYPHS,
-                                 bar_tick if (sel or act) else None)
+                    cache_key = (i, path, rn, ext_s, f_str, act, sel, in_sel, in_q, pfx, iw, avail_name, theme_name, bold_s, self.mode, fav, _LIMITED_GLYPHS,
+                                 bar_tick if (in_sel or act) else None)
                     # Mouse hit-testing reads these every frame, including when
                     # the painted line itself is reused.
                     self._playlist_star_col = _display_width(f"  │ {pfx}[{i+1:4d}] ") + 1
@@ -12239,9 +12547,9 @@ class TerminalPlayerUI:
                     # still read as black on every theme after the row ink
                     # itself was made white -- only the star was white.
                     sel_bg = sel_fg = ""
-                    if sel:
+                    if in_sel:
                         sel_bg, sel_fg = _selection_bar_ansi(theme_name)
-                    row_ink = sel_fg if sel else (act_col if act else playlist_text_col)
+                    row_ink = sel_fg if in_sel else (act_col if act else playlist_text_col)
                     star = favorite_glyph(fav)
                     if star.strip():
                         # White star, then put the row's own fill and ink back.
@@ -12249,9 +12557,10 @@ class TerminalPlayerUI:
                     ip = f" {pfx}[{i+1:4d}] {star} {mn}{npad} {ext_s} {f_str} "
                     cw = _display_width(ip)
                     ip = ip + " " * (iw - cw) if cw < iw else (_clip_display(ip, iw) if cw > iw else ip)
-                    if sel:
-                        # The selection bar follows the active theme instead of a
-                        # fixed grey (console) or reverse video (Liquid Glass).
+                    if in_sel:
+                        # Every row in the Shift selection carries the same
+                        # theme fill as the cursor row, so the block is
+                        # obvious before Del removes it.
                         line = f"  {b_col}│{NC}{sel_bg}{sel_fg}{ip}{NC}{b_col}│{NC}"
                     # The playing row is tinted with the theme's `active` hue so
                     # it is distinguishable from the cursor row (which carries the
@@ -12269,11 +12578,11 @@ class TerminalPlayerUI:
                     row_cache[cache_key] = line
                     lines.append(line)
             if self.mode == "FAVORITES":
-                list_footer = "── ↑/↓: Scroll  •  Enter: Play  •  [O] Open Playlist • [w] Export  •  [H]: Mark  •  [D]: Clear  •  [1]: Mix Archive  •  [2]: Music  •  Q: Queue  •  /: Search "
+                list_footer = "── ↑/↓: Scroll • Shift+↑/↓: Select • Del: Remove • Enter: Play • [O] Open Playlist • [w] Export • [H]: Mark • [D]: Clear • [1]: Mix Archive • [2]: Music • Q: Queue • /: Search "
             elif self.mode == "MUSIC":
-                list_footer = f"── ↑/↓: Scroll • Enter: Play • [1] Mix • [2] Music • [3] Favorites • [H] Mark • Q: Queue • D: Clear • G: {g_key} • /: Search "
+                list_footer = f"── ↑/↓: Scroll • Shift+↑/↓: Select • Del: Remove • Enter: Play • [1] Mix • [2] Music • [3] Favorites • [H] Mark • Q: Queue • D: Clear • G: {g_key} • /: Search "
             else:
-                list_footer = f"── ↑/↓: Scroll  •  Enter: Play  •  [1] Mix Archive  •  [2] Music  •  [3] Favorites  •  [H] Mark  •  Q: Queue  •  D: Clear  •  G: {g_key}  •  O: Open  •  T: Tracklist "
+                list_footer = f"── ↑/↓: Scroll • Shift+↑/↓: Select • Del: Remove • Enter: Play • [1] Mix Archive • [2] Music • [3] Favorites • [H] Mark • Q: Queue • D: Clear • G: {g_key} • O: Open • T: Tracklist "
             # The footer is part of the rule, so it shares the border ink and
             # the panel outline stays one colour all the way around.
             lines.append(_boxed_rule("└", list_footer, "┘", iw, b_col, b_col))
@@ -12321,9 +12630,9 @@ class TerminalPlayerUI:
             g_bottom = f"[G] {g_key}  " if is_lg else ""
             lines.extend([
                 _fit_text_line([
-                    f"  {bold_s}{COLOR_TRAFFIC_GREEN}TRACK CONTROLS:{NC} {bold_s}{COLOR_ELECTRIC_CYAN}[3]{NC} {bold_s}Favorites{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[H]{NC} {bold_s}Mark Fav{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[1]{NC} {bold_s}Mix Archive{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[2]{NC} {bold_s}Music{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[D]{NC} {bold_s}Clear Playlist{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[Space]{NC} {bold_s}Play/Pause{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[R]{NC} {bold_s}Record WAV{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[M]{NC} {bold_s}Vertical{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[L]{NC} {bold_s}Liquid Glass{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[Z]{NC} {bold_s}MP Liquid Visualizer{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[X]{NC} {bold_s}Liquid Mixer{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[Q]{NC} {bold_s}Queue{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[G]{NC} {bold_s}{g_key}{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[I]{NC} {bold_s}Track Inspector{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[E]{NC} {bold_s}Equalizer HUD{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[b]{NC} {bold_s}Bass Boost{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[/]{NC} {bold_s}Search{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[n/p]{NC} {bold_s}Skip{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[+/-]{NC} {bold_s}Pitch{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[v/V]{NC} {bold_s}Vol{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[u]{NC} {bold_s}Mute{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[Esc]{NC} {bold_s}Exit{NC}",
-                    f"  {bold_s}{COLOR_TRAFFIC_GREEN}CONTROLS:{NC} {bold_s}[3] Favorites{NC}  {bold_s}[H] Mark{NC}  {bold_s}[1] Mix Archive{NC}  {bold_s}[2] Music{NC}  {bold_s}[D] Clear{NC}  {bold_s}[Space] Play{NC}  {bold_s}[R] Rec WAV{NC}  {bold_s}[M] Vertical{NC}  {bold_s}[L] Liquid{NC}  {bold_s}[Q] Queue{NC}  {bold_s}[G] {g_key}{NC}  {bold_s}[E] Equalizer{NC}  {bold_s}[b] Bass{NC}  {bold_s}[/] Search{NC}  {bold_s}[n/p] Skip{NC}  {bold_s}[u] Mute{NC}  {bold_s}[Esc] Exit{NC}",
-                    f"  {bold_s}[3] Fav  [H] Mark  [1] Mix  [2] Music  [D] Clear  Space Play  [X] Mixer  [Q] Queue  [G] {g_key}  [E] EQ  [b] Bass  [/] Search  n/p Skip  Esc Exit{NC}"
+                    f"  {bold_s}{COLOR_TRAFFIC_GREEN}TRACK CONTROLS:{NC} {bold_s}{COLOR_ELECTRIC_CYAN}[3]{NC} {bold_s}Favorites{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[H]{NC} {bold_s}Mark Fav{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[1]{NC} {bold_s}Mix Archive{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[2]{NC} {bold_s}Music{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[D]{NC} {bold_s}Clear Playlist{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[Del]{NC} {bold_s}Remove{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[Space]{NC} {bold_s}Play/Pause{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[R]{NC} {bold_s}Record WAV{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[M]{NC} {bold_s}Vertical{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[L]{NC} {bold_s}Liquid Glass{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[Z]{NC} {bold_s}MP Liquid Visualizer{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[X]{NC} {bold_s}Liquid Mixer{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[Q]{NC} {bold_s}Queue{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[G]{NC} {bold_s}{g_key}{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[I]{NC} {bold_s}Track Inspector{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[E]{NC} {bold_s}Equalizer HUD{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[b]{NC} {bold_s}Bass Boost{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[/]{NC} {bold_s}Search{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[n/p]{NC} {bold_s}Skip{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[+/-]{NC} {bold_s}Pitch{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[v/V]{NC} {bold_s}Vol{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[u]{NC} {bold_s}Mute{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}[Esc]{NC} {bold_s}Exit{NC}",
+                    f"  {bold_s}{COLOR_TRAFFIC_GREEN}CONTROLS:{NC} {bold_s}[3] Favorites{NC}  {bold_s}[H] Mark{NC}  {bold_s}[1] Mix Archive{NC}  {bold_s}[2] Music{NC}  {bold_s}[D] Clear{NC}  {bold_s}[Del] Remove{NC}  {bold_s}[Space] Play{NC}  {bold_s}[R] Rec WAV{NC}  {bold_s}[M] Vertical{NC}  {bold_s}[L] Liquid{NC}  {bold_s}[Q] Queue{NC}  {bold_s}[G] {g_key}{NC}  {bold_s}[E] Equalizer{NC}  {bold_s}[b] Bass{NC}  {bold_s}[/] Search{NC}  {bold_s}[n/p] Skip{NC}  {bold_s}[u] Mute{NC}  {bold_s}[Esc] Exit{NC}",
+                    f"  {bold_s}[3] Fav  [H] Mark  [1] Mix  [2] Music  [D] Clear  Del Remove  Space Play  [X] Mixer  [Q] Queue  [G] {g_key}  [E] EQ  [b] Bass  [/] Search  n/p Skip  Esc Exit{NC}"
                 ], max(20, w - 1)),
                 _fit_text_line([
                     f"  {hint_col}{g_bottom}[0] Pitch Reset  [u] Mute  [s] Shuffle  [y] Repeat  [b] Bass Boost  [L] Liquid Glass  [Z] MP Liquid Visualizer  [X] Liquid Mixer  [w] Glass  [E] Equalizer HUD  [e] Vis Style  [c] Color Theme  [a] Audio/BT  [O] Open  [F] Files{NC}",
@@ -12337,9 +12646,9 @@ class TerminalPlayerUI:
             # there rather than advertising a key that does nothing.
             export_hint = "  Export Tracks" if self.mode == "FAVORITES" else ""
             lines.append(_fit_text_line([
-                f"  {hint_col}[3] Favorites  [H] Mark Fav  [1] Mix Archive  [2] Music  [D] Clear Playlist{export_hint}  [Space] Play/Pause  [R] Record WAV  [M] Vertical  [L] Liquid Glass  [Z] MP Liquid Visualizer  [X] Liquid Mixer  [w] Black Glass  [Q] Queue  [G] {g_key}  [+/-] Pitch ±1% (±20% max)  [0] Pitch Reset  [v/V] Vol  [u] Mute  [s] Shuffle  [y] Repeat  [n/p] Next/Prev  [a] Audio/BT  [O] Open  [T] Tracklist  [W] Export  [F] Files  [E] Equalizer HUD  [b] Bass Boost  [e] Vis  [Esc] Exit{NC}",
-                f"  {hint_col}[3] Favorites  [H] Mark  [1] Mix Archive  [2] Music  [D] Clear{export_hint}  Space Play  R Rec  M Vertical  L Glass  Z Vis  X Mixer  W Glass  Q Queue  G {g_key}  +/- Pitch  0 Reset  v/V Vol  u Mute  s Shuf  y Rep  n/p Skip  O Open  T List  E EQ  b Bass  Esc Exit{NC}",
-                f"  {hint_col}[3] Fav  [H] Mark  [1] Mix  [2] Music  [D] Clear{export_hint}  Space Play  R Rec  M Vertical  X Mixer  W Glass  Q Queue  G {g_key}  v/V Vol  u Mute  s Shuf  y Rep  n/p Skip  E EQ  b Bass  Esc Exit{NC}",
+                f"  {hint_col}[3] Favorites  [H] Mark Fav  [1] Mix Archive  [2] Music  [D] Clear Playlist{export_hint}  [Del] Remove  [Space] Play/Pause  [R] Record WAV  [M] Vertical  [L] Liquid Glass  [Z] MP Liquid Visualizer  [X] Liquid Mixer  [w] Black Glass  [Q] Queue  [G] {g_key}  [+/-] Pitch ±1% (±20% max)  [0] Pitch Reset  [v/V] Vol  [u] Mute  [s] Shuffle  [y] Repeat  [n/p] Next/Prev  [a] Audio/BT  [O] Open  [T] Tracklist  [W] Export  [F] Files  [E] Equalizer HUD  [b] Bass Boost  [e] Vis  [Esc] Exit{NC}",
+                f"  {hint_col}[3] Favorites  [H] Mark  [1] Mix Archive  [2] Music  [D] Clear{export_hint}  [Del] Remove  Space Play  R Rec  M Vertical  L Glass  Z Vis  X Mixer  W Glass  Q Queue  G {g_key}  +/- Pitch  0 Reset  v/V Vol  u Mute  s Shuf  y Rep  n/p Skip  O Open  T List  E EQ  b Bass  Esc Exit{NC}",
+                f"  {hint_col}[3] Fav  [H] Mark  [1] Mix  [2] Music  [D] Clear{export_hint}  [Del] Remove  Space Play  R Rec  M Vertical  X Mixer  W Glass  Q Queue  G {g_key}  v/V Vol  u Mute  s Shuf  y Rep  n/p Skip  E EQ  b Bass  Esc Exit{NC}",
                 # The narrowest form still has to name the keys a user needs
                 # to reach the other windows, so G stays.
                 f"  {hint_col}Space Play  M Mini  G {g_key}  E EQ  b Bass  c Theme  Esc Exit{NC}"
@@ -12552,38 +12861,41 @@ def _spawn_player_daemon(file_path: Optional[str] = None, auto_bluetooth: bool =
     if is_player_daemon_running():
         # A live PID is not enough: older/crashed startup paths can leave a
         # daemon holding the playback lock after its IPC listener disappeared.
-        # Reuse a responsive daemon, but retire that orphan so playback can be
-        # started by a fresh process.
-        if send_ipc_command("status"):
-            return None
-        try:
-            if time.time() - PID_FILE.stat().st_mtime < 120.0:
-                # Give a newly launched daemon time to scan a large library
-                # and bind its IPC socket before treating it as orphaned.
+        # Reuse a responsive daemon, but only when it runs this build; a daemon
+        # from another install tree is retired so this build's engine starts.
+        if (st := send_ipc_command("status")):
+            if _daemon_runs_this_build(st.get("data")):
                 return None
-            daemon_pid = int(PID_FILE.read_text(encoding="utf-8").strip())
-            if sys.platform == "win32":
-                return None
-            cmdline = subprocess.run(
-                ["ps", "-p", str(daemon_pid), "-o", "args="],
-                capture_output=True, text=True, timeout=1.0, check=False
-            ).stdout
-            if "MP_Audio_Player.py" not in cmdline or "--daemon" not in cmdline:
-                return None
-            os.kill(daemon_pid, signal.SIGTERM)
-            deadline = time.monotonic() + 3.0
-            while time.monotonic() < deadline:
-                try:
-                    os.kill(daemon_pid, 0)
-                except OSError:
-                    break
-                time.sleep(0.05)
-            else:
-                # Don't start another player while the unresponsive process
-                # still owns the audio engine and daemon lock.
-                return None
-        except (OSError, ValueError, ProcessLookupError):
-            pass
+            _retire_foreign_player_daemon()
+        else:
+            try:
+                if time.time() - PID_FILE.stat().st_mtime < 120.0:
+                    # Give a newly launched daemon time to scan a large library
+                    # and bind its IPC socket before treating it as orphaned.
+                    return None
+                daemon_pid = int(PID_FILE.read_text(encoding="utf-8").strip())
+                if sys.platform == "win32":
+                    return None
+                cmdline = subprocess.run(
+                    ["ps", "-p", str(daemon_pid), "-o", "args="],
+                    capture_output=True, text=True, timeout=1.0, check=False
+                ).stdout
+                if "MP_Audio_Player.py" not in cmdline or "--daemon" not in cmdline:
+                    return None
+                os.kill(daemon_pid, signal.SIGTERM)
+                deadline = time.monotonic() + 3.0
+                while time.monotonic() < deadline:
+                    try:
+                        os.kill(daemon_pid, 0)
+                    except OSError:
+                        break
+                    time.sleep(0.05)
+                else:
+                    # Don't start another player while the unresponsive process
+                    # still owns the audio engine and daemon lock.
+                    return None
+            except (OSError, ValueError, ProcessLookupError):
+                pass
     _cleanup_stale_daemon_files()
     cmd = [sys.executable, str(Path(__file__).resolve()), "--daemon"] + ([] if auto_bluetooth else ["--no-bluetooth-auto"])
     if no_autoplay:
@@ -13127,6 +13439,11 @@ def main():
         d_status = send_ipc_command("status") if daemon_running else None
         if daemon_running and not d_status:
             daemon_running = False
+        elif daemon_running and not _daemon_runs_this_build(d_status.get("data") if isinstance(d_status, dict) else None):
+            # A daemon from another install tree is answering. Stop it so this
+            # window starts the engine that matches the code it is showing.
+            _retire_foreign_player_daemon()
+            daemon_running, d_status = False, None
         elif daemon_running and d_status and isinstance(d_status.get("data"), dict):
             d_data = d_status["data"]
             if d_mode := d_data.get("mode"):

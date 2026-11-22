@@ -300,7 +300,7 @@ class TestCliPlayerAnimatesTheRainbowTheme(unittest.TestCase):
         """A cached selected/playing row would freeze the animated ink."""
         text = (ROOT / "MP_Audio_Player.py").read_text(encoding="utf-8")
         self.assertIn("bar_tick = round(self.visualizer.frame_time(), 1)", text)
-        self.assertIn("bar_tick if (sel or act) else None", text)
+        self.assertIn("bar_tick if (in_sel or act) else None", text)
 
     def test_rendered_frames_differ_over_time(self):
         """End-to-end: two draws a few seconds apart are not identical."""
