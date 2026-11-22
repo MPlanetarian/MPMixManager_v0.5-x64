@@ -104,7 +104,7 @@ usage() {
     echo "  --reset                   Clear settings for the chosen apps; keep them installed"
     echo "  --uninstall               Remove the chosen apps"
     echo "  --apps LIST               all, or manager,gui,liquid,visualizer,mixer"
-    echo "                            (mixer is Linux only)"
+    echo "                            (mixer: Linux, FreeBSD, Windows)"
     echo "  --keep-config             Uninstall: keep settings for a later install (default with --yes)"
     echo "  --delete-config           Uninstall: delete that app's saved settings"
     echo "  --yes, -y                 Do not ask for confirmation"
@@ -238,13 +238,17 @@ if [ -z "$MODE" ]; then
     esac
 fi
 
+# The mixer is a GTK/VTE/ALSA host on Linux and FreeBSD and a native
+# Tkinter/winmm host on Windows. macOS and WSL do not get it.
 _mp_mixer_ok=0
 case "$(uname -s 2>/dev/null)" in
-    Linux|FreeBSD) _mp_mixer_ok=1 ;;
+    Linux)
+        if [ -z "${WSL_DISTRO_NAME:-}" ] && ! grep -qi microsoft /proc/version 2>/dev/null; then
+            _mp_mixer_ok=1
+        fi
+        ;;
+    FreeBSD|CYGWIN*|MINGW*|MSYS*) _mp_mixer_ok=1 ;;
 esac
-if [ -n "${WSL_DISTRO_NAME:-}" ] || grep -qi microsoft /proc/version 2>/dev/null; then
-    _mp_mixer_ok=0
-fi
 
 if [ -z "$APPS" ]; then
     if [ ! -t 0 ]; then
@@ -332,7 +336,8 @@ fi
 case "$(printf '%s' "$APPS" | tr '[:upper:]' '[:lower:]')" in
     *mixer*)
         if [ "$_mp_mixer_ok" -ne 1 ]; then
-            echo "MP Liquid Mixer is Linux only (it needs X11/XWayland, VTE and ALSA)." >&2
+            echo "MP Liquid Mixer is not available on this platform." >&2
+            echo "It runs on Linux, FreeBSD and Windows." >&2
             exit 1
         fi
         ;;

@@ -4,7 +4,8 @@
 Reset clears that app's saved window and playback settings and leaves it
 installed. Uninstall removes its shortcuts. Saved settings are deleted only
 when asked, so a later install can come back with them. All five apps are
-supported, including the Linux-only MP Liquid Mixer on its own.
+supported, including MP Liquid Mixer on its own (Linux, FreeBSD and Windows;
+macOS has no port yet).
 
 Removing the last app also clears the per-user integration the installer
 added outside this tree (services, login agents, icons, KDE rules, shell
@@ -373,7 +374,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--apps",
         required=True,
-        help="all, or manager,gui,liquid,visualizer,mixer (mixer is Linux only)",
+        help="all, or manager,gui,liquid,visualizer,mixer (mixer: Linux, FreeBSD, Windows)",
     )
     parser.add_argument("--keep-config", action="store_true")
     parser.add_argument("--delete-config", action="store_true")

@@ -297,6 +297,16 @@ SPECS: List[Dict[str, Any]] = [
         "pip": "soundfile",
     },
     {
+        "id": "pyaudiowpatch",
+        "kind": "module",
+        "module": "pyaudiowpatch",
+        "required": False,
+        "purpose": "WASAPI loopback recording in the Windows MP Liquid Mixer",
+        "pkgs": {},
+        "pip": "PyAudioWPatch",
+        "note": "Windows only; the mixer records with sounddevice or disables REC without it",
+    },
+    {
         "id": "psutil",
         "kind": "module",
         "module": "psutil",

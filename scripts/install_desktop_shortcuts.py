@@ -8,15 +8,16 @@ Desktop and in the application menu:
   MP Mix Manager
   MP Gui
   MP Liquid Visualizer
-  MP Liquid Mixer      (Linux only)
+  MP Liquid Mixer      (Linux, FreeBSD & Windows)
 
-All five are selectable, including the mixer alone on Linux. The installer can
+All five are selectable, including the mixer alone on Linux, FreeBSD and
+Windows. The installer can
 be told to set up only some of them (``--components``, or the stored selection
 in ``scripts/mp_app_selection.py``), in which case only those shortcuts are
 written and the others are removed. ``SHORTCUT_NAMES`` stays the full catalogue
-in display order. macOS and Windows have no mixer entry because it needs
-X11/XWayland, VTE and ALSA; a mixer-only selection there installs nothing
-rather than falling back to the other apps.
+in display order. macOS has no mixer entry yet; Windows uses the native
+Tkinter/winmm port. A mixer-only selection on macOS installs nothing rather
+than falling back to the other apps.
 
 On macOS, MP Mix Manager stays a Terminal .command file. The other three are
 application bundles, so opening them does not open a Terminal window. All four
@@ -70,7 +71,7 @@ def selected_names(components=None, platform_name: str | None = None) -> tuple[s
     not put them back.
 
     ``platform_name`` defaults to the current platform. The mixer is filtered
-    out everywhere except Linux, because macOS and Windows cannot run it.
+    out only on macOS, which has no port yet.
     """
     platform_name = platform_name or detect_platform()
     if components is None and app_selection.file_says_none():
@@ -86,14 +87,14 @@ def selected_names(components=None, platform_name: str | None = None) -> tuple[s
     names = tuple(
         name for name in SHORTCUT_NAMES if COMPONENT_BY_NAME.get(name) in chosen
     )
-    if platform_name != "linux":
+    if platform_name == "macos":
         names = tuple(
             name for name in names if COMPONENT_BY_NAME.get(name) != "mixer"
         )
     if names:
         return names
-    # A mixer-only selection on macOS/Windows has no valid entry. Do not turn
-    # that into "install all four"; report nothing so the caller can leave the
+    # A mixer-only selection on macOS has no valid entry. Do not turn that
+    # into "install all four"; report nothing so the caller can leave the
     # Desktop alone (the installer refuses the choice before it gets here).
     if chosen == {"mixer"}:
         return tuple()
@@ -184,10 +185,7 @@ def shortcut_targets(root: Path) -> dict[str, dict]:
         "MP Liquid Mixer": {
             "comment": "Launch MP Liquid Mixer",
             "script": root / "scripts" / "launch_liquid_mixer.sh",
-            # The mixer is a Linux-only GTK/VTE/ALSA host. There is no Windows
-            # launcher to point at; selected_names() never asks for this entry
-            # off Linux.
-            "windows_bat": None,
+            "windows_bat": root / "launch_liquid_mixer.bat",
             "terminal": False,
             "categories": "AudioVideo;Audio;Player;",
             "icon": icon,

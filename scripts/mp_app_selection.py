@@ -12,11 +12,12 @@ Component ids are stable and short; the display names are the shortcut names:
     gui         MP Gui             (the Liquid Glass manager window)
     liquid      MP Liquid Player   (the Liquid Glass audio player)
     visualizer  MP Liquid Visualizer
-    mixer       MP Liquid Mixer    (Linux only)
+    mixer       MP Liquid Mixer    (Linux, FreeBSD & Windows)
 
-The **MP Liquid Mixer** needs X11/XWayland, VTE and ALSA, so it is selectable
-only on Linux (and FreeBSD, which uses the same X11 stack). ``parse()`` and
-``supported_components()`` drop it everywhere else. It is a real fifth choice:
+The **MP Liquid Mixer** is a GTK/VTE/ALSA host on Linux and FreeBSD and a
+native Tkinter/winmm host on Windows, so it is selectable there. macOS has no
+port yet. ``parse()`` and ``supported_components()`` drop it only on macOS. It
+is a real fifth choice:
 ``--set mixer`` installs the mixer alone, and selecting one of the other apps
 does not silently add it.
 
@@ -33,7 +34,7 @@ Usage:
     python3 scripts/mp_app_selection.py --supported     # ids valid on this OS
     python3 scripts/mp_app_selection.py --set all
     python3 scripts/mp_app_selection.py --set gui,liquid
-    python3 scripts/mp_app_selection.py --set mixer     # Linux only
+    python3 scripts/mp_app_selection.py --set mixer     # Linux, FreeBSD, Windows
     python3 scripts/mp_app_selection.py --enabled gui   # exit 0 when selected
 """
 
@@ -61,7 +62,7 @@ BLURBS = {
     "gui": "the Liquid Glass manager window",
     "liquid": "the Liquid Glass audio player and visualizer host",
     "visualizer": "the standalone 3D audio-reactive visualizer",
-    "mixer": "the four-channel DJ mixer (Linux only)",
+    "mixer": "the four-channel DJ mixer (Linux, FreeBSD, Windows)",
 }
 
 STATE_FILE = "installed_apps"
@@ -124,12 +125,12 @@ def detect_platform() -> str:
 def supported_components(platform_name: str | None = None) -> list[str]:
     """The component ids this platform can actually run and give shortcuts.
 
-    The mixer is Linux-only: it needs X11/XWayland, VTE and ALSA. FreeBSD is
-    reported as ``linux`` by :func:`detect_platform` because it uses the same
-    X11 stack and the installer writes the same entries there.
+    The mixer is available on Linux/FreeBSD (GTK/VTE/ALSA) and Windows (the
+    native Tkinter/winmm port). macOS has no port yet and drops it.
     """
     name = platform_name or detect_platform()
-    return [ident for ident in COMPONENTS if ident != "mixer" or name == "linux"]
+    return [ident for ident in COMPONENTS
+            if ident != "mixer" or name in ("linux", "windows")]
 
 
 def state_path(config_dir: Path | str | None = None) -> Path:
@@ -163,8 +164,8 @@ def parse(text: str | None, platform_name: str | None = None) -> list[str]:
     not end up with no shortcuts because a variable was misspelled. The words
     ``none`` and ``nothing`` are the uninstaller: every app was removed.
 
-    ``mixer`` is dropped on macOS and Windows instead of being passed to an
-    installer that cannot create its shortcut.
+    ``mixer`` is dropped on macOS instead of being passed to an installer that
+    cannot create its shortcut; Windows keeps it.
     """
     supported = supported_components(platform_name)
     if text is None:

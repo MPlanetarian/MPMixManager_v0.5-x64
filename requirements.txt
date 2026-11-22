@@ -35,6 +35,7 @@ reportlab>=4.0         # PDF reports and the printed manual
 matplotlib>=3.7        # charts inside generated reports
 mutagen>=1.46          # metadata tagging when metaflac is absent
 pypdf>=3.9             # PDF merge for scheduled email reports (menu 28)
+PyAudioWPatch>=0.2.12   # WASAPI loopback recording (Windows MP Liquid Mixer)
 
 # The shared tray icon is a PySide6 widget. Linux distros package it as
 # python3-pyside6; pip is the fallback.

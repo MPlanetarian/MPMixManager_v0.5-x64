@@ -10,6 +10,11 @@ Liquid Visualizer runs behind the whole surface.
 > pair of decks (left: A/C, right: B/D), so two windows reach all four channels.
 > The mixer always opens in **Into Darkness (Void Out)**.
 
+> **Windows 10/11 beta:** a native Tkinter/winmm port lives in
+> [WINDOWS_10.md](WINDOWS_10.md). It keeps the four-channel model, themes,
+> MIDI profiles, IPC decks, WASAPI recording and visualizer companion; the
+> GTK/VTE playlist panes are replaced by the library overlay.
+
 ---
 
 ## What is in the box
@@ -24,7 +29,7 @@ Liquid Visualizer runs behind the whole surface.
 | **MP Visualizer behind** | A locked companion MP Liquid Visualizer runs behind the mixer at the mixer's exact rectangle in both full screen and windowed mode. It follows every move/resize, cannot be detached (Z/double-click are ignored on a locked companion), and is relaunched if it is closed or killed. The **VISUALIZER** button (or `V`) only hides/shows it. |
 | **DJ MIDI auto-map** | A detected **DJ Kontrol** mixer in MIDI mode is mapped automatically (Play A/B, Sync A/B, Shift, Browse, Load, Record, channel volume and deck pitch). A generic MIDI controller is never opened or mapped; only a device whose ALSA name contains `DJ` is used. The native S4 evdev path remains available for hardware that is not in MIDI mode. |
 | **Exit_MP_Video.mp4 brackets the window** | On every launch the shared loader movie plays **before** the mixer window exists, and after the last window closes the same movie plays **after** the window is gone. Both use `scripts/display_loader_video.sh` (`--intro-force` / `--exit-force`), so the movie, player choice, borderless window and timeout are the ones every other MP window uses. Each launch path (desktop shortcut, `X` in another MP window, or `run.sh`) shares this one implementation, so the movie never plays twice. |
-| **Desktop shortcut** | `MP Liquid Mixer.desktop` on the Desktop and in the application menu on Linux, written by `scripts/install_desktop_shortcuts.py` in the same style as the other four MP entries. It points at `scripts/launch_liquid_mixer.sh` through `mp-desktop-exec`, so moving or renaming the install keeps it working. The mixer is a **selectable fifth app** on Linux: `./install.sh --apps mixer` installs only it, and `--apps gui` no longer adds it silently. macOS and Windows do not get one and refuse `--apps mixer`: the mixer needs X11/XWayland, VTE and ALSA. |
+| **Desktop shortcut** | `MP Liquid Mixer.desktop` on the Desktop and in the application menu on Linux, written by `scripts/install_desktop_shortcuts.py` in the same style as the other four MP entries. It points at `scripts/launch_liquid_mixer.sh` through `mp-desktop-exec`, so moving or renaming the install keeps it working. Windows gets **MP Liquid Mixer.lnk** from the same shortcut writer, pointing at `launch_liquid_mixer.bat`. The mixer is a **selectable fifth app** on Linux and Windows: `./install.sh --apps mixer` installs only it. macOS still refuses `--apps mixer` because there is no port yet. |
 | **WAV / FLAC with a selectable part size** | The master output records as WAV (default) or FLAC. The part ceiling is 4 GiB by default and can be lowered to 2 GiB or 1 GiB in Settings; WAV sizes are unsigned 32-bit, so a 4 GiB part passes the old 2 GiB wall. At the ceiling the next file is `..._PART_2`, `..._PART_3`, and so on. |
 | **Themed chrome** | A **Trance Connection Enabled** status lamp, a live system clock, the **WAV/FLAC** toggle, a **24-Bit** badge and the **DREAMWORLDS PRODUCTIONS / MPLANETARIAN** credit all use the active theme's accent and secondary colours, so `C` repaints them with the rest of the window. |
 | **Transparency bar** | The player's own 20%-80% slider range at the bottom of the screen, applied to the whole glass window so the visualizer shows through. |
@@ -55,11 +60,18 @@ Full screen is the default. Useful flags:
 ./MP_Liquid_Mixer/run.sh --theme sensorium # start on one theme
 ```
 
-**MP Liquid Mixer is Linux only.** It is not available on macOS, Windows, WSL
-or Raspberry Pi, and the installer gives it a shortcut only on Linux.
+The GTK/VTE/ALSA host described below is **Linux/FreeBSD only**. **Windows 10
+and 11** use the native Tkinter/winmm port in
+[WINDOWS_10.md](WINDOWS_10.md), which the installer can select as `--apps mixer`.
+It is not available on macOS, WSL or Raspberry Pi.
 
-Requirements are the ones MP Liquid Player already needs, with the X11 and
-ALSA pieces it uses for the window id, the decks and DJ hardware:
+**Windows 10/11** requirements are Python 3.10+, `tkinter`, `numpy`,
+`sounddevice`, `PyAudioWPatch` for WASAPI loopback recording, and
+`glfw`/`PyOpenGL` for the visualizer; see [WINDOWS_10.md](WINDOWS_10.md).
+
+The Linux/FreeBSD requirements are the ones MP Liquid Player already needs,
+with the X11 and ALSA pieces it uses for the window id, the decks and DJ
+hardware:
 
 - **Linux with X11**, or **XWayland** on a Wayland desktop. The host forces
   `GDK_BACKEND=x11` for the X11 window id the visualizer bonds to, so a bare

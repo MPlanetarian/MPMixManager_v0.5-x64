@@ -486,12 +486,15 @@ function Install-MpUserShortcuts {
     $manager = Join-Path $InstallRoot "manager.bat"
     $visualizer = Join-Path $InstallRoot "launch_liquid_visualizer.bat"
     if (-not (Test-Path -LiteralPath $visualizer)) { $visualizer = Join-Path $InstallRoot "scripts\launch_liquid_visualizer.bat" }
+    $mixer = Join-Path $InstallRoot "launch_liquid_mixer.bat"
+    if (-not (Test-Path -LiteralPath $mixer)) { $mixer = Join-Path $InstallRoot "scripts\launch_liquid_mixer.bat" }
 
     $items = @(
         @{ Name = "MP Liquid Player"; Target = $player; Arguments = ""; Comment = "Launch MP Liquid Player" },
         @{ Name = "MP Mix Manager"; Target = $manager; Arguments = ""; Comment = "Launch MP Mix Manager" },
         @{ Name = "MP Gui"; Target = $gui; Arguments = ""; Comment = "Launch MP Gui" },
-        @{ Name = "MP Liquid Visualizer"; Target = $visualizer; Arguments = ""; Comment = "Launch MP Liquid Visualizer" }
+        @{ Name = "MP Liquid Visualizer"; Target = $visualizer; Arguments = ""; Comment = "Launch MP Liquid Visualizer" },
+        @{ Name = "MP Liquid Mixer"; Target = $mixer; Arguments = ""; Comment = "Launch MP Liquid Mixer" }
     )
 
     # -Components is a list of ids (manager, gui, liquid, visualizer) or
@@ -500,14 +503,14 @@ function Install-MpUserShortcuts {
     # app also has its shortcut deleted, so switching to "only MP Gui" does
     # not leave three dead icons behind.
     #
-    # "mixer" is accepted but ignored: the MP Liquid Mixer is Linux only, so a
-    # mixer-only answer falls back to every Windows app instead of deleting all
-    # four shortcuts.
+    # "mixer" is the native Windows MP Liquid Mixer. A mixer-only answer
+    # installs only that shortcut.
     $idToName = @{
         "manager" = "MP Mix Manager"
         "gui" = "MP Gui"
         "liquid" = "MP Liquid Player"
         "visualizer" = "MP Liquid Visualizer"
+        "mixer" = "MP Liquid Mixer"
     }
     #
     # This list must NOT be called $wanted. PowerShell variable names are
@@ -522,7 +525,6 @@ function Install-MpUserShortcuts {
             $trimmed = $part.Trim()
             if (-not $trimmed) { continue }
             $key = $trimmed.ToLowerInvariant()
-            if ($key -eq "mixer" -or $key -eq "mp-liquid-mixer") { continue }
             if ($idToName.ContainsKey($key)) {
                 $wantedItems += $idToName[$key]
             } else {

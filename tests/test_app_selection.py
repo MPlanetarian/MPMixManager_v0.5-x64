@@ -75,15 +75,15 @@ class TestParser(unittest.TestCase):
             with self.subTest(value=value):
                 self.assertEqual(selection.parse(value), ["mixer"])
 
-    def test_the_mixer_is_linux_only(self):
+    def test_the_mixer_is_available_on_linux_freebsd_and_windows(self):
         self.assertEqual(selection.parse("mixer", "linux"), ["mixer"])
         self.assertEqual(selection.parse("mixer", "macos"), [])
-        self.assertEqual(selection.parse("mixer", "windows"), [])
+        self.assertEqual(selection.parse("mixer", "windows"), ["mixer"])
         self.assertEqual(
             selection.parse("all", "macos"),
             ["manager", "gui", "liquid", "visualizer"],
         )
-        self.assertNotIn("mixer", selection.supported_components("windows"))
+        self.assertIn("mixer", selection.supported_components("windows"))
 
     def test_several_apps_in_a_list(self):
         self.assertEqual(selection.parse("gui,liquid"), ["gui", "liquid"])
@@ -276,6 +276,8 @@ class TestShortcutsFollowTheSelection(SelectionBase):
                 ["MP Liquid Visualizer.desktop"],
             )
 
+    @unittest.skipUnless(sys.platform.startswith("linux"),
+                         "Linux .desktop health is checked on Linux")
     def test_presence_check_only_requires_the_selected_apps(self):
         with tempfile.TemporaryDirectory() as tmp:
             desktop = Path(tmp) / "Desktop"
@@ -436,8 +438,9 @@ class TestInstallerWiring(unittest.TestCase):
         window = self.text[marker:marker + 3000]
         self.assertIn("installing all five MP applications", window)
 
-    def test_a_mixer_request_is_refused_off_linux(self):
-        self.assertIn("MP Liquid Mixer is Linux only", self.text)
+    def test_a_mixer_request_is_refused_only_on_macos(self):
+        self.assertIn("MP Liquid Mixer is not available on this platform", self.text)
+        self.assertIn("linux|freebsd|windows) _mp_mixer_ok=1", self.text)
 
     def test_the_selection_reaches_both_shortcut_installers(self):
         self.assertIn('--components "$MP_APPS_SELECTION"', self.text)
@@ -467,7 +470,8 @@ class TestWindowsWiring(unittest.TestCase):
         self.assertIn("[string]$Components", text)
         self.assertIn("$Wanted", text)
         self.assertIn("$keepAll", text)
-        self.assertIn('$key -eq "mixer"', text)
+        self.assertIn('"mixer" = "MP Liquid Mixer"', text)
+        self.assertIn("MP Liquid Mixer", text)
 
     def test_the_component_list_is_not_shadowed_by_a_typed_parameter(self):
         # PowerShell variable names are case-insensitive. A local `$wanted = @()`

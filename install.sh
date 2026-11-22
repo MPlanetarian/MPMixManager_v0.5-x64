@@ -103,7 +103,7 @@ while [ $# -gt 0 ]; do
             echo "  --apps LIST               Set up every app (--apps all) or only the"
             echo "                            ones named: --apps gui, --apps mixer"
             echo "                            (manager, gui, liquid, visualizer, mixer;"
-            echo "                            comma-separated. Mixer is Linux only.)"
+            echo "                            comma-separated. Mixer: Linux, FreeBSD, Windows.)"
             echo "  --reinstall               Wipe this user's configuration and reinstall"
             echo "                            from a first-install state"
             echo "  --preserve-playlists      Reinstall: keep playlists and favorites"
@@ -1169,12 +1169,12 @@ echo ""
 #   all | manager | gui | liquid | visualizer | mixer | gui,liquid | ...
 # An unset value asks; a non-interactive run takes "all".
 #
-# The mixer needs X11/XWayland, VTE and ALSA, so it is offered only on Linux
-# and FreeBSD. macOS, Windows and WSL get the other four and refuse an explicit
-# `--apps mixer` instead of silently installing a different set.
+# The mixer is a GTK/VTE/ALSA host on Linux and FreeBSD and a native
+# Tkinter/winmm host on Windows. macOS and WSL get the other four and refuse an
+# explicit `--apps mixer` instead of silently installing a different set.
 _mp_mixer_ok=0
 case "$HOST_OS" in
-    linux|freebsd) _mp_mixer_ok=1 ;;
+    linux|freebsd|windows) _mp_mixer_ok=1 ;;
 esac
 _mp_apps_supported="manager gui liquid visualizer"
 if [ "$_mp_mixer_ok" -eq 1 ]; then
@@ -1191,8 +1191,8 @@ if [ -n "$MP_APPS_CHOICE" ]; then
     case "$(printf '%s' "$MP_APPS_CHOICE" | tr '[:upper:]' '[:lower:]')" in
         *mixer*)
             if [ "$_mp_mixer_ok" -ne 1 ]; then
-                echo -e "${RED}MP Liquid Mixer is Linux only (it needs X11/XWayland, VTE and ALSA).${NC}" >&2
-                echo "Choose all, manager, gui, liquid, or visualizer on this platform." >&2
+                echo -e "${RED}MP Liquid Mixer is not available on this platform.${NC}" >&2
+                echo "It runs on Linux, FreeBSD and Windows; choose all, manager, gui, liquid, or visualizer here." >&2
                 exit 1
             fi
             ;;

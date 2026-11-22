@@ -10,6 +10,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **MP Liquid Mixer 0.0.1 beta now runs on Windows 10 and 11** (`MP_Liquid_Mixer_Windows_10.py`, `MP_Liquid_Mixer/WINDOWS_10.md`, `launch_liquid_mixer.bat`, `scripts/launch_liquid_mixer.bat`, `tests/test_liquid_mixer_windows.py`):
+  - **Native Tkinter host.** One borderless glass-style window with four channel strips (fader, TRIM, HI/MID/LOW EQ, FILTER, FLANGER/REVERB/DELAY/GATER/FILTER inserts, FX, cue and meters), an equal-power crossfader, master/monitor trims, two deck panes with transport, a library overlay, settings, and a real-time clock.
+  - **Four real decks.** Each channel runs its own `MP_Audio_Player.py --daemon` engine in the existing IPC namespace (`mixerdeck_a` to `mixerdeck_d`), so faders, crossfader, pitch, EQ and inserts are applied by the player engines. The decoder falls back to the Mix Archive library when no Music folder is configured.
+  - **Kontrol S4 / S3 MIDI.** A `winmm` reader binds only the profile's controller, with the shared S4/S3 note/CC maps. A missing S4 is reported clearly in the top bar; `--midi-device` selects a test input.
+  - **Visualizer behind the mixer.** The Windows bond receives the mixer's HWND and rectangle and places the MP Liquid Visualizer directly behind it. `V` hides/shows it; closing the mixer closes it.
+  - **Themes and recording.** `C` cycles the shared theme list and repaints the mixer, decks and settings overlay. `R` records the Windows output through PyAudioWPatch WASAPI loopback to WAV or FLAC.
+  - **Installer and shortcut.** The Windows app selection, shortcut writer and Desktop/Start Menu integration now include **MP Liquid Mixer**. The native port does not need X11, VTE or ALSA; macOS still has no port.
+  - **Tests.** `tests/test_liquid_mixer_windows.py` covers theme cycling, S4 parsing, engine/visualizer wiring, installer inclusion, and a real Tk render. Windows 11 uses the same Tk/winmm/WASAPI paths; its VM was unavailable for this build.
+
 - **A Windows 10 sweep for the Mix Archive Manager menu** (`tests/test_windows_manager_menu.py`, `tests/test_liquid_player_mp_gui.py`):
   - Parses the live `main_opts` array (37 actionable rows), proves every row has a dispatch branch (AI is the Shift+A keyboard row), and proves every helper those branches call is defined.
   - Runs the manager's one-shot forms on Windows 10 through Git Bash: `--version`, `--help`, `--rescan-archive`, `--report-status`, `--beszel-status`, `--ollama-status`, the app-selection parser, the visualizer backend resolver, and the `38` Exit Manager action. Each must exit 0 with no traceback, shell syntax error, `command not found`, unbound variable, `NameError`, `TypeError`, or `AttributeError`.
