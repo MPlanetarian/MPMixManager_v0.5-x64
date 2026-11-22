@@ -41,10 +41,6 @@ from MP_Audio_Player import (
     is_player_daemon_running,
     open_audio_source,
     _cleanup_stale_daemon_files,
-    PID_FILE,
-    SOCKET_PATH,
-    PORT_FILE,
-    STATE_FILE
 )
 
 
@@ -270,28 +266,38 @@ class TestAudioPlayerResilience(unittest.TestCase):
         engine.stop_playback()
 
     def test_dead_daemon_and_stale_socket_cleanup(self):
-        """Verifies _cleanup_stale_daemon_files removes stale files without crashing."""
-        pid_file = PID_FILE
-        sock_file = SOCKET_PATH
-        port_file = PORT_FILE
+        """Verifies _cleanup_stale_daemon_files removes stale files without crashing.
 
-        # Create dummy stale files
-        pid_file.parent.mkdir(parents=True, exist_ok=True)
-        pid_file.write_text("99999999")
-        port_file.write_text("55555")
-        try:
-            sock_file.write_text("")
-        except Exception:
-            pass
+        The paths are patched to a temp directory: the unpatched test wrote
+        99999999 into the real mp_player.pid and then unlinked the live
+        mp_audio_player.sock. Running the suite while a player was open made
+        every IPC command fail and left the deck apparently unable to play.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            pid_file = Path(tmp) / "mp_player.pid"
+            sock_file = Path(tmp) / "mp_audio_player.sock"
+            port_file = Path(tmp) / "mp_audio_player.port"
+            state_file = Path(tmp) / "mp_player_state.json"
+            with patch.object(MP_Audio_Player, "PID_FILE", pid_file), \
+                 patch.object(MP_Audio_Player, "SOCKET_PATH", sock_file), \
+                 patch.object(MP_Audio_Player, "PORT_FILE", port_file), \
+                 patch.object(MP_Audio_Player, "STATE_FILE", state_file):
+                # Create dummy stale files
+                pid_file.write_text("99999999")
+                port_file.write_text("55555")
+                try:
+                    sock_file.write_text("")
+                except Exception:
+                    pass
 
-        # Cleanup should cleanly wipe them
-        _cleanup_stale_daemon_files()
-        self.assertFalse(pid_file.exists())
-        self.assertFalse(port_file.exists())
-        self.assertFalse(sock_file.exists())
+                # Cleanup should cleanly wipe them
+                MP_Audio_Player._cleanup_stale_daemon_files()
+                self.assertFalse(pid_file.exists())
+                self.assertFalse(port_file.exists())
+                self.assertFalse(sock_file.exists())
 
-        # is_player_daemon_running should return False
-        self.assertFalse(is_player_daemon_running())
+                # is_player_daemon_running should return False
+                self.assertFalse(is_player_daemon_running())
 
     def test_audio_arg_uses_first_existing_path_line(self):
         """A launcher that joins several paths with newlines must still open the real mix."""

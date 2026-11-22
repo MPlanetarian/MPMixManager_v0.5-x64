@@ -130,6 +130,16 @@ class TestPlaylistMultiSelectDelete(unittest.TestCase):
                 {"player_script": str(PROJECT_ROOT.parent / "MPMixManager_v0.4-x64/MP_Audio_Player.py")}
             )
         )
+        self.assertTrue(player._daemon_can_play({"player_script": here, "audio_error": ""}))
+        self.assertFalse(
+            player._daemon_can_play(
+                {
+                    "player_script": here,
+                    "audio_error": "audio output disabled by MP_DISABLE_AUDIO_OUTPUT",
+                }
+            ),
+            "a daemon started mute must not be reused",
+        )
 
     def test_shift_selected_rows_paint_with_the_selection_bar(self):
         ui = self._ui()

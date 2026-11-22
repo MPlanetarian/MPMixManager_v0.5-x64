@@ -4687,6 +4687,20 @@ def _daemon_runs_this_build(status_data: Any) -> bool:
     except OSError:
         return False
 
+def _daemon_can_play(status_data: Any) -> bool:
+    """True when the daemon is this build and was not started mute.
+
+    A test run or a launcher with MP_DISABLE_AUDIO_OUTPUT=1 can leave a daemon
+    alive that answers every command and reports ``playing`` while opening no
+    output device at all. Reusing it makes the window look broken: tracks load,
+    the clock moves, and nothing is heard. Retire it like a foreign build.
+    """
+    if not _daemon_runs_this_build(status_data):
+        return False
+    return "MP_DISABLE_AUDIO_OUTPUT" not in str(
+        (status_data or {}).get("audio_error") or ""
+    )
+
 def _retire_foreign_player_daemon() -> None:
     """Stop a daemon from another install that still owns the shared socket."""
     candidates = set(_audio_player_daemon_pids())
@@ -12861,10 +12875,11 @@ def _spawn_player_daemon(file_path: Optional[str] = None, auto_bluetooth: bool =
     if is_player_daemon_running():
         # A live PID is not enough: older/crashed startup paths can leave a
         # daemon holding the playback lock after its IPC listener disappeared.
-        # Reuse a responsive daemon, but only when it runs this build; a daemon
-        # from another install tree is retired so this build's engine starts.
+        # Reuse a responsive daemon, but only when it runs this build and has
+        # audio enabled; a foreign or mute daemon is retired so this build's
+        # engine starts and can be heard.
         if (st := send_ipc_command("status")):
-            if _daemon_runs_this_build(st.get("data")):
+            if _daemon_can_play(st.get("data")):
                 return None
             _retire_foreign_player_daemon()
         else:
@@ -13439,9 +13454,10 @@ def main():
         d_status = send_ipc_command("status") if daemon_running else None
         if daemon_running and not d_status:
             daemon_running = False
-        elif daemon_running and not _daemon_runs_this_build(d_status.get("data") if isinstance(d_status, dict) else None):
-            # A daemon from another install tree is answering. Stop it so this
-            # window starts the engine that matches the code it is showing.
+        elif daemon_running and not _daemon_can_play(d_status.get("data") if isinstance(d_status, dict) else None):
+            # A daemon from another install tree, or one started with audio
+            # output disabled, is answering. Stop it so this window starts an
+            # engine that matches the code and can actually be heard.
             _retire_foreign_player_daemon()
             daemon_running, d_status = False, None
         elif daemon_running and d_status and isinstance(d_status.get("data"), dict):
