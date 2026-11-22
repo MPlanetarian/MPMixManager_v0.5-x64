@@ -70,6 +70,7 @@ MP Audio Player; no separate audio install is needed.
 | `1`-`9` | Send that preset key to the visualizer window |
 | `L` / `G` / `M` | Launch MP Liquid Player / MP Gui / MP Mix Manager |
 | `F11` or double-click | Full screen / 1440x810 windowed |
+| Drag empty surface | Move the window in windowed mode (the visualizer follows) |
 | `Esc` | Leave full screen, then close |
 
 ## Kontrol S4 / S3 MIDI

@@ -20,6 +20,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -213,6 +214,43 @@ class TestTheInstallerOffersTheMixerOnWindows(unittest.TestCase):
     def test_launcher_exists_for_the_shortcut(self):
         self.assertTrue((ROOT / "launch_liquid_mixer.bat").is_file())
         self.assertTrue((ROOT / "scripts" / "launch_liquid_mixer.bat").is_file())
+
+
+class TestWindowDrag(unittest.TestCase):
+    def _app(self, fullscreen=False):
+        app = mixer.LiquidMixerWindows([])
+        app.root = MagicMock()
+        app.root.winfo_x.return_value = 100
+        app.root.winfo_y.return_value = 50
+        app.canvas = MagicMock()
+        app.fullscreen = fullscreen
+        app._publish_geometry = MagicMock()
+        return app
+
+    def test_dragging_empty_space_moves_a_windowed_mixer(self):
+        app = self._app()
+        app._on_press(SimpleNamespace(x=10, y=10, x_root=300, y_root=200))
+        self.assertEqual(app._window_drag, (200, 150))
+        app._on_drag(SimpleNamespace(x=10, y=10, x_root=340, y_root=260))
+        app.root.geometry.assert_called_once_with("+140+110")
+        app._publish_geometry.assert_called_once_with()
+        app._on_release(None)
+        self.assertIsNone(app._window_drag)
+
+    def test_full_screen_does_not_start_a_window_drag(self):
+        app = self._app(fullscreen=True)
+        app._on_press(SimpleNamespace(x=10, y=10, x_root=300, y_root=200))
+        self.assertIsNone(app._window_drag)
+        app.root.geometry.assert_not_called()
+
+    def test_a_control_press_is_not_a_window_drag(self):
+        app = self._app()
+        app._hits = [(0, 0, 50, 50, "library", 0)]
+        app._load_library_row = MagicMock()
+        app._on_press(SimpleNamespace(x=10, y=10, x_root=300, y_root=200))
+        self.assertIsNone(app._window_drag)
+        app._load_library_row.assert_called_once_with(0)
+        app.root.geometry.assert_not_called()
 
 
 class TestTheRealWindow(unittest.TestCase):

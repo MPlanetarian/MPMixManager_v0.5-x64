@@ -524,6 +524,9 @@ class LiquidMixerWindows:
         self._h = DESIGN[1]
         self._hits: List[Tuple[float, float, float, float, str, Any]] = []
         self._drag: Optional[Tuple[str, Any, int, int]] = None
+        # Pointer offset for dragging the borderless window by an empty part
+        # of the surface. None while no window drag is in progress.
+        self._window_drag: Optional[Tuple[int, int]] = None
         self._overlay = ""
         self._overlay_rows: List[Dict[str, Any]] = []
         self._overlay_deck = "A"
@@ -1071,6 +1074,14 @@ class LiquidMixerWindows:
         self.canvas.focus_set()
         kind, data = self._hit_at(event.x, event.y)
         if kind is None:
+            # overrideredirect(True) removes the title bar, so Windows has no
+            # caption to drag. Empty surface becomes the grab handle; full
+            # screen has nowhere to move to and keeps a plain click.
+            if not self.fullscreen and self.root is not None:
+                self._window_drag = (
+                    event.x_root - self.root.winfo_x(),
+                    event.y_root - self.root.winfo_y(),
+                )
             return
         if kind == "button":
             self._button_action(data)
@@ -1091,6 +1102,11 @@ class LiquidMixerWindows:
             self._load_library_row(index)
 
     def _on_drag(self, event) -> None:
+        if self._window_drag is not None:
+            dx, dy = self._window_drag
+            self.root.geometry(f"+{event.x_root - dx}+{event.y_root - dy}")
+            self._publish_geometry()
+            return
         if self._drag is None:
             return
         kind, data, low, high = self._drag
@@ -1108,6 +1124,7 @@ class LiquidMixerWindows:
 
     def _on_release(self, _event) -> None:
         self._drag = None
+        self._window_drag = None
 
     def _on_double(self, _event) -> None:
         self._toggle_fullscreen()
