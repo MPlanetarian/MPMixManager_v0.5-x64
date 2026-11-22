@@ -70,6 +70,20 @@ fi
 # Run from the install tree, which is what Path= in the old entries did.
 cd "$_root" 2>/dev/null || true
 
+# A .desktop entry starts with the systemd user PATH
+# (/usr/local/sbin:/usr/local/bin:/usr/bin on Bazzite/Fedora), which omits the
+# per-user bin directories. rclone (SMB music shares, cloud backup), cliamp and
+# the other helpers are installed in ~/.local/bin, so a menu launch could not
+# find them while a terminal launch could. Add them back for this process tree.
+for _user_bin in "$HOME/.local/bin" "$HOME/bin"; do
+    case ":$PATH:" in
+        *":$_user_bin:"*) ;;
+        *) [ -d "$_user_bin" ] && PATH="$_user_bin:$PATH" ;;
+    esac
+done
+export PATH
+unset _user_bin
+
 for _cand in "$_root/$_name" "$_root/scripts/$_name" "$_root/bin/$_name"; do
     if [ -f "$_cand" ]; then
         if [ -x "$_cand" ]; then

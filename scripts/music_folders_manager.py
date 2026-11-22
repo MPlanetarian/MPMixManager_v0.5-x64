@@ -197,6 +197,7 @@ def load_music_config() -> Dict[str, Any]:
     return {
         "smb_user": _get("MUSIC_SMB_USER"),
         "smb_password": _get("MUSIC_SMB_PASSWORD"),
+        "rclone_path": _get("MUSIC_RCLONE_PATH"),
         "mount_root": Path(os.path.expanduser(_get("MUSIC_SMB_MOUNT_ROOT", str(Path.home() / "MUSIC_SMB")))),
         "legacy_host": _get("MUSIC_SMB_HOST"),
         "legacy_shares": _get("MUSIC_SMB_SHARES"),
@@ -583,8 +584,53 @@ def access_path(f: Dict[str, Any], config: Dict[str, Any], timeout: float = 12.0
 def _smb_credentials(f: Dict[str, Any], config: Dict[str, Any]) -> Tuple[str, str]:
     return (f.get("user") or config.get("smb_user", "")), config.get("smb_password", "")
 
+_RCLONE_BIN_CACHE: Optional[str] = None
+_RCLONE_BIN_CHECKED = False
+
+def rclone_bin() -> Optional[str]:
+    """Absolute path to rclone, or None when it is not installed.
+
+    A .desktop launch inherits the systemd user PATH
+    (/usr/local/sbin:/usr/local/bin:/usr/bin), which on Linux does not include
+    ~/.local/bin and on macOS does not include /opt/homebrew/bin. rclone is
+    installed there, so `shutil.which("rclone")` failed and every SMB share was
+    reported as "rclone is not installed" even though it was.
+    """
+    global _RCLONE_BIN_CACHE, _RCLONE_BIN_CHECKED
+    if _RCLONE_BIN_CHECKED:
+        return _RCLONE_BIN_CACHE
+    _RCLONE_BIN_CHECKED = True
+    exe = "rclone.exe" if IS_WINDOWS else "rclone"
+    override = (os.environ.get("MUSIC_RCLONE_PATH") or "").strip()
+    if not override:
+        try:
+            override = (load_music_config().get("rclone_path") or "").strip()
+        except Exception:
+            override = ""
+    candidates: List[str] = []
+    if override:
+        candidates.append(os.path.expanduser(override))
+    found = shutil.which("rclone")
+    if found:
+        candidates.append(found)
+    home = Path.home()
+    candidates.extend([
+        str(home / ".local" / "bin" / exe),
+        str(home / "bin" / exe),
+        f"/usr/local/bin/{exe}",
+        f"/opt/homebrew/bin/{exe}",
+        f"/snap/bin/{exe}",
+        f"/usr/bin/{exe}",
+    ])
+    for cand in candidates:
+        if cand and os.path.isfile(cand) and os.access(cand, os.X_OK):
+            _RCLONE_BIN_CACHE = cand
+            break
+    return _RCLONE_BIN_CACHE
+
 def _rclone_remote(f: Dict[str, Any], config: Dict[str, Any], with_subpath: bool = False) -> Optional[str]:
-    if not shutil.which("rclone"):
+    binary = rclone_bin()
+    if not binary:
         return None
     user, password = _smb_credentials(f, config)
     host = f.get("host") or config.get("legacy_host")
@@ -596,7 +642,7 @@ def _rclone_remote(f: Dict[str, Any], config: Dict[str, Any], with_subpath: bool
         opts.append(f'user="{user}"')
     if password:
         try:
-            res = subprocess.run(["rclone", "obscure", password], capture_output=True, text=True, check=True)
+            res = subprocess.run([binary, "obscure", password], capture_output=True, text=True, check=True)
             opts.append(f'pass="{res.stdout.strip()}"')
         except Exception:
             pass
@@ -625,9 +671,14 @@ def connect_folder(f: Dict[str, Any], config: Dict[str, Any], interactive: bool 
         p, label = access_path(f, config)
         return (True, f"Connected ({p})") if p else (False, f"Could not connect to {share_unc}.")
 
+    binary = rclone_bin()
+    if not binary:
+        return False, ("rclone is not installed. Install rclone (or set MUSIC_RCLONE_PATH) "
+                       "so SMB shares can be mounted.")
     remote = _rclone_remote(f, config)
     if not remote:
-        return False, "rclone is not installed or SMB host is not configured in config.env."
+        return False, (f"No SMB host or share is configured for [{f.get('id', '?')}]. "
+                       "Edit the folder and enter \\\\host\\share.")
     md = smb_mount_dir(f, config)
     target = os.path.join(str(md), f.get("subpath", ""))
     if _is_mountpoint(md):
@@ -642,7 +693,7 @@ def connect_folder(f: Dict[str, Any], config: Dict[str, Any], interactive: bool 
     if not ok:
         return False, msg
     # Read-write. These shares hold Windows thumbnail caches the cleaner deletes.
-    cmd = ["rclone", "mount", remote, str(md),
+    cmd = [binary, "mount", remote, str(md),
            "--dir-cache-time", "24h", "--vfs-cache-mode", "full", "--vfs-cache-max-size", "15G",
            "--vfs-cache-max-age", "24h", "--vfs-read-chunk-size", "4M", "--vfs-read-chunk-size-limit", "64M",
            "--buffer-size", "16M", "--no-modtime", "--attr-timeout", "1h"]
@@ -844,8 +895,11 @@ def _scan_rclone(f: Dict[str, Any], config: Dict[str, Any], progress_cb=None) ->
     remote = _rclone_remote(f, config, with_subpath=True)
     if not remote:
         return None
+    binary = rclone_bin()
+    if not binary:
+        return None
     cmd = [
-        "rclone", "lsf", remote, "--recursive", "--files-only",
+        binary, "lsf", remote, "--recursive", "--files-only",
         "--format", "pst", "--separator", "|",
         "--contimeout", "20s", "--timeout", "10m", "--retries", "2", "--low-level-retries", "2",
         "--exclude", ".Trashes/**", "--exclude", ".TemporaryItems/**",
@@ -923,7 +977,7 @@ def scan_folder_tracks(f: Dict[str, Any], config: Dict[str, Any], progress_cb=No
     # SMB listings go through rclone with the saved login. Do not mount first:
     # a wedged FUSE mount hangs on connect, and the folders after it never get
     # a playlist. Playback mounts the share later, when a track is opened.
-    if f.get("type") == "smb" and not IS_WINDOWS and shutil.which("rclone"):
+    if f.get("type") == "smb" and not IS_WINDOWS and rclone_bin():
         tracks = _scan_rclone(f, config, progress_cb)
         if tracks is None:
             return None
