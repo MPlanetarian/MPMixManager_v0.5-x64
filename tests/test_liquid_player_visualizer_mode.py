@@ -288,10 +288,13 @@ class LiquidPlayerVisualizerModeTests(unittest.TestCase):
         self.assertNotIn("u.bands0", source)
         self.assertIn("uniform vec4 u_preset", source)
         self.assertIn("uniform float uTextGuard", source)
+        self.assertIn("uniform float u_corner", source)
         guard_at = source.find("uTextGuard > 0.5")
-        out_at = source.find("outColor = vec4(col, 1.0);")
+        corner_at = source.find("u_corner > 0.5")
+        out_at = source.find("outColor = vec4(col, corner_a);")
         self.assertGreater(guard_at, 0)
-        self.assertGreater(out_at, guard_at)
+        self.assertGreater(corner_at, guard_at)
+        self.assertGreater(out_at, corner_at)
 
     def test_macos_raymarch_is_smaller_than_the_retina_framebuffer(self):
         wide_fb = (3024, 1964)

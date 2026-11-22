@@ -3189,6 +3189,12 @@ def _autoplay_bridge(min_energy: float = 0.55) -> "AudioTelemetryBridge":
     return bridge
 
 
+def _wayland_session() -> bool:
+    """True when the visualizer is talking to a Wayland compositor."""
+    return (bool(os.environ.get("WAYLAND_DISPLAY"))
+            or str(os.environ.get("XDG_SESSION_TYPE", "")).lower() == "wayland")
+
+
 def _make_renderer(preset_name: Optional[str] = None, max_seconds: Optional[float] = None,
                    fullscreen: bool = False, target_4k: bool = False,
                    backend: Optional[str] = None,
@@ -3203,6 +3209,15 @@ def _make_renderer(preset_name: Optional[str] = None, max_seconds: Optional[floa
                                                 BACKEND_VULKAN, normalise,
                                                 renderer_class, resolve)
     chosen = resolve(backend)
+    if (not fullscreen and sys.platform.startswith("linux") and _wayland_session()
+            and chosen != BACKEND_OPENGL):
+        # KWin's Wayland compositor does not clip an XWayland window from its
+        # XShape mask. The Vulkan surface therefore keeps square corners behind
+        # the player. The OpenGL renderer can create an ARGB window and cut the
+        # same 36 px silhouette in its shader, which every compositor honours.
+        print("[LiquidVisualizer] Wayland cannot clip an X11 window shape; "
+              "using OpenGL for the rounded window corners.", file=sys.stderr)
+        chosen = BACKEND_OPENGL
     try:
         renderer = renderer_class(chosen)(preset_name, fullscreen=fullscreen,
                                           target_4k=target_4k,

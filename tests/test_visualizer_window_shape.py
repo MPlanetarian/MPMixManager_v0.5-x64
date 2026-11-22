@@ -190,6 +190,51 @@ class TestShaperGeometry(unittest.TestCase):
         self.assertIsNone(user32.SetWindowRgn.call_args.args[1])
 
 
+class TestOpenGLAlphaCorners(unittest.TestCase):
+    """Wayland cannot clip an X11 window from XShape, so the OpenGL window
+    carries a real ARGB surface and the shader cuts the rounded silhouette."""
+
+    def test_the_shader_outputs_a_rounded_alpha_mask(self):
+        source = liquid_player_visualizer.opengl_visualizer_source()
+        self.assertIn("uniform float u_corner", source)
+        self.assertIn("u_corner > 0.5", source)
+        self.assertIn("outColor = vec4(col, corner_a);", source)
+
+    def test_the_corner_radius_is_zero_for_fullscreen_and_saver(self):
+        from types import SimpleNamespace
+        windowed = SimpleNamespace(_window_corners=True, is_fullscreen=False,
+                                   _saver_bounds=None, screensaver=False)
+        self.assertEqual(
+            liquid_player_visualizer._visualizer_corner_radius(windowed),
+            visualizer_window_shape.DEFAULT_CORNER_RADIUS,
+        )
+        fullscreen = SimpleNamespace(_window_corners=True, is_fullscreen=True,
+                                     _saver_bounds=None, screensaver=False)
+        self.assertEqual(liquid_player_visualizer._visualizer_corner_radius(fullscreen), 0.0)
+        saver = SimpleNamespace(_window_corners=True, is_fullscreen=False,
+                                _saver_bounds=(0, 0, 1920, 1080), screensaver=False)
+        self.assertEqual(liquid_player_visualizer._visualizer_corner_radius(saver), 0.0)
+        # The in-player layer shares this renderer but has no window corners.
+        glass = SimpleNamespace(is_fullscreen=False, _saver_bounds=None, screensaver=False)
+        self.assertEqual(liquid_player_visualizer._visualizer_corner_radius(glass), 0.0)
+
+    def test_the_opengl_window_requests_a_transparent_framebuffer(self):
+        import inspect
+        text = inspect.getsource(liquid_player_visualizer.LiquidVisualizerOpenGLRenderer.open)
+        self.assertIn("GLFW_TRANSPARENT_FRAMEBUFFER", text)
+
+    def test_a_windowed_wayland_visualizer_uses_opengl_for_rounded_corners(self):
+        import mp_liquid_visualizer_vulkan as vulkan
+        import visualizer_backend
+        with patch.object(vulkan, "_wayland_session", return_value=True), \
+             patch.object(vulkan.sys, "platform", "linux"), \
+             patch.object(visualizer_backend, "resolve", return_value="vulkan"), \
+             patch.object(visualizer_backend, "renderer_class") as renderer_class:
+            renderer_class.return_value.return_value = MagicMock()
+            vulkan._make_renderer(backend="vulkan", fullscreen=False)
+            renderer_class.assert_called_once_with("opengl")
+
+
 class TestFullscreenStaysRectangular(unittest.TestCase):
     def test_vulkan_shaper_skips_fullscreen_screensaver_and_vr(self):
         renderer = mp_liquid_visualizer_vulkan.LiquidVisualizerVulkanRenderer.__new__(

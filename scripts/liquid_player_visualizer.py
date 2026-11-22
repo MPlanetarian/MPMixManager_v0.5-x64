@@ -54,6 +54,7 @@ GLFW_OPENGL_FORWARD_COMPAT = 0x00022006
 GLFW_RESIZABLE = 0x00020003
 GLFW_VISIBLE = 0x00020004
 GLFW_DECORATED = 0x00020005
+GLFW_TRANSPARENT_FRAMEBUFFER = 0x0002000A
 GLFW_FOCUSED = 0x00020001
 GLFW_ICONIFIED = 0x00020002
 GLFW_PLATFORM = 0x00050003
@@ -120,12 +121,13 @@ uniform vec4 u_preset;
 uniform vec4 u_stream;
 uniform sampler2D uCoverTex;
 uniform float uTextGuard;
+uniform float u_corner;
 """
 
 _UNIFORM_NAMES = (
     "u_res", "u_audio0", "u_audio1", "u_audio2",
     "u_bands0", "u_bands1", "u_bands2", "u_bands3",
-    "u_preset", "u_stream", "uCoverTex", "uTextGuard",
+    "u_preset", "u_stream", "uCoverTex", "uTextGuard", "u_corner",
 )
 
 
@@ -311,9 +313,28 @@ in vec2 vUv;
 out vec4 outColor;
 uniform sampler2D uTex;
 void main() {
-    outColor = vec4(texture(uTex, vUv).rgb, 1.0);
+    outColor = texture(uTex, vUv);
 }
 """
+
+
+def _visualizer_corner_radius(renderer) -> float:
+    """The shader's rounded-corner radius, or 0 when the window fills its area.
+
+    Windowed companions and Z windows use the player's 36 px silhouette.
+    Fullscreen, screensaver and VR windows are meant to fill the screen, so
+    they keep their plain rectangle. ``_window_corners`` is only set on the
+    standalone visualizer window: the same layer is also drawn *inside* the
+    player's glass, where the player window already owns the silhouette and
+    the layer must keep its alpha.
+    """
+    if not getattr(renderer, "_window_corners", False):
+        return 0.0
+    if (getattr(renderer, "is_fullscreen", False)
+            or getattr(renderer, "_saver_bounds", None)
+            or getattr(renderer, "screensaver", False)):
+        return 0.0
+    return float(DEFAULT_CORNER_RADIUS)
 
 
 def _config_env_value(name: str) -> str:
@@ -1214,7 +1235,22 @@ def opengl_visualizer_source() -> str:
     needle = "outColor = vec4(col, 1.0);"
     if needle not in body:
         raise RuntimeError("MP Visualizer shader is missing its output")
-    body = body.replace(needle, _TEXT_GUARD + "\n    " + needle, 1)
+    # The OpenGL window is an ARGB surface. KWin on Wayland ignores XShape on
+    # XWayland windows, so the window's own alpha is the only shape the
+    # compositor honours. Cut the same 36 px corners the player's glass uses;
+    # u_corner is zero for fullscreen, screensaver and VR, where the window is
+    # meant to fill its area.
+    corner = (
+        "float corner_a = 1.0;\n"
+        "    if (u_corner > 0.5) {\n"
+        "        vec2 half_res = u_res.xy * 0.5;\n"
+        "        vec2 q = abs(vUv * u_res.xy - half_res) - (half_res - vec2(u_corner));\n"
+        "        float d = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - u_corner;\n"
+        "        corner_a = 1.0 - smoothstep(-1.0, 1.0, d);\n"
+        "    }\n"
+        "    outColor = vec4(col, corner_a);"
+    )
+    body = body.replace(needle, _TEXT_GUARD + "\n    " + corner, 1)
     source = _GL_HEADER + body
     _SOURCE_CACHE["generic"] = source
     return source
@@ -1578,6 +1614,9 @@ class PlayerVisualizerLayer:
         guard = _loc(locs, "uTextGuard")
         if guard >= 0:
             GL.glUniform1f(guard, 1.0 if text_guard else 0.0)
+        corner = _loc(locs, "u_corner")
+        if corner >= 0:
+            GL.glUniform1f(corner, _visualizer_corner_radius(renderer))
         GL.glActiveTexture(GL.GL_TEXTURE0)
         GL.glBindTexture(GL.GL_TEXTURE_2D, self._tex)
         GL.glBindVertexArray(renderer._vao)
@@ -1818,6 +1857,11 @@ class LiquidVisualizerOpenGLRenderer(MonitorSpanMixin, RandomPresetMixin, Player
     the Vulkan renderer, so every preset behaves the same on both.
     """
 
+    # This renderer owns a standalone window, so its OpenGL surface carries the
+    # rounded silhouette in the shader. The same PlayerVisualizerLayer is also
+    # drawn inside the player's glass, where it must not cut corners again.
+    _window_corners = True
+
     # The public surface below mirrors LiquidVisualizerVulkanRenderer.
     preset: Dict[str, Any]
     title = "MP Liquid Visualizer"
@@ -2042,6 +2086,11 @@ class LiquidVisualizerOpenGLRenderer(MonitorSpanMixin, RandomPresetMixin, Player
                 (GLFW_VISIBLE, start_visible),
                 (GLFW_FOCUSED, 1),
                 (GLFW_RESIZABLE, 0),
+                # KWin's Wayland session does not clip an XWayland window from
+                # its XShape mask, so the corners must be real transparent
+                # pixels. This gives the OpenGL visualizer an ARGB visual; the
+                # shader cuts the rounded silhouette with u_corner.
+                (GLFW_TRANSPARENT_FRAMEBUFFER, 1),
             ]
             if major:
                 hints.insert(1, (GLFW_CONTEXT_VERSION_MAJOR, major))
