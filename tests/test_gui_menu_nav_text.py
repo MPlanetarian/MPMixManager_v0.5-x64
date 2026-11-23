@@ -84,7 +84,7 @@ done
             self.assertIn(rgb, rows[theme], theme)
             self.assertLess(rows[theme].find(rgb), rows[theme].find("Convert to FLAC"), theme)
 
-    def test_selected_row_text_matches_the_player_bar(self):
+    def test_selected_row_text_is_white_on_every_theme(self):
         themes = list(player.EqualizerVisualizer.THEMES)
         script = PREAMBLE + """
 for theme in %s; do
@@ -100,17 +100,16 @@ done
             seen[theme] = line
         self.assertEqual(set(seen), set(themes))
         for theme in themes:
-            bg, fg = player._selection_bar_ansi(theme)
+            bg, _fg = player._selection_bar_ansi(theme)
             line = seen[theme]
             bg_rgb = player._rgb_from_ansi(bg)
-            fg_rgb = player._rgb_from_ansi(fg)
             self.assertIsNotNone(bg_rgb, theme)
-            self.assertIsNotNone(fg_rgb, theme)
             fill = "48;2;%d;%d;%d" % bg_rgb
-            ink = "38;2;%d;%d;%d" % fg_rgb
             self.assertIn(fill, line, f"{theme}: bar fill differs from the player")
-            # The label itself has to carry that ink, not only the pointer.
-            self.assertLess(line.find(ink), line.find("Play Mix"), f"{theme}: selected text differs from the player")
+            # The selected option text is always white, whatever the theme.
+            white = "38;2;255;255;255"
+            self.assertLess(line.find(white), line.find("Play Mix"),
+                            f"{theme}: selected text is not white")
 
     def test_cli_menu_keeps_its_theme_ink(self):
         """A plain terminal is not the glass, so its rows stay on MENU_INK."""

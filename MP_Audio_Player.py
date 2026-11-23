@@ -437,6 +437,31 @@ STATE_FILE, PID_FILE, DURATION_CACHE_FILE = _player_file("mp_player_state.json")
 FAVORITES_FILE = CONFIG_DIR / "favorites.json"
 DAEMON_LOCK_FILE = _player_file("mp_player.lock")
 RESUME_STATE_FILE = _player_file("playback_resume.json")
+PLAYER_VOLUME_FILE = CONFIG_DIR / "player_volume"
+
+
+def _load_saved_volume() -> float:
+    """The volume the player used last time, as 0.0-1.0.
+
+    Opening the player must never reset the user's listening level. The value
+    is written whenever the volume changes and restored by every new engine,
+    so a fresh daemon (or a laptop reboot) comes back where the user left it.
+    """
+    try:
+        value = float(PLAYER_VOLUME_FILE.read_text(encoding="utf-8").strip())
+    except (OSError, TypeError, ValueError):
+        return 0.85
+    return max(0.0, min(1.0, value / 100.0))
+
+
+def _save_player_volume(volume: float) -> None:
+    try:
+        tmp = PLAYER_VOLUME_FILE.with_suffix(".tmp")
+        tmp.write_text(f"{int(round(max(0.0, min(1.0, float(volume))) * 100))}\n",
+                       encoding="utf-8")
+        tmp.replace(PLAYER_VOLUME_FILE)
+    except (OSError, TypeError, ValueError):
+        pass
 _DAEMON_LOCK_FH = None
 
 # Generated playlists (DJ_Tracks_*.json) reach tens of megabytes once a library
@@ -3297,7 +3322,8 @@ class AudioEngine:
         self.current_index, self.current_track = 0, playlist[0] if playlist else None
         # Name of the playlist the tracks came from, used by the play log.
         self.playlist_path = ""
-        self.state, self.volume, self.muted, self.shuffle, self.repeat_mode = "stopped", 1.0, False, False, "all"
+        self.state, self.muted, self.shuffle, self.repeat_mode = "stopped", False, False, "all"
+        self.volume = _load_saved_volume()
         self.position_sec, self.duration_sec, self.sample_rate, self.channels = 0.0, 0.0, 44100, 2
         self.pitch_percent, self.pitch_factor, self.resampler = 0, 1.0, AudioResampler()
         self.sf_file = self.stream = self.audio_source = self.audio_buffer = self.feeder = self.stream_error = self.pending_seek_sec = None
@@ -4112,7 +4138,10 @@ class AudioEngine:
                 self._sync_state_file(force=True)
 
     def seek_relative(self, delta_sec: float): self.seek(self.position_sec + delta_sec)
-    def set_volume(self, vol_pct: int): self.volume, self.muted = max(0.0, min(1.0, float(vol_pct) / 100.0)), False; self._sync_state_file()
+    def set_volume(self, vol_pct: int):
+        self.volume, self.muted = max(0.0, min(1.0, float(vol_pct) / 100.0)), False
+        _save_player_volume(self.volume)
+        self._sync_state_file()
     def change_volume(self, delta_pct: int): self.set_volume(int(self.volume * 100) + delta_pct)
     def toggle_mute(self): self.muted = not self.muted; self._sync_state_file()
     def toggle_shuffle(self): self.shuffle = not self.shuffle; self._sync_state_file()

@@ -1442,6 +1442,35 @@ def spawn_new_visualizer() -> bool:
         return False
 
 
+def _prefer_opengl_glass_on_wayland(argv) -> bool:
+    """Re-exec the OpenGL glass host when Vulkan would open an opaque window.
+
+    Vulkan's XWayland surface on NVIDIA exposes only COMPOSITE_ALPHA_OPAQUE,
+    so the glass window loses its alpha channel and its rounded corners turn
+    into black right angles over the MP Visualizer. The OpenGL host creates a
+    real ARGB window and cuts the same 38 px silhouette in its shader, exactly
+    like the standalone visualizer. Set MP_LIQUID_GLASS_ALLOW_VULKAN=1 to keep
+    Vulkan on Wayland deliberately.
+    """
+    if not sys.platform.startswith("linux"):
+        return False
+    if os.environ.get("MP_LIQUID_GLASS_ALLOW_VULKAN") == "1":
+        return False
+    if not (os.environ.get("WAYLAND_DISPLAY")
+            or str(os.environ.get("XDG_SESSION_TYPE", "")).lower() == "wayland"):
+        return False
+    # Self-checks and one-shot printers must stay in this process.
+    if any(a in ("--self-test", "--embed-check", "--list-fonts") for a in argv):
+        return False
+    target = ROOT / "MP_Audio_Player_Liquid_Glass_OpenGL.py"
+    if not target.is_file():
+        return False
+    print("[LiquidGlass] Vulkan is opaque on Wayland; using the OpenGL host "
+          "for the rounded glass corners.", file=sys.stderr)
+    os.execv(sys.executable, [sys.executable, str(target), *argv])
+    return True
+
+
 def main(argv):
     if "--self-test" in argv:
         from liquid_glass_vulkan import run_self_test
@@ -1540,6 +1569,7 @@ def main(argv):
 
 if __name__ == "__main__":
     try:
+        _prefer_opengl_glass_on_wayland(sys.argv[1:])
         raise SystemExit(main(sys.argv[1:]))
     except Exception as exc:
         print(f"Liquid Glass: {exc}", file=sys.stderr)
