@@ -1613,6 +1613,9 @@ class GlassHost:
         m = self.renderer.bezel_px
         self.renderer.set_window_size(self._target_cols * 9 + 2 * m, self._target_rows * 18 + 2 * m + 44)
         self._sync_panels()
+        # MP Gui opens full screen; the player keeps its chosen size.
+        if self.mode == "MANAGER":
+            self.toggle_maximize()
         if self.embed_check:
             self.renderer.draw(read_player_theme())
             return True
@@ -1764,6 +1767,10 @@ class GlassHost:
             raise RuntimeError("VTE window has no X11 id to place in the glass")
         self._place_terminal(force=True)
         self.renderer.focus_window(self.child_xid)
+        # MP Gui is the manager workspace: open it full screen so the whole
+        # menu is visible without the user having to maximise it first.
+        if self.mode == "MANAGER":
+            self.toggle_maximize()
         term.add_events(
             Gdk.EventMask.BUTTON_PRESS_MASK
             | Gdk.EventMask.BUTTON_RELEASE_MASK
@@ -2052,6 +2059,25 @@ def spawn_new_visualizer() -> bool:
     to bring it back.
     """
     try:
+        try:
+            from liquid_visualizer_session import (
+                MAX_VISUALIZER_WINDOWS,
+                visualizer_window_limit_reached,
+            )
+        except ImportError:
+            from scripts.liquid_visualizer_session import (
+                MAX_VISUALIZER_WINDOWS,
+                visualizer_window_limit_reached,
+            )
+        try:
+            limit_hit = visualizer_window_limit_reached(exclude_pid=os.getpid())
+        except Exception:
+            limit_hit = False
+        if limit_hit:
+            with open(CONFIG_DIR / "liquid_visualizer.log", "a") as f:
+                f.write(f"[spawn_new_visualizer] {MAX_VISUALIZER_WINDOWS} windows "
+                        "already open; refusing another.\n")
+            return False
         vis_script = next((p for p in (ROOT / "MP_Liquid_Visualizer.py", ROOT / "scripts" / "mp_liquid_visualizer_vulkan.py") if p.is_file()), None)
         if not vis_script:
             return False

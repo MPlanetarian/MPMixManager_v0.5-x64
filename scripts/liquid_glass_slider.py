@@ -27,8 +27,11 @@ import sys
 import time
 
 DEFAULT_OPACITY = 0.70
-MIN_OPACITY = 0.20
-MAX_OPACITY = 0.80
+# The bar now spans the full useful range: 10 % (almost transparent) to
+# 100 % (fully opaque). The old 20 %–80 % window was too constricted to read
+# as a transparency control.
+MIN_OPACITY = 0.10
+MAX_OPACITY = 1.00
 
 # Height of the strip the terminal well keeps free at the bottom of the window.
 SLIDER_STRIP = 44
@@ -70,7 +73,7 @@ def player_slider_strip(cell_height: float = 0.0) -> int:
 
 
 def opacity_from_x(x: float, width: float) -> float:
-    """Map a pointer x inside the window to a glass opacity in [0.20, 0.80]."""
+    """Map a pointer x inside the window to a glass opacity in [0.10, 1.00]."""
     left = float(SLIDER_LEFT)
     right = max(float(SLIDER_LEFT) + 40.0, float(width) - float(SLIDER_RIGHT_PAD))
     t = (float(x) - left) / (right - left)

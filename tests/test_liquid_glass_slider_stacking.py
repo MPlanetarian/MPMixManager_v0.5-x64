@@ -245,8 +245,12 @@ class MappingTest(unittest.TestCase):
     def test_right_edge_is_maximum_opacity(self):
         self.assertAlmostEqual(opacity_from_x(960, 1000), MAX_OPACITY, places=3)
 
+    def test_bar_spans_ten_to_one_hundred_percent(self):
+        self.assertAlmostEqual(MIN_OPACITY, 0.10)
+        self.assertAlmostEqual(MAX_OPACITY, 1.00)
+
     def test_thumb_round_trips(self):
-        for opacity in (0.20, 0.35, 0.50, 0.70, 0.80):
+        for opacity in (0.10, 0.20, 0.35, 0.50, 0.70, 0.80, 1.00):
             x = slider_thumb_x(opacity, 1000)
             self.assertAlmostEqual(opacity_from_x(x, 1000), opacity, places=3)
 

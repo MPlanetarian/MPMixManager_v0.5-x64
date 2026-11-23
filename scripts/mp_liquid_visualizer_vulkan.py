@@ -3976,6 +3976,29 @@ def run_visualizer(preset_name: Optional[str] = None, max_seconds: Optional[floa
             return 1
     except Exception:
         pass
+    # Every launcher funnels through here, so the window cap cannot be
+    # bypassed by a shortcut, a tray action or a second host. Count the other
+    # visualizers, not this process, so the sixteenth window is still allowed.
+    try:
+        try:
+            from liquid_visualizer_session import (
+                MAX_VISUALIZER_WINDOWS,
+                visualizer_window_limit_reached,
+            )
+        except ImportError:
+            from scripts.liquid_visualizer_session import (
+                MAX_VISUALIZER_WINDOWS,
+                visualizer_window_limit_reached,
+            )
+        if visualizer_window_limit_reached(exclude_pid=os.getpid()):
+            print(
+                f"MP Visualizer: {MAX_VISUALIZER_WINDOWS} visualizer windows are "
+                "already open. Close one before opening another.",
+                file=sys.stderr,
+            )
+            return 1
+    except Exception:
+        pass
     signal.signal(signal.SIGTERM, _exit_when_player_closes)
     # Windows has no SIGHUP. Registering it aborted the visualizer before the window opened.
     hangup = getattr(signal, "SIGHUP", None)

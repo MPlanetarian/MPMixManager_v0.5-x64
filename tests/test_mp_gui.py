@@ -103,7 +103,7 @@ class TestGuiThemeKey(unittest.TestCase):
         end = text.index("_sync_btop_theme()", start)
         fn = text[start:end]
         self.assertIn("save_theme", fn)
-        self.assertIn('cycle_menu_theme; last_term_lines=0', text)
+        self.assertIn('cycle_menu_theme; typed_buffer=""', text)
         self.assertIn("[C] Theme", text)
         script = fn + """
 save_theme() { printf '%s\\n' "$1"; }
@@ -151,19 +151,24 @@ cycle_menu_theme
 
 
 class TestGuiLauncher(unittest.TestCase):
-    def test_manager_sh_opens_the_gui(self):
+    def test_manager_sh_opens_the_cli(self):
         text = (ROOT / "manager.sh").read_text(encoding="utf-8")
-        self.assertIn('exec bash "MP_Gui.sh" "$@"', text)
-        self.assertLess(
-            text.index('exec bash "MP_Gui.sh" "$@"'),
-            text.index('exec bash "Mix_Archive_Manager.sh" "$@"'),
-        )
+        self.assertIn('exec bash "Mix_Archive_Manager.sh" "$@"', text)
         result = subprocess.run(
             ["bash", "-n", str(ROOT / "manager.sh")],
             capture_output=True,
             text=True,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_mp_gui_opens_full_screen(self):
+        """MP Gui must maximise itself on both hosts before the child starts."""
+        needle = 'if self.mode == "MANAGER":\n            self.toggle_maximize()'
+        for host in ("MP_Audio_Player_Liquid_Glass.py",
+                     "MP_Audio_Player_Liquid_Glass_OpenGL.py"):
+            text = (ROOT / host).read_text(encoding="utf-8")
+            self.assertGreaterEqual(text.count(needle), 2,
+                                    f"{host} does not maximise MP Gui at both startup paths")
 
     def test_mp_gui_starts_the_manager_host(self):
         path = ROOT / "MP_Gui.sh"
@@ -175,7 +180,7 @@ class TestGuiLauncher(unittest.TestCase):
         self.assertIn("windows_find_python.cmd", text)
         self.assertIn('exec "$MP_PY"', text)
         self.assertNotIn("exec python3 ", text)
-        self.assertIn('THEME_NAME="dreamworlds_ultra"', text)
+        self.assertIn('THEME_NAME="dynamic_rainbow_liquid_glass"', text)
         self.assertNotIn("charcoal_vault", text)
         self.assertIn("--keep-theme", text)
         self.assertIn("scripts/mp_gui_focus.sh", text)

@@ -115,8 +115,8 @@ def read_player_theme(config_dir=None):
     try:
         name = theme_file.read_text(encoding="utf-8").strip().lower()
     except OSError:
-        name = "dreamworlds_ultra"
-    return name or "dreamworlds_ultra"
+        name = "dynamic_rainbow_liquid_glass"
+    return name or "dynamic_rainbow_liquid_glass"
 
 
 def _rgb01(rgb):

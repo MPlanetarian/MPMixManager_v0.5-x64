@@ -95,10 +95,10 @@ class EqualizerTestBase(unittest.TestCase):
 
 
 class TestFxLinesRunLength(EqualizerTestBase):
-    """`_fx_lines` is shared by the Liquid, Overview and Rainbow effects."""
+    """`_fx_lines` is shared by the Overview and Rainbow effects."""
 
     def test_one_escape_per_run_not_per_cell(self):
-        viz = self.viz("stream_of_frequency_liquid_eq")
+        viz = self.viz("stream_of_frequency_overview_eq")
         gc = [["█"] * 80]
         gcol = [["\033[38;2;10;20;30m"] * 80]
         lines = viz._fx_lines(gc, gcol, 80, "h", "f")
@@ -109,7 +109,7 @@ class TestFxLinesRunLength(EqualizerTestBase):
                         f"80 cells of one colour emitted {escape_count(body)} escapes")
 
     def test_a_space_does_not_split_a_run(self):
-        viz = self.viz("stream_of_frequency_liquid_eq")
+        viz = self.viz("stream_of_frequency_overview_eq")
         gc = [["█", " ", "█"]]
         gcol = [["\033[38;2;10;20;30m", "", "\033[38;2;10;20;30m"]]
         line = viz._fx_lines(gc, gcol, 3, "h", "f")[1]
@@ -118,7 +118,7 @@ class TestFxLinesRunLength(EqualizerTestBase):
 
     def test_bold_does_not_leak_into_the_next_plain_cell(self):
         """A bold palette entry followed by a plain one must clear bold."""
-        viz = self.viz("stream_of_frequency_liquid_eq")
+        viz = self.viz("stream_of_frequency_overview_eq")
         gc = [["A", "B"]]
         gcol = [["\033[1;38;2;9;9;9m", "\033[38;2;1;2;3m"]]
         line = viz._fx_lines(gc, gcol, 2, "h", "f")[1]
@@ -126,7 +126,7 @@ class TestFxLinesRunLength(EqualizerTestBase):
                       "bold was not cleared before the plain cell")
 
     def test_visible_glyphs_and_colours_are_preserved(self):
-        viz = self.viz("stream_of_frequency_liquid_eq")
+        viz = self.viz("stream_of_frequency_overview_eq")
         gc = [["█", "▓", " ", "▒", "░"]]
         gcol = [["\033[38;2;1;1;1m", "\033[38;2;2;2;2m", "",
                  "\033[38;2;3;3;3m", "\033[38;2;4;4;4m"]]
@@ -256,17 +256,16 @@ class TestFullscreenCadence(EqualizerTestBase):
         return statistics.median(samples)
 
     def test_stream_of_frequency_effects_hold_a_60fps_budget(self):
-        for style in ("stream_of_frequency_eq", "stream_of_frequency_liquid_eq",
-                      "stream_of_frequency_overview_eq"):
+        for style in ("stream_of_frequency_eq", "stream_of_frequency_overview_eq"):
             ms = self._median_frame_ms(style, *FULLSCREEN)
             self.assertLess(
                 ms, 16.7,
                 f"{style} took {ms:.2f} ms/frame at {FULLSCREEN[0]}x{FULLSCREEN[1]}",
             )
 
-    def test_liquid_spectrogram_ships_a_small_payload(self):
+    def test_overview_spectrogram_ships_a_small_payload(self):
         """The run-length emission is what keeps a full screen VTE cheap."""
-        viz = self.viz("stream_of_frequency_liquid_eq")
+        viz = self.viz("stream_of_frequency_overview_eq")
         with patch.dict(os.environ, {"MP_LIQUID_GLASS": "1"}), \
              patch("MP_Audio_Player.time.time", return_value=1000.0):
             for step in range(80):  # fill the spectrogram history
@@ -275,7 +274,7 @@ class TestFullscreenCadence(EqualizerTestBase):
         payload = sum(len(line) for line in lines)
         self.assertLess(
             payload, 12 * 1024,
-            f"the Liquid Spectrogram wrote {payload / 1024:.1f} KiB for one frame",
+            f"the Overview Spectrogram wrote {payload / 1024:.1f} KiB for one frame",
         )
 
     def test_overview_effect_ships_a_small_payload(self):

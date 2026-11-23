@@ -1905,6 +1905,23 @@ class LiquidMixer(GlassHost):
         if script is None:
             return False
         try:
+            try:
+                from liquid_visualizer_session import (
+                    MAX_VISUALIZER_WINDOWS,
+                    visualizer_window_limit_reached,
+                )
+            except ImportError:
+                from scripts.liquid_visualizer_session import (
+                    MAX_VISUALIZER_WINDOWS,
+                    visualizer_window_limit_reached,
+                )
+            if visualizer_window_limit_reached(exclude_pid=os.getpid()):
+                _log(f"{MAX_VISUALIZER_WINDOWS} visualizer windows are already open; "
+                     "not starting another")
+                return False
+        except Exception:
+            pass
+        try:
             mark_player_visualizer_attached(visible=True)
             log = open(CONFIG_DIR / "liquid_mixer_visualizer.log", "a", encoding="utf-8")
             proc = subprocess.Popen(

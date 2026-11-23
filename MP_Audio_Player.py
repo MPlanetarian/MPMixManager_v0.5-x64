@@ -5620,7 +5620,7 @@ _THEME_ALIASES = {
     "sensorium": "sensorium", "sensorium interface": "sensorium", "sensorium_interface": "sensorium",
     "cyberpunk": "cyber_neon", "cyber": "cyber_neon",
     "matrix": "phosphor", "nord": "ice_cold", "dracula": "dreamworlds_neon", "gruvbox": "retro_studio",
-    "dreamworlds": "dreamworlds_ultra", "default": "dreamworlds_ultra", "mplanetarian": "dreamworlds_ultra",
+    "dreamworlds": "dreamworlds_ultra", "default": "dynamic_rainbow_liquid_glass", "mplanetarian": "dreamworlds_ultra",
     "dynamic_rainbow_liquid_glass": "dynamic_rainbow_liquid_glass",
     "dynamic_liquid_glass_rainbow": "dynamic_rainbow_liquid_glass",
     "dynamic_rainbow": "dynamic_rainbow_liquid_glass",
@@ -5666,7 +5666,6 @@ _THEME_ALIASES = {
 class EqualizerVisualizer:
     STYLES = [
         "stream_of_frequency_eq",
-        "stream_of_frequency_liquid_eq",
         "stream_of_frequency_overview_eq",
         "rainbow_mandala_eq",
         "rainbow_wormhole_eq",
@@ -5680,7 +5679,6 @@ class EqualizerVisualizer:
     ]
     STYLE_NAMES = {
         "stream_of_frequency_eq": "Stream of Frequency (Dynamic Spectrogram)",
-        "stream_of_frequency_liquid_eq": "Stream of Frequency (Liquid Spectrogram)",
         "stream_of_frequency_overview_eq": "Stream of Frequency (MPlanterian Overview Effect)",
         "rainbow_mandala_eq": "Rainbow Mandala Bloom (Kaleidoscopic Spectrum)",
         "rainbow_wormhole_eq": "Rainbow Wormhole (Hyperspace Plasma Tunnel)",
@@ -5693,13 +5691,6 @@ class EqualizerVisualizer:
         "oscilloscope": "Oscilloscope Waveform",
     }
     STYLE_ALIASES = {
-        # Stream of Frequency — Liquid Spectrogram
-        "liquid_spectrogram": "stream_of_frequency_liquid_eq",
-        "stream_liquid": "stream_of_frequency_liquid_eq",
-        "stream_of_frequency_liquid": "stream_of_frequency_liquid_eq",
-        "liquid_stream": "stream_of_frequency_liquid_eq",
-        "liquid": "stream_of_frequency_liquid_eq",
-        "liquid_pool": "stream_of_frequency_liquid_eq",
         # Stream of Frequency — MPlanterian Overview Effect
         "overview": "stream_of_frequency_overview_eq",
         "overview_effect": "stream_of_frequency_overview_eq",
@@ -5796,10 +5787,13 @@ class EqualizerVisualizer:
                         _probe = _mixer_deck_theme_fallback(_probe)
                     if _probe in self.THEMES:
                         selected_theme = _shared
-            # Dreamworlds Ultra is the built-in default when no theme has ever
-            # been saved, so a bare player launch matches MP Gui and the CLI.
+            # Dynamic Liquid Glass (Rainbow Colours) is the built-in default
+            # when no theme has ever been saved, so a bare player launch
+            # matches MP Gui and the CLI. A Liquid Mixer deck keeps the
+            # mixer's own Dreamworlds Ultra fallback so the mixer is unchanged.
             if not selected_theme:
-                selected_theme = "dreamworlds_ultra"
+                selected_theme = ("dreamworlds_ultra" if _mixer_deck
+                                  else "dynamic_rainbow_liquid_glass")
             if selected_theme:
                 self.set_theme(selected_theme)
         except Exception: pass
@@ -7160,17 +7154,15 @@ class EqualizerVisualizer:
     def _fx_micro_meter(self, style: str, t_now: float, levels) -> str:
         """A 14-cell readout for MICRO mode, one glyph and palette per style.
 
-        The three Stream of Frequency readings keep their own colours here too:
-        the Dynamic Spectrogram keeps drifting rainbow hues, while the Liquid
-        and Overview effects use their fixed cool and warm palettes so the
-        miniature still matches the full-size picture.
+        The two Stream of Frequency readings keep their own colours here too:
+        the Dynamic Spectrogram drifts through rainbow hues, while the
+        Overview effect uses its fixed warm palette so the miniature still
+        matches the full-size picture.
         """
         lv = np.asarray(levels if levels is not None else [], dtype=float)
         n = 14
         palette = None
-        if style == "stream_of_frequency_liquid_eq":
-            palette = _sof_ramp_ansi(_SOF_LIQUID_RAMP)
-        elif style == "stream_of_frequency_overview_eq":
+        if style == "stream_of_frequency_overview_eq":
             palette = _sof_ramp_ansi(_SOF_OVERVIEW_RAMP)
         out = []
         for i in range(n):
@@ -7184,9 +7176,6 @@ class EqualizerVisualizer:
                 glyph = "✺" if v > 0.74 else ("✴" if v > 0.48 else ("✳" if v > 0.22 else ("◦" if v > 0.05 else "·")))
             elif style == "rainbow_wormhole_eq":
                 glyph = "◉" if v > 0.72 else ("◎" if v > 0.44 else ("◌" if v > 0.20 else ("∙" if v > 0.05 else "·")))
-            elif style == "stream_of_frequency_liquid_eq":
-                # A still pool: filled blocks, no drifting rainbow hue.
-                glyph = "█" if v > 0.72 else ("▓" if v > 0.46 else ("▒" if v > 0.24 else ("░" if v > 0.08 else "·")))
             elif style == "stream_of_frequency_overview_eq":
                 # A contour readout: summit marks and band lines.
                 scaled = abs((v * 6.0) - round(v * 6.0))
@@ -7790,7 +7779,6 @@ class EqualizerVisualizer:
         # here and throwing them away was paid on every frame of the default
         # equaliser, which is the one the Liquid Player opens on.
         if s == "stream_of_frequency_eq": lines = self.render_stream_of_frequency(status, width, height)
-        elif s == "stream_of_frequency_liquid_eq": lines = self.render_stream_of_frequency_liquid(status, width, height)
         elif s == "stream_of_frequency_overview_eq": lines = self.render_stream_of_frequency_overview(status, width, height)
         elif s == "rainbow_mandala_eq": lines = self.render_rainbow_mandala_eq(status, width, height)
         elif s == "rainbow_wormhole_eq": lines = self.render_rainbow_wormhole_eq(status, width, height)
@@ -12838,7 +12826,7 @@ class TerminalPlayerUI:
         badge = f"{bold_s}{playing_badge_ink(self.visualizer.theme, is_lg)}▶{NC}" if state == "playing" else (f"{bold_s}\033[38;2;255;191;0m⏸{NC}" if state == "paused" else f"{bold_s}\033[38;2;255;64;64m⏹{NC}")
         cs, lv = self.visualizer.style, _as_float_vector(st.get("levels", [0.0] * 24), 0)
         if cs in ("rainbow_mandala_eq", "rainbow_wormhole_eq", "rainbow_aurora_eq",
-                  "stream_of_frequency_liquid_eq", "stream_of_frequency_overview_eq"):
+                  "stream_of_frequency_overview_eq"):
             # Each full-field effect owns its miniature: glyph and palette both
             # come from _fx_micro_meter, so the Micro meter matches the HUD.
             m_str = self.visualizer._fx_micro_meter(cs, t_now, lv)

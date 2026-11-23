@@ -98,7 +98,7 @@ FORCED_THEME = "into_darkness_void_out"
 try:  # The player's own slider constants, so both surfaces feel identical.
     from liquid_glass_slider import DEFAULT_OPACITY, MAX_OPACITY, MIN_OPACITY
 except Exception:  # pragma: no cover - the script ships beside the player
-    DEFAULT_OPACITY, MIN_OPACITY, MAX_OPACITY = 0.70, 0.20, 0.80
+    DEFAULT_OPACITY, MIN_OPACITY, MAX_OPACITY = 0.70, 0.10, 1.00
 
 DESIGN_W, DESIGN_H = 1920, 1080
 # Windowed mode is the design grid itself, the size the mixer is composed for.

@@ -17,6 +17,11 @@ from typing import Optional
 
 _VISUALIZER_MARK = "MP_Liquid_Visualizer|mp_liquid_visualizer_vulkan"
 _PLAYER_MARK = "MP_Audio_Player_Liquid_Glass"
+# The most MP Visualizer windows that may be open at once, across the Liquid
+# Player, MP Gui, the Liquid Mixer and the console manager. Sixteen covers a
+# wall of screens and a few detached windows without letting a held key spawn
+# processes until the machine runs out of memory.
+MAX_VISUALIZER_WINDOWS = 16
 _CONFIG_ENV = Path.home() / ".config" / "mix-manager" / "config.env"
 
 
@@ -188,6 +193,40 @@ def _is_descendant(pid: int, ancestor: int) -> bool:
     return False
 
 
+def _proc_visualizer_pids() -> Optional[list[int]]:
+    """Visualizer pids straight from /proc, or None when /proc is unavailable.
+
+    Reading ``/proc`` avoids a ``pgrep`` subprocess in the launch path. That
+    matters because the Z handler runs while a caller may be patching
+    ``subprocess.Popen`` (the spawn tests do), and because the cap check must
+    not block for the pgrep timeout on a loaded machine.
+    """
+    proc = Path("/proc")
+    if not proc.is_dir():
+        return None
+    pids: list[int] = []
+    try:
+        entries = list(proc.iterdir())
+    except OSError:
+        return None
+    for entry in entries:
+        if not entry.name.isdigit():
+            continue
+        pid = int(entry.name)
+        cmd = _cmdline(pid)
+        if not cmd:
+            continue
+        if "MP_Liquid_Visualizer" not in cmd and "mp_liquid_visualizer_vulkan" not in cmd:
+            continue
+        argv0 = cmd.split(" ", 1)[0]
+        if not os.path.basename(argv0).lower().startswith("python"):
+            continue
+        if "pgrep" in cmd or "pkill" in cmd:
+            continue
+        pids.append(pid)
+    return pids
+
+
 def visualizer_pids() -> list[int]:
     """PIDs of running MP Visualizer processes.
 
@@ -197,6 +236,9 @@ def visualizer_pids() -> list[int]:
     the shutdown logic think a second window was open. Only processes whose
     executable is a Python interpreter are kept.
     """
+    direct = _proc_visualizer_pids()
+    if direct is not None:
+        return direct
     pids = []
     for pid in _pgrep(_VISUALIZER_MARK):
         cmd = _cmdline(pid)
@@ -211,6 +253,21 @@ def visualizer_pids() -> list[int]:
             continue
         pids.append(pid)
     return pids
+
+
+def visualizer_window_count(exclude_pid: Optional[int] = None) -> int:
+    """How many visualizer windows are open, ignoring ``exclude_pid``.
+
+    The process calling this is usually itself a visualizer, so the caller
+    passes its own pid to count only the *other* windows.
+    """
+    return len([pid for pid in visualizer_pids() if pid != exclude_pid])
+
+
+def visualizer_window_limit_reached(exclude_pid: Optional[int] = None,
+                                    limit: int = MAX_VISUALIZER_WINDOWS) -> bool:
+    """True when opening one more visualizer would exceed ``limit`` windows."""
+    return visualizer_window_count(exclude_pid=exclude_pid) >= max(1, int(limit))
 
 
 def _visualizer_is_gui_companion(pid: int) -> bool:

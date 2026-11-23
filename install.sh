@@ -739,17 +739,17 @@ else
     fi
 fi
 
-# First install selects Dreamworlds Ultra [Default]. The shared theme
-# file is what the CLI manager, MP Gui, the Liquid Player and the tracklist
-# viewer all read, so writing it here means every window opens in that theme.
-# An existing choice is never overwritten: a reinstall or an update keeps the
-# theme the user picked with C.
+# First install selects Dynamic Liquid Glass [Rainbow Colours]. The shared
+# theme file is what the CLI manager, MP Gui, the Liquid Player and the
+# tracklist viewer all read, so writing it here means every window opens in
+# that theme. An existing choice is never overwritten: a reinstall or an
+# update keeps the theme the user picked with C.
 MP_THEME_DIR="$HOME/.config/mix-manager"
 MP_THEME_FILE="$MP_THEME_DIR/theme"
 mkdir -p "$MP_THEME_DIR" 2>/dev/null || true
 if [ ! -f "$MP_THEME_FILE" ]; then
-    printf '%s\n' "dreamworlds_ultra" > "$MP_THEME_FILE" 2>/dev/null || true
-    echo -e "${GREEN}      ✓ Default theme: Dreamworlds Ultra [Default]${NC}"
+    printf '%s\n' "dynamic_rainbow_liquid_glass" > "$MP_THEME_FILE" 2>/dev/null || true
+    echo -e "${GREEN}      ✓ Default theme: Dynamic Liquid Glass [Rainbow Colours]${NC}"
 else
     echo -e "${DIM}      • Keeping your saved theme: $(tr -d ' \t\n\r' < "$MP_THEME_FILE" 2>/dev/null)${NC}"
 fi

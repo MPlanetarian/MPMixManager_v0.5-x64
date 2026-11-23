@@ -476,16 +476,16 @@ _append_fitted_hint() {
   fi
 }
 set_theme_colors() {
-local theme_name="${1:-dreamworlds_ultra}"; NC='\033[0m' BOLD='\033[1m' DIM='\033[2m'; case "$theme_name" in stream_of_frequency|stream|frequency|sof|frequency_stream|"Stream of Frequency"|"Stream of Frequency Theme"|"Stream of Frequency [Special Edition]"|"Stream of Frequency MP Mix Manager")
+local theme_name="${1:-dynamic_rainbow_liquid_glass}"; NC='\033[0m' BOLD='\033[1m' DIM='\033[2m'; case "$theme_name" in stream_of_frequency|stream|frequency|sof|frequency_stream|"Stream of Frequency"|"Stream of Frequency Theme"|"Stream of Frequency [Special Edition]"|"Stream of Frequency MP Mix Manager")
 RED='\033[38;2;240;32;24m'; GREEN='\033[38;2;76;217;123m'; YELLOW='\033[38;2;245;237;106m'; BLUE='\033[38;2;48;49;131m'; MAGENTA='\033[38;2;151;79;249m'; CYAN='\033[38;2;0;242;255m'; CURRENT_THEME="stream_of_frequency" ;;
 sensorium|sensorium_interface|"Sensorium"|"Sensorium Interface")
 RED='\033[38;2;94;20;15m'; GREEN='\033[38;2;38;61;0m'; YELLOW='\033[38;2;74;52;0m'; BLUE='\033[38;2;11;47;107m'; MAGENTA='\033[38;2;92;36;0m'; CYAN='\033[38;2;10;58;72m'; CURRENT_THEME="sensorium" ;;
 dreamworlds|mplanetarian_dreamworlds|mplanetarian) RED='\033[38;2;237;37;78m' GREEN='\033[38;2;0;229;255m' YELLOW='\033[38;2;255;170;0m'; BLUE='\033[38;2;155;89;182m' MAGENTA='\033[38;2;150;95;225m' CYAN='\033[38;2;0;193;228m'; CURRENT_THEME="dreamworlds" ;;
-dynamic_rainbow_liquid_glass|dynamic_liquid_glass_rainbow|dynamic_rainbow|rainbow_liquid_glass|rainbow|"Dynamic Liquid Glass [Rainbow Colours] (New)"|"Dynamic Liquid Glass [Rainbow Colours]"|"Dynamic Liquid Glass")
+dynamic_rainbow_liquid_glass|dynamic_liquid_glass_rainbow|dynamic_rainbow|rainbow_liquid_glass|rainbow|default|"Dynamic Liquid Glass [Rainbow Colours] (New)"|"Dynamic Liquid Glass [Rainbow Colours]"|"Dynamic Liquid Glass")
 RED='\033[38;2;255;45;142m'; GREEN='\033[38;2;0;242;254m'; YELLOW='\033[38;2;255;215;0m'; BLUE='\033[38;2;90;130;255m'; MAGENTA='\033[38;2;176;88;255m'; CYAN='\033[38;2;0;242;254m'; CURRENT_THEME="dynamic_rainbow_liquid_glass" ;;
 dreamworlds_liquid|mp_dreamworlds_liquid_transparency|liquid_transparency|liquid|glass|"MP Dreamworlds Liquid Transparency"|"MP Dreamworlds Liquid Transparency [Special Edition]")
 RED='\033[38;2;255;75;130m'; GREEN='\033[38;2;0;245;212m'; YELLOW='\033[38;2;255;215;0m'; BLUE='\033[38;2;72;149;239m'; MAGENTA='\033[38;2;199;125;255m'; CYAN='\033[38;2;0;245;255m'; CURRENT_THEME="dreamworlds_liquid" ;;
-dreamworlds_ultra|ultra|default|dreamworlds_ultra_mp_mix_manager|"Dreamworlds Ultra MP Mix Manager")
+dreamworlds_ultra|ultra|dreamworlds_ultra_mp_mix_manager|"Dreamworlds Ultra MP Mix Manager")
 RED='\033[38;2;255;0;0m' GREEN='\033[38;2;0;255;0m' YELLOW='\033[38;2;255;153;51m'; BLUE='\033[38;2;102;102;255m' MAGENTA='\033[38;2;166;77;255m' CYAN='\033[38;2;153;153;255m'; CURRENT_THEME="dreamworlds_ultra" ;;
 cosmic_supernova|supernova|cosmic|cosmic_supernova_mp_mix_manager|"Cosmic Supernova MP Mix Manager"|"Cosmic Supernova"|"Cosmic Supernova [Special]"|"Cosmic Supernova [Special Edition]")
 RED='\033[38;2;255;51;102m'; GREEN='\033[38;2;0;245;212m'; YELLOW='\033[38;2;254;228;64m'; BLUE='\033[38;2;94;96;206m'; MAGENTA='\033[38;2;224;86;253m'; CYAN='\033[38;2;76;201;240m'; CURRENT_THEME="cosmic_supernova" ;;
@@ -494,7 +494,7 @@ RED='\033[38;2;217;83;79m'; GREEN='\033[38;2;92;184;92m'; YELLOW='\033[38;2;240;
 into_darkness_void_out|into_darkness|"Into Darkness (Void Out)"|"Into Darkness"|"Void Out")
 RED='\033[38;2;200;200;200m'; GREEN='\033[38;2;200;200;200m'; YELLOW='\033[1;37m'; BLUE='\033[38;2;72;72;72m'; MAGENTA='\033[38;2;200;200;200m'; CYAN='\033[1;37m'; CURRENT_THEME="into_darkness_void_out" ;;
 retro_terminal|unix_terminal|retro_unix|old_style_unix|unix_retro|white_on_black|retro|terminal|vt100|"Old Style Unix Terminal Retro Mode (White on Black)"|"Old Style Unix Terminal Retro Mode"|"Old Style Unix Terminal")
-RED='\033[1;37m' GREEN='\033[1;37m' YELLOW='\033[1;37m'; BLUE='\033[0;37m' MAGENTA='\033[1;37m' CYAN='\033[1;37m'; CURRENT_THEME="retro_terminal" ;; the_whitest_white|whitest_white|whitest|white|"The Whitest White"|"The Whitest White Theme"|"The Whitest White MP Mix Manager") RED='\033[38;2;0;0;0m'; GREEN='\033[38;2;0;0;0m'; YELLOW='\033[38;2;0;0;0m'; BLUE='\033[38;2;0;0;0m'; MAGENTA='\033[38;2;0;0;0m'; CYAN='\033[38;2;0;0;0m'; CURRENT_THEME="the_whitest_white" ;; blood_moon|blood-moon|"blood moon"|crimson|crimson_eclipse|"crimson eclipse"|vampire|blood|blood_ruby|"blood ruby"|bloodmoon|"Blood Moon"|"Blood Moon [Crimson Eclipse]"|"Blood Moon MP Mix Manager") RED='\033[38;2;255;32;64m'; GREEN='\033[38;2;255;90;95m'; YELLOW='\033[38;2;255;154;162m'; BLUE='\033[38;2;180;0;32m'; MAGENTA='\033[38;2;220;20;60m'; CYAN='\033[38;2;255;68;85m'; CURRENT_THEME="blood_moon" ;; dracula|dreamworlds_neon) RED='\033[38;5;212m' GREEN='\033[38;5;84m' YELLOW='\033[38;5;228m'; BLUE='\033[38;5;62m' MAGENTA='\033[38;5;141m' CYAN='\033[38;5;117m'; CURRENT_THEME="dracula" ;; nord|ice_cold) RED='\033[38;5;167m' GREEN='\033[38;5;108m' YELLOW='\033[38;5;221m'; BLUE='\033[38;5;110m' MAGENTA='\033[38;5;139m' CYAN='\033[38;5;117m'; CURRENT_THEME="nord" ;; matrix|phosphor) RED='\033[38;5;124m' GREEN='\033[38;5;46m' YELLOW='\033[38;5;190m'; BLUE='\033[38;5;29m' MAGENTA='\033[38;5;35m' CYAN='\033[38;5;120m'; CURRENT_THEME="matrix" ;; solarized) RED='\033[38;5;166m' GREEN='\033[38;5;64m' YELLOW='\033[38;5;136m'; BLUE='\033[38;5;33m' MAGENTA='\033[38;5;125m' CYAN='\033[38;5;37m'; CURRENT_THEME="solarized" ;; tokyo) RED='\033[38;5;203m' GREEN='\033[38;5;114m' YELLOW='\033[38;5;222m'; BLUE='\033[38;5;111m' MAGENTA='\033[38;5;176m' CYAN='\033[38;5;73m'; CURRENT_THEME="tokyo" ;; monokai) RED='\033[38;5;197m' GREEN='\033[38;5;148m' YELLOW='\033[38;5;220m'; BLUE='\033[38;5;141m' MAGENTA='\033[38;5;208m' CYAN='\033[38;5;81m'; CURRENT_THEME="monokai" ;; gruvbox|retro_studio) RED='\033[38;5;167m' GREEN='\033[38;5;142m' YELLOW='\033[38;5;214m'; BLUE='\033[38;5;109m' MAGENTA='\033[38;5;175m' CYAN='\033[38;5;108m'; CURRENT_THEME="gruvbox" ;; emerald) RED='\033[38;5;204m' GREEN='\033[38;5;48m' YELLOW='\033[38;5;221m'; BLUE='\033[38;5;31m' MAGENTA='\033[38;5;78m' CYAN='\033[38;5;86m'; CURRENT_THEME="emerald" ;; classic) RED='\033[0;31m' GREEN='\033[0;32m' YELLOW='\033[0;33m'; BLUE='\033[0;34m' MAGENTA='\033[0;35m' CYAN='\033[0;36m'; CURRENT_THEME="classic" ;; cyberpunk|cyber_neon) RED='\033[38;5;196m' GREEN='\033[38;5;48m' YELLOW='\033[38;5;226m'; BLUE='\033[38;5;45m' MAGENTA='\033[38;5;198m' CYAN='\033[38;5;51m'; CURRENT_THEME="cyberpunk" ;; *) RED='\033[38;2;255;0;0m' GREEN='\033[38;2;0;255;0m' YELLOW='\033[38;2;255;153;51m'; BLUE='\033[38;2;102;102;255m' MAGENTA='\033[38;2;166;77;255m' CYAN='\033[38;2;153;153;255m'; CURRENT_THEME="dreamworlds_ultra" ;; esac
+RED='\033[1;37m' GREEN='\033[1;37m' YELLOW='\033[1;37m'; BLUE='\033[0;37m' MAGENTA='\033[1;37m' CYAN='\033[1;37m'; CURRENT_THEME="retro_terminal" ;; the_whitest_white|whitest_white|whitest|white|"The Whitest White"|"The Whitest White Theme"|"The Whitest White MP Mix Manager") RED='\033[38;2;0;0;0m'; GREEN='\033[38;2;0;0;0m'; YELLOW='\033[38;2;0;0;0m'; BLUE='\033[38;2;0;0;0m'; MAGENTA='\033[38;2;0;0;0m'; CYAN='\033[38;2;0;0;0m'; CURRENT_THEME="the_whitest_white" ;; blood_moon|blood-moon|"blood moon"|crimson|crimson_eclipse|"crimson eclipse"|vampire|blood|blood_ruby|"blood ruby"|bloodmoon|"Blood Moon"|"Blood Moon [Crimson Eclipse]"|"Blood Moon MP Mix Manager") RED='\033[38;2;255;32;64m'; GREEN='\033[38;2;255;90;95m'; YELLOW='\033[38;2;255;154;162m'; BLUE='\033[38;2;180;0;32m'; MAGENTA='\033[38;2;220;20;60m'; CYAN='\033[38;2;255;68;85m'; CURRENT_THEME="blood_moon" ;; dracula|dreamworlds_neon) RED='\033[38;5;212m' GREEN='\033[38;5;84m' YELLOW='\033[38;5;228m'; BLUE='\033[38;5;62m' MAGENTA='\033[38;5;141m' CYAN='\033[38;5;117m'; CURRENT_THEME="dracula" ;; nord|ice_cold) RED='\033[38;5;167m' GREEN='\033[38;5;108m' YELLOW='\033[38;5;221m'; BLUE='\033[38;5;110m' MAGENTA='\033[38;5;139m' CYAN='\033[38;5;117m'; CURRENT_THEME="nord" ;; matrix|phosphor) RED='\033[38;5;124m' GREEN='\033[38;5;46m' YELLOW='\033[38;5;190m'; BLUE='\033[38;5;29m' MAGENTA='\033[38;5;35m' CYAN='\033[38;5;120m'; CURRENT_THEME="matrix" ;; solarized) RED='\033[38;5;166m' GREEN='\033[38;5;64m' YELLOW='\033[38;5;136m'; BLUE='\033[38;5;33m' MAGENTA='\033[38;5;125m' CYAN='\033[38;5;37m'; CURRENT_THEME="solarized" ;; tokyo) RED='\033[38;5;203m' GREEN='\033[38;5;114m' YELLOW='\033[38;5;222m'; BLUE='\033[38;5;111m' MAGENTA='\033[38;5;176m' CYAN='\033[38;5;73m'; CURRENT_THEME="tokyo" ;; monokai) RED='\033[38;5;197m' GREEN='\033[38;5;148m' YELLOW='\033[38;5;220m'; BLUE='\033[38;5;141m' MAGENTA='\033[38;5;208m' CYAN='\033[38;5;81m'; CURRENT_THEME="monokai" ;; gruvbox|retro_studio) RED='\033[38;5;167m' GREEN='\033[38;5;142m' YELLOW='\033[38;5;214m'; BLUE='\033[38;5;109m' MAGENTA='\033[38;5;175m' CYAN='\033[38;5;108m'; CURRENT_THEME="gruvbox" ;; emerald) RED='\033[38;5;204m' GREEN='\033[38;5;48m' YELLOW='\033[38;5;221m'; BLUE='\033[38;5;31m' MAGENTA='\033[38;5;78m' CYAN='\033[38;5;86m'; CURRENT_THEME="emerald" ;; classic) RED='\033[0;31m' GREEN='\033[0;32m' YELLOW='\033[0;33m'; BLUE='\033[0;34m' MAGENTA='\033[0;35m' CYAN='\033[0;36m'; CURRENT_THEME="classic" ;; cyberpunk|cyber_neon) RED='\033[38;5;196m' GREEN='\033[38;5;48m' YELLOW='\033[38;5;226m'; BLUE='\033[38;5;45m' MAGENTA='\033[38;5;198m' CYAN='\033[38;5;51m'; CURRENT_THEME="cyberpunk" ;; *) RED='\033[38;2;255;45;142m' GREEN='\033[38;2;0;242;254m' YELLOW='\033[38;2;255;215;0m'; BLUE='\033[38;2;90;130;255m' MAGENTA='\033[38;2;176;88;255m' CYAN='\033[38;2;0;242;254m'; CURRENT_THEME="dynamic_rainbow_liquid_glass" ;; esac
 # Bracketed menu numbers [ 0]. Each theme keeps its own hue. The shared
 # light-blue cyan is not reused, so changing theme always changes this colour.
 _menu_id="${theme_name}"
@@ -502,9 +502,9 @@ case "$_menu_id" in
 stream|frequency|sof|frequency_stream|stream_of_frequency|"Stream of Frequency"|"Stream of Frequency Theme"|"Stream of Frequency [Special Edition]"|"Stream of Frequency MP Mix Manager") _menu_id=stream_of_frequency ;;
 sensorium|sensorium_interface|"Sensorium"|"Sensorium Interface") _menu_id=sensorium ;;
 mplanetarian_dreamworlds|mplanetarian|dreamworlds) _menu_id=dreamworlds ;;
-dynamic_liquid_glass_rainbow|dynamic_rainbow|rainbow_liquid_glass|rainbow|dynamic_rainbow_liquid_glass|"Dynamic Liquid Glass"|"Dynamic Liquid Glass [Rainbow Colours]"|"Dynamic Liquid Glass [Rainbow Colours] (New)") _menu_id=dynamic_rainbow_liquid_glass ;;
+dynamic_liquid_glass_rainbow|dynamic_rainbow|rainbow_liquid_glass|rainbow|dynamic_rainbow_liquid_glass|default|"Dynamic Liquid Glass"|"Dynamic Liquid Glass [Rainbow Colours]"|"Dynamic Liquid Glass [Rainbow Colours] (New)") _menu_id=dynamic_rainbow_liquid_glass ;;
 mp_dreamworlds_liquid_transparency|liquid_transparency|liquid|glass|dreamworlds_liquid|"MP Dreamworlds Liquid Transparency"|"MP Dreamworlds Liquid Transparency [Special Edition]") _menu_id=dreamworlds_liquid ;;
-ultra|default|dreamworlds_ultra_mp_mix_manager|dreamworlds_ultra|"Dreamworlds Ultra MP Mix Manager") _menu_id=dreamworlds_ultra ;;
+ultra|dreamworlds_ultra_mp_mix_manager|dreamworlds_ultra|"Dreamworlds Ultra MP Mix Manager") _menu_id=dreamworlds_ultra ;;
 supernova|cosmic|cosmic_supernova_mp_mix_manager|cosmic_supernova|"Cosmic Supernova"|"Cosmic Supernova MP Mix Manager"|"Cosmic Supernova [Special]"|"Cosmic Supernova [Special Edition]") _menu_id=cosmic_supernova ;;
 retro_linux|linux_memories|retro-linux-memories|retro-linux|linux|veracrypt|retrolinux|charcoal_vault|charcoal|veracrypt_dark|vault|dark_vault|retro_linux_memories|"Retro Linux Memories"|"Retro Linux Memories [GTK / VeraCrypt Dark Slate]"|"Charcoal Vault"|"Charcoal Vault (VeraCrypt Dark)") _menu_id=retro_linux_memories ;;
 unix_terminal|retro_unix|old_style_unix|unix_retro|white_on_black|retro|terminal|vt100|retro_terminal|"Old Style Unix Terminal"|"Old Style Unix Terminal Retro Mode"|"Old Style Unix Terminal Retro Mode (White on Black)") _menu_id=retro_terminal ;;
@@ -525,7 +525,7 @@ emerald) _menu_id=emerald ;;
 classic) _menu_id=classic ;;
 blood_moon|blood-moon|"blood moon"|crimson|crimson_eclipse|"crimson eclipse"|vampire|blood|blood_ruby|"blood ruby"|bloodmoon|"Blood Moon"|"Blood Moon [Crimson Eclipse]"|"Blood Moon MP Mix Manager") _menu_id=blood_moon ;;
 the_whitest_white|whitest_white|whitest|white|"The Whitest White"|"The Whitest White Theme"|"The Whitest White MP Mix Manager") _menu_id=the_whitest_white ;;
-cyberpunk) _menu_id=cyberpunk ;; *) _menu_id=dreamworlds_ultra ;;
+cyberpunk) _menu_id=cyberpunk ;; *) _menu_id=dynamic_rainbow_liquid_glass ;;
 esac
 case "$_menu_id" in
 stream_of_frequency) _mr=76; _mg=217; _mb=123 ;;
@@ -2705,7 +2705,7 @@ local theme_file="$HOME/.config/mix-manager/theme" saved_theme=""
 if [ -f "$theme_file" ]; then
     saved_theme="$(tr -d ' \t\n\r' < "$theme_file" 2>/dev/null)"
 fi
-[ -n "$saved_theme" ] || saved_theme="dreamworlds_ultra"
+[ -n "$saved_theme" ] || saved_theme="dynamic_rainbow_liquid_glass"
 set_theme_colors "$saved_theme"
 # Nothing has to be re-applied on the first menu tick: this is the value that
 # is already on screen, and the stamp in the same moment keeps the watcher
@@ -3090,7 +3090,8 @@ local -a _cycle=(
 )
 local cur="${CURRENT_THEME:-}"
 case "$cur" in
-    dreamworlds|mplanetarian_dreamworlds|mplanetarian|default) cur="dreamworlds_ultra" ;;
+    dreamworlds|mplanetarian_dreamworlds|mplanetarian) cur="dreamworlds_ultra" ;;
+    default) cur="dynamic_rainbow_liquid_glass" ;;
     cyberpunk) cur="cyber_neon" ;;
     dracula) cur="dreamworlds_neon" ;;
     nord) cur="ice_cold" ;;
@@ -4871,6 +4872,14 @@ launch_mp_liquid_visualizer() {
         esac
     fi
     echo -e "\n${BOLD}${CYAN}Opening MP_Liquid_Visualizer [Preset: ${preset_label}] — 1094x734 on macOS, the Liquid Player size on Linux, 700x700 elsewhere, fixed borderless Vulkan window...${NC}"
+    local _vis_open
+    _vis_open=$(pgrep -af "MP_Liquid_Visualizer\.py|mp_liquid_visualizer_vulkan\.py" 2>/dev/null | grep -cE "python[0-9.]*(\.exe)? ")
+    if [ "${_vis_open:-0}" -ge 16 ]; then
+        echo -e "${YELLOW}16 MP Visualizer windows are already open.${NC}"
+        echo -e "${DIM}Close one before opening another.${NC}\n"
+        press_enter
+        return 0
+    fi
     echo -e "${DIM}Continually generates 3D synced to currently playing music (pauses in-place when stopped). Press Esc or 'q' to close.${NC}\n"
     if [ -n "$preset_arg" ]; then
         # Z from the manager is the user opening a window of their own, exactly
@@ -8253,7 +8262,7 @@ while true; do
     esac
     local opts=(
         "1|MPlanetarian Dreamworlds|[Sweet Hot Pink, Electric Cyan, Lavender & Violet]${m1}"
-        "2|Dreamworlds Ultra MP Mix Manager [Default]|[BTOP HotPurpleTrafficLight: Hot Purple, Indigo & Traffic Light RGB]${m2}"
+        "2|Dreamworlds Ultra MP Mix Manager|[BTOP HotPurpleTrafficLight: Hot Purple, Indigo & Traffic Light RGB]${m2}"
         "3|Cyberpunk|[Neon Hot Pink, Electric Cyan & High-Volt Yellow]${m3}"
         "4|Dracula|[Vampiric Purple, Neon Green & Coral Pink]${m4}"
         "5|Nord|[Arctic Slate, Frost Polar Ice & Sage Aurora]${m5}"
@@ -8267,7 +8276,7 @@ while true; do
         "13|Cosmic Supernova [Special Edition]|[Supernova Crimson, Aurora Mint, Solar Gold & Nebula Orchid]${m13}"
         "14|Old Style Unix Terminal Retro Mode (White on Black)|[Monochrome VT100: White Text Only on Black Background]${m14}"
         "15|MP Dreamworlds Liquid Transparency [Special Edition]|[Deep Liquid Ocean Glass, Crystalline Aqua, Seafoam Mint & Liquid Amethyst]${m15}"
-        "16|Dynamic Liquid Glass [Rainbow Colours] (New)|[Dynamic Rainbow Liquid Glass • ±9% Breathing Transparency • 6-Second Cycle]${m16}"
+        "16|Dynamic Liquid Glass [Rainbow Colours] [Default] (New)|[Dynamic Rainbow Liquid Glass • ±9% Breathing Transparency • 6-Second Cycle]${m16}"
         "17|Stream of Frequency [Special Edition]|[Electric Cyan, Frequency Mint, Solar Gold & Stream Indigo]${m17}"
         "18|Sensorium|[Bright Tangerine, Acid Chartreuse & Electric Azure • Light Coral Pane]${m18}"
         "19|Retro Linux Memories [GTK / VeraCrypt Dark Slate]|[Classic Retro Linux GTK Dark Slate, VeraCrypt Blue Selection & Beveled Steel]${m19}"
@@ -8278,10 +8287,10 @@ while true; do
     run_interactive_submenu "Themes & Color Palette Switcher" "  ${_tw}Current Active Theme: ${CURRENT_THEME}${NC}\n" opts 0
     local tchoice="$REPLY"
     case "$tchoice" in
-        1|dreamworlds|default)
+        1|dreamworlds)
             save_theme "dreamworlds"; echo -e "\n${_tw}✓ Theme switched to MPlanetarian Dreamworlds!${NC}"; sleep 0.8 ;;
-        2|ultra|dreamworlds_ultra|default|hotpurple|trafficlight|"dreamworlds ultra"|"Dreamworlds Ultra MP Mix Manager")
-            save_theme "dreamworlds_ultra"; echo -e "\n${_tw}✓ Theme switched to Dreamworlds Ultra MP Mix Manager [Default]!${NC}"; sleep 0.8 ;;
+        2|ultra|dreamworlds_ultra|hotpurple|trafficlight|"dreamworlds ultra"|"Dreamworlds Ultra MP Mix Manager")
+            save_theme "dreamworlds_ultra"; echo -e "\n${_tw}✓ Theme switched to Dreamworlds Ultra MP Mix Manager!${NC}"; sleep 0.8 ;;
         3|cyberpunk)
             save_theme "cyberpunk"; echo -e "\n${_tw}✓ Theme switched to Cyberpunk!${NC}"; sleep 0.8 ;;
         4|dracula)
@@ -8308,8 +8317,8 @@ while true; do
             save_theme "retro_terminal"; echo -e "\n${_tw}✓ Theme switched to Old Style Unix Terminal Retro Mode (White on Black)!${NC}"; sleep 0.8 ;;
         15|liquid|glass|dreamworlds_liquid|mp_dreamworlds_liquid_transparency|liquid_transparency|"MP Dreamworlds Liquid Transparency"|"MP Dreamworlds Liquid Transparency [Special Edition]")
             save_theme "dreamworlds_liquid"; echo -e "\n${_tw}✓ Theme switched to MP Dreamworlds Liquid Transparency [Special Edition]!${NC}"; sleep 0.8 ;;
-        16|dynamic_rainbow_liquid_glass|dynamic_liquid_glass_rainbow|dynamic_rainbow|rainbow|"Dynamic Liquid Glass [Rainbow Colours] (New)"|"Dynamic Liquid Glass [Rainbow Colours]")
-            save_theme "dynamic_rainbow_liquid_glass"; echo -e "\n${_tw}✓ Theme switched to Dynamic Liquid Glass [Rainbow Colours] (New)!${NC}"; sleep 0.8 ;;
+        16|dynamic_rainbow_liquid_glass|dynamic_liquid_glass_rainbow|dynamic_rainbow|rainbow|default|"Dynamic Liquid Glass [Rainbow Colours] (New)"|"Dynamic Liquid Glass [Rainbow Colours]")
+            save_theme "dynamic_rainbow_liquid_glass"; echo -e "\n${_tw}✓ Theme switched to Dynamic Liquid Glass [Rainbow Colours] [Default] (New)!${NC}"; sleep 0.8 ;;
         17|stream_of_frequency|stream|frequency|sof|frequency_stream|"stream of frequency"|"Stream of Frequency"|"Stream of Frequency [Special Edition]"|"Stream of Frequency MP Mix Manager")
             save_theme "stream_of_frequency"; echo -e "\n${_tw}✓ Theme switched to Stream of Frequency [Special Edition]!${NC}"; sleep 0.8 ;;
         18|sensorium|sensorium_interface|"Sensorium"|"Sensorium Interface")
