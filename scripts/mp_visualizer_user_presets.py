@@ -39,9 +39,20 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 CONFIG_DIR = Path.home() / ".config" / "mix-manager"
 USER_PRESET_ROOT = CONFIG_DIR / "visualizer-presets"
 REGISTRY_FILE = USER_PRESET_ROOT / "registry.json"
+OVERRIDE_FILE = USER_PRESET_ROOT / "overrides.json"
 BASE_ID = 1000
 PACKAGE_EXT = ".mpvispreset"
+OVERRIDE_KEY_PREFIX = "builtin-"
 GENERATOR_VERSION = "1.0"
+# The v2 generator stores every control in preset.json. Carry those fields
+# through the registry record as well, otherwise loading a generated preset
+# cannot restore the scene it was made from.
+GENERATIVE_META_FIELDS = (
+    "style_id", "core_id", "camera_id", "backdrop_id", "symmetry_id",
+    "speed", "intensity", "punch", "complexity", "morph_rate",
+    "zoom", "bass_drive", "mid_drive", "treble_drive",
+    "bloom", "refraction", "dispersion", "seed",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -168,6 +179,11 @@ def _entry_to_preset(entry: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             if str(a).strip()
         ),
     }
+    for field in GENERATIVE_META_FIELDS:
+        if field in meta:
+            preset[field] = meta[field]
+        elif field in entry:
+            preset[field] = entry[field]
     return preset
 
 
@@ -276,16 +292,245 @@ def remove_preset(key: str) -> bool:
     return True
 
 
+def rename_preset(key: str, new_name: str) -> Dict[str, Any]:
+    """Rename a user preset without changing its key or number."""
+    name = str(new_name or "").strip()
+    if not name:
+        raise ValueError("A preset needs a name")
+    registry = load_registry()
+    entry = next(
+        (p for p in registry.get("presets", [])
+         if isinstance(p, dict) and p.get("key") == key),
+        None,
+    )
+    if entry is None:
+        raise KeyError(key)
+    entry["name"] = name
+    meta = _read_preset_json(preset_directory(key))
+    meta.update({"key": key, "name": name})
+    _atomic_write(preset_directory(key) / "preset.json",
+                  json.dumps(meta, indent=2, ensure_ascii=False) + "\n")
+    save_registry(registry)
+    return entry
+
+
+# ---------------------------------------------------------------------------
+# built-in overrides
+#
+# Replacing a shipped preset must not renumber it: the active-preset file, the
+# number keys and ``--preset N`` all keep pointing at the same slot. The
+# generated shader package therefore lives in a separate folder named after the
+# built-in id, and the lookup helpers below resolve it before the hand-authored
+# preset. The user library (ids 1000+) is never touched.
+# ---------------------------------------------------------------------------
+def override_dir(preset_id: Any) -> Path:
+    return USER_PRESET_ROOT / f"{OVERRIDE_KEY_PREFIX}{int(preset_id)}"
+
+
+def load_overrides() -> Dict[int, Dict[str, Any]]:
+    """Every replaced built-in, keyed by the built-in's own id."""
+    try:
+        raw = json.loads(OVERRIDE_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeError):
+        raw = {}
+    entries = raw.get("overrides") if isinstance(raw, dict) else None
+    if not isinstance(entries, list):
+        entries = []
+    overrides: Dict[int, Dict[str, Any]] = {}
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        try:
+            preset_id = int(entry.get("id"))
+        except (TypeError, ValueError):
+            continue
+        if preset_id < 0 or preset_id >= BASE_ID:
+            continue
+        normalised = dict(entry)
+        normalised["id"] = preset_id
+        normalised["key"] = f"{OVERRIDE_KEY_PREFIX}{preset_id}"
+        overrides[preset_id] = normalised
+    return overrides
+
+
+def _save_overrides(overrides: Dict[int, Dict[str, Any]]) -> None:
+    _ensure_root()
+    data = {
+        "version": 1,
+        "updated": _now(),
+        "overrides": [overrides[key] for key in sorted(overrides)],
+    }
+    _atomic_write(OVERRIDE_FILE,
+                  json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+
+
+def _override_to_preset(entry: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Turn an override record into the dict the visualizer expects."""
+    try:
+        preset_id = int(entry.get("id"))
+    except (TypeError, ValueError):
+        return None
+    directory = override_dir(preset_id)
+    if not directory.is_dir():
+        return None
+    meta = _read_preset_json(directory)
+    if not meta:
+        meta = dict(entry)
+    cover = entry.get("cover") or meta.get("cover") or "cover.png"
+    cover_path = directory / str(cover)
+    cover_paths = [cover_path]
+    if not cover_path.is_file():
+        cover_paths = [p for p in sorted(directory.glob("cover.*")) if p.is_file()]
+    name = str(entry.get("name") or meta.get("name") or f"Built-in {preset_id}")
+    preset: Dict[str, Any] = {
+        "id": preset_id,
+        "key": f"{OVERRIDE_KEY_PREFIX}{preset_id}",
+        "name": name,
+        "album": str(entry.get("album") or meta.get("album") or name),
+        "bandcamp_url": str(meta.get("bandcamp_url") or ""),
+        "cover_paths": cover_paths,
+        "user_preset": False,
+        "user_override": True,
+        "preset_dir": str(directory),
+        "opengl_source": str(directory / "preset.opengl.frag"),
+        "metal_source": str(directory / "preset.metal"),
+        "vulkan_source": str(directory / "preset.frag"),
+        "vulkan_spv": str(directory / "preset.frag.spv"),
+        "style": meta.get("style", "Hybrid"),
+        "generator_version": meta.get("generator_version", GENERATOR_VERSION),
+        "installed": entry.get("installed") or meta.get("installed") or "",
+        "_aliases": (),
+    }
+    for field in GENERATIVE_META_FIELDS:
+        if field in meta:
+            preset[field] = meta[field]
+        elif field in entry:
+            preset[field] = entry[field]
+    return preset
+
+
+def find_override(preset_or_id: Any) -> Optional[Dict[str, Any]]:
+    """Resolve a built-in id (or ``builtin-N`` key) to its replacement."""
+    target: Optional[int] = None
+    if isinstance(preset_or_id, dict):
+        try:
+            target = int(preset_or_id.get("id"))
+        except (TypeError, ValueError):
+            target = None
+    else:
+        text = str(preset_or_id or "").strip().lower()
+        if text.startswith(OVERRIDE_KEY_PREFIX):
+            text = text[len(OVERRIDE_KEY_PREFIX):]
+        try:
+            target = int(text)
+        except (TypeError, ValueError):
+            target = None
+    if target is None or target < 0 or target >= BASE_ID:
+        return None
+    entry = load_overrides().get(target)
+    return _override_to_preset(entry) if entry is not None else None
+
+
+def set_override(source_dir: Path, preset_id: Any, meta: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Replace a built-in preset with the shader package in ``source_dir``."""
+    try:
+        target_id = int(preset_id)
+    except (TypeError, ValueError):
+        raise ValueError("A built-in preset id is required")
+    if target_id < 0 or target_id >= BASE_ID:
+        raise ValueError(f"{target_id} is not a built-in preset id")
+    source = Path(source_dir)
+    if not source.is_dir():
+        raise FileNotFoundError(str(source))
+    destination = override_dir(target_id)
+    destination.mkdir(parents=True, exist_ok=True)
+    # The generator writes straight into override_dir() and then calls this
+    # function with that same folder; copying a file onto itself would raise.
+    if source.resolve() != destination.resolve():
+        for item in source.iterdir():
+            if item.is_file():
+                shutil.copy2(item, destination / item.name)
+    incoming = dict(meta or {})
+    meta = _read_preset_json(destination)
+    meta.update(incoming)
+    meta.update({
+        "id": target_id,
+        "key": f"{OVERRIDE_KEY_PREFIX}{target_id}",
+        "name": str(incoming.get("name") or meta.get("name") or f"Built-in {target_id}"),
+        "installed": str(incoming.get("installed") or _now()),
+    })
+    entry = {
+        **meta,
+        "id": target_id,
+        "key": f"{OVERRIDE_KEY_PREFIX}{target_id}",
+        "cover": str(meta.get("cover") or "cover.png"),
+    }
+    _atomic_write(destination / "preset.json",
+                  json.dumps(meta, indent=2, ensure_ascii=False) + "\n")
+    overrides = load_overrides()
+    overrides[target_id] = entry
+    _save_overrides(overrides)
+    return entry
+
+
+def rename_override(preset_id: Any, new_name: str) -> Dict[str, Any]:
+    """Rename a replaced built-in while keeping its id and key."""
+    name = str(new_name or "").strip()
+    if not name:
+        raise ValueError("A preset needs a name")
+    try:
+        target_id = int(preset_id)
+    except (TypeError, ValueError):
+        raise KeyError(preset_id)
+    overrides = load_overrides()
+    entry = overrides.get(target_id)
+    if entry is None:
+        raise KeyError(target_id)
+    entry["name"] = name
+    meta = _read_preset_json(override_dir(target_id))
+    meta.update({"id": target_id, "key": entry["key"], "name": name})
+    _atomic_write(override_dir(target_id) / "preset.json",
+                  json.dumps(meta, indent=2, ensure_ascii=False) + "\n")
+    overrides[target_id] = entry
+    _save_overrides(overrides)
+    return entry
+
+
+def clear_override(preset_id: Any) -> bool:
+    """Delete a replacement so the hand-authored preset is drawn again."""
+    try:
+        target_id = int(preset_id)
+    except (TypeError, ValueError):
+        return False
+    overrides = load_overrides()
+    if target_id not in overrides:
+        return False
+    overrides.pop(target_id, None)
+    _save_overrides(overrides)
+    shutil.rmtree(override_dir(target_id), ignore_errors=True)
+    return True
+
+
 # ---------------------------------------------------------------------------
 # backend lookups used by the patched visualizer backends
 # ---------------------------------------------------------------------------
 def _preset_from_arg(preset_or_id: Any) -> Optional[Dict[str, Any]]:
     if isinstance(preset_or_id, dict):
-        if preset_or_id.get("user_preset"):
-            return preset_or_id
-        if int(preset_or_id.get("id", 0) or 0) >= BASE_ID:
-            return find_user_preset(preset_or_id.get("id"))
+        try:
+            preset_id = int(preset_or_id.get("id", 0) or 0)
+        except (TypeError, ValueError):
+            preset_id = 0
+        if preset_id < BASE_ID:
+            return find_override(preset_id)
+        if preset_or_id.get("user_preset") or preset_id >= BASE_ID:
+            return find_user_preset(preset_id)
         return None
+    text = str(preset_or_id or "").strip()
+    if not text:
+        return None
+    override = find_override(text)
+    if override is not None:
+        return override
     return find_user_preset(preset_or_id)
 
 
@@ -346,7 +591,9 @@ def export_package(key: str, destination: Path) -> Path:
     """Write a portable ``.mpvispreset`` zip for one installed preset."""
     preset = find_user_preset(key)
     if preset is None:
-        raise FileNotFoundError(f"No installed user preset named {key!r}")
+        preset = find_override(key)
+    if preset is None:
+        raise FileNotFoundError(f"No installed preset named {key!r}")
     directory = Path(str(preset["preset_dir"]))
     destination = Path(destination).expanduser()
     if destination.suffix.lower() != PACKAGE_EXT:

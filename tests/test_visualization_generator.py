@@ -232,6 +232,18 @@ class TestGeneratorWindowLayout(unittest.TestCase):
         self.assertIn("self.preview = ShaderPreview(Gtk, self.GLib)", source)
         self.assertIn("self.preview_badge = Gtk.Label", source)
 
+    def test_library_and_install_stay_outside_the_scroll_view(self):
+        """The preset dropdown and the Preview/Generate actions must not be
+        buried below the long slider list again. The library sits in its own
+        full-width bar above the body and the install block is pinned below
+        the scroll view; the scrollbar is also kept visible."""
+        source = (ROOT / "MP_Visualization_Generator.py").read_text(encoding="utf-8")
+        self.assertIn("root.pack_start(library_expander", source)
+        self.assertIn("root.reorder_child(library_expander, 1)", source)
+        self.assertIn("panel.pack_start(install_expander", source)
+        self.assertIn("controls_scroll.set_overlay_scrolling(False)", source)
+        self.assertIn('Gtk.Button(label="Preview This Scene")', source)
+
 
 class TestBuiltinPresetLibrary(unittest.TestCase):
     """The library dropdown must list the visualizer's own presets.
