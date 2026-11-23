@@ -2938,8 +2938,9 @@ class EqualizerManager:
 # scaling, which halves the boost's acoustic power - the half-way point on a
 # decibel scale. Normal is unaffected because its gain is already zero, so the
 # dial keeps a true bypass. Medium lands at about +5.3 dB at 45 Hz. High takes
-# that same half-power trim and then gives up another quarter of its acoustic
-# power, which lands it at about +12.4 dB at 45 Hz.
+# that same half-power trim and is then brought down to about +7.3 dB at 45 Hz,
+# which is deliberately well under Medium's two-thirds step: High is for loud,
+# heavily limited mixes where the old +11.2 dB pushed the bass too hard.
 # ---------------------------------------------------------------------------
 CRUSHER_BASS_PEAK_HZ = 45.0
 CRUSHER_BASS_FULL_GAIN_DB = 25.0
@@ -2948,9 +2949,11 @@ CRUSHER_BASS_FULL_GAIN_DB = 25.0
 # applied to the boost itself, not to the whole signal, so Normal stays a true
 # bypass and the dial keeps its 1/3 and 2/3 steps.
 BASS_BOOST_TRIM_DB = 3.0103
-# High only. Three quarters of the power that the shared trim would have left
-# it: 10*log10(4/3) dB off the High step, and nowhere else.
-BASS_BOOST_HIGH_POWER = 0.75
+# High only. The shared trim would have left High at +13.66 dB at 45 Hz; this
+# factor keeps 0.232468 of that acoustic power (10*log10(1/0.232468) = 6.3364
+# dB off the High step, and nowhere else), so High peaks at +7.32 dB instead of
+# +11.16 dB. The 1/3 and 2/3 dial positions are untouched.
+BASS_BOOST_HIGH_POWER = 0.232468
 BASS_BOOST_HIGH_EXTRA_TRIM_DB = round(-10.0 * math.log10(BASS_BOOST_HIGH_POWER), 4)
 BASS_BOOST_MODES: Tuple[str, ...] = ("Normal", "Medium", "High")
 BASS_BOOST_FRACTIONS: Dict[str, float] = {

@@ -86,12 +86,11 @@ class BassModeModelTests(TempConfigCase):
 
         A -3 dB trim halves the acoustic power of the boost. Medium lands at
         about +5.3 dB at 45 Hz instead of +8.3 dB. Normal stays a bypass.
-        High takes that same trim and then gives up another quarter of the
-        power that trim left it, so it lands at about +12.4 dB instead of
-        +13.7 dB.
+        High takes that same trim and is then brought all the way down to
+        about +7.3 dB at 45 Hz, well under the old +11.2 dB.
         """
         self.assertAlmostEqual(player.BASS_BOOST_TRIM_DB, 3.0, delta=0.1)
-        self.assertAlmostEqual(player.BASS_BOOST_HIGH_POWER, 0.75)
+        self.assertAlmostEqual(player.BASS_BOOST_HIGH_POWER, 0.232468)
         self.assertEqual(player.bass_mode_peak_db("Normal"), 0.0)
         full = player.CRUSHER_BASS_FULL_GAIN_DB
         self.assertAlmostEqual(player.bass_mode_peak_db("Medium"), full / 3.0 - 3.0103, delta=0.02)
@@ -101,9 +100,10 @@ class BassModeModelTests(TempConfigCase):
         # Half the power is exactly -3.0103 dB, and Medium is only that trim.
         ratio = 10.0 ** ((player.bass_mode_peak_db("Medium") - full / 3.0) / 20.0)
         self.assertAlmostEqual(ratio, 0.5 ** 0.5, delta=0.01)
-        # High's extra cut is a quarter of its acoustic power, not of its dB.
+        # High's extra cut takes it down to the documented +7.32 dB peak.
         power = 10.0 ** ((high - trimmed_high) / 10.0)
-        self.assertAlmostEqual(power, 0.75, delta=0.01)
+        self.assertAlmostEqual(power, 0.232468, delta=0.01)
+        self.assertAlmostEqual(high, 7.32, delta=0.02)
 
     def test_default_mode_is_normal(self):
         mgr = player.BassBoostManager()
