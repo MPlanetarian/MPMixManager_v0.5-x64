@@ -1034,6 +1034,12 @@ class TestStandaloneVisualizerPresentation(unittest.TestCase):
         mode.contents.refreshRate = 60
         glfw.glfwGetPrimaryMonitor.return_value = monitor
         glfw.glfwGetVideoMode.return_value = mode
+
+        def _get_pos(_window, px, py):
+            px._obj.value = 160
+            py._obj.value = 80
+
+        glfw.glfwGetWindowPos.side_effect = _get_pos
         renderer._glfw = glfw
         renderer._window = window
         renderer._cur_pos = (160, 80)
@@ -1070,6 +1076,73 @@ class TestStandaloneVisualizerPresentation(unittest.TestCase):
         args = glfw.glfwSetWindowMonitor.call_args[0]
         self.assertIsNone(args[1], "leaving fullscreen must pass a NULL monitor")
         self.assertEqual(args[2:], (160, 80, 700, 700, 0))
+
+    def test_fullscreen_uses_the_monitor_under_the_window(self):
+        """Z on a moved window must fill that window's monitor, not the primary.
+
+        ``glfwGetPrimaryMonitor`` made every visualizer in a multi-monitor
+        setup snap to the same display (and the window manager then clipped it
+        to that display's work area).
+        """
+        renderer, glfw, window, primary = self._fullscreen_renderer()
+        secondary = MagicMock()
+        mode = MagicMock()
+        mode.contents.width = 1920
+        mode.contents.height = 1200
+        mode.contents.refreshRate = 60
+
+        def _mode_for(mon):
+            return mode
+
+        def _pos_for(mon, px, py):
+            px._obj.value = 1920
+            py._obj.value = 0
+
+        glfw.glfwGetVideoMode.side_effect = _mode_for
+        glfw.glfwGetMonitorPos.side_effect = _pos_for
+        renderer._window_monitor = lambda: (secondary, (1920, 0, 1920, 1200))
+        glfw.glfwGetPrimaryMonitor.return_value = primary
+        with patch("sys.platform", "linux"):
+            self.assertTrue(renderer.toggle_fullscreen())
+        glfw.glfwSetWindowMonitor.assert_called_once_with(
+            window, secondary, 0, 0, 1920, 1200, 60
+        )
+        self.assertTrue(renderer._fullscreen_monitor_mode)
+
+    def test_window_pos_reads_the_live_glfw_position(self):
+        """A WM/monitor move must not leave monitor selection on a stale point."""
+        renderer = object.__new__(vis.LiquidVisualizerOpenGLRenderer)
+        glfw = MagicMock()
+        renderer._glfw = glfw
+        renderer._window = MagicMock()
+        renderer._cur_pos = (10, 20)
+
+        def _get_pos(_window, px, py):
+            px._obj.value = 4000
+            py._obj.value = 200
+
+        glfw.glfwGetWindowPos.side_effect = _get_pos
+        self.assertEqual(renderer.window_pos(), (4000, 200))
+        self.assertEqual(renderer._cur_pos, (4000, 200))
+
+    def test_refresh_probe_restores_the_shared_glfw_prototype(self):
+        """``monitor_refresh_hz`` must not leave GetVideoMode returning a raw pointer.
+
+        The visualizer shares one libglfw handle with the liquid-glass host.
+        A leftover ``c_void_p`` return type made ``mode.contents`` fail, so the
+        fullscreen path silently fell back to the primary monitor.
+        """
+        import liquid_glass_opengl as glass
+
+        glfw = MagicMock()
+        before_restype = object()
+        before_argtypes = [object()]
+        glfw.glfwGetVideoMode.restype = before_restype
+        glfw.glfwGetVideoMode.argtypes = before_argtypes
+        glfw.glfwGetPrimaryMonitor.return_value = 0
+        glass.monitor_refresh_hz(glfw)
+        self.assertIs(glfw.glfwGetVideoMode.restype, before_restype)
+        self.assertIs(glfw.glfwGetVideoMode.argtypes, before_argtypes)
 
     def test_glfw_is_pinned_to_x11_on_linux(self):
         """A Wayland GLFW window has no X11 handle, so it cannot be placed or moved."""

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """MP_Liquid_Visualizer — Native Vulkan 3D Audio-Reactive Visualizer Engine."""
 from __future__ import annotations
-import shutil, argparse, ctypes, json, math, os, platform, random, signal, socket, subprocess, sys, time
+import shutil, argparse, ctypes, json, math, os, platform, random, signal, socket, subprocess, sys, time, zlib
 from ctypes import (CFUNCTYPE, POINTER, Structure, addressof, byref, c_char, c_char_p, c_double,
                     c_float, c_int, c_int32, c_size_t, c_uint8, c_uint32, c_uint64, c_void_p, cast, memmove, sizeof, string_at)
 from ctypes.util import find_library
@@ -592,12 +592,32 @@ def load_preset_cover_rgba(preset: Dict[str, Any], tex_size: int = 1024) -> Tupl
     return tex_size, tex_size, bytes((8, 7, 17, 255)) * (tex_size * tex_size)
 
 
+def shared_track_base(path: Any) -> float:
+    """A stable phase offset for one track's shared visualizer clock.
+
+    Two visualizer windows that open at different times still have to show the
+    same frame of the same preset. The playback position is the shared clock,
+    but using it raw would reset every preset to time zero on every track
+    change. A hash of the track path gives each track its own stable origin, so
+    a window opened half way through the song joins the others in the same
+    place instead of starting from the beginning.
+    """
+    text = str(path or "")
+    if not text:
+        return 0.0
+    try:
+        return float(zlib.crc32(text.encode("utf-8", "replace")) % 1000)
+    except Exception:
+        return 0.0
+
+
 class AudioTelemetryBridge:
     __slots__ = (
         "config_dir", "state_file", "socket_path", "port_file", "_state_str", "_sock_str", "is_playing", "accum_time", "dynamic_time",
         "bass_phase", "mid_phase", "high_phase", "beat_pulse", "_prev_bass", "_last_poll",
         "_last_state_mtime_ns", "_last_state_stamp",
-        "_cached_status", "bands16", "sub_bass", "bass", "low_mid", "mid", "high_mid", "treble", "air", "rms_energy", "pitch_factor"
+        "_cached_status", "bands16", "sub_bass", "bass", "low_mid", "mid", "high_mid", "treble", "air", "rms_energy", "pitch_factor",
+        "_timeline_anchor",
     )
 
     def __init__(self, config_dir: Optional[Path] = None):
@@ -608,6 +628,11 @@ class AudioTelemetryBridge:
         self.accum_time = self.dynamic_time = self.bass_phase = self.mid_phase = self.high_phase = self.beat_pulse = self._prev_bass = self._last_poll = 0.0
         self._last_state_mtime_ns = 0
         self._last_state_stamp = None
+        # Wall-clock time the current status snapshot was written (or fetched
+        # over the socket). The shared clock extrapolates the reported playback
+        # position from this anchor, so every visualizer process computes the
+        # same time from the same snapshot.
+        self._timeline_anchor = 0.0
         self._cached_status: Dict[str, Any] = {}
         self.bands16: List[float] = [0.0] * 16
         self.sub_bass = self.bass = self.low_mid = self.mid = self.high_mid = self.treble = self.air = self.rms_energy = 0.0
@@ -640,6 +665,7 @@ class AudioTelemetryBridge:
                     data = json.loads(f.read())
                 if isinstance(data, dict):
                     self._cached_status = data
+                    self._timeline_anchor = float(st_stat.st_mtime)
                     return data
             except Exception: pass
 
@@ -655,11 +681,72 @@ class AudioTelemetryBridge:
                     resp = json.loads(raw)
                     if isinstance(resp.get("data"), dict):
                         self._cached_status = resp["data"]
+                        # The socket answer is live: anchor it to the moment we
+                        # asked, because there is no file mtime to use.
+                        self._timeline_anchor = time.time()
                         return self._cached_status
             except Exception: pass
 
         self._cached_status = {"running": False, "state": "stopped"}
         return self._cached_status
+
+    def _shared_timeline(self, st: Dict[str, Any], pitch: float) -> Optional[float]:
+        """The playback clock every visualizer process agrees on.
+
+        The player publishes ``position_sec`` and writes the state file. The
+        snapshot was accurate when it was written, so the current position is
+        that value plus the age of the file times the pitch factor. Every
+        window reads the same file and the same anchor, which makes the scene
+        time identical everywhere instead of integrating its own clock from
+        whatever moment the window happened to open.
+
+        ``None`` means the snapshot cannot provide a shared clock (not playing,
+        no position, or a hand-written test state), and the caller keeps the
+        old per-window integration.
+        """
+        if str(st.get("state", "")).strip().lower() != "playing":
+            return None
+        try:
+            position = float(st.get("position_sec"))
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(position) or position < 0.0:
+            return None
+        try:
+            anchor = float(getattr(self, "_timeline_anchor", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            anchor = 0.0
+        if anchor <= 0.0:
+            return None
+        age = time.time() - anchor
+        if not math.isfinite(age):
+            age = 0.0
+        # A stopped writer must not let the scene run away. Position advances
+        # in whole-second steps in the fingerprint, so a healthy player always
+        # republishes well inside this window.
+        age = 0.0 if age < 0.0 else min(age, 3.0)
+        rate = max(0.1, min(4.0, float(pitch)))
+        return shared_track_base(st.get("path")) + position + age * rate
+
+    def _apply_shared_clock(self, timeline: float) -> None:
+        """Put every window on the same scene clock and phase.
+
+        ``accum_time`` and ``dynamic_time`` are the two clocks the shader sees
+        (``u.res.z`` and ``u.preset.w``). They were integrated locally, so two
+        windows opened seconds apart showed different moments of the same
+        preset forever. Deriving them from the shared playback clock keeps all
+        of them on the same frame.
+
+        The three audio phases are normally integrated too. They are kept
+        synchronous here by deriving them from the same shared clock plus the
+        current bands, so a window opened later joins the others at the same
+        phase instead of starting from zero.
+        """
+        self.accum_time = float(timeline)
+        self.dynamic_time = float(timeline)
+        self.bass_phase = timeline * 1.2 + self.sub_bass * 2.4
+        self.mid_phase = timeline * 1.0 + self.mid * 2.0
+        self.high_phase = timeline * 0.9 + self.treble * 2.0
 
     def update(self, dt: float, force_playing: Optional[bool] = None, synthetic_audio: bool = False, _sin=math.sin, _cos=math.cos):
         dt = 0.0 if dt < 0.0 else (0.1 if dt > 0.1 else dt)
@@ -679,11 +766,19 @@ class AudioTelemetryBridge:
 
         p = float(st.get("pitch_factor", 1.0) or 1.0)
         self.pitch_factor = p = 0.5 if p < 0.5 else (1.5 if p > 1.5 else p)
-        self.accum_time += dt * p
+        timeline = self._shared_timeline(st, p)
+        if timeline is not None:
+            # Shared playback clock: every visualizer shows the same moment.
+            self.accum_time = float(timeline)
+        else:
+            self.accum_time += dt * p
         t = self.accum_time
         rms = float(st.get("rms_level", 0.0) or 0.0)
         rc = 0.0 if rms < 0.0 else (1.0 if rms > 0.5 else rms * 2.0)
-        self.dynamic_time += dt * (1.0 + 0.65 * _sin(t * 0.082) * _cos(t * 0.041) + 0.35 * _sin(t * 0.173)) * (0.85 + 0.30 * rc) * p
+        if timeline is not None:
+            self.dynamic_time = float(timeline)
+        else:
+            self.dynamic_time += dt * (1.0 + 0.65 * _sin(t * 0.082) * _cos(t * 0.041) + 0.35 * _sin(t * 0.173)) * (0.85 + 0.30 * rc) * p
 
         lv = st.get("levels")
         if isinstance(lv, list) and len(lv) >= 8:
@@ -699,6 +794,10 @@ class AudioTelemetryBridge:
             raw16 = [0.25 + 0.20 * _sin(pos * (2.5 + i * 0.3) + i) ** 2 for i in range(16)]
             if rms < 0.28: rms = 0.28
         self._apply_bands(raw16, rms, p, dt)
+        if timeline is not None:
+            # Re-seat the phases from the shared clock after the bands have been
+            # smoothed, so every window lands on the same value this frame.
+            self._apply_shared_clock(timeline)
 
     def _apply_bands(self, raw16: List[float], rms: float, pitch: float, dt: float):
         # Runs once per rendered frame, so the smoothing loop is unrolled over
@@ -1657,27 +1756,26 @@ class LiquidVisualizerVulkanRenderer(MonitorSpanMixin, RandomPresetMixin, Player
         return None
 
     def _current_monitor(self):
-        if not getattr(self, "_window", None) or not getattr(self, "_glfw", None): return None
+        """The monitor under this window, not the primary one.
+
+        The Vulkan and OpenGL renderers must both fullscreen onto the display
+        the user moved the window to. The overlap calculation lives in
+        :class:`MonitorSpanMixin`, which uses the live GLFW position and size;
+        duplicating it here let the two backends drift apart.
+        """
+        if not getattr(self, "_window", None) or not getattr(self, "_glfw", None):
+            return None
         g = self._glfw
-        mon = g.glfwGetPrimaryMonitor()
         try:
-            wx, wy = self._cur_pos
-            ww, wh = self.width, self.height
-            c = c_int()
-            mons = g.glfwGetMonitors(byref(c))
-            if mons and c.value > 0:
-                ba, bm, mx, my = -1, None, c_int(), c_int()
-                for i in range(c.value):
-                    m = mons[i]
-                    g.glfwGetMonitorPos(m, byref(mx), byref(my))
-                    mp = g.glfwGetVideoMode(m)
-                    if mp:
-                        md = mp.contents
-                        area = max(0, min(wx + ww, mx.value + md.width) - max(wx, mx.value)) * max(0, min(wy + wh, my.value + md.height) - max(wy, my.value))
-                        if area > ba: ba, bm = area, m
-                if bm and ba > 0: return bm
-        except Exception: pass
-        return mon
+            mon, _rect = self._window_monitor()
+            if mon is not None:
+                return mon
+        except Exception:
+            pass
+        try:
+            return g.glfwGetPrimaryMonitor()
+        except Exception:
+            return None
 
     def toggle_fullscreen(self) -> bool:
         if not getattr(self, "_window", None) or not getattr(self, "_glfw", None):

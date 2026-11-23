@@ -2600,6 +2600,22 @@ class LiquidVisualizerOpenGLRenderer(MonitorSpanMixin, RandomPresetMixin, Player
         return max(1, int(w.value)), max(1, int(h.value))
 
     def window_pos(self) -> tuple:
+        """The live window position, not the last position this process set.
+
+        A window manager (KWin) or the user can move the window without going
+        through ``set_window_pos``. The cached value was then used for monitor
+        selection, so Z took every window fullscreen on the screen it happened
+        to be launched on instead of the screen it is currently rendering on.
+        """
+        g, w = getattr(self, "_glfw", None), getattr(self, "_window", None)
+        if g is not None and w:
+            try:
+                from ctypes import byref, c_int
+                x, y = c_int(), c_int()
+                g.glfwGetWindowPos(w, byref(x), byref(y))
+                self._cur_pos = (int(x.value), int(y.value))
+            except Exception:
+                pass
         return self._cur_pos
 
     def set_window_pos(self, x: int, y: int) -> None:
@@ -2640,6 +2656,32 @@ class LiquidVisualizerOpenGLRenderer(MonitorSpanMixin, RandomPresetMixin, Player
         self._fullscreen_monitor_mode = False
         self._cur_pos = (x, y)
 
+    def _fullscreen_monitor(self):
+        """The monitor this window is on, for a fullscreen switch.
+
+        ``glfwGetPrimaryMonitor`` is the wrong answer for a window the user
+        moved to another screen: every visualizer would pile onto the primary
+        display on Z or a double-click. Ask the same monitor-overlap helper the
+        F10/F11 span uses, and fall back to the primary only when the window
+        position is not known yet.
+        """
+        try:
+            mon = self.span_monitor()
+            if mon is not None:
+                return mon, getattr(self, "_span_bounds", None)
+        except Exception:
+            pass
+        try:
+            mon, rect = self._window_monitor()
+            if mon is not None:
+                return mon, rect
+        except Exception:
+            pass
+        try:
+            return self._glfw.glfwGetPrimaryMonitor(), None
+        except Exception:
+            return None, None
+
     def toggle_fullscreen(self) -> bool:
         from mp_liquid_visualizer_vulkan import (
             GLFW_AUTO_ICONIFY,
@@ -2657,10 +2699,9 @@ class LiquidVisualizerOpenGLRenderer(MonitorSpanMixin, RandomPresetMixin, Player
             self._saved_pos = self.window_pos()
             fw, fh = RENDER_1080P_WIDTH, RENDER_1080P_HEIGHT
             refresh = 0
-            mon = None
+            mon, mon_rect = self._fullscreen_monitor()
             try:
-                mon = self.span_monitor() or g.glfwGetPrimaryMonitor()
-                mode = g.glfwGetVideoMode(mon) if hasattr(g, "glfwGetVideoMode") else None
+                mode = g.glfwGetVideoMode(mon) if (mon and hasattr(g, "glfwGetVideoMode")) else None
                 if mode:
                     md = mode.contents
                     # A 4K panel stays at 1080p, matching the Vulkan renderer.
@@ -2674,15 +2715,21 @@ class LiquidVisualizerOpenGLRenderer(MonitorSpanMixin, RandomPresetMixin, Player
                 g.glfwSetWindowSizeLimits(w, -1, -1, -1, -1)
             except Exception:
                 pass
-            # Resizing a borderless window to the screen still leaves it
-            # *behind* the Windows taskbar, which is topmost, so a strip of the
-            # desktop stays visible at the bottom. A real monitor fullscreen
-            # window makes the shell hide the taskbar. The monitor-spanning
-            # windows already did this; now Windows always does too.
+            # A real monitor-fullscreen window is what hides the Windows
+            # taskbar and fills the selected display exactly. The old fallback
+            # resized a borderless window at (0, 0), so a window on another
+            # monitor jumped to the primary screen and KWin/WM clipped it to
+            # the work area -- the "quarter of the desktop uncovered" symptom.
+            #
+            # Native Wayland cannot be asked to set a monitor directly (GLFW
+            # asserts for a non-primary output), so only use the monitor call
+            # when GLFW really owns an X11/Win32/Cocoa window. That includes
+            # XWayland, which is what every MP window uses on KDE Wayland.
+            native_window = bool(self.x11_window() or self.win32_window() or self.cocoa_window())
             use_monitor_mode = (
                 mon is not None
                 and hasattr(g, "glfwSetWindowMonitor")
-                and (bool(self._span_bounds) or sys.platform.startswith("win"))
+                and (bool(self._span_bounds) or native_window)
             )
             filled = False
             if use_monitor_mode:
@@ -2699,8 +2746,11 @@ class LiquidVisualizerOpenGLRenderer(MonitorSpanMixin, RandomPresetMixin, Player
                 except Exception:
                     pass
             if not filled:
+                # No monitor mode: at least stay on the monitor the window is
+                # already rendering on instead of snapping to the primary one.
                 try:
-                    g.glfwSetWindowPos(w, 0, 0)
+                    fx, fy = (int(mon_rect[0]), int(mon_rect[1])) if mon_rect else (0, 0)
+                    g.glfwSetWindowPos(w, fx, fy)
                     g.glfwSetWindowSize(w, fw, fh)
                 except Exception:
                     pass

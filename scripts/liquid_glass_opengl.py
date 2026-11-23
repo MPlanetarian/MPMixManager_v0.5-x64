@@ -304,12 +304,34 @@ GLFW_KEY_ESCAPE = 256
 GLFW_RELEASE = 0
 
 
+class _GLFWvidmode(ctypes.Structure):
+    """The part of GLFW's video-mode struct this module reads."""
+
+    _fields_ = [
+        ("width", c_int),
+        ("height", c_int),
+        ("redBits", c_int),
+        ("greenBits", c_int),
+        ("blueBits", c_int),
+        ("refreshRate", c_int),
+    ]
+
+
 def monitor_refresh_hz(glfw, window=None) -> int:
     """Refresh rate of the monitor a window is on, or 0 when unknown.
 
     Used only to choose a vsync divisor, so a failure here is harmless: the
     caller falls back to interval 1 and its own frame deadline.
+
+    The GLFW functions are shared by every module that loaded the same
+    ``libglfw`` handle. Their prototypes must be restored after the call:
+    leaving ``glfwGetVideoMode`` as a plain ``c_void_p`` made the visualizer's
+    later monitor lookup fail, so fullscreen fell back to the primary screen
+    and the work-area size.
     """
+    video_mode = getattr(glfw, "glfwGetVideoMode", None)
+    old_restype = getattr(video_mode, "restype", None)
+    old_argtypes = getattr(video_mode, "argtypes", None)
     try:
         monitor = None
         if window is not None and hasattr(glfw, "glfwGetWindowMonitor"):
@@ -320,17 +342,27 @@ def monitor_refresh_hz(glfw, window=None) -> int:
             glfw.glfwGetPrimaryMonitor.restype = c_void_p
             glfw.glfwGetPrimaryMonitor.argtypes = []
             monitor = glfw.glfwGetPrimaryMonitor()
-        if not monitor:
+        if not monitor or video_mode is None:
             return 0
-        glfw.glfwGetVideoMode.restype = c_void_p
-        glfw.glfwGetVideoMode.argtypes = [c_void_p]
-        mode = glfw.glfwGetVideoMode(monitor)
+        video_mode.restype = POINTER(_GLFWvidmode)
+        video_mode.argtypes = [c_void_p]
+        mode = video_mode(monitor)
         if not mode:
             return 0
         hz = int(mode.contents.refreshRate)
         return hz if 20 <= hz <= 360 else 0
     except Exception:
         return 0
+    finally:
+        # Another module's ctypes view of the same function must survive this
+        # probe; the visualizer's fullscreen monitor lookup depends on it.
+        if video_mode is not None and old_restype is not None:
+            try:
+                video_mode.restype = old_restype
+                if old_argtypes is not None:
+                    video_mode.argtypes = old_argtypes
+            except Exception:
+                pass
 
 
 def theme_rgb(name):

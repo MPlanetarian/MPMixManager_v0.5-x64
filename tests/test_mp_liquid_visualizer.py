@@ -380,6 +380,81 @@ class TestMPLiquidVisualizer(unittest.TestCase):
             self.assertEqual(bridge.mid_phase, frozen_mid_phase)
             self.assertEqual(bridge.high_phase, frozen_high_phase)
 
+    def test_all_visualizer_windows_share_one_playback_clock(self):
+        """Windows opened at different times must show the same preset frame.
+
+        Each bridge used to integrate its own time from zero, so the companion
+        behind the player and a window opened later were permanently offset.
+        """
+        with tempfile.TemporaryDirectory() as td:
+            tmp_path = Path(td)
+            state_file = tmp_path / "mp_player_state.json"
+            path = "/music/a-track.flac"
+            state_file.write_text(json.dumps({
+                "running": True,
+                "state": "playing",
+                "muted": False,
+                "rms_level": 0.42,
+                "pitch_factor": 1.0,
+                "position_sec": 64.25,
+                "path": path,
+                "levels": [0.8, 0.75, 0.7, 0.6, 0.5, 0.45, 0.4, 0.35] * 3,
+            }), encoding="utf-8")
+            # The state file was written a moment ago; both windows
+            # extrapolate the same age from the same mtime.
+            old = time.time() - 0.5
+            os.utime(state_file, (old, old))
+
+            companion = vis.AudioTelemetryBridge(config_dir=tmp_path)
+            detached = vis.AudioTelemetryBridge(config_dir=tmp_path)
+            companion.update(0.016)
+            time.sleep(0.02)
+            detached.update(0.016)
+
+            self.assertAlmostEqual(companion.accum_time, detached.accum_time, delta=0.1)
+            self.assertAlmostEqual(companion.accum_time, companion.dynamic_time, places=6)
+            self.assertAlmostEqual(detached.bass_phase, companion.bass_phase, delta=0.5)
+            # The shared clock uses the track's stable origin, not zero.
+            self.assertGreater(
+                companion.accum_time,
+                vis.shared_track_base(path) + 64.0,
+            )
+
+            # A window opened even later still joins the same frame.
+            later = vis.AudioTelemetryBridge(config_dir=tmp_path)
+            time.sleep(0.05)
+            later.update(0.016)
+            self.assertAlmostEqual(later.accum_time, companion.accum_time, delta=0.2)
+
+    def test_shared_playback_clock_freezes_on_pause(self):
+        """Pausing must hold every window on the same frozen frame."""
+        with tempfile.TemporaryDirectory() as td:
+            tmp_path = Path(td)
+            state_file = tmp_path / "mp_player_state.json"
+            payload = {
+                "running": True,
+                "state": "playing",
+                "muted": False,
+                "rms_level": 0.5,
+                "pitch_factor": 1.0,
+                "position_sec": 30.0,
+                "path": "/music/b-track.flac",
+                "levels": [0.6] * 24,
+            }
+            state_file.write_text(json.dumps(payload), encoding="utf-8")
+            old = time.time() - 0.2
+            os.utime(state_file, (old, old))
+            bridge = vis.AudioTelemetryBridge(config_dir=tmp_path)
+            bridge.update(0.016)
+            frozen = bridge.accum_time
+
+            paused = dict(payload, state="paused")
+            state_file.write_text(json.dumps(paused), encoding="utf-8")
+            for _ in range(5):
+                bridge.update(0.1)
+            self.assertFalse(bridge.is_playing)
+            self.assertEqual(bridge.accum_time, frozen)
+
     def test_escape_and_q_keys_close_window(self):
         """Pressing Escape (256) or 'q' (81) must close the borderless window."""
         # Assert the constants and the handler, not one particular formatting
