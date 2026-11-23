@@ -167,6 +167,8 @@ def shortcut_targets(root: Path) -> dict[str, dict]:
             "categories": "AudioVideo;Audio;Utility;",
             "icon": icon,
             "windows_icon": icon,
+            # Terminal=true opens Konsole; that window's class is konsole.
+            "wm_class": "konsole",
         },
         "MP Gui": {
             "comment": "Launch MP Gui",
@@ -198,6 +200,7 @@ def shortcut_targets(root: Path) -> dict[str, dict]:
             "categories": "AudioVideo;Audio;Player;",
             "icon": icon,
             "windows_icon": icon,
+            "wm_class": "MP_Liquid_Mixer",
         },
     }
 

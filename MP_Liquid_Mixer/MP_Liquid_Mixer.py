@@ -644,6 +644,13 @@ class LiquidMixer(GlassHost):
 
         window = Gtk.Window()
         window.set_title(self.TITLE)
+        # The taskbar pairs the window with the MP Liquid Mixer shortcut by
+        # WM class. Without this GTK publishes the script name and KDE falls
+        # back to the generic X icon.
+        try:
+            window.set_wmclass("MP_Liquid_Mixer", "mp_liquid_mixer")
+        except Exception:
+            pass
         window.set_decorated(False)
         window.set_app_paintable(True)
         window.set_default_size(core.DESIGN_W, core.DESIGN_H)

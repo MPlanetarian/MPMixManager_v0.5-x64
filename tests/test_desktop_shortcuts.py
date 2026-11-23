@@ -175,6 +175,21 @@ class TestDesktopShortcuts(unittest.TestCase):
         self.assertIn("StartupWMClass=MP_Liquid", text)
         self.assertIn("Icon=mp_liquid_glass_icon", text)
 
+    def test_every_app_shortcut_names_its_wm_class(self):
+        expected = {
+            "MP Liquid Player": "MP_Liquid",
+            "MP Gui": "MP_Liquid",
+            "MP Liquid Visualizer": "MP_Visualizer",
+            "MP Liquid Mixer": "MP_Liquid_Mixer",
+            "MP Mix Manager": "konsole",
+        }
+        for name, wm_class in expected.items():
+            with self.subTest(shortcut=name):
+                spec = shortcut_targets(ROOT)[name]
+                entry = linux_desktop_entry(name, spec, ROOT)
+                self.assertIn(f"StartupWMClass={wm_class}", entry)
+                self.assertIn("Icon=mp_liquid_glass_icon", entry)
+
     def test_linux_desktop_exec_survives_the_two_pass_keyfile_parse(self):
         """The Exec line must launch, not just pass desktop-file-validate.
 
