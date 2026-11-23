@@ -169,6 +169,29 @@ class TestMenuAndInstaller(unittest.TestCase):
         install = (ROOT / "install.sh").read_text(encoding="utf-8")
         self.assertIn("MP Liquid Player VR Mode", install)
 
+    def test_the_menu_row_names_linux_and_windows(self):
+        text = (ROOT / "Mix_Archive_Manager.sh").read_text(encoding="utf-8")
+        self.assertIn(
+            '"VR|Enter VR Mode with MP Liquid Player (BigScreen)|'
+            '(Linux & Windows • Bigscreen VR through Steam • Windows centers the player)"',
+            text,
+        )
+
+    def test_linux_bigscreen_is_steam_only(self):
+        text = (ROOT / "Mix_Archive_Manager.sh").read_text(encoding="utf-8")
+        start = text.index("launch_bigscreen_linux() {")
+        fn = text[start:text.index("\n}\n", start)]
+        self.assertIn("steam://rungameid/457550", fn)
+        self.assertIn("flatpak run com.valvesoftware.Steam", fn)
+        self.assertIn("snap run steam", fn)
+        self.assertNotIn("Bigscreen.exe", fn)
+        # VR Mode must route Linux through the Steam helper instead of
+        # refusing the platform.
+        vr = text[text.index("enter_bigscreen_vr_mode() {"):]
+        vr = vr[:vr.index("\n}\n")]
+        self.assertIn("launch_bigscreen_linux", vr)
+        self.assertNotIn("SUPPORTED ON MICROSOFT WINDOWS ONLY", vr)
+
 
 if __name__ == "__main__":
     unittest.main()
