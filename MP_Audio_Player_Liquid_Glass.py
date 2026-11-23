@@ -120,6 +120,35 @@ def list_liquid_glass_fonts():
           '    python3 MP_Audio_Player_Liquid_Glass.py --set-font "Fira Code 11"\n')
 
 
+def _analyser_rows(rows):
+    """Analyser height the console player reserves in a landscape frame.
+
+    Keep in sync with ``_draw_frame`` in MP_Audio_Player.py: a portrait
+    window takes a different, height-derived analyser.
+    """
+    return 7 if rows >= 34 else (5 if rows >= 28 else 3)
+
+
+def _vertical_analyser_rows(rows):
+    """Analyser height the console player reserves in the portrait frame."""
+    spare = max(0, rows - 17 - 10 - 1)
+    return max(3, min(20, 8 + spare // 3))
+
+
+def _playlist_top_row(rows, mode="NORMAL"):
+    """0-based terminal row where the playlist's top rule is drawn.
+
+    The console player draws ``12`` fixed rows (header, now-playing, format,
+    timeline, pitch, volume, EQUALIZER rule, track buttons) before the
+    playlist rule, then the analyser. The glass panel has to start on that
+    exact row; the old constants put it 1-4 rows too low, so the first
+    playlist entries fell outside the panel.
+    """
+    if str(mode).upper() == "VERTICAL":
+        return 12 + _vertical_analyser_rows(rows)
+    return 12 + _analyser_rows(rows)
+
+
 def player_panel_rects(cols, rows, cw, ch, ox, oy, mode="NORMAL"):
     b = lambda c, r, bc, br: (ox + c * cw, oy + r * ch, bc * cw, br * ch)
     iw = max(20, cols - 4)
@@ -132,7 +161,7 @@ def player_panel_rects(cols, rows, cw, ch, ox, oy, mode="NORMAL"):
         # the fixed rows leave, so the playlist's first row follows the window.
         # The offset is measured from the drawn frame at every height.
         iw = max(20, cols - 6)
-        playlist_top = max(5, rows - 20)
+        playlist_top = _playlist_top_row(rows, "VERTICAL")
         playlist_rows = max(2, rows - playlist_top)
         return b(2, 0, iw + 2, 4), b(2, playlist_top, iw + 2, playlist_rows)
     if mode == "MINI":
@@ -140,7 +169,7 @@ def player_panel_rects(cols, rows, cw, ch, ox, oy, mode="NORMAL"):
     if mode == "TRACKLIST":
         return (b(2, 0, iw, rows), (0.0, 0.0, 0.0, 0.0)) if rows <= 7 else (b(2, 0, iw, 7), b(2, 7, iw, max(1, rows - 7)))
     iw = max(20, cols - 6)
-    before = 14 + (7 if rows >= 34 else (5 if rows >= 28 else 3))
+    before = _playlist_top_row(rows, "NORMAL")
     return b(2, 0, iw + 2, 4), b(2, before, iw + 2, max(1, rows - before - 5) + 2)
 
 

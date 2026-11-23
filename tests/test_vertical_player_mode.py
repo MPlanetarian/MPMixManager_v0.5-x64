@@ -294,6 +294,9 @@ class TestVerticalPlayerMode(unittest.TestCase):
                     self.assertLessEqual(x + w, MP_Audio_Player.VERTICAL_COLS * 9 + 14)
                 # The playlist box must start on the row the player draws it.
                 self.assertGreater(playlist[1], header[1] + 4 * 18)
+                expected_top = {52: 28, 44: 25, 36: 22, 30: 20}[rows]
+                self.assertEqual(playlist[1], 7 + expected_top * 18,
+                                 f"{mod.__name__} playlist starts off its drawn rule at {rows} rows")
 
     def test_host_launcher_forwards_the_vertical_flag(self):
         for mod in (lg_vulkan, lg_opengl):

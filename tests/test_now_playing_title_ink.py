@@ -192,7 +192,12 @@ class NowPlayingInkRenderTests(unittest.TestCase):
         self.assertIsNotNone(row, f"{mode} {theme} did not paint the title")
         stem = TITLE if TITLE in row else TITLE.split(" - ")[0]
         painted = _foreground_at(row, row.index(stem))
-        expected = WHITE if player.now_playing_uses_white(theme, liquid) else BLACK
+        if liquid and mode == "NORMAL":
+            # The full Liquid frame's whole now-playing line is white on every
+            # theme (badge, mode chip and track name).
+            expected = WHITE
+        else:
+            expected = WHITE if player.now_playing_uses_white(theme, liquid) else BLACK
         self.assertEqual(
             painted, expected,
             f"{mode} / {'glass' if liquid else 'console'} / {theme}: "
@@ -224,7 +229,8 @@ class NowPlayingInkRenderTests(unittest.TestCase):
         """The ♫ must not stay a pink bullet beside a white title."""
         row = self._assert_frame("stream_of_frequency", "NORMAL", 40, liquid=True)
         note = row.index("♫")
-        expected = WHITE if player.now_playing_uses_white("stream_of_frequency", True) else BLACK
+        # The full Liquid line is white on every theme now.
+        expected = WHITE
         self.assertEqual(_foreground_at(row, note), expected)
 
     def test_the_old_pink_title_ink_is_gone(self):
@@ -241,13 +247,13 @@ class NowPlayingInkRenderTests(unittest.TestCase):
             painted = _foreground_at(row, row.index("PLAYING"))
             self.assertEqual(painted, WHITE, f"{theme} PLAYING painted {painted}")
 
-    def test_glass_playing_label_still_tracks_the_pane(self):
+    def test_glass_playing_label_is_white_on_every_theme(self):
         pale = _draw("dreamworlds_ultra", "NORMAL", 40, liquid=True)
         pale_row = next(line for line in pale if "PLAYING" in line)
-        self.assertEqual(_foreground_at(pale_row, pale_row.index("PLAYING")), BLACK)
+        self.assertEqual(_foreground_at(pale_row, pale_row.index("PLAYING")), WHITE)
         dark = _draw("into_darkness_void_out", "NORMAL", 40, liquid=True)
         dark_row = next(line for line in dark if "PLAYING" in line)
-        self.assertEqual(_foreground_at(dark_row, dark_row.index("PLAYING")), (236, 240, 244))
+        self.assertEqual(_foreground_at(dark_row, dark_row.index("PLAYING")), WHITE)
 
 
 class InkSurvivesThePostProcessorsTests(unittest.TestCase):
@@ -275,8 +281,9 @@ class InkSurvivesThePostProcessorsTests(unittest.TestCase):
         """End to end: the strings the renderer builds survive presentation."""
         source = (ROOT / "MP_Audio_Player.py").read_text(encoding="utf-8")
         self.assertIn("now_playing_ink(self.visualizer.theme, is_lg)", source)
-        # The full frame stores it in a local before the f-string.
-        self.assertIn("title_ink = now_playing_ink(self.visualizer.theme, is_lg)", source)
+        # The full frame stores it in a local before the f-string. Liquid Glass
+        # now forces that line white on every theme.
+        self.assertIn("title_ink = WHITE if is_lg else now_playing_ink(self.visualizer.theme, is_lg)", source)
 
 
 class EveryRenderSiteUsesTheHelperTests(unittest.TestCase):
@@ -290,7 +297,7 @@ class EveryRenderSiteUsesTheHelperTests(unittest.TestCase):
         source = (ROOT / "MP_Audio_Player.py").read_text(encoding="utf-8")
         self.assertEqual(
             source.count("now_playing_ink(self.visualizer.theme, is_lg)"), 3,
-            "Full+Vertical, Mini and Micro must all use the shared helper",
+            "Full's else-branch, Mini and Micro must all use the shared helper",
         )
         # Every ♫ title glyph in the renderers comes from that helper.
         for line_no, line in enumerate(source.splitlines(), 1):

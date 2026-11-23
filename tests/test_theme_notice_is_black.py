@@ -196,7 +196,7 @@ class ThemeNoticeColourTests(unittest.TestCase):
         """
         source = (BASE_DIR / "MP_Audio_Player.py").read_text(encoding="utf-8")
         self.assertEqual(source.count("playing_badge_ink(self.visualizer.theme, is_lg)"), 3,
-                         "expected the badge in Full+Vertical, mini and micro frames")
+                         "expected the badge in Full's else-branch, mini and micro")
         # The old green play inks must be gone.
         self.assertNotIn("{GREEN}\u25B6 PLAYING", source)
         self.assertNotIn("38;2;0;255;127m\u25B6 PLAY", source)

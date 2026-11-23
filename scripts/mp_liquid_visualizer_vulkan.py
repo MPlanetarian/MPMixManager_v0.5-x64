@@ -617,7 +617,7 @@ class AudioTelemetryBridge:
         "bass_phase", "mid_phase", "high_phase", "beat_pulse", "_prev_bass", "_last_poll",
         "_last_state_mtime_ns", "_last_state_stamp",
         "_cached_status", "bands16", "sub_bass", "bass", "low_mid", "mid", "high_mid", "treble", "air", "rms_energy", "pitch_factor",
-        "_timeline_anchor",
+        "_timeline_anchor", "_timeline_pos", "_timeline_mtime", "_timeline_path",
     )
 
     def __init__(self, config_dir: Optional[Path] = None):
@@ -633,6 +633,16 @@ class AudioTelemetryBridge:
         # position from this anchor, so every visualizer process computes the
         # same time from the same snapshot.
         self._timeline_anchor = 0.0
+        # Last accepted playback snapshot. The player's status writer
+        # occasionally publishes a position ~0.3 s behind the one before it
+        # (it samples the decoder while the output buffer is being refilled).
+        # Feeding that straight into the shared clock made the scene lurch
+        # backwards every few hundred milliseconds, which reads as the
+        # visualizer losing the music. Keep the accepted snapshot and ignore
+        # only those small backward blips; a real seek is much larger.
+        self._timeline_pos: Optional[float] = None
+        self._timeline_mtime = 0.0
+        self._timeline_path = ""
         self._cached_status: Dict[str, Any] = {}
         self.bands16: List[float] = [0.0] * 16
         self.sub_bass = self.bass = self.low_mid = self.mid = self.high_mid = self.treble = self.air = self.rms_energy = 0.0
@@ -718,18 +728,34 @@ class AudioTelemetryBridge:
             anchor = 0.0
         if anchor <= 0.0:
             return None
-        age = time.time() - anchor
+        path = str(st.get("path") or "")
+        if path != self._timeline_path:
+            # A new track gets its own stable origin and its own snapshot.
+            self._timeline_path = path
+            self._timeline_pos = None
+            self._timeline_mtime = 0.0
+        if self._timeline_pos is None:
+            self._timeline_pos = position
+            self._timeline_mtime = anchor
+        elif anchor != self._timeline_mtime:
+            delta = position - self._timeline_pos
+            # Ignore a small backward blip; accept a real seek (a jump of a
+            # second or more in either direction).
+            if not (delta < 0.0 and abs(delta) <= 0.9):
+                self._timeline_pos = position
+                self._timeline_mtime = anchor
+        base = shared_track_base(path)
+        age = time.time() - self._timeline_mtime
         if not math.isfinite(age):
             age = 0.0
-        # A stopped writer must not let the scene run away. Position advances
-        # in whole-second steps in the fingerprint, so a healthy player always
-        # republishes well inside this window.
+        # A stopped writer must not let the scene run away. A healthy player
+        # republishes several times a second.
         age = 0.0 if age < 0.0 else min(age, 3.0)
         rate = max(0.1, min(4.0, float(pitch)))
-        return shared_track_base(st.get("path")) + position + age * rate
+        return base + self._timeline_pos + age * rate
 
     def _apply_shared_clock(self, timeline: float) -> None:
-        """Put every window on the same scene clock and phase.
+        """Put every window on the same scene clock.
 
         ``accum_time`` and ``dynamic_time`` are the two clocks the shader sees
         (``u.res.z`` and ``u.preset.w``). They were integrated locally, so two
@@ -737,16 +763,15 @@ class AudioTelemetryBridge:
         preset forever. Deriving them from the shared playback clock keeps all
         of them on the same frame.
 
-        The three audio phases are normally integrated too. They are kept
-        synchronous here by deriving them from the same shared clock plus the
-        current bands, so a window opened later joins the others at the same
-        phase instead of starting from zero.
+        The three audio phases are deliberately left to ``_apply_bands``. They
+        are an *integral* of the current bands (bass makes the bass swirl spin
+        faster), and hard-assigning them from ``timeline + band * k`` made the
+        phase jump whenever a band changed, which is what looked out of sync
+        with the music. Scene time is shared; the phases stay smooth and
+        audio-reactive.
         """
         self.accum_time = float(timeline)
         self.dynamic_time = float(timeline)
-        self.bass_phase = timeline * 1.2 + self.sub_bass * 2.4
-        self.mid_phase = timeline * 1.0 + self.mid * 2.0
-        self.high_phase = timeline * 0.9 + self.treble * 2.0
 
     def update(self, dt: float, force_playing: Optional[bool] = None, synthetic_audio: bool = False, _sin=math.sin, _cos=math.cos):
         dt = 0.0 if dt < 0.0 else (0.1 if dt > 0.1 else dt)

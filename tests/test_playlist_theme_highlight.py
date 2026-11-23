@@ -401,14 +401,44 @@ class TestPlaylistThemeHighlight(unittest.TestCase):
             panel = captured_lines[top:bottom + 1]
             self.assertGreaterEqual(len(panel), 3, f"Playlist panel was too short for {test_theme}")
             for line in (panel[0], panel[-1]):
-                edges = [(glyph, color) for glyph, color in glyph_colors(line) if glyph in "┌┐└┘─│"]
-                self.assertGreaterEqual(len(edges), 3, f"Playlist rule lost its edge for {test_theme}")
+                edges = [(glyph, color) for glyph, color in glyph_colors(line) if glyph in "┌┐└┘│"]
+                self.assertGreaterEqual(len(edges), 2, f"Playlist rule lost its edge for {test_theme}")
                 for glyph, color in edges:
-                    self.assertEqual(color, border, f"Playlist {glyph} is {color!r}, not {border!r}, for {test_theme}")
+                    self.assertTrue(color.endswith(border), f"Playlist {glyph} is {color!r}, not {border!r}, for {test_theme}")
             self.assertEqual(glyph_colors(panel[-1])[-1], ("┘", border), f"Bottom-right corner differs for {test_theme}")
             for line in panel[1:-1]:
                 bars = [color for glyph, color in glyph_colors(line) if glyph == "│"]
                 self.assertEqual(bars, [border, border], f"Playlist side bars differ for {test_theme}")
+
+    def test_liquid_playlist_title_is_white_on_every_theme(self):
+        """The playlist heading stays white; only the rule follows the theme.
+
+        On several themes the heading took the border hue and became
+        unreadable against the pane.
+        """
+        mock_scanner = MagicMock()
+        mock_scanner.get_mixes.return_value = [
+            {"name": f"Mix {i:02d}", "path": f"/path/to/mix{i}.mp3", "ext": "FLAC", "size_mb": 80}
+            for i in range(4)
+        ]
+        ui = TerminalPlayerUI(engine=None, scanner=mock_scanner, ui_size_mode="STANDARD", is_remote=True)
+        st = {
+            "title": "Mix 01", "path": "/path/to/mix0.mp3", "state": "playing",
+            "position_fmt": "02:00", "duration_fmt": "60:00", "progress_pct": 3.3,
+            "volume": 80, "pitch_percent": 0, "levels": [0.5] * 24, "rms_level": 0.1,
+        }
+        for test_theme in ("retro_linux_memories", "dreamworlds_liquid", "retro_studio",
+                           "into_darkness_void", "the_whitest_white"):
+            ui.visualizer.theme = test_theme
+            captured = []
+            with patch.dict("os.environ", {"MP_LIQUID_GLASS": "1"}), \
+                 patch("MP_Audio_Player._present_frame", side_effect=lambda lines, w, h: captured.extend(lines)), \
+                 patch("MP_Audio_Player._win_visible_size", return_value=(120, 40)):
+                ui._get_status = MagicMock(return_value=st)
+                ui._draw_frame()
+            top = next(line for line in captured if "┌" in line and "PLAYLIST" in line)
+            self.assertIn("\033[38;2;255;255;255m── MP MIX ARCHIVE PLAYLIST", top,
+                          f"The playlist heading is not white on {test_theme}")
 
     def test_selected_playlist_row_uses_theme_colour(self):
         """The navigation bar on the selected row follows the active theme.

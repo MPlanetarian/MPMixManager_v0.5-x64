@@ -83,7 +83,8 @@ class TestManagerBashToggle(unittest.TestCase):
             'if [ -z "$typed_buffer" ] && { [ "$ch" = "b" ] || [ "$ch" = "B" ]; }; then',
             text,
         )
-        self.assertIn("enter_manager_bash_terminal; typed_buffer=\"\"", text)
+        self.assertIn("cleanup_submenu_screen; enter_manager_bash_terminal", text)
+        self.assertIn("_nav_mouse_enable; printf", text)
         self.assertIn("[B] Bash, [Shift+A] MP Harmony, [C] Theme", text)
         self.assertIn("[B] Bash, [Shift+A] MP Harmony, [Esc] to return", text)
         self.assertNotIn('typed_buffer" = "b"', text)

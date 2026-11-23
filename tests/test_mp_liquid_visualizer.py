@@ -455,6 +455,49 @@ class TestMPLiquidVisualizer(unittest.TestCase):
             self.assertFalse(bridge.is_playing)
             self.assertEqual(bridge.accum_time, frozen)
 
+    def test_a_backward_status_blip_does_not_rewind_the_scene(self):
+        """The writer sometimes reports a position ~0.3 s behind the last one.
+
+        That is a decoder/output-buffer sampling artefact, not a seek. Feeding
+        it to the shared clock made the whole scene lurch backwards several
+        times a second, which is what "out of sync with the music" looked
+        like. A real seek (much larger) must still be followed.
+        """
+        with tempfile.TemporaryDirectory() as td:
+            tmp_path = Path(td)
+            state_file = tmp_path / "mp_player_state.json"
+            path = "/music/sync-track.flac"
+            payload = {
+                "running": True, "state": "playing", "muted": False,
+                "rms_level": 0.4, "pitch_factor": 1.0, "position_sec": 64.0,
+                "path": path, "levels": [0.5] * 24,
+            }
+
+            def write(pos: float) -> None:
+                state_file.write_text(json.dumps(dict(payload, position_sec=pos)),
+                                      encoding="utf-8")
+                # Make the file look like a fresh status snapshot.
+                now = time.time()
+                os.utime(state_file, (now, now))
+
+            write(64.0)
+            bridge = vis.AudioTelemetryBridge(config_dir=tmp_path)
+            bridge.update(0.016)
+            before = bridge.accum_time
+
+            # The same track's next sample is 0.3 s *behind*; ignore it.
+            time.sleep(0.02)
+            write(63.7)
+            bridge.update(0.016)
+            self.assertGreaterEqual(bridge.accum_time, before - 1e-6,
+                                    "a backward blip must not rewind the scene")
+
+            # A real seek backwards (5 s) is followed.
+            time.sleep(0.02)
+            write(58.7)
+            bridge.update(0.016)
+            self.assertLess(bridge.accum_time, before - 1.0)
+
     def test_escape_and_q_keys_close_window(self):
         """Pressing Escape (256) or 'q' (81) must close the borderless window."""
         # Assert the constants and the handler, not one particular formatting

@@ -55,6 +55,9 @@ class TestLiquidGlassPlayerFeatures(unittest.TestCase):
             self.assertEqual(len(r_norm), 2, f"{mod.__name__} NORMAL should return 2 panel rects")
             self.assertGreater(r_norm[0][2], 0)
             self.assertGreater(r_norm[1][2], 0)
+            # The player draws the playlist rule at row 15 in a 24-row frame.
+            self.assertEqual(r_norm[1][1], 14 + 15 * 18,
+                             f"{mod.__name__} NORMAL playlist is off its drawn rule")
 
             r_mini = mod.player_panel_rects(74, 14, 9, 18, 14, 14, mode="MINI")
             self.assertEqual(len(r_mini), 2, f"{mod.__name__} MINI should return 2 panel rects")

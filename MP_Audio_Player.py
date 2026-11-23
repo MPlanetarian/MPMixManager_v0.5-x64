@@ -10284,7 +10284,14 @@ class TerminalPlayerUI:
         preset = self._mp_visualizer_preset()
         self.mp_visualizer_preset_id = int(preset.get("id", 0))
         try:
-            _mp_visualizer_api().write_player_visualizer_state(bool(self.mp_visualizer_on), preset)
+            # ``active`` keeps the companion bonded behind the player; the
+            # button's on/off state is ``visible``. Without this second key the
+            # convention of active=False only left the window attached (a
+            # locked companion ignores ``active``), so the Visualization button
+            # could no longer hide and show the window it owns.
+            _mp_visualizer_api().write_player_visualizer_state(
+                bool(self.mp_visualizer_on), preset,
+                visible=bool(self.mp_visualizer_on))
         except Exception as exc:
             self._notify(f"Visualizer state was not saved: {exc}", 3.0)
         return preset
@@ -10400,7 +10407,16 @@ class TerminalPlayerUI:
         preset = self._mp_visualizer_preset()
         on = bool(getattr(self, "mp_visualizer_on", False))
         theme_name = getattr(getattr(self, "visualizer", None), "theme", "") or ""
-        fav_face = f"  {favorite_glyph(True)} FAVORITES  "
+        # The Favorites chip is a two-way door once Favorites is open: its text
+        # names the library the user came from ("MUSIC" or "MIXES"), and
+        # clicking it returns there (``_load_favorites`` is the toggle).
+        fav_return = str(getattr(self, "_favorites_return_mode", "") or "").upper()
+        fav_label = "FAVORITES"
+        if self.mode == "FAVORITES" and fav_return in ("MUSIC", "MIX_ARCHIVE"):
+            fav_label = "MUSIC" if fav_return == "MUSIC" else "MIXES"
+        fav_long = f"  {favorite_glyph(True)} {fav_label}  "
+        fav_mid = f" {favorite_glyph(True)} {fav_label} "
+        fav_face = fav_long
         vis_face = "  VISUALIZATION  "
         # A portrait column cannot carry the long word. The chip is a toggle
         # the user needs in every size, so it shortens rather than being
@@ -10443,7 +10459,7 @@ class TerminalPlayerUI:
         # runs past the border and the VISUALIZATION toggle is never the thing
         # that disappears. A portrait column carries the short forms; a wide
         # console keeps the long ones.
-        fav_faces = (fav_face, "  ★ FAV  ", " ★ ")
+        fav_faces = (fav_long, fav_mid, " ★ ")
         vis_faces = (vis_face, vis_face_short, vis_face_min)
         bass_faces = (bass_face, bass_face_short, " BASS ")
         gap_faces = ("   ", "  ", " ")
@@ -12241,7 +12257,7 @@ class TerminalPlayerUI:
             bsub = f"Music Library  •  {music_library_label(self.folder_name)}  •  Local Drives & SMB Shares" if self.mode == "MUSIC" else "Dreamworlds Productions  •  Hot Purple & Traffic Light Edition"
         if is_lg and self.mp_visualizer_on:
             preset = self._mp_visualizer_preset()
-            btitle = f"✦ MP LIQUID GLASS VISUALIZER — {preset.get('id', 0)} {preset.get('name', '')} ✦"
+            btitle = f"✦ MP Liquid Player (Sensorium) — {preset.get('id', 0)} {preset.get('name', '')} ✦"
             bsub = "Press 0-9 to change the visualizer theme  •  Shift+V returns to liquid glass"
         # Inside a mixer deck the panel's second line is the loaded track. The
         # mixer used to draw the filename above the terminal; it now lives on
@@ -12286,13 +12302,20 @@ class TerminalPlayerUI:
         if len(tname) > maxlen: tname = tname[:maxlen - 3] + "..."
         parts = os.path.splitext(st.get("path", ""))
         ch_str, sr, ext = ("Stereo" if st.get("channels", 2) == 2 else "Mono"), st.get("sample_rate", 44100), parts[1][1:].upper() or "FLAC"
-        # The console ▶ PLAYING label is white on every theme. Liquid Glass
-        # still picks black on the pale pane and a light ink on the charcoal
-        # panes. PAUSED/STOPPED keep their amber/red so the three states stay
-        # distinguishable at a glance.
-        play_ink = playing_badge_ink(self.visualizer.theme, is_lg)
+        # The console ▶ PLAYING label is white on every theme. Liquid Glass now
+        # matches it: the whole now-playing line (badge, mode chip and track
+        # name) is white on every theme instead of switching to black on the
+        # pale panes. PAUSED/STOPPED keep their amber/red so the three states
+        # stay distinguishable at a glance.
+        play_ink = WHITE if is_lg else playing_badge_ink(self.visualizer.theme, is_lg)
         badge = f"{bold_s}{play_ink}▶ PLAYING{NC}" if st.get("state") == "playing" else (f"{bold_s}{YELLOW}⏸ PAUSED{NC}" if st.get("state") == "paused" else f"{bold_s}{RED}⏹ STOPPED{NC}")
-        if self.mode == "FAVORITES":
+        if is_lg:
+            mode_b = f" {bold_s}{WHITE}[MIX ARCHIVE]{NC}"
+            if self.mode == "FAVORITES":
+                mode_b = f" {bold_s}{WHITE}[FAVORITES]{NC}"
+            elif self.mode == "MUSIC":
+                mode_b = f" {bold_s}{WHITE}[MUSIC MODE]{NC}"
+        elif self.mode == "FAVORITES":
             mode_b = f" {bold_s}{COLOR_TRAFFIC_AMBER}[FAVORITES]{NC}"
         elif self.mode == "MUSIC":
             mode_b = f" {bold_s}{COLOR_TRAFFIC_GREEN}[MUSIC MODE]{NC}"
@@ -12301,13 +12324,9 @@ class TerminalPlayerUI:
         is_rec, flash = bool(st.get("recording", False)), (int(time.time() * 1.5) % 2 == 0)
         rec_b = f"  {bold_s}{COLOR_TRAFFIC_RED}● REC{NC}" if (is_rec and flash) else (f"  {dim_s}{RED}○ REC{NC}" if is_rec else "")
         fav_now = f" {COLOR_TRAFFIC_AMBER}{favorite_glyph(True)}{NC}" if st.get("path") and self._favorites_store().is_favorite(st.get("path")) else ""
-        # The title is the one line read from across the room, so it gets the
-        # highest-contrast ink the pane allows instead of a theme hue: black on
-        # the pale glass, white on the charcoal themes. The ♫ carries the same
-        # ink so the pair reads as one label rather than a pink bullet beside
-        # a white title. `is_lg` picks the surface: the console pane under the
-        # same theme is usually dark, which is the opposite answer.
-        title_ink = now_playing_ink(self.visualizer.theme, is_lg)
+        # The track title is white in Liquid Glass for the same reason, so the
+        # whole line is one readable ink on every theme.
+        title_ink = WHITE if is_lg else now_playing_ink(self.visualizer.theme, is_lg)
         # Trim the title to the space the badges leave, measured on the row as
         # drawn; a fixed character budget cannot know how wide `▶ PLAYING` and
         # the mode chip are, which is why a portrait column ran over.
@@ -12339,11 +12358,18 @@ class TerminalPlayerUI:
             f"  {dim_s}{CYAN}{ext} {sr/1000:.1f} kHz{NC}",
         ], max(20, w - 1)))
 
-        # The bar keeps at least 12 cells and gives up the rest to the labels,
-        # so `MM:SS ... MM:SS (nn.n%)` still fits a 56-column portrait window.
+        # The three transport rows end on the same column as the panel rule
+        # below them. They used to stop about 21 cells short (the bar was
+        # capped at `iw - 42` whatever the labels needed), which left a ragged
+        # right edge beside the playlist box.
+        bar_max = max(20, w - 2)
         pct = float(st.get("progress_pct", 0.0))
-        label_w = 2 + _display_width(st.get("position_fmt", "00:00")) * 2 + 6 + 2
-        bw = max(12, min(max(54, iw - 42), max(12, iw - label_w)))
+        pos_s = st.get("position_fmt", "00:00")
+        dur_s = st.get("duration_fmt", "00:00")
+        pct_s = f"({pct:.1f}%)"
+        time_prefix = f"  {pos_s}  "
+        time_suffix = f"  {dur_s}  {pct_s}"
+        bw = max(12, bar_max - _display_width(time_prefix) - _display_width(time_suffix))
         fw = int((pct / 100.0) * bw)
         # The track itself is the seek target. The time labels and the
         # percentage are not: `3 + len(POSITION) + 2` is the two leading spaces,
@@ -12351,10 +12377,26 @@ class TerminalPlayerUI:
         # Rows are the 1-based line index SGR mouse reports, and the span is an
         # inclusive 1-based (first, last) column pair.
         timeline_row = len(lines) + 1
-        timeline_start = 3 + _display_width(st.get("position_fmt", "00:00")) + 2
+        timeline_start = 3 + _display_width(pos_s) + 2
         timeline_span = (timeline_start, timeline_start + bw - 1)
-        lines.append(f"  {bold_s}{COLOR_ELECTRIC_CYAN}{st.get('position_fmt', '00:00')}{NC}  {b_col}{'━' * fw + '●' + '─' * max(0, bw - fw - 1)}{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}{st.get('duration_fmt', '00:00')}{NC}  {text_col}({pct:.1f}%){NC}")
-        pitch_pfx, pitch_trk, pitch_sfx = self.visualizer.pitch_bar_parts(int(st.get("pitch_percent", 0)), width=bw, max_cols=max(20, w - 1))
+        lines.append(f"  {bold_s}{COLOR_ELECTRIC_CYAN}{pos_s}{NC}  {b_col}{'━' * fw + '●' + '─' * max(0, bw - fw - 1)}{NC}  {bold_s}{COLOR_ELECTRIC_CYAN}{dur_s}{NC}  {text_col}{pct_s}{NC}")
+
+        def _fill_bar(parts, start_width):
+            """Grow a bar to the panel's right edge, not just shrink it.
+
+            ``pitch_bar_parts`` / ``volume_bar_parts`` only shrink when the
+            labels do not fit; passing the leftover cells back in makes the
+            track fill the row exactly.
+            """
+            pfx, trk, sfx = parts(start_width)
+            room = bar_max - _display_width(pfx) - _display_width(sfx)
+            if room > start_width:
+                pfx, trk, sfx = parts(room)
+            return pfx, trk, sfx
+
+        pitch_pfx, pitch_trk, pitch_sfx = _fill_bar(
+            lambda wd: self.visualizer.pitch_bar_parts(
+                int(st.get("pitch_percent", 0)), width=wd, max_cols=bar_max), bw)
         pitch_row = len(lines) + 1
         pitch_start = _display_width(pitch_pfx) + 1
         pitch_span = (pitch_start, pitch_start + _display_width(pitch_trk) - 1)
@@ -12364,8 +12406,9 @@ class TerminalPlayerUI:
         # 24-row console the same three tracks stay visible as before.
         volume = int(st.get("volume", 85) or 0)
         vol_label = "MUTED" if st.get("muted") else f"{volume}%"
-        vol_pfx, vol_trk, vol_sfx = self.visualizer.volume_bar_parts(
-            volume, width=bw, max_cols=max(20, w - 1))
+        vol_pfx, vol_trk, vol_sfx = _fill_bar(
+            lambda wd: self.visualizer.volume_bar_parts(
+                volume, width=wd, max_cols=bar_max), bw)
         self._volume_row = len(lines) + 1
         self._volume_start = _display_width(vol_pfx) + 1
         self._volume_span = (self._volume_start,
@@ -12460,7 +12503,8 @@ class TerminalPlayerUI:
             # The title text is part of the rule, so it shares the border ink.
             # Passing the body colour here left the title's own `──` and `─`
             # glyphs in a different hue from the rest of the panel outline.
-            lines.append(_boxed_rule("┌", list_title, "┐", iw, b_col, b_col))
+            lines.append(_boxed_rule("┌", list_title, "┐", iw, b_col,
+                                     WHITE if is_lg else b_col))
             # Bottom rule, one blank row, the Vol status line, and the control
             # rows. MP Liquid reserves one row less: its playlist footer rule
             # sits a row further down than the CLI's, and the playlist body
@@ -12708,7 +12752,7 @@ class TerminalPlayerUI:
         bold_s = "" if is_lg else BOLD
         text_col = theme_body_ansi(self.visualizer.theme) if is_lg else theme_console_body_ansi(self.visualizer.theme)
         if is_lg and self.mp_visualizer_on:
-            header_title = "✦ MP LIQUID GLASS VISUALIZER ✦"
+            header_title = "✦ MP Liquid Player (Sensorium) ✦"
         else:
             header_title = '✦ MP MINI AUDIO PLAYER (LIQUID GLASS) ✦' if is_lg else '✦ MP MINI AUDIO PLAYER ✦'
         lines = [f"  {c1}╭{'─'*iw}╮{NC}", f"  {c1}│{c2}{header_title.center(iw)}{c1}│{NC}", f"  {c1}╰{'─'*iw}╯{NC}"] if is_lg else [f"  {BOLD}{c1}╭{'─'*iw}╮{NC}", f"  {BOLD}{c1}│{BOLD}{c2}{header_title.center(iw)}{c1}│{NC}", f"  {BOLD}{c1}╰{'─'*iw}╯{NC}"]
@@ -12837,7 +12881,7 @@ class TerminalPlayerUI:
         next_mode_lbl = "Full" if is_lg else "Vertical"
         r2 = f" 🎛 [{m_str}] │ {bass_mode_badge(self._bass_mode(), bool(bold_s))} │ 🎨 {c1}{self.visualizer.get_theme_display_name()[:10]}{NC} │ \033[38;2;255;215;0m[M] {next_mode_lbl}{NC} "
         if is_lg and self.mp_visualizer_on:
-            micro_hdr = "✦ MP LIQUID GLASS VISUALIZER ✦"
+            micro_hdr = "✦ MP Liquid Player (Sensorium) ✦"
         else:
             micro_hdr = "✦ MP MICRO AUDIO PLAYER (LIQUID GLASS) ✦" if is_lg else "✦ MP MICRO AUDIO PLAYER ✦"
         if is_lg:

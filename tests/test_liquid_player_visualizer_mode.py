@@ -235,12 +235,57 @@ class LiquidPlayerVisualizerModeTests(unittest.TestCase):
                 self.assertTrue(ui.mp_visualizer_on)
                 self.assertNotEqual(ui.mode, "FAVORITES")
                 drawn_on = self._draw(ui, kind)
-                self.assertIn("MP LIQUID GLASS VISUALIZER", drawn_on)
+                self.assertIn("MP Liquid Player (Sensorium)", drawn_on)
                 on_fill, _on_ink = player.theme_chip_style(ui.visualizer.theme, lift=0.9)
                 self.assertIn(f"48;2;{on_fill[0]};{on_fill[1]};{on_fill[2]}", drawn_on)
                 self.assertNotIn("48;2;0;48;72", drawn_on)
                 self._click(ui, ui._favorites_button_span[0], ui._favorites_button_row)
                 self.assertEqual(ui.mode, "FAVORITES")
+
+    def test_visualization_button_writes_the_visible_flag(self):
+        """The button's off state must unmap the window it owns.
+
+        Writing only ``active: false`` released the bond; a locked companion
+        ignores that, so the window stayed on screen and a second press could
+        not bring anything back. ``visible`` is the map/unmap flag.
+        """
+        ui = self._ui(liquid=True)
+        api = MagicMock()
+        with patch.object(player, "_mp_visualizer_api", return_value=api), \
+             patch.object(ui, "_ensure_standalone_mp_visualizer"):
+            ui.mp_visualizer_on = False
+            ui._toggle_mp_visualizer()
+            args, kwargs = api.write_player_visualizer_state.call_args
+            self.assertTrue(kwargs.get("visible"))
+            self.assertTrue(args[0])
+            ui._toggle_mp_visualizer()
+            args, kwargs = api.write_player_visualizer_state.call_args
+            self.assertFalse(kwargs.get("visible"))
+            self.assertFalse(args[0])
+
+    def test_favorites_chip_names_the_library_to_return_to(self):
+        ui = self._ui(liquid=True)
+        with patch.dict(os.environ, {"MP_LIQUID_GLASS": "1"}):
+            ui.mode = "MIX_ARCHIVE"
+            ui._favorites_return_mode = ""
+            lines = []
+            ui._append_liquid_action_row(lines, 120)
+            self.assertIn("FAVORITES", player._strip_bold_ansi(lines[-1]))
+
+            ui.mode = "FAVORITES"
+            ui._favorites_return_mode = "MIX_ARCHIVE"
+            lines = []
+            ui._append_liquid_action_row(lines, 120)
+            drawn = player._strip_bold_ansi(lines[-1])
+            self.assertIn("MIXES", drawn)
+            self.assertNotIn("FAVORITES", drawn)
+
+            ui._favorites_return_mode = "MUSIC"
+            lines = []
+            ui._append_liquid_action_row(lines, 120)
+            drawn = player._strip_bold_ansi(lines[-1])
+            self.assertIn("MUSIC", drawn)
+            self.assertNotIn("FAVORITES", drawn)
 
     def test_mini_and_micro_use_the_same_theme_keys(self):
         with patch.dict(os.environ, {"MP_LIQUID_GLASS": "1"}):

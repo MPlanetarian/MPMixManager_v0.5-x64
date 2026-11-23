@@ -87,6 +87,20 @@ class LaunchersSayWhyTest(unittest.TestCase):
         self.assertIn("mp_is_raspberry_pi", fn)
         self.assertIn("not available on Raspberry Pi", fn)
 
+    def test_z_opens_a_detached_window_the_user_can_fullscreen(self):
+        """Z from the manager is a free window, not the player's companion.
+
+        Without ``MP_VISUALIZER_DETACHED=1`` the new window adopts the player's
+        ``active`` state, bonds behind it and refuses to stay fullscreen.
+        """
+        text = MGR.read_text(encoding="utf-8")
+        start = text.index("launch_mp_liquid_visualizer() {")
+        fn = text[start:text.index("\n}\n", start)]
+        launches = [line for line in fn.splitlines() if "nohup python3" in line]
+        self.assertTrue(launches)
+        for line in launches:
+            self.assertIn("MP_VISUALIZER_DETACHED=1", line)
+
     def test_the_shell_detector_exists(self):
         lib = (ROOT / "scripts" / "lib" / "mp_pi_detect.sh").read_text(encoding="utf-8")
         self.assertIn("mp_is_raspberry_pi()", lib)

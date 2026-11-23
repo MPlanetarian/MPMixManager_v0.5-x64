@@ -402,6 +402,21 @@ def _mode_grid(mode):
     return COLS, ROWS
 
 
+def _analyser_rows(rows):
+    return 7 if rows >= 34 else (5 if rows >= 28 else 3)
+
+
+def _vertical_analyser_rows(rows):
+    spare = max(0, rows - 17 - 10 - 1)
+    return max(3, min(20, 8 + spare // 3))
+
+
+def _playlist_top_row(rows, mode="NORMAL"):
+    if str(mode).upper() == "VERTICAL":
+        return 12 + _vertical_analyser_rows(rows)
+    return 12 + _analyser_rows(rows)
+
+
 def player_panel_rects(cols=COLS, rows=ROWS, char_w=CHAR_W, char_h=CHAR_H, origin_x=0, origin_y=0, mode="NORMAL"):
     def box(col, row, box_cols, box_rows):
         return (
@@ -418,12 +433,11 @@ def player_panel_rects(cols=COLS, rows=ROWS, char_w=CHAR_W, char_h=CHAR_H, origi
         # Vertical is the full player frame in a portrait column, so it uses
         # the same two panels as NORMAL: the header block and the playlist.
         iw = max(20, cols - 6)
-        viz_rows = 7 if rows >= 34 else (5 if rows >= 28 else 3)
-        before = 4 + 1 + 1 + 3 + (viz_rows + 3) + 2
-        body_rows = max(1, rows - (before + 1) - 4)
+        before = _playlist_top_row(rows, "VERTICAL")
+        body_rows = max(1, rows - before)
         return (
             box(2, 0, iw + 2, 4),
-            box(2, before, iw + 2, body_rows + 2),
+            box(2, before, iw + 2, body_rows),
         )
     elif m == "MINI":
         return box(2, 0, max(20, cols - 4), 3), box(2, 3, max(20, cols - 4), max(1, rows - 3))
@@ -434,8 +448,8 @@ def player_panel_rects(cols=COLS, rows=ROWS, char_w=CHAR_W, char_h=CHAR_H, origi
         return box(2, 0, iw, 7), box(2, 7, iw, max(1, rows - 7))
     else:
         iw = max(20, cols - 6)
-        before = 17
-        body_rows = 21
+        before = _playlist_top_row(rows, "NORMAL")
+        body_rows = max(1, rows - before - 3)
         return box(2, 0, iw + 2, 4), box(2, before, iw + 2, body_rows)
 
 
