@@ -154,6 +154,10 @@ def shortcut_targets(root: Path) -> dict[str, dict]:
             "categories": "AudioVideo;Audio;Player;",
             "icon": icon,
             "windows_icon": icon,
+            # The GLFW glass window publishes mp_liquid.MP_Liquid; without this
+            # the KDE taskbar cannot pair the window with the shortcut and
+            # falls back to the generic X icon.
+            "wm_class": "MP_Liquid",
         },
         "MP Mix Manager": {
             "comment": "Launch MP Mix Manager",
@@ -172,6 +176,9 @@ def shortcut_targets(root: Path) -> dict[str, dict]:
             "categories": "AudioVideo;Audio;Utility;",
             "icon": icon,
             "windows_icon": icon,
+            # MP Gui is the same glass host as the player, so it publishes
+            # mp_liquid.MP_Liquid too.
+            "wm_class": "MP_Liquid",
         },
         "MP Liquid Visualizer": {
             "comment": "Launch MP Liquid Visualizer",
@@ -181,6 +188,7 @@ def shortcut_targets(root: Path) -> dict[str, dict]:
             "categories": "AudioVideo;Audio;Player;",
             "icon": icon,
             "windows_icon": icon,
+            "wm_class": "MP_Visualizer",
         },
         "MP Liquid Mixer": {
             "comment": "Launch MP Liquid Mixer",
@@ -350,7 +358,8 @@ def linux_desktop_entry(name: str, spec: dict, root: Path) -> str:
     else:
         icon_value = "mp_liquid_glass_icon"
     terminal = "true" if spec.get("terminal") else "false"
-    return (
+    wm_class = str(spec.get("wm_class") or "").strip()
+    entry = (
         "[Desktop Entry]\n"
         "Type=Application\n"
         "Version=1.0\n"
@@ -364,6 +373,12 @@ def linux_desktop_entry(name: str, spec: dict, root: Path) -> str:
         f"Categories={spec['categories']}\n"
         "StartupNotify=true\n"
     )
+    if wm_class:
+        # KDE matches the taskbar entry to the window by WM class. Without
+        # this the MP Liquid Player's glass window (mp_liquid.MP_Liquid) is
+        # unpaired and the taskbar shows the generic X icon.
+        entry += f"StartupWMClass={wm_class}\n"
+    return entry
 
 
 def mac_command(spec: dict) -> str:

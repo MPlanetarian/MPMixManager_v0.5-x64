@@ -168,6 +168,13 @@ class TestDesktopShortcuts(unittest.TestCase):
                 self.assertTrue(mac_finder_icon_present(apps / "MP Mix Manager.command"))
             self.assertTrue(desktop_shortcuts_present(desktop, "macos", mac_components))
 
+    def test_liquid_player_desktop_names_its_wm_class(self):
+        """KDE needs StartupWMClass=MP_Liquid to use the real taskbar icon."""
+        spec = shortcut_targets(ROOT)["MP Liquid Player"]
+        text = linux_desktop_entry("MP Liquid Player", spec, ROOT)
+        self.assertIn("StartupWMClass=MP_Liquid", text)
+        self.assertIn("Icon=mp_liquid_glass_icon", text)
+
     def test_linux_desktop_exec_survives_the_two_pass_keyfile_parse(self):
         """The Exec line must launch, not just pass desktop-file-validate.
 
