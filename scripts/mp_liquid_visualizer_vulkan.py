@@ -734,28 +734,41 @@ class AudioTelemetryBridge:
             self._timeline_path = path
             self._timeline_pos = None
             self._timeline_mtime = 0.0
+        rate = max(0.1, min(4.0, float(pitch)))
+        now = time.time()
+
+        def projected(pos: float, mtime: float) -> float:
+            """Where the scene is if this snapshot is still the one we trust."""
+            age = now - mtime
+            if not math.isfinite(age) or age < 0.0:
+                age = 0.0
+            elif age > 3.0:
+                # A stopped writer must not let the scene run away.
+                age = 3.0
+            return float(pos) + age * rate
+
         if self._timeline_pos is None:
             self._timeline_pos = position
             self._timeline_mtime = anchor
         elif anchor != self._timeline_mtime:
-            delta = position - self._timeline_pos
-            # Ignore a small backward blip; accept a real seek (a jump of a
-            # second or more in either direction).
-            if not (delta < 0.0 and abs(delta) <= 0.9):
+            # Compare the new sample with the time already on screen, not with
+            # the raw previous position. The player clock lags the speakers by
+            # a fraction of a second (the output buffer). Taking that sample
+            # and zeroing the extrapolation rewound the scene on every write,
+            # which is the hitch that looks like the picture has left the
+            # music. A sample behind the picture by less than a second is
+            # ignored and the scene keeps moving. A seek is a jump of about a
+            # second or more, and that is followed.
+            shown = projected(self._timeline_pos, self._timeline_mtime)
+            sample = projected(position, anchor)
+            delta = sample - shown
+            if delta > 0.0 or delta <= -0.9:
                 self._timeline_pos = position
                 self._timeline_mtime = anchor
-        base = shared_track_base(path)
-        age = time.time() - self._timeline_mtime
-        if not math.isfinite(age):
-            age = 0.0
-        # A stopped writer must not let the scene run away. A healthy player
-        # republishes several times a second.
-        age = 0.0 if age < 0.0 else min(age, 3.0)
-        rate = max(0.1, min(4.0, float(pitch)))
-        return base + self._timeline_pos + age * rate
+        return shared_track_base(path) + projected(self._timeline_pos, self._timeline_mtime)
 
     def _apply_shared_clock(self, timeline: float) -> None:
-        """Put every window on the same scene clock.
+        """Put every window on the same scene clock and the same musical phase.
 
         ``accum_time`` and ``dynamic_time`` are the two clocks the shader sees
         (``u.res.z`` and ``u.preset.w``). They were integrated locally, so two
@@ -763,15 +776,18 @@ class AudioTelemetryBridge:
         preset forever. Deriving them from the shared playback clock keeps all
         of them on the same frame.
 
-        The three audio phases are deliberately left to ``_apply_bands``. They
-        are an *integral* of the current bands (bass makes the bass swirl spin
-        faster), and hard-assigning them from ``timeline + band * k`` made the
-        phase jump whenever a band changed, which is what looked out of sync
-        with the music. Scene time is shared; the phases stay smooth and
-        audio-reactive.
+        The three audio phases are the same kind of clock. Leaving them to
+        integrate from zero made each window spin on its own and left the
+        swirls unhooked from the song. They are derived from this timeline,
+        plus the smoothed bands, so a beat still tugs the motion and a window
+        opened later joins the others. ``timeline`` is already monotonic, so a
+        band change cannot rewind the scene underneath the phase.
         """
         self.accum_time = float(timeline)
         self.dynamic_time = float(timeline)
+        self.bass_phase = timeline * 1.2 + self.sub_bass * 2.4
+        self.mid_phase = timeline * 1.0 + self.mid * 2.0
+        self.high_phase = timeline * 0.9 + self.treble * 2.0
 
     def update(self, dt: float, force_playing: Optional[bool] = None, synthetic_audio: bool = False, _sin=math.sin, _cos=math.cos):
         dt = 0.0 if dt < 0.0 else (0.1 if dt > 0.1 else dt)

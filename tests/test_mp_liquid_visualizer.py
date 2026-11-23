@@ -498,6 +498,49 @@ class TestMPLiquidVisualizer(unittest.TestCase):
             bridge.update(0.016)
             self.assertLess(bridge.accum_time, before - 1.0)
 
+    def test_a_late_status_sample_does_not_rewind_the_scene(self):
+        """A sample that moved forward, but by less than the time already shown.
+
+        The output buffer leaves position_sec a fraction of a second behind
+        the speakers. Accepting it and restarting the extrapolation pulled
+        the picture backwards on every write, so the scene no longer kept
+        time with the music. The picture must stay where it has already
+        reached. The phases stay on that same clock, so the swirls do too.
+        """
+        with tempfile.TemporaryDirectory() as td:
+            tmp_path = Path(td)
+            state_file = tmp_path / "mp_player_state.json"
+            path = "/music/late-track.flac"
+            payload = {
+                "running": True, "state": "playing", "muted": False,
+                "rms_level": 0.4, "pitch_factor": 1.0, "position_sec": 20.0,
+                "path": path, "levels": [0.2, 0.8, 0.7, 0.4] * 6,
+            }
+
+            def write(pos: float) -> None:
+                state_file.write_text(json.dumps(dict(payload, position_sec=pos)),
+                                      encoding="utf-8")
+                now = time.time()
+                os.utime(state_file, (now, now))
+
+            write(20.0)
+            bridge = vis.AudioTelemetryBridge(config_dir=tmp_path)
+            bridge.update(0.016)
+            time.sleep(0.35)
+            moving = bridge.accum_time
+            # The player reports only +0.05 s after 0.35 s of wall time.
+            write(20.05)
+            bridge.update(0.016)
+            self.assertGreater(bridge.accum_time, moving,
+                               "a late sample must not rewind the scene")
+            self.assertGreater(bridge.accum_time, vis.shared_track_base(path) + 20.2)
+            # Phases are the song clock plus the bands, shared by every window.
+            self.assertAlmostEqual(
+                bridge.bass_phase,
+                bridge.accum_time * 1.2 + bridge.sub_bass * 2.4,
+                places=5,
+            )
+
     def test_escape_and_q_keys_close_window(self):
         """Pressing Escape (256) or 'q' (81) must close the borderless window."""
         # Assert the constants and the handler, not one particular formatting
