@@ -1727,8 +1727,12 @@ class MixArchiveScanner:
         if sys.platform == "win32":
             for d in ("B:/MIX_ARCHIVE", "B:/MIX_ARCHIVE/FLAC_CONVERTED_OUTPUTS", "X:/MIX_ARCHIVE"): add(d)
             for l in "BDEFGNVXZ": add(f"{l}:/MIX_ARCHIVE")
-        else:
-            for p in ("/run/media/mplanetarian/WD BLACK B/MIX_ARCHIVE", "/run/media/mplanetarian/DATA/MIX_ARCHIVE2/FLAC_CONVERTED_OUTPUTS", os.path.expanduser("~/GoogleDrive/MIX_ARCHIVE")): add(p)
+        # Linux/macOS used to fall back to a hardcoded list of archive paths
+        # here (an external drive, a second archive, a Google Drive mirror).
+        # That silently added every mix on those drives to the playlist even
+        # when the user had configured no Mix Archive folder at all. The
+        # configured MIX_ARCHIVE_DIR / EXTRA_MIX_ARCHIVE_DIRS values above are
+        # now the only archive roots; nothing is guessed from the filesystem.
         if not dirs:
             for fb in (self.base_dir / "MIX_ARCHIVE", self.base_dir / "FLAC_CONVERTED_OUTPUTS", self.base_dir, Path.home() / "Music"):
                 if fb not in (Path.home(), Path("/")): add(fb)
