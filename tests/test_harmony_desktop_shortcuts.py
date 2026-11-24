@@ -100,7 +100,9 @@ class TestInstall(ShortcutTestBase):
                 self.assertIn("http://127.0.0.1:11435", text)
                 continue
             # Every manager script named in Exec must exist in this tree.
-            self.assertIn("MPMixManager_v0.5-x64/scripts/", text, name)
+            # Do not pin the directory's name: a test bed deploys the same
+            # tree under its own path (MP_AUTO_TESTER_TREE, a worktree, ...).
+            self.assertIn(f"{ROOT.name}/scripts/", text, name)
             for token in text.split():
                 if token.endswith(".sh'"):
                     script = Path(token.strip("'\""))

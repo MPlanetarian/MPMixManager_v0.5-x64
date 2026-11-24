@@ -556,6 +556,7 @@ class TestMPLiquidVisualizer(unittest.TestCase):
         self.assertIn("GLFW_KEY_Q", src)
         self.assertRegex(src, r"key == GLFW_KEY_ESCAPE")
 
+    @unittest.skipUnless(DISPLAY_AVAILABLE, "a GLFW window needs a display")
     def test_z_key_cycles_fullscreen_half_and_normal_size(self):
         """Pressing Z cycles: fullscreen -> half size -> default size -> fullscreen."""
         import time
@@ -608,6 +609,7 @@ class TestMPLiquidVisualizer(unittest.TestCase):
         finally:
             renderer.close()
 
+    @unittest.skipUnless(DISPLAY_AVAILABLE, "a GLFW window needs a display")
     def test_double_click_window_toggles_fullscreen_and_restores_window_size(self):
         """A real renderer window enters fullscreen on a double-click and returns on the next one."""
         import os
@@ -697,6 +699,7 @@ class TestMPLiquidVisualizer(unittest.TestCase):
         self.assertEqual(vert_spv.read_bytes()[:4], b"\x03\x02#\x07")
         self.assertEqual(frag_spv.read_bytes()[:4], b"\x03\x02#\x07")
 
+    @unittest.skipUnless(DISPLAY_AVAILABLE, "a GLFW window needs a display")
     def test_cli_list_presets_and_vulkan_self_test(self):
         """CLI --list-presets and --self-test must succeed and render the windowed PNG."""
         res_list = subprocess.run(
@@ -723,6 +726,7 @@ class TestMPLiquidVisualizer(unittest.TestCase):
             self.assertTrue(out_png.is_file() and out_png.stat().st_size > 50000)
 
 
+    @unittest.skipUnless(DISPLAY_AVAILABLE, "a GLFW window needs a display")
     def test_fullscreen_no_auto_iconify_across_desktops(self):
         """Fullscreen window must disable GLFW_AUTO_ICONIFY and enable GLFW_FLOATING so it stays visible when clicking away."""
         renderer = vis.LiquidVisualizerVulkanRenderer()

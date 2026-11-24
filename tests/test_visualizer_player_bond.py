@@ -429,6 +429,8 @@ class TestTheBondServesMPGuiToo(unittest.TestCase):
             self.assertEqual(renderer._bond_host_title(), "MP Audio Player (Liquid Glass")
 
 
+@unittest.skipUnless(Path("/proc/self/environ").is_file(),
+                     "owner detection reads /proc/<pid>/environ")
 class TestEachHostStopsOnlyItsOwnCompanion(unittest.TestCase):
     """Closing one host must not blank the background of the other.
 

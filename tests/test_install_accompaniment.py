@@ -12,6 +12,7 @@ import subprocess
 import tempfile
 import time
 import unittest
+from tests.mp_test_path import system_path
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -112,7 +113,7 @@ class AccompanimentCase(unittest.TestCase):
 
     def start_watcher(self, display=":99"):
         env = os.environ.copy()
-        env["PATH"] = f"{self.dir}:/usr/bin:/bin"
+        env["PATH"] = system_path(self.dir)
         env["MP_INSTALL_PLAYER_DIR"] = str(self.dir)
         env["TMPDIR"] = str(self.dir)
         env.pop("WAYLAND_DISPLAY", None)
@@ -234,7 +235,7 @@ class TestInstallerWiring(unittest.TestCase):
         _write_fake(player, log, "sleep")
         env = os.environ.copy()
         env.update({
-            "PATH": f"{work.name}:/usr/bin:/bin",
+            "PATH": system_path(work.name),
             "MP_INSTALL_PLAYER_DIR": work.name,
             "MP_INSTALL_ACCOMPANIMENT": "1",
             "DISPLAY": ":99",
@@ -261,7 +262,7 @@ class TestInstallerWiring(unittest.TestCase):
         _write_fake(player, log, "ignore-term")
         env = os.environ.copy()
         env.update({
-            "PATH": f"{work.name}:/usr/bin:/bin",
+            "PATH": system_path(work.name),
             "MP_INSTALL_PLAYER_DIR": work.name,
             "MP_INSTALL_ACCOMPANIMENT": "1",
             "MP_INSTALL_ACCOMPANIMENT_SELF_TEST": "1",
@@ -304,7 +305,7 @@ class TestInstallerWiring(unittest.TestCase):
         _write_fake(player, log, "sleep")
         env = os.environ.copy()
         env.update({
-            "PATH": f"{work.name}:/usr/bin:/bin",
+            "PATH": system_path(work.name),
             "MP_INSTALL_PLAYER_DIR": work.name,
             "MP_INSTALL_ACCOMPANIMENT": "0",
             "MP_INSTALL_ACCOMPANIMENT_SELF_TEST": "1",

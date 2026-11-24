@@ -222,7 +222,11 @@ class TestLoaderVideoIntegration(unittest.TestCase):
         fi
         echo "IS_GUI: $is_gui"
         """
-        res = subprocess.run([BASH_BIN, "-c", script], cwd=str(BASE_DIR), capture_output=True, text=True)
+        res = subprocess.run(
+            [BASH_BIN, "-c", script], cwd=str(BASE_DIR),
+            capture_output=True, text=True,
+            env={**os.environ, "DISPLAY": ":99"},
+        )
         self.assertEqual(res.returncode, 0)
         self.assertIn("IS_GUI: 1", res.stdout)
 

@@ -97,7 +97,13 @@ def run_viewer(tracklist: Path, rows: int = 35, columns: int = 95,
                 return
             out += chunk
 
-    drain(1.0)
+    # Wait for the first frame before typing. A slow host can still have the
+    # pty echo enabled when the key arrives, and that echoed byte then reads
+    # as a line outside the box.
+    start = time.monotonic()
+    while time.monotonic() - start < timeout and b"TRACKLIST VIEWER" not in out:
+        drain(0.25)
+    drain(0.3)
     for key in keys:
         os.write(master, key)
         drain(0.4)

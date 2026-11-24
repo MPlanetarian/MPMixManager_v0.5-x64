@@ -92,7 +92,7 @@ class TestTracklistViewerActions(unittest.TestCase):
 
         self._make_executable(
             self.bin_dir / "vi",
-            f'#!/bin/bash\necho "$1" > "{vi_log}"\necho "02. Added By VI - New Track" >> "$1"\nexit 0\n',
+            f'#!/usr/bin/env bash\necho "$1" > "{vi_log}"\necho "02. Added By VI - New Track" >> "$1"\nexit 0\n',
         )
 
         env = os.environ.copy()
@@ -132,11 +132,11 @@ class TestTracklistViewerActions(unittest.TestCase):
 
         self._make_executable(
             self.bin_dir / "gwenview",
-            f'#!/bin/bash\necho "$1" > "{viewer_log}"\nexit 0\n',
+            f'#!/usr/bin/env bash\necho "$1" > "{viewer_log}"\nexit 0\n',
         )
         self._make_executable(
             self.bin_dir / "ffmpeg",
-            f'#!/bin/bash\necho "CALLED" > "{ffmpeg_log}"\nexit 0\n',
+            f'#!/usr/bin/env bash\necho "CALLED" > "{ffmpeg_log}"\nexit 0\n',
         )
 
         env = os.environ.copy()
@@ -176,11 +176,11 @@ class TestTracklistViewerActions(unittest.TestCase):
         viewer_log = self.base / "viewer_gen_opened.txt"
         self._make_executable(
             self.bin_dir / "gwenview",
-            f'#!/bin/bash\necho "$1" > "{viewer_log}"\nexit 0\n',
+            f'#!/usr/bin/env bash\necho "$1" > "{viewer_log}"\nexit 0\n',
         )
         self._make_executable(
             self.bin_dir / "ffmpeg",
-            '#!/bin/bash\n'
+            '#!/usr/bin/env bash\n'
             'out="${@: -1}"\n'
             'mkdir -p "$(dirname "$out")"\n'
             'printf "GENERATED_PNG_DATA" > "$out"\n'

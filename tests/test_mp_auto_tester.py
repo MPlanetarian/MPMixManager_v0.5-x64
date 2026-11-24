@@ -370,6 +370,9 @@ class TestReportBuilder(unittest.TestCase):
                 self.assertIn("jpeg", listing.stdout.lower())
 
     def test_cli_writes_pdf_and_text(self):
+        import importlib.util as _ilu
+        if _ilu.find_spec("reportlab") is None:
+            self.skipTest("reportlab is not installed")
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             results = tmp_path / "results.json"
@@ -379,8 +382,6 @@ class TestReportBuilder(unittest.TestCase):
                  "--out-dir", str(tmp_path), "--stamp", "TEST"],
                 capture_output=True, text=True,
             )
-            if "reportlab" not in res.stdout and res.returncode != 0:
-                self.skipTest("reportlab is not installed")
             self.assertEqual(res.returncode, 0, res.stderr)
             self.assertIn("Report generated:", res.stdout)
             self.assertTrue((tmp_path / "MP_Auto_Tester_Report_TEST.txt").is_file())

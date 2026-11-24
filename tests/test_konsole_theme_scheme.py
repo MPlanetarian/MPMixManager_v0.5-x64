@@ -74,6 +74,8 @@ def _run_in_pty(home: Path, body: str):
     return b"".join(chunks).decode("utf-8", "replace")
 
 
+@unittest.skipUnless(__import__("shutil").which("konsole"),
+                     "konsole is not installed on this host")
 class TestKonsoleThemeScheme(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

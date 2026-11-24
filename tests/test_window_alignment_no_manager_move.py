@@ -1,3 +1,5 @@
+import os
+import shutil
 import unittest
 from pathlib import Path
 from scripts.align_mix_windows import js_code, align_x11
@@ -19,6 +21,9 @@ class TestWindowAlignmentNoManagerMove(unittest.TestCase):
         self.assertNotIn("workspace.raiseWindow(mgrWin)", code)
         self.assertNotIn("workspace.activeWindow = mgrWin", code)
 
+    @unittest.skipUnless(
+        shutil.which("wmctrl") and (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")),
+        "wmctrl and a desktop session are needed to probe X11")
     def test_align_x11_never_forces_manager_window_activation(self):
         # align_x11 must return cleanly without touching or moving the manager window
         result = align_x11(mgr_pid=1234)

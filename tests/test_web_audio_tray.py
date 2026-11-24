@@ -57,6 +57,8 @@ class TestPlatformCase(unittest.TestCase):
             self.assertFalse(result["supported"], name)
             self.assertEqual(result["action"], "unsupported", name)
 
+    @unittest.skipUnless(__import__("sys").platform.startswith("linux"),
+                         "this assertion describes the Linux tray case")
     def test_platform_detection(self):
         self.assertEqual(web._platform_case_name(), "Linux")
 

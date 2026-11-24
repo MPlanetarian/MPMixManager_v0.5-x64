@@ -154,7 +154,7 @@ class TestTtyAudioMode(unittest.TestCase):
             switch = Path(home) / "scripts"
             switch.mkdir()
             fake = switch / "MP_Desktop_CLI_Switch.sh"
-            fake.write_text("#!/bin/bash\nprintf '%s\\n' SWITCHED\nexit 0\n", encoding="utf-8")
+            fake.write_text("#!/usr/bin/env bash\nprintf '%s\\n' SWITCHED\nexit 0\n", encoding="utf-8")
             fake.chmod(0o755)
             body = f"""
             press_enter() {{ echo PRESSED; }}
@@ -189,7 +189,7 @@ class TestTtyAudioMode(unittest.TestCase):
             switch = Path(home) / "scripts"
             switch.mkdir()
             fake = switch / "MP_Desktop_CLI_Switch.sh"
-            fake.write_text("#!/bin/bash\nprintf '%s\\n' SWITCHED\nexit 0\n", encoding="utf-8")
+            fake.write_text("#!/usr/bin/env bash\nprintf '%s\\n' SWITCHED\nexit 0\n", encoding="utf-8")
             fake.chmod(0o755)
             body = f"""
             press_enter() {{ :; }}
@@ -235,7 +235,7 @@ class TestTtyAudioMode(unittest.TestCase):
             switch = Path(home) / "scripts"
             switch.mkdir()
             fake = switch / "MP_Desktop_CLI_Switch.sh"
-            fake.write_text("#!/bin/bash\nprintf '%s\\n' SWITCHED\nexit 9\n", encoding="utf-8")
+            fake.write_text("#!/usr/bin/env bash\nprintf '%s\\n' SWITCHED\nexit 9\n", encoding="utf-8")
             fake.chmod(0o755)
             body = f"""
             press_enter() {{ :; }}
@@ -261,7 +261,7 @@ class TestTtyAudioMode(unittest.TestCase):
             switch = Path(home) / "scripts"
             switch.mkdir()
             fake = switch / "MP_Desktop_CLI_Switch.sh"
-            fake.write_text("#!/bin/bash\nprintf '%s\\n' SWITCHED\nexit 0\n", encoding="utf-8")
+            fake.write_text("#!/usr/bin/env bash\nprintf '%s\\n' SWITCHED\nexit 0\n", encoding="utf-8")
             fake.chmod(0o755)
             body = f"""
             press_enter() {{ :; }}

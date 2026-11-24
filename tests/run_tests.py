@@ -80,6 +80,16 @@ def configure_environment(full: bool) -> None:
         if path not in sys.path:
             sys.path.insert(0, path)
 
+    # A non-login SSH session on FreeBSD and macOS inherits a minimal PATH that
+    # omits the package prefixes, even though bash, ffmpeg and rclone live
+    # there. Tests call those tools by name, so put the standard prefixes back.
+    path_parts = os.environ.get("PATH", "").split(os.pathsep)
+    for prefix in ("/usr/local/bin", "/usr/local/sbin",
+                   "/opt/homebrew/bin", "/opt/homebrew/sbin"):
+        if os.path.isdir(prefix) and prefix not in path_parts:
+            path_parts.insert(0, prefix)
+    os.environ["PATH"] = os.pathsep.join(path_parts)
+
 
 def discover(pattern: str | None = None) -> unittest.TestSuite:
     loader = unittest.TestLoader()

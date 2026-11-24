@@ -74,6 +74,7 @@ class TestNoSilentVoiceSwitch(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
 
 
+@unittest.skipUnless(AGENT.is_file(), "MP Harmony Agent is not installed")
 class TestSharedVoiceSetting(unittest.TestCase):
     def test_shared_voice_file_is_jenny(self):
         """Both programs read this file, so it decides what you hear."""

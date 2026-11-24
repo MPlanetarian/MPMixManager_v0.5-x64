@@ -119,7 +119,7 @@ class TestManagerBashToggle(unittest.TestCase):
             stub = tmp_path / "MP_Gui.sh"
             marker = tmp_path / "launched"
             stub.write_text(
-                "#!/bin/bash\nprintf 'GUI_LAUNCHED\\n' >> \"${MP_GUI_STUB_OUT}\"\n",
+                "#!/usr/bin/env bash\nprintf 'GUI_LAUNCHED\\n' >> \"${MP_GUI_STUB_OUT}\"\n",
                 encoding="utf-8",
             )
             script = (

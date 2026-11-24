@@ -20,6 +20,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from tests.mp_test_path import system_path
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -359,7 +360,8 @@ class TestLoaderScriptIntroMode(unittest.TestCase):
         res = subprocess.run(
             ["bash", str(SCRIPT), "--intro"],
             capture_output=True, text=True, cwd=str(ROOT),
-            env={**os.environ, "PATH": f"{fake}:/usr/bin:/bin",
+            env={**os.environ, "PATH": system_path(fake),
+                 "DISPLAY": ":99",
                  "PLAYER_INTRO_VIDEO_MAX_SECONDS": "5"},
         )
         self.assertEqual(res.returncode, 0, res.stderr)
@@ -379,7 +381,7 @@ class TestLoaderScriptIntroMode(unittest.TestCase):
         res = subprocess.run(
             ["bash", str(SCRIPT), "--intro"],
             capture_output=True, text=True, cwd=str(ROOT),
-            env={**os.environ, "PATH": f"{fake}:/usr/bin:/bin",
+            env={**os.environ, "PATH": system_path(fake),
                  "SHOW_PLAYER_INTRO_VIDEO": "false"},
         )
         self.assertEqual(res.returncode, 0, res.stderr)

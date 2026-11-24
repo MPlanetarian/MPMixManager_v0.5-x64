@@ -24,6 +24,14 @@ import audio_formats as formats
 HAVE_FFMPEG = shutil.which("ffmpeg") is not None
 
 
+def _ffmpeg_has_dsdiff():
+    if not HAVE_FFMPEG:
+        return False
+    proc = subprocess.run(["ffmpeg", "-hide_banner", "-demuxers"],
+                          capture_output=True, text=True)
+    return "dsdiff" in proc.stdout
+
+
 def _ffmpeg_make(target, *args):
     """Render a short sine wave into `target` with the given encoder flags."""
     return subprocess.run(
@@ -209,7 +217,8 @@ class DSDiffReaderTests(unittest.TestCase):
         self.assertFalse(reader.is_dsdiff("a.dsf"))
         self.assertFalse(reader.is_dsdiff("a.flac"))
 
-    @unittest.skipUnless(HAVE_FFMPEG, "ffmpeg is required to decode the DSF view")
+    @unittest.skipUnless(_ffmpeg_has_dsdiff(),
+                         "this FFmpeg build has no DSDIFF demuxer")
     def test_player_decodes_a_dff_file(self):
         import numpy as np
         import MP_Audio_Player as player

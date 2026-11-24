@@ -72,6 +72,14 @@ class TestRoles(unittest.TestCase):
 
 
 class TestDetection(unittest.TestCase):
+    def setUp(self):
+        # running_roles() refuses to look at the process table on a host the
+        # dashboard does not support (/proc may be absent). These tests are
+        # about how a supplied table is classified, so enable the detector.
+        patcher = patch.object(control, "is_supported", return_value=True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_all_five_are_detected_from_a_process_list(self):
         processes = [
             proc(10, 1, "python3 /opt/MP_Audio_Player_Liquid_Glass_OpenGL.py --manager"),
@@ -129,7 +137,13 @@ class TestDetection(unittest.TestCase):
 
 class TestLaunch(unittest.TestCase):
     def test_launching_when_closed_spawns_the_launcher(self):
+        # Pin the installed set and the TTY flag too: a test bed may have only
+        # some apps installed, and a host switched into TTY Audio Mode keeps a
+        # flag file that makes launch_app refuse every desktop window.
         with patch.object(control, "is_supported", return_value=True), \
+             patch.object(control, "tty_mode_active", return_value=False), \
+             patch.object(control, "installed_components",
+                          return_value=set(control.ROLE_ORDER)), \
              patch.object(control, "running_roles", return_value=set()), \
              patch.object(control, "_spawn") as spawn:
             result = control.launch_app(control.ROLE_GUI)
@@ -141,6 +155,7 @@ class TestLaunch(unittest.TestCase):
         # launch_app refuses an app that is not installed, and the installed
         # set comes from the user's config, so pin it here too.
         with patch.object(control, "is_supported", return_value=True), \
+             patch.object(control, "tty_mode_active", return_value=False), \
              patch.object(control, "installed_components",
                           return_value=set(control.ROLE_ORDER)), \
              patch.object(control, "running_roles", return_value={"liquid"}), \

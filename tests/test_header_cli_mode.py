@@ -61,6 +61,14 @@ def _base_env(**extra) -> dict:
     ):
         env.pop(key, None)
     env.update(extra)
+    # A host that has been switched into TTY Audio Mode keeps a flag file in
+    # $HOME/.config/mix-manager, and sourcing the manager exports the mode for
+    # the whole process. That is machine state, not what these tests are about,
+    # so give each render a clean home.
+    if "HOME" not in extra:
+        home = tempfile.mkdtemp(prefix="mp-hdr-home-")
+        env["HOME"] = home
+        env["XDG_CONFIG_HOME"] = str(Path(home) / ".config")
     return env
 
 

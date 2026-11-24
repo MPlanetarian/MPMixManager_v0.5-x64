@@ -158,6 +158,7 @@ class TestDJS4MidiController(unittest.TestCase):
         mock_ipc.assert_called_with("toggle_record")
 
 
+@unittest.skipUnless(sys.platform.startswith("linux"), "ALSA port detection is Linux-only")
 class TestPortAutoDetection(unittest.TestCase):
     """The S4 is not always card 0.
 

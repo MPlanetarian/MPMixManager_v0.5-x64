@@ -298,6 +298,8 @@ class TestEveryBackendBindsShowAndHide(unittest.TestCase):
         sync.assert_called_once()
 
 
+@unittest.skipUnless(sys.platform.startswith("linux"),
+                     "the standalone visualizer companion is Linux-only")
 class TestTheSpawnerOwnsOnlyItsCompanion(_StateFile):
     """A window the user opened with Z must not stop the button's companion."""
 

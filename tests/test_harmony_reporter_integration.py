@@ -205,6 +205,9 @@ class TestReporterIntegration(unittest.TestCase):
         self.assertIn('"HARMONY"', text)
         self.assertIn("archived", text)
 
+    @unittest.skipUnless(
+        __import__("importlib").util.find_spec("matplotlib") is not None,
+        "matplotlib is required to import the report section harvester")
     def test_harvester_marks_archived_pairs_and_dedupes(self):
         import generate_ai_report_section as gen
         with tempfile.TemporaryDirectory() as td:

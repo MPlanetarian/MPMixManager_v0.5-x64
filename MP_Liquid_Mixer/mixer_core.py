@@ -1305,7 +1305,22 @@ def visualizer_pid_alive() -> Optional[int]:
         if state == "Z":
             return None
     except (OSError, IndexError):
-        pass
+        # FreeBSD does not mount procfs by default, so ask ps instead. Linux
+        # also accepts -o stat=; FreeBSD uses -o state= with the same letters.
+        try:
+            state_out = subprocess.run(
+                ["ps", "-o", "stat=", "-p", str(pid)],
+                capture_output=True, text=True, timeout=5,
+            )
+            if state_out.returncode != 0:
+                state_out = subprocess.run(
+                    ["ps", "-o", "state=", "-p", str(pid)],
+                    capture_output=True, text=True, timeout=5,
+                )
+            if state_out.stdout.strip().startswith("Z"):
+                return None
+        except (OSError, subprocess.SubprocessError):
+            pass
     return pid
 
 

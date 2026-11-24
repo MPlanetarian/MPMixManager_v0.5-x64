@@ -75,6 +75,9 @@ class TestHarmonyMenu(unittest.TestCase):
         self.assertNotIn("Press Enter to return to MP Mix Manager.", out)
         self.assertNotIn("You would be installing", out)
 
+    @unittest.skipUnless(
+        __import__("shutil").which("distrobox") and __import__("shutil").which("podman"),
+        "distrobox and podman are needed to reach the container branch")
     def test_a_missing_container_name_is_reported(self):
         result = _run_launcher(
             {

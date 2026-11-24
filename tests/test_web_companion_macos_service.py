@@ -1,7 +1,7 @@
 """Tests for the macOS launchd install of the Web Companion.
 
 macOS TCC judges a background job by its *responsible process*. The original
-bundle entry point was a `#!/bin/bash ... exec python3` shim: `exec` replaces
+bundle entry point was a `#!/usr/bin/env bash ... exec python3` shim: `exec` replaces
 the process image, so the archive read was attributed to
 `com.apple.python3` and a Full Disk Access grant recorded against
 "MP Web Companion.app" never applied. The phone then loaded a dashboard whose
@@ -28,6 +28,8 @@ ROOT = Path(__file__).resolve().parent.parent
 WRAPPER = ROOT / "scripts" / "mix_web_companion.sh"
 
 
+@unittest.skipUnless(__import__("sys").platform == "darwin",
+                     "the bundle launcher is built with Apple tooling")
 class TestBundleLauncher(unittest.TestCase):
     def setUp(self):
         self.text = WRAPPER.read_text(encoding="utf-8")

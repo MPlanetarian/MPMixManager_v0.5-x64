@@ -29,6 +29,7 @@ from __future__ import annotations
 import json
 import os
 import signal
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -235,7 +236,16 @@ def process_cmdline(pid: int) -> str:
     try:
         raw = Path(f"/proc/{pid}/cmdline").read_bytes()
     except OSError:
-        return ""
+        # FreeBSD and macOS have no procfs. ps reports the same argv and is
+        # what every other process helper in the suite falls back to.
+        try:
+            result = subprocess.run(
+                ["ps", "-o", "command=", "-p", str(pid)],
+                capture_output=True, text=True, timeout=5,
+            )
+            return result.stdout.strip() if result.returncode == 0 else ""
+        except (OSError, subprocess.SubprocessError):
+            return ""
     return raw.replace(b"\x00", b" ").decode("utf-8", "replace")
 
 
@@ -251,10 +261,9 @@ def instance_is_live(state: Optional[Dict[str, Any]]) -> bool:
     pid = int(state.get("pid", 0))
     if not pid_alive(pid):
         return False
-    if sys.platform.startswith("linux"):
-        cmdline = process_cmdline(pid)
-        if cmdline and state["instance"] not in cmdline:
-            return False
+    cmdline = process_cmdline(pid)
+    if cmdline and state["instance"] not in cmdline:
+        return False
     return True
 
 

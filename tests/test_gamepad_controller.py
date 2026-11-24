@@ -185,6 +185,8 @@ B: ABS=33001b
         self.assertFalse(gb.has_key(XBOX_KEYS, gb.BTN_TL2))  # Xbox triggers are analog
 
 
+@unittest.skipUnless(sys.platform.startswith("linux"),
+                     "the evdev doctor is Linux-only")
 class SwitchController(unittest.TestCase):
     """The Switch Pro Controller through hid-nintendo."""
 
@@ -248,6 +250,8 @@ B: KEY=0
         self.assertNotIn("Missing driver", output.getvalue())
 
 
+@unittest.skipUnless(sys.platform.startswith("linux"),
+                     "the evdev doctor is Linux-only")
 class SteamDoctor(unittest.TestCase):
     """A Steam pad in lizard mode looks like a keyboard, not a missing driver."""
 

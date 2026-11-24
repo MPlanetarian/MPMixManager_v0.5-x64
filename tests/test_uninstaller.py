@@ -16,6 +16,7 @@ import tempfile
 import textwrap
 import time
 import unittest
+from tests.mp_test_path import system_path
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -215,7 +216,7 @@ class ExitVideoWhileUninstalling(unittest.TestCase):
 
     def _env(self, **extra):
         env = os.environ.copy()
-        env["PATH"] = f"{self.tmp / 'bin'}:/usr/bin:/bin"
+        env["PATH"] = system_path(self.tmp / "bin")
         env["DISPLAY"] = env.get("DISPLAY") or ":99"
         env["SHOW_EXIT_VIDEO"] = "true"
         env["HOME"] = str(self.home)

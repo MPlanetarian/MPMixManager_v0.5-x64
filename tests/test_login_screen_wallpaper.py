@@ -54,6 +54,7 @@ def group_values(text: str, group: str) -> dict[str, str]:
     return values
 
 
+@unittest.skipUnless(REBUILD.is_file(), "the GDM theme rebuild helper is not installed")
 class TestGdmLoginBackground(unittest.TestCase):
     """The GDM rule must scale to fit and stay centred."""
 

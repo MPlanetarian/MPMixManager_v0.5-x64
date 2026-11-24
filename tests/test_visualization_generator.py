@@ -399,6 +399,11 @@ class TestWheelControls(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
+        if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+            # Importing Gtk works headlessly, but constructing a widget aborts
+            # the process with "Can't create a GtkStyleContext without a
+            # display connection" instead of raising. Skip before that.
+            raise unittest.SkipTest("no display for GTK")
         try:
             import gi
             gi.require_version("Gtk", "3.0")
