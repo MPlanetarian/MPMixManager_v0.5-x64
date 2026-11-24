@@ -1,10 +1,11 @@
 import math
 import re
+import subprocess
 import unittest
 from pathlib import Path
 
 from MP_Audio_Player import EqualizerVisualizer, _THEME_ALIASES, _THEME_PALETTES
-from MP_Audio_Player import TerminalPlayerUI, _rgb_from_ansi
+from MP_Audio_Player import TerminalPlayerUI, _rgb_from_ansi, _rotate_ansi_hue
 import MP_Audio_Player
 from scripts.liquid_glass_opengl import (
     LiquidGlassRendererOpenGL,
@@ -351,6 +352,83 @@ class TestCliPlayerAnimatesTheRainbowTheme(unittest.TestCase):
 
         self.assertIsNotNone(border_ink(first))
         self.assertNotEqual(border_ink(first), border_ink(later), "the CLI border never changed colour")
+
+
+class TestManagerAnimatesTheRainbowTheme(unittest.TestCase):
+    """Mix Archive Manager has to walk the same 24-second cycle as the player.
+
+    The glass hosts and the console player already sweep Dynamic Liquid Glass.
+    The manager published the t=0 table from set_theme_colors and never moved
+    it, so the menu sat on one violet while the other two windows turned.
+    """
+
+    def _bash(self, body: str) -> str:
+        script = f"""
+set -e
+mgr="{ROOT / "Mix_Archive_Manager.sh"}"
+eval "$(awk '/^_rainbow_split\\(\\)/{{f=1}} f{{print}} /^# --- end dynamic rainbow cycle ---/{{exit}}' "$mgr")"
+eval "$(awk '/^set_theme_colors\\(\\)/{{f=1}} f{{print}} f&&/^}}/{{exit}}' "$mgr")"
+eval "$(sed -n '/^highlight_menu_line() {{/,/^}}/p' "$mgr")"
+{body}
+"""
+        res = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
+        if res.returncode != 0:
+            raise AssertionError(res.stderr or res.stdout)
+        return res.stdout
+
+    def test_seconds_match_the_player_rotation(self):
+        out = self._bash(r"""
+set_theme_colors dynamic_rainbow_liquid_glass
+for t in 0 6 12 18 24; do
+    MP_RAINBOW_AT=$t _apply_dynamic_rainbow_frame
+    printf '%s|%s;%s;%s|%s;%s;%s|%s;%s;%s|%s;%s;%s\n' \
+        "$t" "$MENU_INK_R" "$MENU_INK_G" "$MENU_INK_B" \
+        "$SEL_BAR_R" "$SEL_BAR_G" "$SEL_BAR_B" \
+        "$MENU_NUM_R" "$MENU_NUM_G" "$MENU_NUM_B" \
+        "$_RAINBOW_NAV_R0" "$_RAINBOW_NAV_G0" "$_RAINBOW_NAV_B0"
+done
+""")
+        seen = {}
+        for raw in out.splitlines():
+            second, ink, sel, num, nav = raw.split("|")
+            seen[int(second)] = tuple(tuple(int(c) for c in part.split(";")) for part in (ink, sel, num, nav))
+        bases = {
+            "ink": (216, 180, 254),
+            "sel": (176, 88, 255),
+            "num": (255, 45, 142),
+            "nav": (247, 37, 133),
+        }
+        for second in (0, 6, 12, 18, 24):
+            shift = 0.0 if second % 24 == 0 else second / 24.0
+            got = seen[second]
+            for idx, key in enumerate(("ink", "sel", "num", "nav")):
+                seq = "\033[38;2;{0};{1};{2}m".format(*bases[key])
+                turned = _rgb_from_ansi(_rotate_ansi_hue(seq, shift))
+                self.assertEqual(got[idx], turned, f"{key} at t={second}")
+        self.assertEqual(seen[0], seen[24])
+        self.assertNotEqual(seen[0], seen[6])
+        self.assertNotEqual(seen[6], seen[12])
+
+    def test_other_themes_do_not_arm_the_cycle(self):
+        out = self._bash(r"""
+set_theme_colors dreamworlds_ultra
+printf '%s|%s;%s;%s\n' "${_RAINBOW_ARMED:-0}" "$MENU_INK_R" "$MENU_INK_G" "$MENU_INK_B"
+MP_RAINBOW_AT=9 _apply_dynamic_rainbow_frame
+printf '%s|%s;%s;%s|%s\n' "${_RAINBOW_ARMED:-0}" "$MENU_INK_R" "$MENU_INK_G" "$MENU_INK_B" "${_RAINBOW_FRAME_CHANGED:-0}"
+""")
+        first, second = [line.split("|") for line in out.splitlines()]
+        self.assertEqual(first[0], "0")
+        self.assertEqual(second[0], "0")
+        self.assertEqual(first[1], second[1])
+        self.assertEqual(second[2], "0")
+
+    def test_the_open_menu_rebuilds_when_the_second_changes(self):
+        text = (ROOT / "Mix_Archive_Manager.sh").read_text(encoding="utf-8")
+        loop = text.split("while true; do ", 1)[1].split("; update_terminal_geometry", 1)[0]
+        self.assertTrue(loop.startswith("_rainbow_tick_menu;"), loop)
+        body = text.split("_rainbow_tick_menu() {", 1)[1].split("\n}", 1)[0]
+        self.assertIn("_MENU_FRAME_FRESH=0", body)
+        self.assertIn("build_header_block", body)
 
 
 if __name__ == "__main__":

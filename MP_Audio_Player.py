@@ -5110,7 +5110,8 @@ def animate_theme_palette(theme_name: str, seconds: float,
     """Rotate a theme's palette colours for the frame at ``seconds``.
 
     Only Dynamic Liquid Glass moves. t=0 and t=24 return the base palette
-    unchanged, so the resting frame and the console manager agree.
+    unchanged. Mix Archive Manager walks this same cycle, so those two
+    instants still match the colours set_theme_colors publishes.
     """
     pal = dict(base if base is not None else _THEME_PALETTES.get(theme_name, _DEFAULT_PALETTE))
     if theme_name != "dynamic_rainbow_liquid_glass":
@@ -5988,8 +5989,9 @@ class EqualizerVisualizer:
         Companion sweeps it on a 24-second cycle and the shader hosts drive it
         per frame, so the console player reads the same clock instead of a
         frozen table entry. ``at`` is seconds into the cycle; omit it to use
-        the wall clock. Every other theme returns its static palette, and t=0
-        is byte-for-byte the shipped entry so a still frame matches the manager.
+        the wall clock. Every other theme returns its static palette. t=0 is
+        byte-for-byte the shipped entry. Mix Archive Manager uses this same
+        cycle, so that instant still matches the colours it publishes.
         """
         pal = _THEME_PALETTES.get(self.theme, _DEFAULT_PALETTE)
         if self.theme != "dynamic_rainbow_liquid_glass":

@@ -475,6 +475,146 @@ _append_fitted_hint() {
     cached_header_block+="  ${DIM}${BLUE}${_line#  }\033[K${NC}\n"
   fi
 }
+# --- dynamic rainbow cycle ---
+# Dynamic Liquid Glass is the one theme whose colours move. The player turns
+# its palette on a 24-second clock (MP_Audio_Player rainbow_hue_at), and the
+# glass behind MP Gui and MP Liquid Player turns with it. The manager used to
+# paint that clock's t=0 frame and leave it there. These helpers walk the same
+# clock: second 0 and second 24 are the set_theme_colors table, and every
+# other second is the player's hue rotation. The pane stays the shared dark
+# field. The ink, borders, numbers and the selected row move.
+_rainbow_split() {
+    local _s="$1" _dr="$2" _dg="$3" _db="$4"
+    [[ "$_s" =~ 38\;2\;([0-9]+)\;([0-9]+)\;([0-9]+) ]] || return 1
+    printf -v "$_dr" '%s' "${BASH_REMATCH[1]}"
+    printf -v "$_dg" '%s' "${BASH_REMATCH[2]}"
+    printf -v "$_db" '%s' "${BASH_REMATCH[3]}"
+}
+_rainbow_clear_nav() {
+    unset _RAINBOW_NAV_R0 _RAINBOW_NAV_G0 _RAINBOW_NAV_B0 \
+          _RAINBOW_NAV_R1 _RAINBOW_NAV_G1 _RAINBOW_NAV_B1 \
+          _RAINBOW_NAV_R2 _RAINBOW_NAV_G2 _RAINBOW_NAV_B2 \
+          _RAINBOW_NAV_R3 _RAINBOW_NAV_G3 _RAINBOW_NAV_B3 \
+          _RAINBOW_NAV_PR _RAINBOW_NAV_PG _RAINBOW_NAV_PB
+}
+_rainbow_arm_tables() {
+    _RAINBOW_ARMED=0
+    _RAINBOW_BUCKET=""
+    _RAINBOW_FRAME=()
+    _rainbow_clear_nav
+    [ "${CURRENT_THEME:-}" = "dynamic_rainbow_liquid_glass" ] || return 0
+    command -v python3 >/dev/null 2>&1 || return 0
+    local _rr _rg _rb _gr _gg _gb _yr _yg _yb _br _bg _bb _mar _mag _mab _cr _cg _cb
+    _rainbow_split "$RED" _rr _rg _rb || return 0
+    _rainbow_split "$GREEN" _gr _gg _gb || return 0
+    _rainbow_split "$YELLOW" _yr _yg _yb || return 0
+    _rainbow_split "$BLUE" _br _bg _bb || return 0
+    _rainbow_split "$MAGENTA" _mar _mag _mab || return 0
+    _rainbow_split "$CYAN" _cr _cg _cb || return 0
+    local _out=""
+    _out="$(
+        MP_RB="$_rr $_rg $_rb $_gr $_gg $_gb $_yr $_yg $_yb $_br $_bg $_bb $_mar $_mag $_mab $_cr $_cg $_cb" \
+        MP_NB="${MENU_NUM_R:-0} ${MENU_NUM_G:-0} ${MENU_NUM_B:-0} ${MENU_INK_R:-0} ${MENU_INK_G:-0} ${MENU_INK_B:-0} ${SEL_BAR_R:-0} ${SEL_BAR_G:-0} ${SEL_BAR_B:-0}" \
+        python3 - <<'PY'
+import colorsys
+import os
+
+def triples(text):
+    nums = [int(part) for part in text.split()]
+    return [tuple(nums[i:i + 3]) for i in range(0, len(nums), 3)]
+
+bases = triples(os.environ.get("MP_RB", "")) + triples(os.environ.get("MP_NB", ""))
+# Selected-row rotation (pink, cyan, orange, grey) and the grey pointer.
+bases += [(247, 37, 133), (0, 229, 255), (255, 140, 0), (88, 98, 118), (160, 175, 205)]
+
+def rot(rgb, shift):
+    if shift == 0.0:
+        return rgb
+    red, green, blue = (channel / 255.0 for channel in rgb)
+    hue, light, sat = colorsys.rgb_to_hls(red, green, blue)
+    red, green, blue = colorsys.hls_to_rgb((hue + shift) % 1.0, light, sat)
+    return tuple(int(round(channel * 255.0)) for channel in (red, green, blue))
+
+for slot in range(24):
+    shift = slot / 24.0
+    parts = []
+    for rgb in bases:
+        parts.extend(rot(rgb, shift))
+    print(" ".join(str(value) for value in parts))
+PY
+    )" || return 0
+    local _line=""
+    while IFS= read -r _line; do
+        [ -n "$_line" ] || continue
+        _RAINBOW_FRAME+=("$_line")
+    done <<< "$_out"
+    [ "${#_RAINBOW_FRAME[@]}" -eq 24 ] || { _RAINBOW_FRAME=(); return 0; }
+    _RAINBOW_ARMED=1
+}
+_rainbow_put_fg() {
+    printf -v "$1" '\033[38;2;%s;%s;%sm' "$2" "$3" "$4"
+}
+_apply_dynamic_rainbow_frame() {
+    _RAINBOW_FRAME_CHANGED=0
+    [ "${_RAINBOW_ARMED:-0}" = "1" ] || return 0
+    [ "${CURRENT_THEME:-}" = "dynamic_rainbow_liquid_glass" ] || return 0
+    local _now="" _bucket="" _slot=0 _line=""
+    if [ -n "${MP_RAINBOW_AT:-}" ]; then
+        _now="$MP_RAINBOW_AT"
+    else
+        _now="${EPOCHREALTIME:-${EPOCHSECONDS:-}}"
+        [ -n "$_now" ] || _now="$(date +%s 2>/dev/null || printf '0')"
+    fi
+    _bucket="${_now%%[.,]*}"
+    [[ "$_bucket" =~ ^-?[0-9]+$ ]] || return 0
+    [ "$_bucket" = "${_RAINBOW_BUCKET:-}" ] && return 0
+    _RAINBOW_BUCKET="$_bucket"
+    _slot=$(( _bucket % 24 ))
+    [ "$_slot" -lt 0 ] && _slot=$(( _slot + 24 ))
+    _line="${_RAINBOW_FRAME[_slot]:-}"
+    local -a _p=()
+    local IFS=' '
+    read -r -a _p <<< "$_line"
+    # 14 colours: accents, menu number, menu ink, selection bar, four nav
+    # fills and the grey pointer.
+    [ "${#_p[@]}" -eq 42 ] || return 0
+    _rainbow_put_fg RED "${_p[0]}" "${_p[1]}" "${_p[2]}"
+    _rainbow_put_fg GREEN "${_p[3]}" "${_p[4]}" "${_p[5]}"
+    _rainbow_put_fg YELLOW "${_p[6]}" "${_p[7]}" "${_p[8]}"
+    _rainbow_put_fg BLUE "${_p[9]}" "${_p[10]}" "${_p[11]}"
+    _rainbow_put_fg MAGENTA "${_p[12]}" "${_p[13]}" "${_p[14]}"
+    _rainbow_put_fg CYAN "${_p[15]}" "${_p[16]}" "${_p[17]}"
+    MENU_NUM_R="${_p[18]}"; MENU_NUM_G="${_p[19]}"; MENU_NUM_B="${_p[20]}"
+    _rainbow_put_fg MENU_NUM "$MENU_NUM_R" "$MENU_NUM_G" "$MENU_NUM_B"
+    MENU_INK_R="${_p[21]}"; MENU_INK_G="${_p[22]}"; MENU_INK_B="${_p[23]}"
+    _rainbow_put_fg MENU_INK "$MENU_INK_R" "$MENU_INK_G" "$MENU_INK_B"
+    SEL_BAR_R="${_p[24]}"; SEL_BAR_G="${_p[25]}"; SEL_BAR_B="${_p[26]}"
+    printf -v SEL_BAR '\033[48;2;%s;%s;%sm' "$SEL_BAR_R" "$SEL_BAR_G" "$SEL_BAR_B"
+    SEL_BAR_LUM=$(( (SEL_BAR_R * 299 + SEL_BAR_G * 587 + SEL_BAR_B * 114) / 1000 ))
+    if [ "$SEL_BAR_LUM" -ge 140 ]; then
+        SEL_BAR_FG=$'\033[1;38;2;0;0;0m'
+    else
+        SEL_BAR_FG=$'\033[1;38;2;255;255;255m'
+    fi
+    _RAINBOW_NAV_R0="${_p[27]}"; _RAINBOW_NAV_G0="${_p[28]}"; _RAINBOW_NAV_B0="${_p[29]}"
+    _RAINBOW_NAV_R1="${_p[30]}"; _RAINBOW_NAV_G1="${_p[31]}"; _RAINBOW_NAV_B1="${_p[32]}"
+    _RAINBOW_NAV_R2="${_p[33]}"; _RAINBOW_NAV_G2="${_p[34]}"; _RAINBOW_NAV_B2="${_p[35]}"
+    _RAINBOW_NAV_R3="${_p[36]}"; _RAINBOW_NAV_G3="${_p[37]}"; _RAINBOW_NAV_B3="${_p[38]}"
+    _RAINBOW_NAV_PR="${_p[39]}"; _RAINBOW_NAV_PG="${_p[40]}"; _RAINBOW_NAV_PB="${_p[41]}"
+    _RAINBOW_FRAME_CHANGED=1
+}
+# Repaint the open menu when the 24-second clock steps. The menu already
+# wakes about 20 times a second on Linux; this only rebuilds the frame on
+# the seconds the hue actually changes.
+_rainbow_tick_menu() {
+    _apply_dynamic_rainbow_frame
+    if [ "${_RAINBOW_FRAME_CHANGED:-0}" = "1" ] && declare -F build_header_block >/dev/null 2>&1; then
+        build_header_block
+        _last_menu_frame=""
+        _MENU_FRAME_FRESH=0
+    fi
+}
+# --- end dynamic rainbow cycle ---
 set_theme_colors() {
 local theme_name="${1:-dynamic_rainbow_liquid_glass}"; NC='\033[0m' BOLD='\033[1m' DIM='\033[2m'; case "$theme_name" in stream_of_frequency|stream|frequency|sof|frequency_stream|"Stream of Frequency"|"Stream of Frequency Theme"|"Stream of Frequency [Special Edition]"|"Stream of Frequency MP Mix Manager")
 RED='\033[38;2;240;32;24m'; GREEN='\033[38;2;76;217;123m'; YELLOW='\033[38;2;245;237;106m'; BLUE='\033[38;2;48;49;131m'; MAGENTA='\033[38;2;151;79;249m'; CYAN='\033[38;2;0;242;255m'; CURRENT_THEME="stream_of_frequency" ;;
@@ -716,6 +856,9 @@ else
     THEME_FG_R=226; THEME_FG_G=230; THEME_FG_B=238
     MENU_WHITE="\033[38;2;255;255;255m"
 fi
+# Arm the 24-second sweep after the resting colours are published. Tests that
+# eval only this function leave the helper undefined and keep the t=0 table.
+declare -F _rainbow_arm_tables >/dev/null 2>&1 && _rainbow_arm_tables || true
 export CURRENT_THEME MENU_NUM MENU_NUM_R MENU_NUM_G MENU_NUM_B MENU_INK MENU_INK_R MENU_INK_G MENU_INK_B THEME_BG_R THEME_BG_G THEME_BG_B SEL_BAR SEL_BAR_R SEL_BAR_G SEL_BAR_B SEL_BAR_FG SEL_BAR_LUM
 }
 
@@ -1125,7 +1268,7 @@ read_nav_key() {
     return 0
 }
 highlight_menu_line() {
-local key="$1" label="$2" extra="$3" color_idx="${4:-0}" _out_var="$5" box_width="${6:-74}" breath_factor="${7:-100}"; local c_mod=$(( (color_idx % 4 + 4) % 4 )); local base_r base_g base_b base_pr base_pg base_pb; local _glass=0; if [ "${MP_LIQUID_GLASS:-0}" = "1" ] || [ "${MP_GUI_SESSION:-0}" = "1" ]; then _glass=1; fi; if [ "$_glass" -eq 1 ]; then base_r="${SEL_BAR_R:-166}"; base_g="${SEL_BAR_G:-77}"; base_b="${SEL_BAR_B:-255}"; base_pr="$base_r"; base_pg="$base_g"; base_pb="$base_b"; elif [ "${CURRENT_THEME:-}" = "retro_terminal" ]; then base_r=255; base_g=255; base_b=255; base_pr=255; base_pg=255; base_pb=255; elif [ "${CURRENT_THEME:-}" = "cosmic_supernova" ]; then case "$c_mod" in 0) base_r=224; base_g=86; base_b=253; base_pr=224; base_pg=86; base_pb=253 ;; 1) base_r=0; base_g=245; base_b=212; base_pr=0; base_pg=245; base_pb=212 ;; 2) base_r=254; base_g=228; base_b=64; base_pr=254; base_pg=228; base_pb=64 ;; 3) base_r=94; base_g=96; base_b=206; base_pr=140; base_pg=160; base_pb=255 ;; esac; else case "$c_mod" in 0) base_r=247; base_g=37; base_b=133; base_pr=247; base_pg=37; base_pb=133 ;; 1) base_r=0; base_g=229; base_b=255; base_pr=0; base_pg=229; base_pb=255 ;; 2) base_r=255; base_g=140; base_b=0; base_pr=255; base_pg=140; base_pb=0 ;; 3) base_r=88; base_g=98; base_b=118; base_pr=160; base_pg=175; base_pb=205 ;; esac; fi; local bf="${breath_factor:-100}"; [ "$bf" -lt 15 ] && bf=15; [ "$bf" -gt 100 ] && bf=100; local r=$(( base_r * bf / 100 )) g=$(( base_g * bf / 100 )) b=$(( base_b * bf / 100 )) pr=$(( base_pr * bf / 100 )) pg=$(( base_pg * bf / 100 )) pb=$(( base_pb * bf / 100 )); local bg="\033[48;2;${r};${g};${b}m" ptr_col="\033[1;38;2;${pr};${pg};${pb}m" fg_key fg_lbl; fg_key="\033[1;38;2;255;255;255m"; fg_lbl="\033[1;38;2;255;255;255m"; local rst="\033[0m" ptr="${ptr_col} ▶ ❯${rst}"; printf -v formatted_key "[%2s]" "$key"; local line_content="${bg}${fg_key} ${formatted_key} ${fg_lbl}${label}${rst}"; local raw_len=$(( 1 + ${#formatted_key} + 1 + ${#label} )); local target_w=$(( box_width - 6 )); local pad_len=$(( target_w - raw_len )); [ "$pad_len" -lt 1 ] && pad_len=1; local pad_spaces; printf -v pad_spaces '%*s' "$pad_len" ''; local line_out="${ptr}${line_content}${pad_spaces} ${rst}\033[K"; if [ -n "$_out_var" ]; then printf -v "$_out_var" "%s" "$line_out"; else printf "%b\n" "$line_out"; fi
+local key="$1" label="$2" extra="$3" color_idx="${4:-0}" _out_var="$5" box_width="${6:-74}" breath_factor="${7:-100}"; local c_mod=$(( (color_idx % 4 + 4) % 4 )); local base_r base_g base_b base_pr base_pg base_pb; local _glass=0; if [ "${MP_LIQUID_GLASS:-0}" = "1" ] || [ "${MP_GUI_SESSION:-0}" = "1" ]; then _glass=1; fi; if [ "$_glass" -eq 1 ]; then base_r="${SEL_BAR_R:-166}"; base_g="${SEL_BAR_G:-77}"; base_b="${SEL_BAR_B:-255}"; base_pr="$base_r"; base_pg="$base_g"; base_pb="$base_b"; elif [ "${CURRENT_THEME:-}" = "retro_terminal" ]; then base_r=255; base_g=255; base_b=255; base_pr=255; base_pg=255; base_pb=255; elif [ "${CURRENT_THEME:-}" = "cosmic_supernova" ]; then case "$c_mod" in 0) base_r=224; base_g=86; base_b=253; base_pr=224; base_pg=86; base_pb=253 ;; 1) base_r=0; base_g=245; base_b=212; base_pr=0; base_pg=245; base_pb=212 ;; 2) base_r=254; base_g=228; base_b=64; base_pr=254; base_pg=228; base_pb=64 ;; 3) base_r=94; base_g=96; base_b=206; base_pr=140; base_pg=160; base_pb=255 ;; esac; elif [ "${CURRENT_THEME:-}" = "dynamic_rainbow_liquid_glass" ] && [ -n "${_RAINBOW_NAV_R0:-}" ]; then case "$c_mod" in 0) base_r="${_RAINBOW_NAV_R0}"; base_g="${_RAINBOW_NAV_G0}"; base_b="${_RAINBOW_NAV_B0}"; base_pr="$base_r"; base_pg="$base_g"; base_pb="$base_b" ;; 1) base_r="${_RAINBOW_NAV_R1}"; base_g="${_RAINBOW_NAV_G1}"; base_b="${_RAINBOW_NAV_B1}"; base_pr="$base_r"; base_pg="$base_g"; base_pb="$base_b" ;; 2) base_r="${_RAINBOW_NAV_R2}"; base_g="${_RAINBOW_NAV_G2}"; base_b="${_RAINBOW_NAV_B2}"; base_pr="$base_r"; base_pg="$base_g"; base_pb="$base_b" ;; 3) base_r="${_RAINBOW_NAV_R3}"; base_g="${_RAINBOW_NAV_G3}"; base_b="${_RAINBOW_NAV_B3}"; base_pr="${_RAINBOW_NAV_PR}"; base_pg="${_RAINBOW_NAV_PG}"; base_pb="${_RAINBOW_NAV_PB}" ;; esac; else case "$c_mod" in 0) base_r=247; base_g=37; base_b=133; base_pr=247; base_pg=37; base_pb=133 ;; 1) base_r=0; base_g=229; base_b=255; base_pr=0; base_pg=229; base_pb=255 ;; 2) base_r=255; base_g=140; base_b=0; base_pr=255; base_pg=140; base_pb=0 ;; 3) base_r=88; base_g=98; base_b=118; base_pr=160; base_pg=175; base_pb=205 ;; esac; fi; local bf="${breath_factor:-100}"; [ "$bf" -lt 15 ] && bf=15; [ "$bf" -gt 100 ] && bf=100; local r=$(( base_r * bf / 100 )) g=$(( base_g * bf / 100 )) b=$(( base_b * bf / 100 )) pr=$(( base_pr * bf / 100 )) pg=$(( base_pg * bf / 100 )) pb=$(( base_pb * bf / 100 )); local bg="\033[48;2;${r};${g};${b}m" ptr_col="\033[1;38;2;${pr};${pg};${pb}m" fg_key fg_lbl; fg_key="\033[1;38;2;255;255;255m"; fg_lbl="\033[1;38;2;255;255;255m"; local rst="\033[0m" ptr="${ptr_col} ▶ ❯${rst}"; printf -v formatted_key "[%2s]" "$key"; local line_content="${bg}${fg_key} ${formatted_key} ${fg_lbl}${label}${rst}"; local raw_len=$(( 1 + ${#formatted_key} + 1 + ${#label} )); local target_w=$(( box_width - 6 )); local pad_len=$(( target_w - raw_len )); [ "$pad_len" -lt 1 ] && pad_len=1; local pad_spaces; printf -v pad_spaces '%*s' "$pad_len" ''; local line_out="${ptr}${line_content}${pad_spaces} ${rst}\033[K"; if [ -n "$_out_var" ]; then printf -v "$_out_var" "%s" "$line_out"; else printf "%b\n" "$line_out"; fi
 }
 
 _start_win_cursor_hider() {
@@ -2403,6 +2546,7 @@ _ms_render_frame() {
     _menu_fast_ok=1
 }
 # --- end multi-screen section columns ---------------------------------------
+_apply_dynamic_rainbow_frame
 build_header_block
 _compose_menu_status() {
 local _out="$1"; local cur_key="" cur_lbl="" cur_ext=""; local line=""; IFS='|' read -r cur_key cur_lbl cur_ext <<< "${_opts_ref[$cur_idx]}"; if [ "${search_mode:-0}" -eq 1 ] || [ -n "${search_query:-}" ]; then line="  ${BOLD}${CYAN}Filter / Search:${NC} ${MENU_WHITE}${BOLD}[${search_query}█]${NC} ▏ [Option ${cur_key}: ${cur_lbl}] ▏ (Type to search, ↑/↓ Navigate, Enter: Select, Esc: Clear)\033[K"; elif [ -n "$typed_buffer" ]; then if [ -n "$menu_title" ]; then line="  ${BOLD}${CYAN}Selection:${NC}${MENU_WHITE} ${BOLD}${typed_buffer} ▏ (Press Enter to confirm, Esc to return)\033[K"; else line="  ${BOLD}${CYAN}Selection:${NC}${MENU_WHITE} ${BOLD}${typed_buffer} ▏ (Press Enter to confirm, 'q' to exit)\033[K"; fi; else if [ -n "$menu_title" ]; then line="  ${BOLD}${CYAN}Selection:${NC}${MENU_WHITE} [Option ${cur_key}: ${cur_lbl}] ▏ [↑/↓ to Navigate, [/] to Search, Enter to Select, Esc to Return]\033[K"; else line="  ${BOLD}${CYAN}Selection:${NC}${MENU_WHITE} [Option ${cur_key}: ${cur_lbl}] ▏ [↑/↓ to Navigate, [/] to Search, Enter to Select, ${_menu_exit_hint}]\033[K"; fi; fi; printf -v "$_out" '%s' "$line"
@@ -2502,7 +2646,7 @@ _menu_handle_mouse() {
 cleanup_submenu_screen() {
 _menu_restore_input; _MENU_CURSOR_LOCK=0; _stop_win_cursor_hider; _nav_mouse_disable; printf '\033[?7h\033[?12h\033[?25h\033[?2026l'
 }                                            
-_MENU_CURSOR_LOCK=1; _start_win_cursor_hider; _nav_mouse_enable; printf '\033[?25l\033[?12l\033[?7l'; local _mp_gui_vis_row=0 _mp_gui_vis_span_c1=0 _mp_gui_vis_span_c2=0; local _last_menu_frame=""; local typed_buffer=""; local search_mode=0; local search_query=""; local view_top=0; local last_term_lines="$_TERM_LINES"; local _MENU_FRAME_FRESH=0; local _LAST_MENU_TICK_S="${SECONDS:-0}"; local -a _menu_item_row=(); local _menu_status_row=0; local _menu_fast_ok=0; local _ARROW_HOLD=0; local _LAST_NAV_TIME="${SECONDS:-0}" _BREATH_STEP=0 _BREATH_TICK_DIV=0 _IS_BREATHING=0; local _LAST_MOUSE_AT=0 _LAST_MOUSE_IDX="" _MENU_MOUSE_ACTIVATE=0 _MENU_MOUSE_SELECTED=0; local -a _BREATH_FACTORS=(100 98 94 88 82 74 66 58 50 42 35 30 26 24 22 20 20 22 24 26 30 35 42 50 58 66 74 82 88 94 98 100); while true; do _menu_quiet_input; update_terminal_geometry 0; local cur_box_w; _set_menu_box_width cur_box_w "${_TERM_COLS:-80}"; local _draw=1; if [ "$cur_box_w" -eq "$box_w" ] && [ "$_TERM_LINES" -eq "$last_term_lines" ] && [ -n "$_last_menu_frame" ] && [ "${_MENU_FRAME_FRESH:-0}" -eq 1 ]; then _draw=0; fi; if [ "$_draw" -eq 0 ]; then printf '\033[?25l\033[?12l\033[?7l'; else if [ "$cur_box_w" -ne "$box_w" ] || [ "$_TERM_LINES" -ne "$last_term_lines" ]; then box_w="$cur_box_w"; last_term_lines="$_TERM_LINES"; _CURRENT_BOX_W="$box_w"; build_header_block; fi; if _ms_layout_panels; then _ms_render_frame; if [ "${STARTUP_AUTOPLAY_EXECUTED:-0}" -eq 0 ]; then run_deferred_startup; fi; _MENU_FRAME_FRESH=1; else local inner_w=$(( box_w - 2 )); local text_w=$(( box_w - 4 )); local h_border; printf -v h_border '%*s' "$inner_w" ''; h_border="${h_border// /─}"; local menu_rule; printf -v menu_rule '%*s' "$((inner_w + 1))" ''; menu_rule="${menu_rule// /─}"; local player_banner=""; local banner_lines=0; if get_mp_audio_player_track_info 2>/dev/null; then local st_color="$GREEN"; local st_icon="▶"; if [ "$MP_PLAYER_STATE" = "paused" ]; then st_color="$YELLOW"; st_icon="⏸"; fi; local st_low="$(printf "%s" "$MP_PLAYER_STATE" | tr "A-Z" "a-z")"; local st_sym="${BOLD}${st_color}${st_icon} ${st_low}${NC}"; local st_raw="${st_icon} ${st_low}"; if [ "${MP_PLAYER_RECORDING:-false}" = "true" ]; then st_sym+=" ${BOLD}${RED}● REC${NC}"; st_raw+=" ● REC"; fi; local p_mode_title="♫ MP AUDIO PLAYER"; [ "$MP_PLAYER_MODE" = "MUSIC" ] && p_mode_title="♫ MP AUDIO PLAYER [MUSIC MODE - TRACKS]"; local rem_dashes=$(( inner_w - ${#p_mode_title} - 4 )); [ "$rem_dashes" -lt 0 ] && rem_dashes=0; local p_top_dashes; printf -v p_top_dashes '%*s' "$rem_dashes" ''; p_top_dashes="${p_top_dashes// /─}"; player_banner+="  ${BOLD}${MAGENTA}╭── ${p_mode_title} ${p_top_dashes}╮\033[K${NC}\n"; local pos_pct_str="${MP_PLAYER_POS_FMT}/${MP_PLAYER_DUR_FMT} (${MP_PLAYER_PROGRESS_PCT%.*}%)"; local max_t_len=$(( text_w - ${#pos_pct_str} - ${#st_raw} - 4 )); [ "$max_t_len" -lt 4 ] && max_t_len=4; [ "$max_t_len" -gt "$text_w" ] && max_t_len="$text_w"; local disp_title="$MP_PLAYER_TITLE"; if [ ${#disp_title} -gt "$max_t_len" ]; then disp_title="${disp_title:0:$((max_t_len - 3))}..."; fi; local l1_left="${st_sym}  ${BOLD}${YELLOW}${disp_title}${NC}"; local l1_right="${CYAN}${MP_PLAYER_POS_FMT}/${MP_PLAYER_DUR_FMT}${NC} ${DIM}(${MP_PLAYER_PROGRESS_PCT%.*}%)${NC}"; local raw_l1_len=$(( ${#st_raw} + 2 + ${#disp_title} + ${#pos_pct_str} )); local l1_pad=$(( text_w - raw_l1_len )); if [ "$l1_pad" -lt 1 ]; then local _over=$((1 - l1_pad)); local _tlen=${#disp_title}; if [ $((_tlen - _over)) -gt 3 ]; then disp_title="${disp_title:0:$((_tlen - _over - 3))}..."; else disp_title="${disp_title:0:$(( _tlen > _over ? _tlen - _over : 0 ))}"; fi; l1_left="${st_sym}  ${BOLD}${YELLOW}${disp_title}${NC}"; raw_l1_len=$(( ${#st_raw} + 2 + ${#disp_title} + ${#pos_pct_str} )); l1_pad=$(( text_w - raw_l1_len )); [ "$l1_pad" -lt 1 ] && l1_pad=1; fi; local l1_sp
+_MENU_CURSOR_LOCK=1; _start_win_cursor_hider; _nav_mouse_enable; printf '\033[?25l\033[?12l\033[?7l'; local _mp_gui_vis_row=0 _mp_gui_vis_span_c1=0 _mp_gui_vis_span_c2=0; local _last_menu_frame=""; local typed_buffer=""; local search_mode=0; local search_query=""; local view_top=0; local last_term_lines="$_TERM_LINES"; local _MENU_FRAME_FRESH=0; local _LAST_MENU_TICK_S="${SECONDS:-0}"; local -a _menu_item_row=(); local _menu_status_row=0; local _menu_fast_ok=0; local _ARROW_HOLD=0; local _LAST_NAV_TIME="${SECONDS:-0}" _BREATH_STEP=0 _BREATH_TICK_DIV=0 _IS_BREATHING=0; local _LAST_MOUSE_AT=0 _LAST_MOUSE_IDX="" _MENU_MOUSE_ACTIVATE=0 _MENU_MOUSE_SELECTED=0; local -a _BREATH_FACTORS=(100 98 94 88 82 74 66 58 50 42 35 30 26 24 22 20 20 22 24 26 30 35 42 50 58 66 74 82 88 94 98 100); while true; do _rainbow_tick_menu; _menu_quiet_input; update_terminal_geometry 0; local cur_box_w; _set_menu_box_width cur_box_w "${_TERM_COLS:-80}"; local _draw=1; if [ "$cur_box_w" -eq "$box_w" ] && [ "$_TERM_LINES" -eq "$last_term_lines" ] && [ -n "$_last_menu_frame" ] && [ "${_MENU_FRAME_FRESH:-0}" -eq 1 ]; then _draw=0; fi; if [ "$_draw" -eq 0 ]; then printf '\033[?25l\033[?12l\033[?7l'; else if [ "$cur_box_w" -ne "$box_w" ] || [ "$_TERM_LINES" -ne "$last_term_lines" ]; then box_w="$cur_box_w"; last_term_lines="$_TERM_LINES"; _CURRENT_BOX_W="$box_w"; build_header_block; fi; if _ms_layout_panels; then _ms_render_frame; if [ "${STARTUP_AUTOPLAY_EXECUTED:-0}" -eq 0 ]; then run_deferred_startup; fi; _MENU_FRAME_FRESH=1; else local inner_w=$(( box_w - 2 )); local text_w=$(( box_w - 4 )); local h_border; printf -v h_border '%*s' "$inner_w" ''; h_border="${h_border// /─}"; local menu_rule; printf -v menu_rule '%*s' "$((inner_w + 1))" ''; menu_rule="${menu_rule// /─}"; local player_banner=""; local banner_lines=0; if get_mp_audio_player_track_info 2>/dev/null; then local st_color="$GREEN"; local st_icon="▶"; if [ "$MP_PLAYER_STATE" = "paused" ]; then st_color="$YELLOW"; st_icon="⏸"; fi; local st_low="$(printf "%s" "$MP_PLAYER_STATE" | tr "A-Z" "a-z")"; local st_sym="${BOLD}${st_color}${st_icon} ${st_low}${NC}"; local st_raw="${st_icon} ${st_low}"; if [ "${MP_PLAYER_RECORDING:-false}" = "true" ]; then st_sym+=" ${BOLD}${RED}● REC${NC}"; st_raw+=" ● REC"; fi; local p_mode_title="♫ MP AUDIO PLAYER"; [ "$MP_PLAYER_MODE" = "MUSIC" ] && p_mode_title="♫ MP AUDIO PLAYER [MUSIC MODE - TRACKS]"; local rem_dashes=$(( inner_w - ${#p_mode_title} - 4 )); [ "$rem_dashes" -lt 0 ] && rem_dashes=0; local p_top_dashes; printf -v p_top_dashes '%*s' "$rem_dashes" ''; p_top_dashes="${p_top_dashes// /─}"; player_banner+="  ${BOLD}${MAGENTA}╭── ${p_mode_title} ${p_top_dashes}╮\033[K${NC}\n"; local pos_pct_str="${MP_PLAYER_POS_FMT}/${MP_PLAYER_DUR_FMT} (${MP_PLAYER_PROGRESS_PCT%.*}%)"; local max_t_len=$(( text_w - ${#pos_pct_str} - ${#st_raw} - 4 )); [ "$max_t_len" -lt 4 ] && max_t_len=4; [ "$max_t_len" -gt "$text_w" ] && max_t_len="$text_w"; local disp_title="$MP_PLAYER_TITLE"; if [ ${#disp_title} -gt "$max_t_len" ]; then disp_title="${disp_title:0:$((max_t_len - 3))}..."; fi; local l1_left="${st_sym}  ${BOLD}${YELLOW}${disp_title}${NC}"; local l1_right="${CYAN}${MP_PLAYER_POS_FMT}/${MP_PLAYER_DUR_FMT}${NC} ${DIM}(${MP_PLAYER_PROGRESS_PCT%.*}%)${NC}"; local raw_l1_len=$(( ${#st_raw} + 2 + ${#disp_title} + ${#pos_pct_str} )); local l1_pad=$(( text_w - raw_l1_len )); if [ "$l1_pad" -lt 1 ]; then local _over=$((1 - l1_pad)); local _tlen=${#disp_title}; if [ $((_tlen - _over)) -gt 3 ]; then disp_title="${disp_title:0:$((_tlen - _over - 3))}..."; else disp_title="${disp_title:0:$(( _tlen > _over ? _tlen - _over : 0 ))}"; fi; l1_left="${st_sym}  ${BOLD}${YELLOW}${disp_title}${NC}"; raw_l1_len=$(( ${#st_raw} + 2 + ${#disp_title} + ${#pos_pct_str} )); l1_pad=$(( text_w - raw_l1_len )); [ "$l1_pad" -lt 1 ] && l1_pad=1; fi; local l1_sp
 printf -v l1_sp '%*s' "$l1_pad" ''; player_banner+="  ${BOLD}${MAGENTA}│${NC} ${l1_left}${l1_sp}${l1_right} ${BOLD}${MAGENTA}│\033[K${NC}\n"; local line2_ctrl="[Space] Toggle [M] Player [L] Liquid [G] MP Gui [X] Mixer [C] Theme [n] Next [</>] Track [p] UI [f] FM";
     # W opens an MP Black Glass pane at this window's size, but only inside
     # MP Gui: on a pure console W is a letter for type-to-select.
