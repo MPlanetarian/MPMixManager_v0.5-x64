@@ -40,8 +40,15 @@ if [ ! -x "$LAUNCHER" ]; then
     LAUNCHER="$CODEBASE_DIR/Mix_Archive_Manager.sh"
 fi
 
+# Monospace, at the point size of the user's default Konsole profile.
+if [ -f "$CODEBASE_DIR/scripts/mp_cli_font.sh" ]; then
+    # shellcheck disable=SC1091
+    . "$CODEBASE_DIR/scripts/mp_cli_font.sh"
+    mp_ensure_cli_font_profile
+fi
+
 # Windowed on purpose. A maximised launch covered the whole desktop, so the
 # manager hid the player, cover art and tracklist windows it had just opened
 # and the user could not switch back without closing it. The manager asks for
 # the size it wants itself; forcing it to fill the screen fights that.
-exec /usr/bin/konsole --separate --workdir "$CODEBASE_DIR" -p tabtitle="MP Mix Archive Manager" -e "$LAUNCHER" "$@"
+exec /usr/bin/konsole --separate --profile MP_Mix_Manager --workdir "$CODEBASE_DIR" -p tabtitle="MP Mix Archive Manager" -e "$LAUNCHER" "$@"

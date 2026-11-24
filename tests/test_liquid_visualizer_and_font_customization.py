@@ -25,18 +25,19 @@ import MP_Audio_Player_Liquid_Glass_OpenGL as lg_gl
 
 class TestLiquidVisualizerAndFontCustomization(unittest.TestCase):
     def test_fallback_font_is_monospace_normal_weight(self):
-        """Hack and the Monospace fallback stay regular weight."""
+        """The shipped face is Monospace at regular weight."""
         self.assertEqual(lg_vk.DEFAULT_FONT, "Monospace 11")
         self.assertEqual(lg_gl.DEFAULT_FONT, "Monospace 11")
         self.assertEqual(fonts.HACK_FONT, "Hack 11")
         self.assertEqual(fonts.FALLBACK_FONT, "Monospace 11")
+        self.assertEqual(fonts.DEFAULT_LIQUID_GLASS_FONT, "Monospace 11")
         for face in (lg_vk.DEFAULT_FONT, lg_gl.DEFAULT_FONT, fonts.HACK_FONT, fonts.FALLBACK_FONT):
             self.assertNotIn("Bold", face)
 
-    def test_linux_default_uses_hack_when_installed(self):
-        """MP Liquid and MP Gui use Hack on Linux, then Monospace."""
+    def test_default_is_monospace_even_when_hack_is_installed(self):
+        """MP Liquid, MP Gui, and the mixer start on Monospace."""
         with patch.object(fonts, "hack_font_installed", return_value=True):
-            self.assertEqual(fonts.default_liquid_glass_font(), "Hack 11")
+            self.assertEqual(fonts.default_liquid_glass_font(), "Monospace 11")
         with patch.object(fonts, "hack_font_installed", return_value=False):
             self.assertEqual(fonts.default_liquid_glass_font(), "Monospace 11")
 
@@ -66,7 +67,7 @@ class TestLiquidVisualizerAndFontCustomization(unittest.TestCase):
             self.assertEqual(fonts.default_liquid_glass_font(), "Monospace 11")
 
     def test_font_override_and_persistence(self):
-        """CLI and a saved font still win. With neither, both hosts follow Hack or Monospace."""
+        """CLI and a saved font still win. With neither, both hosts use Monospace."""
         with tempfile.TemporaryDirectory() as tmpdir:
             test_cfg = Path(tmpdir) / "liquid_glass_font"
             env = {"MP_LIQUID_GLASS_FONT": "", "LIQUID_GLASS_FONT": ""}
@@ -76,8 +77,8 @@ class TestLiquidVisualizerAndFontCustomization(unittest.TestCase):
                  patch.object(lg_gl, "CONFIG_DIR", Path(tmpdir)), \
                  patch.dict(os.environ, env), \
                  patch.object(fonts, "hack_font_installed", return_value=True):
-                self.assertEqual(lg_vk.get_liquid_glass_font(), "Hack 11")
-                self.assertEqual(lg_gl.get_liquid_glass_font(), "Hack 11")
+                self.assertEqual(lg_vk.get_liquid_glass_font(), "Monospace 11")
+                self.assertEqual(lg_gl.get_liquid_glass_font(), "Monospace 11")
                 self.assertEqual(lg_vk.get_liquid_glass_font("Fira Code 11"), "Fira Code 11")
                 self.assertEqual(lg_gl.get_liquid_glass_font("Fira Code 11"), "Fira Code 11")
                 lg_vk.set_liquid_glass_font("Liberation Mono 11")

@@ -3108,7 +3108,7 @@ class LiquidMixer(GlassHost):
     def _text_layout(self, cr, text: str, size: float, bold: bool, max_width: float):
         Pango = self.Pango
         layout = self.PangoCairo.create_layout(cr)
-        desc = Pango.FontDescription.from_string(f"Sans {max(6.0, size):.1f}")
+        desc = Pango.FontDescription.from_string(f"Monospace {max(6.0, size):.1f}")
         desc.set_weight(Pango.Weight.BOLD if bold else Pango.Weight.NORMAL)
         layout.set_font_description(desc)
         layout.set_text(str(text), -1)

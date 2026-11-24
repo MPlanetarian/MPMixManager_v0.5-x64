@@ -63,7 +63,7 @@ COLS, ROWS = 120, 40
 VERTICAL_COLS, VERTICAL_ROWS = 56, 52
 
 
-# Used when Hack is not installed. Linux uses Hack 11 when that family is present.
+# Shipped face for MP Liquid Player and MP Gui. A saved font or --font replaces it.
 DEFAULT_FONT = "Monospace 11"
 CONFIG_DIR = Path.home() / ".config" / "mix-manager"
 FONT_CONFIG_FILE = CONFIG_DIR / "liquid_glass_font"
@@ -73,9 +73,9 @@ TRACKLIST_SCROLLBACK = 2000
 IS_WIN = sys.platform == "win32"
 
 RECOMMENDED_FONTS = [
-    ("Monospace 11", "Fallback when the Hack family is not installed"),
+    ("Monospace 11", "Default face for MP Liquid Player, MP Gui, and MP Liquid Mixer"),
     ("Fira Code 11", "Modern Programming Font (Clean shapes, sleek proportions)"),
-    ("Hack 11", "Linux default when the Hack family is installed"),
+    ("Hack 11", "Optional programming font"),
     ("Adwaita Mono 11", "Modern GNOME Desktop Monospace"),
     ("Liberation Mono 11", "Classic Clean Monospace"),
 ]

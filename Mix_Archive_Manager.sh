@@ -2867,6 +2867,10 @@ _LAST_THEME_STAMP="$(_theme_file_stamp)"
 # pane exactly as the user's shell left it. A flagged call that really loads a
 # menu paints at menu time through _paint_theme_background_on_load().
 if [ "${_MP_CLI_ARGS_PRESENT:-0}" != "1" ]; then
+    # The face is switched before the theme scheme. setProfile reloads the
+    # session profile, which would put the user's colours back on top of a
+    # theme that had already been painted.
+    declare -F _apply_cli_monospace_font >/dev/null 2>&1 && _apply_cli_monospace_font || true
     # Konsole's scheme reset clears OSC 11. Paint the theme pane after that.
     _ensure_konsole_default_scheme
     _CLI_THEME_BG_LOADED=1
@@ -2884,6 +2888,10 @@ _CLI_THEME_BG_LOADED=1
 # A piped run has no pane to paint; the OSC 50 scheme reset would end up in
 # the captured output, so only a real terminal is touched.
 [ -t 1 ] || return 0
+# The face is switched before the theme scheme. setProfile reloads the
+# session profile, which would put the user's colours back on top of a
+# theme that had already been painted.
+declare -F _apply_cli_monospace_font >/dev/null 2>&1 && _apply_cli_monospace_font || true
 # Konsole's scheme reset clears OSC 11. Paint the theme pane after that.
 _ensure_konsole_default_scheme
 _apply_cli_theme_background
@@ -2950,6 +2958,53 @@ _restore_konsole_theme_scheme() {
     local def_scheme=""
     def_scheme="$(_konsole_default_scheme_name)"
     printf '\033]50;ColorScheme=%s\a' "${def_scheme:-WhiteOnBlack}" 2>/dev/null || true
+}
+# The CLI is a Konsole window. Its shipped face is Monospace. The desktop
+# launchers start the MP_Mix_Manager profile directly. A manager started
+# inside a Konsole that already has that profile loaded asks the session to
+# switch, and puts the previous profile back on the way out so the user's
+# shell is not left on the manager face. MP Gui and MP Liquid Player draw
+# with their own VTE font and are left alone. The point size stays the size
+# already in the user's default Konsole profile.
+_apply_cli_monospace_font() {
+    [ "${MP_LIQUID_GLASS:-0}" = "1" ] && return 0
+    [ "${MP_GUI_SESSION:-0}" = "1" ] && return 0
+    [ -t 1 ] || return 0
+    [ -n "${KONSOLE_DBUS_SERVICE:-}${KONSOLE_VERSION:-}" ] || return 0
+    local lib="${SCRIPT_DIR:-}/scripts/mp_cli_font.sh"
+    [ -f "$lib" ] || return 0
+    # shellcheck disable=SC1090
+    . "$lib"
+    mp_ensure_cli_font_profile || return 0
+    [ -n "${KONSOLE_DBUS_SERVICE:-}" ] || return 0
+    [ -n "${KONSOLE_DBUS_SESSION:-}" ] || return 0
+    local qdbus_bin="" cur=""
+    if command -v qdbus-qt6 >/dev/null 2>&1; then
+        qdbus_bin="qdbus-qt6"
+    elif command -v qdbus >/dev/null 2>&1; then
+        qdbus_bin="qdbus"
+    else
+        return 0
+    fi
+    cur="$("$qdbus_bin" "$KONSOLE_DBUS_SERVICE" "$KONSOLE_DBUS_SESSION" org.kde.konsole.Session.profile 2>/dev/null | tr -d ' \r\n')"
+    [ "$cur" = "MP_Mix_Manager" ] && return 0
+    [ -n "$cur" ] && _CLI_FONT_PROFILE_PREV="$cur"
+    "$qdbus_bin" "$KONSOLE_DBUS_SERVICE" "$KONSOLE_DBUS_SESSION" org.kde.konsole.Session.setProfile "MP_Mix_Manager" >/dev/null 2>&1 || true
+}
+_restore_cli_monospace_font() {
+    [ -n "${_CLI_FONT_PROFILE_PREV:-}" ] || return 0
+    [ -n "${KONSOLE_DBUS_SERVICE:-}" ] || return 0
+    [ -n "${KONSOLE_DBUS_SESSION:-}" ] || return 0
+    local qdbus_bin="" prev="${_CLI_FONT_PROFILE_PREV}"
+    _CLI_FONT_PROFILE_PREV=""
+    if command -v qdbus-qt6 >/dev/null 2>&1; then
+        qdbus_bin="qdbus-qt6"
+    elif command -v qdbus >/dev/null 2>&1; then
+        qdbus_bin="qdbus"
+    else
+        return 0
+    fi
+    "$qdbus_bin" "$KONSOLE_DBUS_SERVICE" "$KONSOLE_DBUS_SESSION" org.kde.konsole.Session.setProfile "$prev" >/dev/null 2>&1 || true
 }
 # MP Gui and MP Liquid Player share ~/.config/mix-manager/theme. Pressing C in
 # either window rewrites it, and the other window has to follow without a
@@ -3528,8 +3583,10 @@ exit_mix_manager() {
             kill "$_jp" 2>/dev/null || true
         done
     fi
-    # Hand the console back to the user's own profile colours.
+    # Hand the console back to the user's own profile colours, then the face
+    # they had before the manager switched it to Monospace.
     _restore_cli_theme_background
+    _restore_cli_monospace_font
     # TTY Audio Mode also puts the line discipline back. A crash path uses
     # the same restore so the console is not left raw or without a cursor.
     if type mp_tty_restore_terminal >/dev/null 2>&1 && { [ "${MP_TTY_ABNORMAL_EXIT:-0}" = "1" ] || { type mp_tty_audio_mode_active >/dev/null 2>&1 && mp_tty_audio_mode_active; }; }; then

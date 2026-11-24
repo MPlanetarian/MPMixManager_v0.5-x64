@@ -40,4 +40,11 @@ if [ ! -x "$LAUNCHER" ]; then
     LAUNCHER="$CODEBASE_DIR/Mix_Archive_Manager.sh"
 fi
 
-exec /usr/bin/konsole --fullscreen --separate --workdir "$CODEBASE_DIR" -p tabtitle="MP Mix Archive Manager" -e "$LAUNCHER" "$@"
+# Monospace, at the point size of the user's default Konsole profile.
+if [ -f "$CODEBASE_DIR/scripts/mp_cli_font.sh" ]; then
+    # shellcheck disable=SC1091
+    . "$CODEBASE_DIR/scripts/mp_cli_font.sh"
+    mp_ensure_cli_font_profile
+fi
+
+exec /usr/bin/konsole --fullscreen --separate --profile MP_Mix_Manager --workdir "$CODEBASE_DIR" -p tabtitle="MP Mix Archive Manager" -e "$LAUNCHER" "$@"
