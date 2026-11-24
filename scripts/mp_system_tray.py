@@ -152,6 +152,14 @@ LIQUID_HOSTS = (
     "MP_Audio_Player_Liquid_Glass_OpenGL_macOS.py",
 )
 
+VISUALIZER_SCRIPTS = (
+    "MP_Liquid_Visualizer.py",
+    "mp_liquid_visualizer_vulkan.py",
+    "mp_liquid_visualizer_metal.py",
+    "launch_liquid_visualizer",
+    "launch_liquid_visualizer.sh",
+)
+
 # Substrings that can possibly make `classify_process` return a role. Used as
 # a cheap prefilter so an unrelated process is rejected with a few `in` tests
 # instead of a full argv walk. Every name checked below must appear here, or a
@@ -507,13 +515,7 @@ def classify_process(
         return ROLE_GUI
     if invoked_script(cmdline, "launch-liquid-glass") or invoked_script(cmdline, "launch_liquid_glass.sh"):
         return ROLE_LIQUID
-    for name in (
-        "MP_Liquid_Visualizer.py",
-        "mp_liquid_visualizer_vulkan.py",
-        "mp_liquid_visualizer_metal.py",
-        "launch_liquid_visualizer",
-        "launch_liquid_visualizer.sh",
-    ):
+    for name in VISUALIZER_SCRIPTS:
         if invoked_script(cmdline, name):
             return ROLE_VISUALIZER
     if (
@@ -717,6 +719,38 @@ def process_environ(pid: int) -> str:
     except OSError:
         return ""
     return raw.replace(b"\x00", b"\n").decode("utf-8", "replace")
+
+
+def is_visualizer_process(proc: ProcessInfo) -> bool:
+    return any(invoked_script(proc.cmdline, name) for name in VISUALIZER_SCRIPTS)
+
+
+def free_visualizer_running(processes: list[ProcessInfo]) -> bool:
+    """True when a visualizer the user opened is alive.
+
+    The MP Liquid Player launches a visualizer too, but that companion belongs
+    to the player: it opens unmapped while the Visualization button is off and
+    is locked behind the player while it is on. Focusing it from the tray
+    therefore raises nothing (the unmapped window is not even listed by
+    `wmctrl`) or raises a window that is immediately lowered again. Only a
+    detached window is something the tray can usefully bring forward.
+
+    On a host without `/proc` the roles cannot be told apart, so the caller
+    keeps the historical focus-first behaviour; the focus-failure fallback in
+    :func:`run_launch_plan` still opens a window when nothing can be raised.
+    """
+    if not Path("/proc").is_dir():
+        return True
+    for proc in processes:
+        if not is_visualizer_process(proc):
+            continue
+        env = proc.environ or process_environ(proc.pid)
+        lines = env.splitlines()
+        if "MP_VISUALIZER_COMPANION=1" in lines:
+            continue
+        if "MP_VISUALIZER_DETACHED=1" in lines:
+            return True
+    return False
 
 
 def read_proc_table() -> list[ProcessInfo]:
@@ -1281,17 +1315,64 @@ def announce_limit(role: str) -> None:
     )
 
 
+def run_launch_plan(
+    base: Path,
+    role: str,
+    plan: dict[str, object],
+    log_path: Path,
+    processes: list[ProcessInfo] | None = None,
+    self_pids: set[int] | None = None,
+) -> str:
+    """Focus or spawn the window a plan asks for; return what was done.
+
+    A visualizer process can be alive while every window it owns is invisible:
+    the MP Liquid Player's companion is unmapped when its Visualization button
+    is off, and `wmctrl` does not list an unmapped window at all. The old code
+    saw the role as running, tried to focus the title, got no match and
+    returned — so **Launch MP Visualizer** did nothing. When there is no
+    detached window to raise, or the raise fails, the tray now spawns the
+    standalone window the click asked for instead of returning silently.
+    """
+    if plan.get("limit"):
+        announce_limit(role)
+    if plan["action"] == "focus":
+        if role == ROLE_VISUALIZER:
+            can_focus = free_visualizer_running(processes or [])
+        else:
+            can_focus = True
+        if can_focus and focus_window(str(plan["title"])):
+            return "focus"
+        if role != ROLE_VISUALIZER:
+            # A capped host at four windows must not open a fifth just
+            # because its window could not be raised.
+            return "focus"
+        plan = launch_plan(role, base, set(), processes=processes, self_pids=self_pids)
+    try:
+        spawn_argv(list(plan["argv"]), base, log_path)
+    except OSError as exc:
+        try:
+            with open(log_path, "a", encoding="utf-8") as log_file:
+                log_file.write(f"launch {role} failed: {exc}\n")
+        except OSError:
+            pass
+        notify(FOCUS_TITLES[role], f"Could not start: {exc}", "dialog-error")
+        return "error"
+    return "spawn"
+
+
 def _launch_role(base: Path, role: str) -> int:
     processes = read_proc_table()
     self_pids = {os.getpid()}
     running = roles_present(processes, self_pids)
     plan = launch_plan(role, base, running, processes=processes, self_pids=self_pids)
-    if plan.get("limit"):
-        announce_limit(role)
-    if plan["action"] == "focus":
-        focus_window(str(plan["title"]))
-        return 0
-    spawn_argv(list(plan["argv"]), base, config_dir() / "mp_system_tray.log")
+    run_launch_plan(
+        base,
+        role,
+        plan,
+        config_dir() / "mp_system_tray.log",
+        processes,
+        self_pids,
+    )
     return 0
 
 
@@ -2382,12 +2463,7 @@ def run_tray(base: Path, config: Path, stay: bool = False) -> int:
         running = roles_present(processes, self_pids)
         plan = launch_plan(role, base, running, processes=processes, self_pids=self_pids)
         remember_launch()
-        if plan.get("limit"):
-            announce_limit(role)
-        if plan["action"] == "focus":
-            focus_window(str(plan["title"]))
-            return
-        spawn_argv(list(plan["argv"]), base, log_path)
+        run_launch_plan(base, role, plan, log_path, processes, self_pids)
 
     web_audio_action = None
     close_action = None

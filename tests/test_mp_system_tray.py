@@ -246,6 +246,109 @@ class TestMenu(unittest.TestCase):
         self.assertEqual(script.name, "kill_all_mp_audio_players.sh")
 
 
+class TestVisualizerLaunchFallback(unittest.TestCase):
+    """Launch MP Visualizer must never resolve to an invisible window.
+
+    The MP Liquid Player's companion is a visualizer process whose window the
+    player owns. With the Visualization button off it is unmapped, and `wmctrl`
+    does not list unmapped windows, so the old focus-only path matched nothing
+    and the tray click did nothing.
+    """
+
+    COMPANION = proc(
+        21,
+        1,
+        "python3 /opt/MP_Liquid_Visualizer.py --preset random --backend vulkan",
+        "MP_VISUALIZER_COMPANION=1\nMP_VISUALIZER_MATCH_GUI=1",
+    )
+    DETACHED = proc(
+        22,
+        1,
+        "python3 /opt/MP_Liquid_Visualizer.py",
+        "MP_VISUALIZER_DETACHED=1",
+    )
+    LOG = Path(tempfile.gettempdir()) / "mp-tray-test.log"
+
+    def test_a_player_companion_is_not_a_window_the_tray_can_raise(self):
+        self.assertFalse(tray.free_visualizer_running([self.COMPANION]))
+        self.assertTrue(tray.free_visualizer_running([self.DETACHED]))
+
+    def test_no_free_window_spawns_instead_of_focusing_nothing(self):
+        plan = tray.launch_plan(
+            tray.ROLE_VISUALIZER, ROOT, {tray.ROLE_VISUALIZER}
+        )
+        with patch.object(tray, "focus_window") as focus, patch.object(
+            tray, "spawn_argv"
+        ) as spawn:
+            action = tray.run_launch_plan(
+                ROOT,
+                tray.ROLE_VISUALIZER,
+                plan,
+                self.LOG,
+                [self.COMPANION],
+                {os.getpid()},
+            )
+        self.assertEqual(action, "spawn")
+        focus.assert_not_called()
+        argv = spawn.call_args.args[0]
+        self.assertTrue(str(argv[1]).endswith("launch_liquid_visualizer.sh"))
+
+    def test_a_free_visible_window_is_focused_instead_of_duplicated(self):
+        plan = tray.launch_plan(
+            tray.ROLE_VISUALIZER, ROOT, {tray.ROLE_VISUALIZER}
+        )
+        with patch.object(tray, "focus_window", return_value=True) as focus, patch.object(
+            tray, "spawn_argv"
+        ) as spawn:
+            action = tray.run_launch_plan(
+                ROOT,
+                tray.ROLE_VISUALIZER,
+                plan,
+                self.LOG,
+                [self.DETACHED],
+                {os.getpid()},
+            )
+        self.assertEqual(action, "focus")
+        focus.assert_called_once_with("MP Liquid Visualizer")
+        spawn.assert_not_called()
+
+    def test_a_free_window_that_cannot_be_raised_is_replaced_by_a_new_one(self):
+        plan = tray.launch_plan(
+            tray.ROLE_VISUALIZER, ROOT, {tray.ROLE_VISUALIZER}
+        )
+        with patch.object(tray, "focus_window", return_value=False), patch.object(
+            tray, "spawn_argv"
+        ) as spawn:
+            action = tray.run_launch_plan(
+                ROOT,
+                tray.ROLE_VISUALIZER,
+                plan,
+                self.LOG,
+                [self.DETACHED],
+                {os.getpid()},
+            )
+        self.assertEqual(action, "spawn")
+        spawn.assert_called_once()
+
+    def test_a_capped_host_at_the_limit_does_not_open_a_fifth_window(self):
+        plan = tray.launch_plan(
+            tray.ROLE_GUI, ROOT, {tray.ROLE_GUI}, counts={tray.ROLE_GUI: 4}
+        )
+        with patch.object(tray, "focus_window", return_value=False), patch.object(
+            tray, "spawn_argv"
+        ) as spawn:
+            action = tray.run_launch_plan(
+                ROOT,
+                tray.ROLE_GUI,
+                plan,
+                self.LOG,
+                [],
+                {os.getpid()},
+            )
+        self.assertEqual(action, "focus")
+        spawn.assert_not_called()
+
+
 class TestSingleton(unittest.TestCase):
     def test_a_second_process_does_not_take_the_lock(self):
         with tempfile.TemporaryDirectory() as tmp:
