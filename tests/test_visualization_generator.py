@@ -9,7 +9,10 @@ headlessly. These tests cover:
   produces different shader constants;
 * the three backends are generated from one scene (Vulkan, OpenGL 330, Metal);
 * the extra look and audio-mapping parameters reach the shader;
-* the CLI resolves slugs and numeric ids;
+* the v2.2 dance engine: beat FX / colour spin dials reach all backends, the
+  kick / beat-clock / shockwave code is compiled into every style, the vibe
+  bundles are genre-coherent, and ``--vibe`` does not clobber ``--name``;
+* the CLI resolves slugs and numeric ids (including the vibe bundles);
 * a generated preset round-trips through the registry and a
   ``.mpvispreset`` package with its generative metadata intact.
 """
@@ -162,6 +165,129 @@ class TestShaderGeneration(unittest.TestCase):
                     )
 
 
+class TestDanceEngine(unittest.TestCase):
+    """The dance-floor engine: kick events, colour spin and genre vibes.
+
+    ``u_audio2.x`` is a bass-onset envelope and ``u_audio2.y`` an
+    energy-warped phase accumulator (see the visualizer's
+    AudioTelemetryBridge), so the generated shaders may only rely on those
+    semantics. These tests pin the engine's presence, its parameters and the
+    vibe bundles that make one click sound like a genre.
+    """
+
+    def test_vibe_table_is_indexed_and_slugged(self):
+        ids = [vibe[0] for vibe in generator.VIBES]
+        self.assertEqual(ids, list(range(len(generator.VIBES))))
+        self.assertEqual(len(set(generator.VIBE_SLUGS.values())), len(generator.VIBES))
+        for vibe_id, label, slug, bundle in generator.VIBES:
+            self.assertEqual(generator.VIBE_NAMES[vibe_id], label)
+            self.assertEqual(generator.VIBE_SLUGS[slug], vibe_id)
+            self.assertTrue(bundle, "a vibe must tune something")
+            for key, value in bundle.items():
+                self.assertIn(key, generator.VIBE_TUNING_KEYS, f"vibe {slug} tunes unknown {key}")
+                self.assertGreaterEqual(value, 0.1)
+                self.assertLessEqual(value, 3.0)
+
+    def test_vibe_bundles_are_genre_coherent(self):
+        by_slug = {vibe[2]: vibe[3] for vibe in generator.VIBES}
+        # Ambient must calm the strobe, techno and DnB must push it.
+        self.assertLess(by_slug["ambient"]["strobe"], by_slug["house"]["strobe"])
+        self.assertGreater(by_slug["techno"]["strobe"], by_slug["house"]["strobe"])
+        self.assertGreater(by_slug["dnb"]["strobe"], by_slug["house"]["strobe"])
+        # DnB runs faster than ambient and leans on the hats.
+        self.assertGreater(by_slug["dnb"]["speed"], by_slug["ambient"]["speed"])
+        self.assertGreater(by_slug["dnb"]["treble_drive"], by_slug["ambient"]["treble_drive"])
+
+    def test_beat_fx_and_colour_spin_reach_every_backend(self):
+        config = _config(strobe=1.75, spin=0.55)
+        for source in (
+            generator.generate_vulkan_source(config, steps=32),
+            generator.generate_opengl_source(config, steps=32),
+        ):
+            self.assertIn("const float STROBE = 1.7500;", source)
+            self.assertIn("const float SPIN = 0.5500;", source)
+        metal = generator.generate_metal_source(config, steps=32)
+        self.assertIsNotNone(metal)
+        self.assertIn("STROBE", metal)
+
+    def test_dance_engine_is_compiled_into_every_style(self):
+        for style_id in generator.STYLE_NAMES:
+            source = generator.generate_vulkan_source(_config(style=style_id), steps=32)
+            for token in ("kickEnv", "beatClock", "barStep", "dropEnergy",
+                          "buildEnergy", "strobePulse", "neonGrade",
+                          "spinOffset", "mapSceneBase"):
+                self.assertIn(token, source, f"style {style_id} lost the {token} engine")
+
+    def test_spectrum_tints_the_palette(self):
+        """The hue position must follow spectral energy, not only time."""
+        source = generator.generate_vulkan_source(_config(), steps=32)
+        self.assertIn("float bandTint = 0.045", source)
+        self.assertIn("+ bandTint", source)
+
+    def test_preview_keeps_its_musical_timeline_across_rebuilds(self):
+        """An auto-preview rebuild must not restart the synthetic track."""
+        import inspect
+
+        set_shader = inspect.getsource(generator.ShaderPreview.set_shader)
+        self.assertNotIn("self._started = time.monotonic()", set_shader)
+        self.assertNotIn("self._phase_bass = 0.0", set_shader)
+        # The constructor still seeds the clock.
+        init = inspect.getsource(generator.ShaderPreview.__init__)
+        self.assertIn("self._started = time.monotonic()", init)
+
+    def test_still_preview_shows_the_dance_language(self):
+        """Exported stills must match the live shader, not the old pastel mock."""
+        import inspect
+
+        still = inspect.getsource(generator.render_still_preview)
+        self.assertIn("Image.effect_noise", still)
+        self.assertIn("kick shockwave rings", still)
+        self.assertIn("strobe", still)
+
+    def test_shockwave_overlay_wraps_the_scene(self):
+        source = generator.generate_vulkan_source(_config(), steps=32)
+        self.assertIn("vec2 mapScene(vec3 p) {", source)
+        self.assertIn("vec2 res = mapSceneBase(p);", source)
+        self.assertIn("Kick shockwaves", source)
+        # The overlay must be inside the wrapper, not inside the base scene.
+        wrapper = source[source.index("vec2 mapScene(vec3 p) {"):]
+        self.assertIn("kickEnv()", wrapper.split("vec3 normalAt")[0])
+
+    def test_preview_telemetry_is_four_on_the_floor(self):
+        """The preview must simulate a real dance track, not a sine swamp."""
+        source = (ROOT / "MP_Visualization_Generator.py").read_text(encoding="utf-8")
+        self.assertIn("bpm = 126.0", source)
+        self.assertIn("four-on-the-floor", source)
+        # The phase accumulators integrate energy exactly like the player's
+        # AudioTelemetryBridge instead of wrapping modulo one.
+        self.assertIn("self._phase_bass += dt * (1.2 + sub_bass * 4.2 + kick * 2.0)", source)
+        self.assertNotIn("(t * 0.7) % 1.0", source)
+
+    def test_preset_metadata_carries_the_dance_dials(self):
+        try:
+            from PIL import Image
+        except Exception:
+            raise unittest.SkipTest("Pillow not available")
+        with tempfile.TemporaryDirectory(prefix="mpvis-dance-") as temp:
+            root = Path(temp)
+            image_path = root / "cover.png"
+            Image.new("RGB", (48, 48), (18, 90, 200)).save(image_path, format="PNG")
+            bundle = generator.build_preset(
+                _config(image=str(image_path), name="Dance Meta", strobe=1.9, spin=0.75),
+                install=False, register=False, directory=root / "pkg",
+            )
+            meta = bundle["meta"]
+            self.assertEqual(meta["strobe"], 1.9)
+            self.assertEqual(meta["spin"], 0.75)
+            self.assertEqual(meta["generator_version"], "2.2")
+            self.assertIn("const float STROBE = 1.9000;", bundle["vulkan"])
+            self.assertIn("const float SPIN = 0.7500;", bundle["opengl"])
+            # The stored settings reload into the generator's sliders.
+            config = generator.GeneratorWindow._preset_config(None, meta)
+            self.assertEqual(config["strobe"], 1.9)
+            self.assertEqual(config["spin"], 0.75)
+
+
 class TestCliResolution(unittest.TestCase):
     def test_resolve_choice_accepts_ids_and_slugs(self):
         resolve = generator._resolve_choice
@@ -171,6 +297,64 @@ class TestCliResolution(unittest.TestCase):
         self.assertEqual(resolve("snap", generator.CAMERA_NAMES, generator.CAMERA_SLUGS), 2)
         self.assertEqual(resolve("nonsense", generator.STYLE_NAMES, generator.STYLE_SLUGS), 0)
 
+    def test_vibe_flag_does_not_eat_the_preset_name(self):
+        """``--vibe`` once looped ``for name, value in bundle`` and the leaked
+        loop variable replaced the preset name with the bundle's last dial."""
+        try:
+            from PIL import Image
+        except Exception:
+            raise unittest.SkipTest("Pillow not available")
+        with tempfile.TemporaryDirectory(prefix="mpvis-home-") as temp:
+            artwork = Path(temp) / "art.png"
+            Image.new("RGB", (32, 32), (90, 30, 180)).save(artwork, format="PNG")
+            old_home = os.environ.get("HOME")
+            os.environ["HOME"] = temp
+            try:
+                result = subprocess.run(
+                    [sys.executable, str(ROOT / "MP_Visualization_Generator.py"),
+                     "--generate", "--image", str(artwork),
+                     "--name", "CLI Vibe Check", "--style", "3",
+                     "--vibe", "techno", "--strobe", "2.1"],
+                    capture_output=True, text=True, timeout=180,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("CLI Vibe Check", result.stdout)
+                self.assertIn("user_cli_vibe_check", result.stdout)
+                self.assertNotIn("Installed spin", result.stdout)
+                registry = json.loads(
+                    (Path(temp) / ".config/mix-manager/visualizer-presets/registry.json").read_text()
+                )
+                entry = registry["presets"][-1]
+                meta = json.loads(
+                    (Path(temp) / ".config/mix-manager/visualizer-presets" / entry["key"]
+                     / "preset.json").read_text()
+                )
+                self.assertEqual(meta["name"], "CLI Vibe Check")
+                self.assertEqual(meta["style_id"], 3)
+                self.assertEqual(meta["strobe"], 2.1)
+                self.assertAlmostEqual(meta["spin"], 0.85)
+            finally:
+                if old_home is None:
+                    os.environ.pop("HOME", None)
+                else:
+                    os.environ["HOME"] = old_home
+
+    def test_resolve_choice_accepts_vibe_ids_and_slugs(self):
+        resolve = generator._resolve_choice
+        self.assertEqual(resolve("2", generator.VIBE_NAMES, generator.VIBE_SLUGS), 2)
+        self.assertEqual(resolve("techno", generator.VIBE_NAMES, generator.VIBE_SLUGS), 2)
+        self.assertEqual(resolve("dnb", generator.VIBE_NAMES, generator.VIBE_SLUGS), 3)
+        self.assertEqual(resolve("nonsense", generator.VIBE_NAMES, generator.VIBE_SLUGS), 0)
+
+    def test_cli_choice_flags_use_id_keyed_tables(self):
+        """``--style 3`` used to fall back to 0: the CLI passed the raw tuple
+        table where an id-keyed dict was expected."""
+        source = (ROOT / "MP_Visualization_Generator.py").read_text(encoding="utf-8")
+        self.assertIn('"--style": ("style", STYLE_NAMES, STYLE_SLUGS)', source)
+        self.assertNotIn('"--style": ("style", STYLES, STYLE_SLUGS)', source)
+        self.assertIn('"--strobe": ("strobe", float)', source)
+        self.assertIn('"--spin": ("spin", float)', source)
+
     def test_cli_help_and_option_listing(self):
         result = subprocess.run(
             [sys.executable, str(ROOT / "MP_Visualization_Generator.py"), "--list-options"],
@@ -179,6 +363,8 @@ class TestCliResolution(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("stream_h", result.stdout)
         self.assertIn("kaleidoscope", result.stdout)
+        self.assertIn("Dance vibes", result.stdout)
+        self.assertIn("techno", result.stdout)
 
 
 class TestGeneratorWindowLayout(unittest.TestCase):
@@ -565,7 +751,8 @@ class TestPresetRoundTrip(unittest.TestCase):
                 self.assertEqual(meta["symmetry_id"], 3)
                 self.assertAlmostEqual(meta["complexity"], 1.7)
                 self.assertAlmostEqual(meta["bloom"], 1.5)
-                self.assertEqual(meta["generator_version"], registry.GENERATOR_VERSION)
+                # The v2.2 dance engine stamps its own version into the preset.
+                self.assertEqual(meta["generator_version"], "2.2")
 
                 preset = registry.find_user_preset(bundle["meta"]["key"])
                 self.assertIsNotNone(preset)
