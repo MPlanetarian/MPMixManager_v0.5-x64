@@ -292,14 +292,14 @@ def _apply_builtin_overrides() -> None:
     which know about overrides independently of this list.
     """
     try:
-        from mp_visualizer_user_presets import load_overrides
+        from mp_visualizer_user_presets import load_effective_overrides
     except ImportError:  # imported as scripts.mp_liquid_visualizer_vulkan
         try:
-            from scripts.mp_visualizer_user_presets import load_overrides  # type: ignore
+            from scripts.mp_visualizer_user_presets import load_effective_overrides  # type: ignore
         except Exception:
             return
     try:
-        overrides = load_overrides()
+        overrides = load_effective_overrides()
     except Exception:
         return
     if not overrides:

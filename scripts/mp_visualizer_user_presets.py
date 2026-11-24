@@ -40,6 +40,8 @@ CONFIG_DIR = Path.home() / ".config" / "mix-manager"
 USER_PRESET_ROOT = CONFIG_DIR / "visualizer-presets"
 REGISTRY_FILE = USER_PRESET_ROOT / "registry.json"
 OVERRIDE_FILE = USER_PRESET_ROOT / "overrides.json"
+# Built-in replacements that ship with the repo rather than the user config.
+BUNDLED_OVERRIDE_ROOT = Path(__file__).resolve().parent.parent / "shaders" / "presets"
 BASE_ID = 1000
 PACKAGE_EXT = ".mpvispreset"
 OVERRIDE_KEY_PREFIX = "builtin-"
@@ -364,6 +366,58 @@ def _save_overrides(overrides: Dict[int, Dict[str, Any]]) -> None:
                   json.dumps(data, indent=2, ensure_ascii=False) + "\n")
 
 
+def bundled_override_dir(preset_id: Any) -> Optional[Path]:
+    """The shipped replacement folder for a built-in preset, if one exists."""
+    try:
+        target_id = int(preset_id)
+    except (TypeError, ValueError):
+        return None
+    if target_id < 0 or target_id >= BASE_ID:
+        return None
+    directory = BUNDLED_OVERRIDE_ROOT / f"{OVERRIDE_KEY_PREFIX}{target_id}"
+    return directory if directory.is_dir() else None
+
+
+def load_bundled_overrides() -> Dict[int, Dict[str, Any]]:
+    """Built-in replacements that ship with the repo.
+
+    They use the same folder layout and manifest as a user override, so all
+    three backends and the generator resolve them through one path. They are
+    read-only: only ``overrides.json`` can add or remove a replacement, and a
+    user override for the same id always wins.
+    """
+    overrides: Dict[int, Dict[str, Any]] = {}
+    try:
+        directories = sorted(BUNDLED_OVERRIDE_ROOT.glob(f"{OVERRIDE_KEY_PREFIX}*"))
+    except OSError:
+        return overrides
+    for directory in directories:
+        if not directory.is_dir():
+            continue
+        try:
+            preset_id = int(directory.name[len(OVERRIDE_KEY_PREFIX):])
+        except (TypeError, ValueError):
+            continue
+        if preset_id < 0 or preset_id >= BASE_ID:
+            continue
+        meta = _read_preset_json(directory)
+        if not meta:
+            continue
+        entry = dict(meta)
+        entry["id"] = preset_id
+        entry["key"] = f"{OVERRIDE_KEY_PREFIX}{preset_id}"
+        entry["bundled"] = True
+        overrides[preset_id] = entry
+    return overrides
+
+
+def load_effective_overrides() -> Dict[int, Dict[str, Any]]:
+    """Bundled replacements with the user's own overrides on top."""
+    overrides = load_bundled_overrides()
+    overrides.update(load_overrides())
+    return overrides
+
+
 def _override_to_preset(entry: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Turn an override record into the dict the visualizer expects."""
     try:
@@ -372,6 +426,8 @@ def _override_to_preset(entry: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return None
     directory = override_dir(preset_id)
     if not directory.is_dir():
+        directory = bundled_override_dir(preset_id)
+    if directory is None or not directory.is_dir():
         return None
     meta = _read_preset_json(directory)
     if not meta:
@@ -427,7 +483,7 @@ def find_override(preset_or_id: Any) -> Optional[Dict[str, Any]]:
             target = None
     if target is None or target < 0 or target >= BASE_ID:
         return None
-    entry = load_overrides().get(target)
+    entry = load_effective_overrides().get(target)
     return _override_to_preset(entry) if entry is not None else None
 
 

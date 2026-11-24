@@ -25,7 +25,9 @@ Two smaller bugs in the same path:
 
 from __future__ import annotations
 
+import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -156,6 +158,77 @@ class TestTheOpenGLRendererHonoursTheSamePin(unittest.TestCase):
         bond_mod.PlayerBondMixin._sync_bonded_preset(r, {"preset_id": 4}, lambda: PRESETS)
         r.switch_preset.assert_not_called()
         self.assertEqual(r.preset["id"], vulkan_vis.STREAM_WAVES_HORIZONTAL_ID)
+
+
+class TestTheShippedDynamicWavesReplacement(unittest.TestCase):
+    """Preset 11 now ships as the generated ribbon vault in the repo.
+
+    The replacement lives in ``shaders/presets/builtin-11`` and uses the same
+    folder layout as a user override, so Vulkan, OpenGL and Metal all resolve
+    it without a second code path. A user override for the same id still wins.
+    """
+
+    def setUp(self):
+        import mp_visualizer_user_presets as presets
+
+        self.presets = presets
+        self.temp = tempfile.TemporaryDirectory(prefix="mpvis-bundled-")
+        root = Path(self.temp.name)
+        self._saved = (
+            presets.USER_PRESET_ROOT,
+            presets.REGISTRY_FILE,
+            presets.OVERRIDE_FILE,
+        )
+        presets.USER_PRESET_ROOT = root / "visualizer-presets"
+        presets.REGISTRY_FILE = presets.USER_PRESET_ROOT / "registry.json"
+        presets.OVERRIDE_FILE = presets.USER_PRESET_ROOT / "overrides.json"
+
+    def tearDown(self):
+        (
+            self.presets.USER_PRESET_ROOT,
+            self.presets.REGISTRY_FILE,
+            self.presets.OVERRIDE_FILE,
+        ) = self._saved
+        self.temp.cleanup()
+
+    def test_preset_eleven_serves_every_backend_from_the_repo(self):
+        preset = self.presets.find_override(11)
+        self.assertIsNotNone(preset)
+        self.assertEqual(preset["key"], "builtin-11")
+        self.assertEqual(preset["name"], "Stream of Frequency — Dynamic Waves")
+        self.assertEqual(preset["album"], "MPlanetarian - Dreamworlds Productions V3")
+        expected_dir = BASE / "shaders" / "presets" / "builtin-11"
+        for key, name in (
+            ("vulkan_spv", "preset.frag.spv"),
+            ("vulkan_source", "preset.frag"),
+            ("opengl_source", "preset.opengl.frag"),
+            ("metal_source", "preset.metal"),
+        ):
+            self.assertEqual(Path(preset[key]), expected_dir / name, key)
+            self.assertTrue(Path(preset[key]).is_file(), key)
+        self.assertTrue(preset["cover_paths"])
+        self.assertEqual(Path(preset["cover_paths"][0]), expected_dir / "cover.png")
+
+    def test_the_backend_lookups_return_the_bundled_files(self):
+        self.assertIsNotNone(self.presets.vulkan_spirv_for(11))
+        self.assertIsNotNone(self.presets.opengl_source_for(11))
+        self.assertIsNotNone(self.presets.metal_source_for(11))
+
+    def test_a_user_override_still_beats_the_bundled_preset(self):
+        user_dir = self.presets.override_dir(11)
+        user_dir.mkdir(parents=True)
+        (user_dir / "preset.json").write_text(
+            json.dumps({"id": 11, "name": "Local Waves", "cover": "cover.png"}),
+            encoding="utf-8",
+        )
+        for name in ("preset.frag", "preset.opengl.frag", "preset.metal", "cover.png"):
+            (user_dir / name).write_text("// local\n", encoding="utf-8")
+        (user_dir / "preset.frag.spv").write_bytes(b"\x03\x02\x23\x07" + b"\0" * 32)
+        self.presets.set_override(user_dir, 11, {"name": "Local Waves"})
+        preset = self.presets.find_override(11)
+        self.assertIsNotNone(preset)
+        self.assertEqual(preset["name"], "Local Waves")
+        self.assertEqual(Path(preset["preset_dir"]), user_dir)
 
 
 if __name__ == "__main__":

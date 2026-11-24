@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Preset 11 ships the Dreamworlds Productions V3 ribbon vault** (`shaders/presets/builtin-11/`, `scripts/mp_visualizer_user_presets.py`, `scripts/mp_liquid_visualizer_vulkan.py`, `tests/test_visualizer_preset_override.py`):
+  - **Stream of Frequency — Dynamic Waves** now renders the generated horizontal ribbon vault instead of the hand-authored river. The package carries its Vulkan SPIR-V, GLSL 330 and Metal sources, cover and preview, so the same scene runs on all three backends.
+  - A bundled replacement lives in `shaders/presets/builtin-11` and is read through the same override registry the generator uses. It keeps the built-in id, key and place in the library, a user override for the same id still wins, and a checkout without the folder falls back to the hand-authored shader.
+  - `tests/test_visualizer_preset_override.py` proves each backend resolves the bundled files and that a user override takes precedence.
 - **The Windows MP Liquid Mixer ribbon has a transparency slider** (`MP_Liquid_Mixer_Windows_10.py`, `MP_Liquid_Mixer/WINDOWS_10.md`, `tests/test_liquid_mixer_windows.py`):
   - **TRANSPARENCY** sits on the bottom ribbon beside the master/monitor controls. Drag it or use the wheel to move between 50 % see-through and 100 % solid; the value is applied live and saved to `liquid_mixer_windows.json`.
   - It follows the same rule as the saved alpha: without the companion visualizer the window stays solid, and turning the visualizer back on restores the chosen value.
