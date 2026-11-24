@@ -276,10 +276,11 @@ class TestFourKFullscreenRenderCap(unittest.TestCase):
             def _ensure_upscale(self, GL):
                 return True
 
-            def _draw_scene(self, GL, renderer, rw, rh, bridge, text_guard=True):
+            def _draw_scene(self, GL, renderer, rw, rh, bridge, text_guard=True, **kwargs):
+                # The shared draw path may pass extra corner/trim options.
                 picked["scene"] = (rw, rh)
 
-            def _draw_upscale(self, GL, renderer):
+            def _draw_upscale(self, GL, renderer, *args, **kwargs):
                 picked["upscaled"] = True
 
             def _ensure_bridge(self):
