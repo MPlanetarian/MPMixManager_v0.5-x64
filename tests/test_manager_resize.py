@@ -160,6 +160,9 @@ class TestManagerResize(unittest.TestCase):
         source <(sed -n '1,""" + prefix + """p' """ + f'"{MANAGER_SH}"' + """)
         is_mix_archive_configured() { return 0; }
         get_manager_uptime() { _MANAGER_UPTIME_LINE="Uptime: 1h"; }
+        get_system_perf_stats() { :; }
+        _reflow_audio_iface_display() { :; }
+        _mp_console_icons() { printf '%s' "$1"; }
         source <(sed -n '/^render_main_header() {/,/^}/p' """ + f'"{MANAGER_SH}"' + """)
         
         # Case 1: Zoom In with Ctrl + (e.g. font becomes bigger, so window cols shrink to 90)

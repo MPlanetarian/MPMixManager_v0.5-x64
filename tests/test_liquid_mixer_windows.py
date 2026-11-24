@@ -31,7 +31,17 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 import mixer_core as core  # noqa: E402
 import mixer_midi  # noqa: E402
-import MP_Liquid_Mixer_Windows_10 as mixer  # noqa: E402
+
+try:
+    import tkinter  # noqa: F401
+    import MP_Liquid_Mixer_Windows_10 as mixer  # noqa: E402
+except Exception:  # pragma: no cover - headless/Linux without Tk
+    mixer = None
+    # Module-level skip attributes are honoured by unittest discovery without
+    # turning the whole module into a collection error. Raising SkipTest here
+    # aborts the import and the runner reports an error instead of a skip.
+    __unittest_skip__ = True
+    __unittest_skip_why__ = "tkinter is not available on this host"
 
 
 class TestThePortLoads(unittest.TestCase):
@@ -316,6 +326,23 @@ class TestTheRealWindow(unittest.TestCase):
                                 for i in items if app.canvas.type(i) == "text"))
         finally:
             root.destroy()
+
+
+_WINDOWS_PORT = sys.platform.startswith(("win", "cygwin", "msys"))
+if mixer is None or not _WINDOWS_PORT:
+    # unittest discovery honours skip attributes on classes, not on the module.
+    # Drop the real classes and leave one explicitly skipped test so a Linux or
+    # headless host reports a skip instead of import-time failures. The Windows
+    # port is only meaningful on Windows; its installer and recorder assertions
+    # are not claims about the Linux build.
+    for _name, _value in list(globals().items()):
+        if isinstance(_value, type) and issubclass(_value, unittest.TestCase):
+            del globals()[_name]
+
+    class WindowsMixerUnavailable(unittest.TestCase):
+        @unittest.skip("the Windows MP Liquid Mixer port runs only on Windows")
+        def test_windows_mixer_unavailable(self):
+            pass
 
 
 if __name__ == "__main__":

@@ -579,7 +579,7 @@ class TestLaunchersPlayItBeforeTheVisualizer(unittest.TestCase):
         self.assertIn("MP_PLAYER_INTRO_DONE=1", text)
         self.assertLess(
             text.index("play_player_intro"),
-            text.index('start "" "%PYTHON_BIN%" "%VIS_PY%" --preset random'),
+            text.index('start "" "%PYTHONW_BIN%" "%VIS_PY%" --preset random'),
             "the .bat starts the visualizer before the movie",
         )
 

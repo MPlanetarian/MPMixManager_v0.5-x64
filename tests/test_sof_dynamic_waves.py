@@ -116,10 +116,12 @@ class TestCoverArt(unittest.TestCase):
         (lambda: __import__("importlib").util.find_spec("PIL") is not None)(),
         "Pillow is not installed for this interpreter",
     )
-    def test_other_presets_still_raise_when_art_is_missing(self):
+    def test_other_presets_fall_back_to_the_indigo_pane(self):
+        """Missing artwork is a texture accent, not a reason to refuse a window."""
         preset = {"key": "cosmic_dreamworlds_liquid", "name": "x", "cover_paths": []}
-        with self.assertRaises(FileNotFoundError):
-            vis.load_preset_cover_rgba(preset)
+        w, h, pixels = vis.load_preset_cover_rgba(preset, tex_size=8)
+        self.assertEqual((w, h), (8, 8))
+        self.assertEqual(set(pixels), {0xFF, 8, 7, 17})
 
 
 class TestShaderContract(unittest.TestCase):

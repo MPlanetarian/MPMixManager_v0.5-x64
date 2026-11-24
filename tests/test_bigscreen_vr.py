@@ -148,7 +148,8 @@ class TestEnterVrMode(unittest.TestCase):
             # hard-coding pixel offsets. The visualizer side (and therefore the
             # player's vertical centring) changes whenever the side table or the
             # player grid changes, and a literal stops describing the contract.
-            expected = vr_layout(0, 0, 1920, 1080, "vulkan")
+            from bigscreen_vr import liquid_backend
+            expected = vr_layout(0, 0, 1920, 1080, liquid_backend(ROOT, config))
             px, py, pw, ph = expected["player"]
             self.assertEqual(player[1]["MP_VR_PLAYER_X"], str(px))
             self.assertEqual(player[1]["MP_VR_PLAYER_Y"], str(py))

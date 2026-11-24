@@ -1192,6 +1192,18 @@ scripts/mp_opencode_progress_reporter.sh dry-run       # build text + audio, no 
 
   A briefing is only built and emailed **while at least one OpenCode session is running**. When nothing is running the timer exits before it writes a report, synthesises audio or touches SMTP, so an idle workstation never generates mail. `--force` and `--dry-run` remain available for an explicit manual send or preview.
 
+- 📡 **MP Auto Responder GitHub project monitor**: `scripts/mp_auto_responder.py` watches a public issue tracker (`ItsNotRexed/Leonida` by default) every **20 minutes** and dispatches a project-progress briefing with **every update in the window** — new issues, closures, merges, comments and other activity — plus open/closed issue counts, merged/closed pull request counts, an overall completion percentage, 24-hour activity and the change since the previous briefing. Each tick emails a **TEXT report**, an **audio transcript** and a **spoken MP3**, and announces the same briefing on the workstation through the shared speech lock. It is scheduled by `mp-auto-responder.timer`:
+
+```bash
+scripts/mp_auto_responder.sh enable        # every 20 minutes (default)
+scripts/mp_auto_responder.sh enable 30     # every 30 minutes
+scripts/mp_auto_responder.sh status        # interval, timer, progress, history
+scripts/mp_auto_responder.sh force         # send a briefing right now
+scripts/mp_auto_responder.sh dry-run       # build everything, no email
+```
+
+  The first run seeds a baseline of every open item, so older issues and pull requests are never announced as new. `AUTO_RESPONDER_GITHUB_REPO`, `AUTO_RESPONDER_INTERVAL_MINUTES`, `AUTO_RESPONDER_RECIPIENTS`, `AUTO_RESPONDER_EMAIL_ENABLED`, `AUTO_RESPONDER_ANNOUNCE_AUDIO` and the attachment switches live in `~/MP_REPORTER/email_config.env`; reports land in `REPORTS/AUTO_RESPONDER` and `TTS_AUDIO/AUTO_RESPONDER`, pruned to two days. `AUTO_RESPONDER_EMAIL_ENABLED="false"` keeps the reports, transcript and workstation announcement but opens no SMTP connection, while `EMAIL_REPORTS_ENABLED` remains the master switch for the rest of MP Reporter. A GitHub token is taken from `AUTO_RESPONDER_GITHUB_TOKEN`, `GH_TOKEN`/`GITHUB_TOKEN` or `gh auth token`, so the monitor stays inside the authenticated rate limit.
+
 ---
 
 ## 🧪 Spotlight: MP Auto Tester — Cross-System Test & Screenshot Harness

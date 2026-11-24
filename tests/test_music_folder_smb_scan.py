@@ -14,6 +14,16 @@ sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
 import music_folders_manager as mfm
 
 
+_REAL_STAT = mfm.os.stat
+
+
+def _no_mount_stat(path, *args, **kwargs):
+    """Refuse a stat of the wedged mount, but allow config-file lookups."""
+    if str(path).startswith("/tmp/MUSIC_SMB"):
+        raise AssertionError("mount stat")
+    return _REAL_STAT(path, *args, **kwargs)
+
+
 def _folder():
     return {
         "type": "smb", "id": "DATAMAC1", "name": "DATAMAC1",
@@ -49,8 +59,10 @@ class TestSmbPlaylistScan(unittest.TestCase):
         with patch.object(mfm, "connect_folder", return_value=(True, "ok")) as connect, \
              patch.object(mfm, "_scan_filesystem") as filesystem, \
              patch.object(mfm.shutil, "which", return_value="/usr/bin/rclone"), \
+             patch.object(mfm, "_RCLONE_BIN_CHECKED", False), \
+             patch.object(mfm, "_RCLONE_BIN_CACHE", None), \
              patch.object(mfm.subprocess, "Popen", return_value=proc), \
-             patch.object(mfm.os, "stat", side_effect=AssertionError("mount stat")):
+             patch.object(mfm.os, "stat", side_effect=_no_mount_stat):
             tracks = mfm.scan_folder_tracks(_folder(), _config(), interactive=False)
         connect.assert_not_called()
         filesystem.assert_not_called()
@@ -64,8 +76,10 @@ class TestSmbPlaylistScan(unittest.TestCase):
         with patch.object(mfm, "connect_folder", return_value=(False, "not responding")), \
              patch.object(mfm, "_scan_filesystem") as filesystem, \
              patch.object(mfm.shutil, "which", return_value="/usr/bin/rclone"), \
+             patch.object(mfm, "_RCLONE_BIN_CHECKED", False), \
+             patch.object(mfm, "_RCLONE_BIN_CACHE", None), \
              patch.object(mfm.subprocess, "Popen", return_value=proc), \
-             patch.object(mfm.os, "stat", side_effect=AssertionError("mount stat")):
+             patch.object(mfm.os, "stat", side_effect=_no_mount_stat):
             notes = []
             tracks = mfm.scan_folder_tracks(_folder(), _config(), progress_cb=notes.append, interactive=False)
         filesystem.assert_not_called()

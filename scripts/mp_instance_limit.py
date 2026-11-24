@@ -141,7 +141,7 @@ def _host_script_index(tokens: list[str]) -> int | None:
             if token in ("-c", "-m"):
                 return None
             continue
-        if Path(token.strip("'\"")).name in HOST_SCRIPTS:
+        if Path(token.strip("'\" ").replace("\\", "/")).name in HOST_SCRIPTS:
             return cursor
         # The first non-flag argument is the script (or module) being run.
         return None

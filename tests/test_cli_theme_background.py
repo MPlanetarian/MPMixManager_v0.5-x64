@@ -100,7 +100,7 @@ class TestCliThemeBackground(unittest.TestCase):
         )
         self.assertEqual(alias.returncode, 0, alias.stderr)
         expected_alias = {
-            "default": (186, 180, 220),
+            "default": (20, 12, 32),
             "mplanetarian": (0, 0, 0),
             "mplanetarian_dreamworlds": (0, 0, 0),
         }

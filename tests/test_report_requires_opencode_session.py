@@ -20,6 +20,7 @@ from __future__ import annotations
 import importlib.util
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parent.parent
 REPORTER = ROOT / "scripts" / "mp_daily_email_reporter.py"
@@ -130,7 +131,9 @@ class OpenCodeSessionDetectionTest(unittest.TestCase):
         original_rate = self.mod.check_rate_limit
         self.mod.check_rate_limit = fake_rate_limit
         try:
-            self.mod.execute_email_dispatch(force=False)
+            with patch.object(self.mod, "load_config",
+                              return_value={"EMAIL_REPORTS_ENABLED": "true"}):
+                self.mod.execute_email_dispatch(force=False)
         finally:
             self.mod.check_rate_limit = original_rate
             self.mod.active_opencode_sessions = original_detect
@@ -156,7 +159,9 @@ class OpenCodeSessionDetectionTest(unittest.TestCase):
         original_rate = self.mod.check_rate_limit
         self.mod.check_rate_limit = fake_rate_limit
         try:
-            self.mod.execute_email_dispatch(force=True)
+            with patch.object(self.mod, "load_config",
+                              return_value={"EMAIL_REPORTS_ENABLED": "true"}):
+                self.mod.execute_email_dispatch(force=True)
         finally:
             self.mod.check_rate_limit = original_rate
             self.mod.active_opencode_sessions = original_detect

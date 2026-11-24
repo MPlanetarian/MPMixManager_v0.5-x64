@@ -95,6 +95,12 @@ def _child():
 
     player._spawn_player_daemon = fake_spawn
     player.is_player_daemon_running = lambda: bool(scenario.get("daemon"))
+    # The suite exports MP_DISABLE_AUDIO_OUTPUT=1 so no test opens a device;
+    # _daemon_can_play() correctly refuses a mute daemon in production. These
+    # tests are about the UI attaching to a running daemon, so treat the fake
+    # status as a playable engine.
+    player._daemon_can_play = lambda data: True
+    player._retire_foreign_player_daemon = lambda *args, **kwargs: None
 
     def fake_ipc(cmd, **kwargs):
         result["ipc"].append({"cmd": cmd, "kwargs": kwargs})

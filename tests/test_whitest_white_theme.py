@@ -102,9 +102,9 @@ class TestWhitestWhitePalette(unittest.TestCase):
             self.assertNotIn(marker, plain, marker)
         # The selected row follows the 0.4 navigation rotation, which is a
         # colour fill rather than the white block 0.5 used. It starts on Pink,
-        # and the black ink keeps it legible.
+        # and the selected option text is white on every theme.
         self.assertIn("48;2;247;37;133", sel)
-        self.assertIn("1;38;2;0;0;0", sel)
+        self.assertIn("1;38;2;255;255;255", sel)
         self.assertIn("▶", sel)
 
     def test_selected_row_walks_the_four_colour_palette(self):

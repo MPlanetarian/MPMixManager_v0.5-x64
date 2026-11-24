@@ -60,6 +60,9 @@ class TestInstallDirResolver(unittest.TestCase):
             config.mkdir(parents=True)
             (config / "install_dir").write_text(f"{tree}\n", encoding="utf-8")
             env = dict(os.environ, HOME=tmp)
+            # The test runner pins MP_MIX_MANAGER_DIR at the deployed tree;
+            # these cases deliberately resolve a different temp tree.
+            env.pop("MP_MIX_MANAGER_DIR", None)
             res = subprocess.run(
                 ["bash", "-c", f'. "{tree}/scripts/lib/mp_install_dir.sh"; mp_find_install_dir'],
                 capture_output=True,
@@ -79,6 +82,9 @@ class TestInstallDirResolver(unittest.TestCase):
             local_bin.mkdir(parents=True)
             (local_bin / "manager").symlink_to(tree / "Mix_Archive_Manager.sh")
             env = dict(os.environ, HOME=tmp)
+            # The test runner pins MP_MIX_MANAGER_DIR at the deployed tree;
+            # these cases deliberately resolve a different temp tree.
+            env.pop("MP_MIX_MANAGER_DIR", None)
             res = subprocess.run(
                 ["bash", "-c", f'. "{tree}/scripts/lib/mp_install_dir.sh"; mp_find_install_dir'],
                 capture_output=True,
@@ -112,6 +118,9 @@ class TestInstallDirResolver(unittest.TestCase):
             (config / "install_dir").write_text(f"{tree}\n", encoding="utf-8")
             shutil.copy2(LIB_SH, config / "lib" / "mp_install_dir.sh")
             env = dict(os.environ, HOME=tmp)
+            # The test runner pins MP_MIX_MANAGER_DIR at the deployed tree;
+            # these cases deliberately resolve a different temp tree.
+            env.pop("MP_MIX_MANAGER_DIR", None)
             res = subprocess.run(
                 [str(lib_dir / "mp-desktop-exec"), "hello.sh", "one", "two"],
                 capture_output=True,

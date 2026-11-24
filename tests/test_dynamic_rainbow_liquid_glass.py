@@ -232,7 +232,7 @@ class TestDynamicRainbowLiquidGlass(unittest.TestCase):
     def test_manager_themes_menu_includes_option_16(self):
         """Verify Mix_Archive_Manager.sh includes option 16 for Dynamic Liquid Glass."""
         mgr_sh = (ROOT / "Mix_Archive_Manager.sh").read_text(encoding="utf-8")
-        self.assertIn("16|Dynamic Liquid Glass [Rainbow Colours] (New)", mgr_sh)
+        self.assertIn("16|Dynamic Liquid Glass [Rainbow Colours] [Default] (New)", mgr_sh)
         self.assertIn("dynamic_rainbow_liquid_glass", mgr_sh)
 
 
