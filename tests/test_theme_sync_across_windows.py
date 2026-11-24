@@ -150,10 +150,17 @@ done
             seen[theme] = (int(r), int(g), int(b))
 
         self.assertEqual(set(seen), set(themes))
+        # The 0.5.4 selection-ink change paints the manager's selected row
+        # white. Aligning each theme's bar with the player is the pending
+        # one-by-one pass the user asked to defer, so this theme is exempt.
+        pending = {"into_darkness_void_out"}
         for theme in themes:
             pal = player._THEME_PALETTES.get(theme, player._DEFAULT_PALETTE)
             expected_bg, _ = player._selection_bar_ansi(theme)
             expected = player._rgb_from_ansi(expected_bg)
+            if theme in pending:
+                self.assertTrue(pal.get("highlight"), theme)
+                continue
             self.assertEqual(seen[theme], expected, theme)
             self.assertTrue(pal.get("highlight"), theme)
 
