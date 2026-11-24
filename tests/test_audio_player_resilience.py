@@ -305,7 +305,7 @@ class TestAudioPlayerResilience(unittest.TestCase):
         good.write_text("x")
         raw = f"{good}\n/tmp/vert{{}}vert{{}}\n/tmp/echo\n{good}"
         found = MP_Audio_Player._existing_audio_path(raw)
-        self.assertEqual(found, str(good.resolve()))
+        self.assertEqual(Path(found).resolve(), good.resolve())
         self.assertEqual(MP_Audio_Player._existing_audio_path(""), "")
         self.assertEqual(MP_Audio_Player._existing_audio_path("no-such-file.flac"), "")
 

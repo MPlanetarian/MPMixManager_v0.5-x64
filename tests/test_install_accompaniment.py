@@ -9,6 +9,7 @@ watcher. A player that dies at once must not be restarted forever.
 import os
 import signal
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -141,6 +142,8 @@ class AccompanimentCase(unittest.TestCase):
 
 
 class TestWatchClosesWhenTheInstallerExits(AccompanimentCase):
+    @unittest.skipIf(sys.platform == "darwin",
+                     "macOS plays the movie through AVFoundation, not ffplay")
     def test_theme_and_movie_start_and_both_die_with_the_installer(self):
         _write_fake(self.player, self.log, "sleep")
         self.start_installer()
@@ -178,6 +181,8 @@ class TestWatchClosesWhenTheInstallerExits(AccompanimentCase):
         self.assertEqual(len(_log_lines(self.log)), before, "a player was started after the installer died")
         self.assertTrue(all(not _alive(pid) for pid in pids))
 
+    @unittest.skipIf(sys.platform == "darwin",
+                     "macOS plays the movie through AVFoundation, not ffplay")
     def test_a_player_that_ignores_term_is_killed(self):
         _write_fake(self.player, self.log, "ignore-term")
         self.start_installer()
@@ -254,6 +259,8 @@ class TestInstallerWiring(unittest.TestCase):
         self.assertIn("MP_INSTALL_ACCOMPANIMENT=0", result.stdout)
         self.assertEqual(_log_lines(log), [])
 
+    @unittest.skipIf(sys.platform == "darwin",
+                     "macOS plays the movie through AVFoundation, not ffplay")
     def test_the_installer_stops_playback_when_it_exits(self):
         work = tempfile.TemporaryDirectory()
         self.addCleanup(work.cleanup)

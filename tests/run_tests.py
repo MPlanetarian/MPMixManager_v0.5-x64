@@ -75,6 +75,13 @@ def configure_environment(full: bool) -> None:
         for key in SLOW_ENV:
             os.environ.pop(key, None)
 
+    # macOS exposes the per-user temp directory through the /var symlink while
+    # the app resolves it to /private/var. Normalise TMPDIR before any module
+    # imports tempfile so a test and the code under test see one string.
+    import tempfile as _tempfile
+    _tempfile.tempdir = os.path.realpath(_tempfile.gettempdir())
+    os.environ["TMPDIR"] = _tempfile.tempdir
+
     # The application imports its siblings directly, not as a package.
     for path in (str(ROOT), str(ROOT / "scripts")):
         if path not in sys.path:

@@ -6,6 +6,7 @@ macOS and Windows.
 """
 
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -209,6 +210,8 @@ class TestDesktopShortcuts(unittest.TestCase):
                 self.assertNotIn('\\"', exec_line.replace('\\\\"', ""))
                 self.assertIn('\\\\$HOME/.local/bin/mp-desktop-exec\\\\"', exec_line)
                 # And the entry must survive an independent parse.
+                if shutil.which("desktop-file-validate") is None:
+                    continue
                 with tempfile.TemporaryDirectory() as tmp:
                     path = Path(tmp) / f"{name}.desktop"
                     path.write_text(text, encoding="utf-8")

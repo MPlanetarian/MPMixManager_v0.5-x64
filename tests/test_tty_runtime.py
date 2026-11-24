@@ -21,6 +21,17 @@ from mp_tty_runtime import (  # noqa: E402
 )
 
 
+PENDIN = getattr(termios, "PENDIN", 0)
+
+
+def _stable(attrs):
+    """The termios list without PENDIN, which the driver sets and clears."""
+    if PENDIN and len(attrs) > 3:
+        attrs = list(attrs)
+        attrs[3] = attrs[3] & ~PENDIN
+    return attrs
+
+
 class TestTtyRuntime(unittest.TestCase):
     def test_cbreak_keeps_signals_and_restores_termios(self):
         master, slave = pty.openpty()
@@ -31,7 +42,7 @@ class TestTtyRuntime(unittest.TestCase):
             self.assertEqual(active[3] & termios.ICANON, 0)
             self.assertNotEqual(active[3] & termios.ISIG, 0)
             restore_terminal()
-            self.assertEqual(termios.tcgetattr(slave), original)
+            self.assertEqual(_stable(termios.tcgetattr(slave)), _stable(original))
         finally:
             os.close(master)
             os.close(slave)
@@ -44,7 +55,7 @@ class TestTtyRuntime(unittest.TestCase):
             active = termios.tcgetattr(slave)
             self.assertEqual(active[3] & termios.ISIG, 0)
             restore_terminal()
-            self.assertEqual(termios.tcgetattr(slave), original)
+            self.assertEqual(_stable(termios.tcgetattr(slave)), _stable(original))
         finally:
             os.close(master)
             os.close(slave)

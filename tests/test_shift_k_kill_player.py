@@ -45,7 +45,14 @@ class TestShiftKKillPlayer(unittest.TestCase):
             # helper rather than `pkill -9 -f`, which also killed editors that
             # merely had the file open and other users' players. The helper
             # never shells out, so subprocess.run is not called at all.
-            mock_subproc.assert_not_called()
+            # On Linux the helper reads /proc and never shells out. On macOS
+            # it must ask ps, which is fine; what matters is that no kill(1)
+            # or pkill(1) command was run.
+            for call in mock_subproc.call_args_list:
+                argv = call.args[0] if call.args else call.kwargs.get("args", [])
+                if isinstance(argv, str):
+                    argv = argv.split()
+                self.assertNotIn(Path(str(argv[0])).name if argv else "", ("pkill", "kill", "killall"))
 
     def test_audio_player_lowercase_k_does_not_kill(self):
         """Verifies that lowercase 'k' (b'k') continues navigating the list and does NOT kill the player."""

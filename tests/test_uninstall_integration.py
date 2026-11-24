@@ -19,6 +19,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 
+from mp_app_selection import supported_components  # noqa: E402
+
+SUPPORTED = list(supported_components())
+
 import uninstall_apps  # noqa: E402
 import uninstall_integration as integration  # noqa: E402
 
@@ -246,7 +250,7 @@ class ResetKeepsIntegration(unittest.TestCase):
             dry_run=False,
         )
 
-        self.assertEqual(remain, ["manager", "gui", "liquid", "visualizer", "mixer"])
+        self.assertEqual(remain, SUPPORTED)
         self.assertTrue(unit.exists())
         self.assertIn("Dynamic MOTD", bashrc.read_text(encoding="utf-8"))
 

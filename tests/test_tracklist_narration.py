@@ -150,7 +150,7 @@ class TestTracklistNarratorModule(unittest.TestCase):
         base = Path("/tmp/opencode/narr_root_test")
         flac = base / "FLAC_CONVERTED_OUTPUTS"
         flac.mkdir(parents=True, exist_ok=True)
-        self.assertEqual(self.n.resolve_archive_root(flac / "Mix.txt"), base)
+        self.assertEqual(self.n.resolve_archive_root(flac / "Mix.txt").resolve(), base.resolve())
 
     def test_slugify_keeps_readable_file_names(self):
         self.assertEqual(

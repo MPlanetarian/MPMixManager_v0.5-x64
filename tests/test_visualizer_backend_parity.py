@@ -29,6 +29,8 @@ import mp_liquid_visualizer_vulkan
 import visualizer_backend
 
 
+@unittest.skipUnless(__import__("sys").platform.startswith("linux"),
+                     "Vulkan/OpenGL choice is the Linux rule; macOS uses Metal")
 class TestVisualizerBackendSelection(unittest.TestCase):
     """``visualizer_backend`` resolves auto/opengl/vulkan from config."""
 
@@ -166,6 +168,8 @@ class TestVulkanProbe(unittest.TestCase):
         with patch.object(visualizer_backend, "vulkan_devices", return_value=fake):
             self.assertTrue(visualizer_backend.nvidia_vulkan_available())
 
+    @unittest.skipUnless(__import__("sys").platform.startswith("linux"),
+                         "the recommendation is the Linux Vulkan/OpenGL rule")
     def test_software_renderer_does_not_count_as_nvidia(self):
         fake = [{"vendor_id": 0x10005, "device_type": 4, "name": "llvmpipe"}]
         with patch.object(visualizer_backend, "vulkan_devices", return_value=fake):

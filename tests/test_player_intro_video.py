@@ -344,6 +344,8 @@ class TestLoaderScriptIntroMode(unittest.TestCase):
         self.assertEqual(res.returncode, 0, res.stderr)
         self.assertTrue(res.stdout.strip().endswith("Exit_MP_Video.mp4"))
 
+    @unittest.skipIf(sys.platform == "darwin",
+                     "macOS uses the AVFoundation borderless helper")
     def test_the_intro_mode_uses_the_borderless_player_flags(self):
         fake = tempfile.mkdtemp()
         self.addCleanup(lambda: subprocess.run(["rm", "-rf", fake]))

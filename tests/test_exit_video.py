@@ -89,6 +89,8 @@ class TestExitVideoAsset(unittest.TestCase):
 
 
 class TestLoaderReuse(unittest.TestCase):
+    @unittest.skipIf(sys.platform == "darwin",
+                     "macOS uses the AVFoundation borderless helper")
     def test_the_exit_movie_uses_the_loader_player_flags(self):
         """Same borderless, always-on-top window as MP_loader.mp4."""
         fake = tempfile.mkdtemp()

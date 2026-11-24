@@ -254,6 +254,8 @@ class TestFourKFullscreenRenderCap(unittest.TestCase):
         r._fb_size = (3840, 2160)
         self.assertEqual(r.framebuffer_size(), (3840, 2160))
 
+    @unittest.skipIf(__import__("sys").platform == "darwin",
+                     "macOS draws through Metal, not the OpenGL layer")
     def test_opengl_fullscreen_draw_chooses_1080p(self):
         """The OpenGL layer draws a 4K fullscreen surface through a 1080p target."""
         import types

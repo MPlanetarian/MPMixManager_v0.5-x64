@@ -69,7 +69,9 @@ class TestLauncherWithUnmountedStorage(unittest.TestCase):
             tree = _make_tree(root, str(archive))
             proc = _run(tree)
             self.assertEqual(proc.returncode, 0, proc.stderr)
-            self.assertIn(f"pwd={archive.resolve()}", proc.stdout)
+            reported = next(line for line in proc.stdout.splitlines() if "pwd=" in line)
+            started_in = reported.split("pwd=", 1)[1].split()[0]
+            self.assertEqual(os.path.realpath(started_in), str(archive.resolve()))
 
     def test_no_archive_configuration_starts_in_the_application_tree(self):
         with tempfile.TemporaryDirectory() as tmp:

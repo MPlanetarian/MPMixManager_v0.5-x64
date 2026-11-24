@@ -84,7 +84,7 @@ class TestPlayerSpekGenerate(unittest.TestCase):
         self.assertTrue(any("finished the Spek" in n for n in self.notes))
         viewer.assert_called_once_with(created["path"])
         self.assertTrue(Path(created["path"]).is_file())
-        self.assertEqual(Path(created["path"]).parent, self.spek_dir)
+        self.assertEqual(Path(created["path"]).parent.resolve(), self.spek_dir.resolve())
         desk.assert_any_call("MP Audio Player", "MP Audio Player is generating a Spek for Tone Mix")
         self.assertFalse(self.ui._spek_job_running)
 

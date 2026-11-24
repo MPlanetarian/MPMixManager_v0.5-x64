@@ -159,7 +159,7 @@ class TestLiquidPlayerStaysOpen(unittest.TestCase):
         ])
         self.assertTrue(data["ui"], data)
         self.assertEqual(data["exit"], 0)
-        self.assertEqual(data["spawn"]["file"], data["audio"])
+        self.assertEqual(Path(data["spawn"]["file"]).resolve(), Path(data["audio"]).resolve())
         self.assertEqual(data["spawn"]["seek_to"], 88.5)
         self.assertEqual(data["spawn"]["mode"], "MUSIC")
         self.assertNotIn("play", [item["cmd"] for item in data["ipc"]])
@@ -183,14 +183,14 @@ class TestLiquidPlayerStaysOpen(unittest.TestCase):
         self.assertIsNone(data["spawn"])
         plays = [item for item in data["ipc"] if item["cmd"] == "play"]
         self.assertEqual(len(plays), 1)
-        self.assertEqual(plays[0]["kwargs"]["file"], data["audio"])
+        self.assertEqual(Path(plays[0]["kwargs"]["file"]).resolve(), Path(data["audio"]).resolve())
         self.assertEqual(plays[0]["kwargs"]["position"], 88.5)
 
     def test_plain_play_still_exits_without_opening_the_ui(self):
         data = _run_player(["--play", "{audio}", "--seek-to", "88.5"])
         self.assertFalse(data["ui"], data)
         self.assertEqual(data["exit"], 0)
-        self.assertEqual(data["spawn"]["file"], data["audio"])
+        self.assertEqual(Path(data["spawn"]["file"]).resolve(), Path(data["audio"]).resolve())
         self.assertEqual(data["spawn"]["seek_to"], 88.5)
 
     def test_music_folder_launch_loads_the_library_while_a_mix_is_playing(self):

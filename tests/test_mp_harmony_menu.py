@@ -173,7 +173,15 @@ class TestHarmonyGate(unittest.TestCase):
         self.assertIn("Agent launch skipped", result.stdout)
         self.assertNotIn("You would be installing", result.stdout)
 
+    @unittest.skipUnless(__import__("shutil").which("ollama"),
+                         "ollama is not installed on this host")
     def test_live_ollama_sees_the_pinned_model(self):
+        import shutil
+        if not shutil.which("ollama"):
+            self.skipTest("ollama is not installed on this host")
+        listing = subprocess.run(["ollama", "list"], capture_output=True, text=True)
+        if "gpt-oss-pinned" not in (listing.stdout + listing.stderr):
+            self.skipTest("the pinned model is not pulled on this host")
         probe = subprocess.run(
             ["curl", "-sf", "--connect-timeout", "2", "--max-time", "4", "http://127.0.0.1:11434/"],
             capture_output=True,

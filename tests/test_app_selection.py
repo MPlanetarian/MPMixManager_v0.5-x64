@@ -22,6 +22,28 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import mp_app_selection as selection  # noqa: E402
+
+_PLATFORM_PATCHES = None
+
+
+def setUpModule():
+    """Pin the platform these tests describe (the Linux five-app install).
+
+    The module under test drops the mixer on macOS; the macOS rules have their
+    own cases that pass platform_name explicitly.
+    """
+    global _PLATFORM_PATCHES
+    _PLATFORM_PATCHES = [
+        patch.object(sys, "platform", "linux"),
+        patch.object(selection.platform, "system", return_value="Linux"),
+    ]
+    for patcher in _PLATFORM_PATCHES:
+        patcher.start()
+
+
+def tearDownModule():
+    for patcher in reversed(_PLATFORM_PATCHES or []):
+        patcher.stop()
 import mp_suite_control as suite_control  # noqa: E402
 import mp_system_tray as tray  # noqa: E402
 from install_desktop_shortcuts import (  # noqa: E402

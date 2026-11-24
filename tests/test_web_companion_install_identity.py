@@ -136,6 +136,11 @@ class TestTrayStartupDoesNotAbort(unittest.TestCase):
     @unittest.skipIf(sys.platform == "win32",
                      "this builds a POSIX environment (PATH=/usr/bin:/bin, XDG_RUNTIME_DIR); "
                      "the Windows tray is exercised by scripts/windows_tray.ps1 instead")
+    @unittest.skipUnless(
+        __import__("importlib").util.find_spec("PyQt5")
+        or __import__("importlib").util.find_spec("PySide6")
+        or __import__("importlib").util.find_spec("PyQt6"),
+        "the tray needs a Qt binding")
     def test_exits_zero_without_a_display(self):
         import subprocess
         import sys

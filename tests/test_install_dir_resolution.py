@@ -70,7 +70,7 @@ class TestInstallDirResolver(unittest.TestCase):
                 env=env,
             )
             self.assertEqual(res.returncode, 0, res.stderr)
-            self.assertEqual(res.stdout.strip(), str(tree))
+            self.assertEqual(Path(res.stdout.strip()).resolve(), tree.resolve())
 
     def test_shell_resolver_follows_the_manager_symlink(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -92,7 +92,7 @@ class TestInstallDirResolver(unittest.TestCase):
                 env=env,
             )
             self.assertEqual(res.returncode, 0, res.stderr)
-            self.assertEqual(res.stdout.strip(), str(tree))
+            self.assertEqual(Path(res.stdout.strip()).resolve(), tree.resolve())
 
     def test_python_resolver_matches(self):
         from mp_install_dir import find_install_dir

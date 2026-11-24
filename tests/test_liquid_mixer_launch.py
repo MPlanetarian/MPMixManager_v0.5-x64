@@ -171,6 +171,8 @@ class TestLaunch(LauncherCase):
             self.assertEqual(launcher.launch_mixer(), "unsupported")
         popen.assert_not_called()
 
+    @unittest.skipUnless(__import__("sys").platform.startswith("linux"),
+                         "MP Liquid Mixer is Linux-only")
     def test_a_missing_tree_is_reported(self):
         with patch.dict(os.environ, {"DISPLAY": ":0"}), \
              patch.object(launcher, "mixer_command", return_value=None), \

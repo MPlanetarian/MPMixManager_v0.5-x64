@@ -60,7 +60,8 @@ class TestAppleSiliconRequirement(unittest.TestCase):
             self.assertIn("M1/M2/M3/M4", err_msg)
 
     def test_non_darwin_platform_refused(self):
-        with patch("sys.platform", "linux"), patch("platform.machine", return_value="x86_64"):
+        with patch("sys.platform", "linux"), patch("platform.system", return_value="Linux"), \
+             patch("platform.machine", return_value="x86_64"):
             self.assertFalse(is_macos())
             self.assertFalse(is_apple_silicon())
             with self.assertRaises(RuntimeError) as ctx:
@@ -230,6 +231,8 @@ class TestLauncherIntegrations(unittest.TestCase):
         self.assertIn("REENTRY:YES", res.stdout)
         self.assertIn("OTHER:NO", res.stdout)
 
+    @unittest.skipIf(sys.platform == "darwin",
+                     "this exercises the player's Linux host refusal")
     def test_execution_on_linux_reports_apple_silicon_requirement(self):
         # When running the macOS player on Linux, it must gracefully exit 1 with an informative message
         result = subprocess.run(

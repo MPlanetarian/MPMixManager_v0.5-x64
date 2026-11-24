@@ -134,6 +134,12 @@ class TestTracklistViewerActions(unittest.TestCase):
             self.bin_dir / "gwenview",
             f'#!/usr/bin/env bash\necho "$1" > "{viewer_log}"\nexit 0\n',
         )
+        # macOS opens the image with `open -a Preview`; a fake `open` keeps the
+        # test from launching Preview and records the path the same way.
+        self._make_executable(
+            self.bin_dir / "open",
+            f'#!/usr/bin/env bash\nshift 2\necho "$1" > "{viewer_log}"\nexit 0\n',
+        )
         self._make_executable(
             self.bin_dir / "ffmpeg",
             f'#!/usr/bin/env bash\necho "CALLED" > "{ffmpeg_log}"\nexit 0\n',
@@ -177,6 +183,12 @@ class TestTracklistViewerActions(unittest.TestCase):
         self._make_executable(
             self.bin_dir / "gwenview",
             f'#!/usr/bin/env bash\necho "$1" > "{viewer_log}"\nexit 0\n',
+        )
+        # macOS opens the image with `open -a Preview`; a fake `open` keeps the
+        # test from launching Preview and records the path the same way.
+        self._make_executable(
+            self.bin_dir / "open",
+            f'#!/usr/bin/env bash\nshift 2\necho "$1" > "{viewer_log}"\nexit 0\n',
         )
         self._make_executable(
             self.bin_dir / "ffmpeg",

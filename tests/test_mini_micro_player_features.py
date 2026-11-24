@@ -23,6 +23,8 @@ sys.path.insert(0, str(BASE_DIR))
 import MP_Audio_Player
 
 
+@unittest.skipUnless(__import__("sys").platform.startswith("linux"),
+                     "Konsole/KWin appearance is provisioned on Linux")
 class TestMiniMicroPlayerFeatures(unittest.TestCase):
     def test_no_colorscheme_escape_to_parent_stdout(self):
         """Verifies that _setup_mini_terminal_appearance never emits OSC 50 ColorScheme to stdout."""

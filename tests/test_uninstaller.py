@@ -22,6 +22,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 
+from mp_app_selection import supported_components  # noqa: E402
+
+SUPPORTED = list(supported_components())
+
 import mp_app_selection as selection  # noqa: E402
 import uninstall_apps  # noqa: E402
 from install_desktop_shortcuts import SHORTCUT_NAMES, selected_names  # noqa: E402
@@ -47,7 +51,7 @@ class UninstallFiles(unittest.TestCase):
         self.desktop.mkdir()
         self.menu.mkdir()
         (self.config / "installed_apps").write_text(
-            "manager gui liquid visualizer mixer\n", encoding="utf-8"
+            " ".join(SUPPORTED) + "\n", encoding="utf-8"
         )
         _write(self.config / "liquid_gui_window.json", "{}")
         _write(self.config / "liquid_player_window.json", "{}")
@@ -76,19 +80,21 @@ class UninstallFiles(unittest.TestCase):
 
     def test_uninstall_one_app_keeps_its_settings_and_the_others(self):
         remain = self._apply("uninstall", "gui", delete_config=False)
-        self.assertEqual(remain, ["manager", "liquid", "visualizer", "mixer"])
+        self.assertEqual(remain, [c for c in SUPPORTED if c != "gui"])
         self.assertFalse((self.desktop / "MP Gui.desktop").exists())
         self.assertFalse((self.menu / "MP Gui.desktop").exists())
         self.assertTrue((self.desktop / "MP Liquid Player.desktop").is_file())
         self.assertTrue((self.config / "liquid_gui_window.json").is_file())
         self.assertEqual(
             (self.config / "installed_apps").read_text(encoding="utf-8"),
-            "manager liquid visualizer mixer\n",
+            " ".join(c for c in SUPPORTED if c != "gui") + "\n",
         )
         self.assertTrue(
             (self.home / ".config" / "autostart" / "mp-mix-manager-tray.desktop").is_file()
         )
 
+    @unittest.skipIf(sys.platform == "darwin",
+                     "the mixer and the native movie player are Linux/FreeBSD paths")
     def test_a_mixer_only_install_can_be_uninstalled(self):
         (self.config / "installed_apps").write_text("mixer\n", encoding="utf-8")
         _write(self.desktop / "MP Liquid Mixer.desktop", "[Desktop Entry]\n")
@@ -140,13 +146,13 @@ class UninstallFiles(unittest.TestCase):
 
     def test_reset_clears_settings_and_leaves_the_shortcut(self):
         remain = self._apply("reset", "liquid")
-        self.assertEqual(remain, ["manager", "gui", "liquid", "visualizer", "mixer"])
+        self.assertEqual(remain, SUPPORTED)
         self.assertFalse((self.config / "liquid_player_window.json").exists())
         self.assertTrue((self.config / "liquid_gui_window.json").is_file())
         self.assertTrue((self.desktop / "MP Liquid Player.desktop").is_file())
         self.assertEqual(
             (self.config / "installed_apps").read_text(encoding="utf-8"),
-            "manager gui liquid visualizer mixer\n",
+            " ".join(SUPPORTED) + "\n",
         )
 
     def test_dry_run_changes_nothing(self):
@@ -253,6 +259,8 @@ class ExitVideoWhileUninstalling(unittest.TestCase):
             alive.append(pid)
         return alive
 
+    @unittest.skipIf(sys.platform == "darwin",
+                     "the mixer and the native movie player are Linux/FreeBSD paths")
     def test_the_movie_loops_until_the_uninstaller_exits(self):
         res = self._run("--uninstall", "--apps", "gui", "--keep-config")
         self.assertEqual(res.returncode, 0, res.stderr + res.stdout)
@@ -270,6 +278,8 @@ class ExitVideoWhileUninstalling(unittest.TestCase):
             time.sleep(0.1)
         self.assertEqual(self._alive(), [])
 
+    @unittest.skipIf(sys.platform == "darwin",
+                     "the mixer and the native movie player are Linux/FreeBSD paths")
     def test_the_script_uninstalls_the_mixer_on_its_own(self):
         (self.config / "installed_apps").write_text("manager mixer\n", encoding="utf-8")
         _write(self.desktop / "MP Mix Manager.desktop", "[Desktop Entry]\n")
@@ -286,6 +296,8 @@ class ExitVideoWhileUninstalling(unittest.TestCase):
             "manager\nmixer=off\n",
         )
 
+    @unittest.skipIf(sys.platform == "darwin",
+                     "the mixer and the native movie player are Linux/FreeBSD paths")
     def test_a_player_that_exits_is_started_again_until_the_work_ends(self):
         res = self._run(
             "--uninstall", "--apps", "gui", "--keep-config",

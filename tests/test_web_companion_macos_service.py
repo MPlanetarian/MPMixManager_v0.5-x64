@@ -220,18 +220,22 @@ class TestBundleLauncher(unittest.TestCase):
         )
         try:
             self.assertIn("child ready", self._wait_for(log, "child ready"))
+            # The launcher embeds libpython when it can, so Python is the
+            # launcher process: there is no child to forward to. Only the
+            # exec fallback forks; accept either form.
             child = subprocess.run(
                 ["pgrep", "-P", str(launcher.pid)], capture_output=True, text=True
             ).stdout.split()
-            self.assertTrue(child, "launcher did not start a child")
             launcher.terminate()
             launcher.wait(timeout=15)
-            # The child must be gone, not orphaned.
             time.sleep(0.5)
-            still_there = subprocess.run(
-                ["kill", "-0", child[0]], capture_output=True
-            ).returncode == 0
-            self.assertFalse(still_there, "child survived the launcher's SIGTERM")
+            if child:
+                still_there = subprocess.run(
+                    ["kill", "-0", child[0]], capture_output=True
+                ).returncode == 0
+                self.assertFalse(still_there, "child survived the launcher's SIGTERM")
+            else:
+                self.assertIn("child got signal", log.read_text(encoding="utf-8"))
         finally:
             if launcher.poll() is None:
                 launcher.kill()

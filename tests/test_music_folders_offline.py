@@ -45,7 +45,7 @@ class TestDeadMountDetection(unittest.TestCase):
             link.symlink_to(Path(tmp) / "var_home")
             mounted = real / "MUSIC002"
             mounted.mkdir()
-            entry = f":smb{{x}}:MUSIC002 {mounted} fuse.rclone rw 0 0\n"
+            entry = f":smb{{x}}:MUSIC002 {mounted.resolve()} fuse.rclone rw 0 0\n"
             with patch("builtins.open", return_value=io.StringIO(entry)):
                 self.assertTrue(mfm._is_mountpoint(link / "MUSIC_SMB" / "MUSIC002"))
                 self.assertFalse(mfm._is_mountpoint(link / "MUSIC_SMB" / "MUSIC003"))

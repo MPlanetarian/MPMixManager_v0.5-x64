@@ -17,6 +17,8 @@ sys.path.insert(0, str(BASE_DIR))
 import MP_Audio_Player
 
 
+@unittest.skipUnless(__import__("sys").platform.startswith("linux"),
+                     "Konsole/KWin appearance is provisioned on Linux")
 class TestMiniPlayerTransparency(unittest.TestCase):
     def test_dynamic_gradient_background_changes_color(self):
         """Verifies that _get_dynamic_gradient produces changing, vibrant background colors across steps."""

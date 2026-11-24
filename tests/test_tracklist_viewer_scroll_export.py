@@ -186,7 +186,7 @@ class TestTracklistExport(unittest.TestCase):
 
     def test_export_html_lands_in_program_tracklist_exports(self):
         saved = tracklist_export.export_html(self.tracklist, base_dir=self.program)
-        self.assertEqual(saved.parent, self.program / "TRACKLIST_EXPORTS")
+        self.assertEqual(saved.parent.resolve(), (self.program / "TRACKLIST_EXPORTS").resolve())
         self.assertTrue(saved.is_file())
         html = saved.read_text(encoding="utf-8")
         self.assertIn("<!DOCTYPE html>", html)
@@ -196,7 +196,7 @@ class TestTracklistExport(unittest.TestCase):
 
     def test_export_text_is_a_clean_copy(self):
         saved = tracklist_export.export_text(self.tracklist, base_dir=self.program)
-        self.assertEqual(saved.parent, self.program / "TRACKLIST_EXPORTS")
+        self.assertEqual(saved.parent.resolve(), (self.program / "TRACKLIST_EXPORTS").resolve())
         self.assertEqual(saved.read_text(encoding="utf-8"), self.tracklist.read_text(encoding="utf-8"))
 
     def test_export_rejects_unknown_format(self):
@@ -218,13 +218,13 @@ class TestTracklistExport(unittest.TestCase):
         self.assertEqual(res.returncode, 0, res.stderr)
         saved = Path(res.stdout.strip())
         self.assertTrue(saved.is_file())
-        self.assertEqual(saved.parent, self.program / "TRACKLIST_EXPORTS")
+        self.assertEqual(saved.parent.resolve(), (self.program / "TRACKLIST_EXPORTS").resolve())
 
     def test_player_helper_exports_to_program_folder(self):
         ok, saved = mp_player.export_tracklist_file(self.tracklist, "html", base_dir=self.program)
         self.assertTrue(ok, saved)
         self.assertTrue(Path(saved).is_file())
-        self.assertEqual(Path(saved).parent, self.program / "TRACKLIST_EXPORTS")
+        self.assertEqual(Path(saved).parent.resolve(), (self.program / "TRACKLIST_EXPORTS").resolve())
 
     def test_player_helper_reports_missing_tracklist(self):
         ok, message = mp_player.export_tracklist_file(self.base / "missing.txt", "html", base_dir=self.program)

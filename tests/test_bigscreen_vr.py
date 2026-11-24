@@ -3,6 +3,7 @@
 
 import sys
 import tempfile
+import os
 import unittest
 from pathlib import Path
 
@@ -42,7 +43,7 @@ class TestBigscreenLookup(unittest.TestCase):
             root = Path(tmp)
             exe = _touch_exe(root / "Program Files (x86)" / "Steam" / "steamapps" / "common" / "Bigscreen")
             found = find_bigscreen_exe([root])
-            self.assertEqual(found, exe)
+            self.assertEqual(str(found).lower(), str(exe).lower())
 
     def test_finds_steam_library_on_another_drive(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -50,7 +51,7 @@ class TestBigscreenLookup(unittest.TestCase):
             exe = _touch_exe(library / "steamapps" / "common" / "BigScreen", "BigScreen.exe")
             vdf = f'"path"\t\t"{library.as_posix()}"\n'
             found = find_bigscreen_exe([], [vdf])
-            self.assertEqual(found, exe)
+            self.assertEqual(str(found).lower(), str(exe).lower())
 
     def test_finds_oculus_install(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -58,13 +59,13 @@ class TestBigscreenLookup(unittest.TestCase):
             folder = root / "Program Files (x86)" / "Oculus" / "Software" / "Software" / "bigscreen-bigscreen" / "Bigscreen"
             exe = _touch_exe(folder)
             found = find_bigscreen_exe([root])
-            self.assertEqual(found, exe)
+            self.assertEqual(str(found).lower(), str(exe).lower())
 
     def test_registry_install_location(self):
         with tempfile.TemporaryDirectory() as tmp:
             exe = _touch_exe(Path(tmp))
             found = find_bigscreen_exe([], [], [tmp])
-            self.assertEqual(found, exe)
+            self.assertEqual(str(found).lower(), str(exe).lower())
 
 
 class TestVrLayout(unittest.TestCase):

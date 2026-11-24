@@ -138,6 +138,8 @@ class TestHelperScript(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    @unittest.skipUnless(__import__("sys").platform.startswith("linux"),
+                         "the login-screen helper reads Linux greeter state")
     def test_status_mode_reports_positioning(self):
         result = subprocess.run(
             ["bash", str(SCRIPT), "--status"],

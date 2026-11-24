@@ -123,6 +123,8 @@ class TestAutoStartVisualizerOnLiquidPlayer(unittest.TestCase):
             self.assertTrue(handled, "Z must be consumed by the host")
             spawn.assert_called_once()
 
+    @unittest.skipUnless(sys.platform.startswith("linux"),
+                         "the standalone companion is a Linux feature")
     def test_spawn_new_visualizer_opens_even_when_one_is_running(self):
         """Z must open a new window even if a visualizer process already exists."""
         with patch("subprocess.Popen") as popen, \

@@ -177,10 +177,16 @@ class TestPlaylistMultiSelectDelete(unittest.TestCase):
             paths = [f"/music/{'folder/' * 20}{i:04d}.flac" for i in range(200)]
             payload = json.dumps({"cmd": "remove_tracks", "paths": paths}).encode()
             self.assertGreater(len(payload), 4096)
-            right.sendall(payload)
+            # macOS socketpair buffers are small enough that a 32 KiB
+            # sendall blocks before the handler is called, deadlocking the
+            # test. Send from a thread so the handler can drain the request.
+            import threading
+            sender = threading.Thread(target=right.sendall, args=(payload,), daemon=True)
+            sender.start()
             right.settimeout(2.0)
 
             server._handle_client(left)
+            sender.join(timeout=5)
 
             reply = json.loads(right.recv(65536))
             self.assertEqual(reply["status"], "ok")
