@@ -7,6 +7,8 @@
 # a GitHub project's issues and pull requests on a fixed interval (twenty
 # minutes by default). Every tick emails a text report, an audio transcript and
 # a spoken MP3 briefing, and announces the same briefing on this workstation.
+# The monitor ships disabled and unconfigured: set AUTO_RESPONDER_GITHUB_REPO
+# and AUTO_RESPONDER_ENABLED="true" in email_config.env before enabling it.
 #
 # Usage
 #   mp_auto_responder.sh enable [MINUTES]   Install & start (20 min default)
@@ -60,6 +62,15 @@ interval_minutes() {
     printf '%s' "$value"
 }
 
+config_value() {
+    local key="$1" value="${!1:-}"
+    if [ -z "$value" ] && [ -f "${MP_REPORTER_DIR}/email_config.env" ]; then
+        value="$(grep -E "^${key}=" "${MP_REPORTER_DIR}/email_config.env" \
+            2>/dev/null | tail -n 1 | cut -d= -f2- | tr -d '"' || true)"
+    fi
+    printf '%s' "$value"
+}
+
 write_units() {
     local minutes="$1"
     mkdir -p "$UNIT_DIR"
@@ -101,6 +112,14 @@ case "${1:-status}" in
         if [ ! -f "$REPORTER_PY" ]; then
             echo -e "${RED}Reporter module not found: ${REPORTER_PY}${NC}" >&2
             exit 1
+        fi
+        repo="$(config_value AUTO_RESPONDER_GITHUB_REPO)"
+        if [ -z "$repo" ]; then
+            echo -e "${RED}No repository configured.${NC} Set AUTO_RESPONDER_GITHUB_REPO in ${MP_REPORTER_DIR}/email_config.env to the owner/name of the project to monitor." >&2
+            exit 1
+        fi
+        if [ "$(config_value AUTO_RESPONDER_ENABLED)" != "true" ]; then
+            echo -e "${YELLOW}AUTO_RESPONDER_ENABLED is not \"true\" in ${MP_REPORTER_DIR}/email_config.env; the timer will be installed but will send nothing.${NC}" >&2
         fi
         minutes="$(interval_minutes "${2:-}")"
         write_units "$minutes"

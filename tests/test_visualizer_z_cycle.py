@@ -93,7 +93,10 @@ class _Cycle(_FakeWindow, zcycle.ZWindowCycleMixin):
 
 class TestTheCycleItself(unittest.TestCase):
     def test_three_presses_return_to_the_original_shape(self):
+        # No live MP Liquid Player here: the half step must use the captured
+        # original shape, not whatever window this machine happens to have open.
         window = _Cycle(size=(1574, 1258), pos=(510, 385))
+        window._z_player_size = lambda: None
         original = (window._size, window._pos)
 
         self.assertEqual(window.cycle_window_mode(), zcycle.WINDOW_MODE_FULLSCREEN)

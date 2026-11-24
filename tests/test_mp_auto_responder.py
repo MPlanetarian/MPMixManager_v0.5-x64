@@ -39,7 +39,7 @@ def _record(number=100, title="A change", state="open", is_pr=False,
     return {
         "number": number,
         "title": title,
-        "url": "https://github.com/ItsNotRexed/Leonida/issues/%d" % number,
+        "url": "https://github.com/example/project/issues/%d" % number,
         "author": author,
         "state": state,
         "is_pr": is_pr,
@@ -98,9 +98,9 @@ def _data(**extra):
     data = {
         "generated": now, "window_start": now - timedelta(minutes=20),
         "window_end": now, "window_minutes": 20, "hostname": "X299ROG",
-        "repo": {"name": "ItsNotRexed/Leonida",
-                 "description": "Native PC recompilation",
-                 "html_url": "https://github.com/ItsNotRexed/Leonida"},
+        "repo": {"name": "example/project",
+                 "description": "Example project",
+                 "html_url": "https://github.com/example/project"},
         "progress": _progress(), "updates": updates, "groups": groups,
         "counts": {"new_issues": 1, "closed_issues": 1, "reopened_issues": 0,
                    "new_prs": 0, "merged_prs": 1, "closed_prs": 0,
@@ -324,6 +324,7 @@ class TestDispatch(unittest.TestCase):
         cfg = dict(self.mod.CONFIG_DEFAULTS)
         cfg.update({
             "AUTO_RESPONDER_ENABLED": "true",
+            "AUTO_RESPONDER_GITHUB_REPO": "example/project",
             "AUTO_RESPONDER_INTERVAL_MINUTES": "20",
             "AUTO_RESPONDER_RECIPIENTS": "owner@example.com",
             "AUTO_RESPONDER_SUBJECT_PREFIX": "MP Auto Responder",
@@ -351,7 +352,7 @@ class TestDispatch(unittest.TestCase):
         audio.write_bytes(b"ID3fake")
         return [
             mock.patch.object(self.mod, "collect_repo",
-                              return_value={"name": "ItsNotRexed/Leonida",
+                              return_value={"name": "example/project",
                                             "description": "d"}),
             mock.patch.object(self.mod, "collect_progress",
                               return_value=_progress()),
@@ -424,6 +425,14 @@ class TestDispatch(unittest.TestCase):
                 calls = smtp.return_value.sendmail.call_count
                 self.assertTrue(self.mod.execute_dispatch(force=False))
                 self.assertEqual(smtp.return_value.sendmail.call_count, calls)
+
+    def test_no_repository_is_a_quiet_no_op(self):
+        with mock.patch.object(
+                self.mod, "load_config",
+                return_value=self._cfg(AUTO_RESPONDER_GITHUB_REPO="")):
+            with mock.patch.object(self.mod, "collect_repo") as repo:
+                self.assertTrue(self.mod.execute_dispatch(force=True))
+        repo.assert_not_called()
 
     def test_disabled_responder_does_nothing(self):
         with mock.patch.object(self.mod, "load_config",
@@ -519,10 +528,18 @@ class TestDispatch(unittest.TestCase):
 
 
 class TestWiring(unittest.TestCase):
+    def test_ships_disabled_with_no_repository(self):
+        mod = _load()
+        self.assertEqual(mod.repo_slug(dict(mod.CONFIG_DEFAULTS)), "")
+        self.assertFalse(mod.truthy(
+            mod.CONFIG_DEFAULTS["AUTO_RESPONDER_ENABLED"]))
+
     def test_config_example_documents_the_twenty_minute_timer(self):
         text = EXAMPLE.read_text(encoding="utf-8")
         self.assertIn('AUTO_RESPONDER_INTERVAL_MINUTES="20"', text)
         self.assertIn("AUTO_RESPONDER_GITHUB_REPO", text)
+        self.assertIn('AUTO_RESPONDER_GITHUB_REPO=""', text)
+        self.assertIn('AUTO_RESPONDER_ENABLED="false"', text)
         self.assertIn("AUTO_RESPONDER_ANNOUNCE_AUDIO", text)
         self.assertIn("AUTO_RESPONDER_EMAIL_ENABLED", text)
 
@@ -535,7 +552,12 @@ class TestWiring(unittest.TestCase):
     def test_readme_documents_the_monitor(self):
         text = README.read_text(encoding="utf-8")
         self.assertIn("mp_auto_responder.py", text)
-        self.assertIn("ItsNotRexed/Leonida", text)
+        self.assertIn("AUTO_RESPONDER_GITHUB_REPO", text)
+
+    def test_the_removed_project_is_not_referenced(self):
+        for path in (MODULE_PATH, WRAPPER, EXAMPLE, README):
+            with self.subTest(path=path.name):
+                self.assertNotIn("Leonida", path.read_text(encoding="utf-8"))
 
     def test_module_and_wrapper_ship(self):
         self.assertTrue(MODULE_PATH.is_file())

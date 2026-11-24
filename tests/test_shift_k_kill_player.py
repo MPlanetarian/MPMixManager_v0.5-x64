@@ -13,6 +13,7 @@ Unit tests to verify Shift+K shortcut kills MP_Audio_Player:
 """
 
 import unittest
+from tests.mp_test_display import HAS_DISPLAY
 from unittest.mock import patch, MagicMock
 import subprocess
 import sys
@@ -113,6 +114,7 @@ class TestShiftKKillPlayer(unittest.TestCase):
         self.assertIn('CHAR:K) if [ "$search_mode" -eq 1 ]; then', content)
         self.assertIn("mp_stop_audio_players", content)
 
+    @unittest.skipUnless(HAS_DISPLAY, "GUI widgets need a display")
     def test_liquid_glass_shift_k_handling(self):
         """Verifies that MP_Audio_Player_Liquid_Glass.py handles Shift+K in _on_key_press."""
         import MP_Audio_Player_Liquid_Glass as lg

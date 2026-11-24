@@ -11,6 +11,7 @@ import os
 import re
 import sys
 import unittest
+from tests.mp_test_display import HAS_DISPLAY
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -215,6 +216,7 @@ class TestLiquidGlassPlayerFeatures(unittest.TestCase):
         mock_launch.assert_not_called()
         self.assertFalse(flag.is_file())
 
+    @unittest.skipUnless(HAS_DISPLAY, "GUI widgets need a display")
     def test_host_m_key_does_not_resize_and_follows_published_size(self):
         """The glass window ignores M. It resizes only after the player publishes a new size."""
         flag = Path.home() / ".config" / "mix-manager" / "liquid_ui_size.4242"
@@ -244,6 +246,7 @@ class TestLiquidGlassPlayerFeatures(unittest.TestCase):
         finally:
             flag.unlink(missing_ok=True)
 
+    @unittest.skipUnless(HAS_DISPLAY, "GUI widgets need a display")
     def test_plain_h_reaches_the_player_and_escape_does_not_close_the_glass(self):
         """Plain H is Favorites in the Liquid Player and a search letter in MP Gui.
 
@@ -720,6 +723,7 @@ class TestLiquidGlassPlayerFeatures(unittest.TestCase):
                 # Client area (inside well) should not be considered bezel
                 self.assertFalse(host._on_bezel(win_w // 2, win_h // 2, win_w, win_h))
 
+    @unittest.skipUnless(HAS_DISPLAY, "GUI widgets need a display")
     def test_window_dragging_terminal_header_and_modifiers(self):
         """Verifies dragging from terminal header (y <= 90) or with Alt/Super moves window."""
         import gi

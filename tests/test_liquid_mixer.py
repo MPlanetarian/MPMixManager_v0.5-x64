@@ -15,6 +15,7 @@ import sys
 import tempfile
 import time
 import unittest
+from tests.mp_test_display import HAS_DISPLAY
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -1189,6 +1190,7 @@ class TestLoaderVideo(unittest.TestCase):
             mixer._play_loader_video("--intro-force")
         run.assert_not_called()
 
+    @unittest.skipUnless(HAS_DISPLAY, "GUI widgets need a display")
     def test_run_plays_the_intro_before_the_window_and_the_exit_after(self):
         class _Fake:
             def __init__(self, *args, **kwargs):

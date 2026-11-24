@@ -27,9 +27,9 @@ from scripts.desktop_launch_screen import fit_square_on_main  # noqa: E402
 def _has_display() -> bool:
     """A real GLFW window needs a display server; a headless runner has none."""
     import os
-    if sys.platform.startswith("linux"):
-        return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
-    return True
+    if sys.platform.startswith(("darwin", "win32")):
+        return True
+    return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
 
 
 DISPLAY_AVAILABLE = _has_display()

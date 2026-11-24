@@ -13,6 +13,7 @@ import os
 import signal
 import sys
 import unittest
+from tests.mp_test_display import HAS_DISPLAY
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
@@ -105,6 +106,7 @@ class TestAutoStartVisualizerOnLiquidPlayer(unittest.TestCase):
         self.assertIn("--preset", cmd)
         self.assertIn("random", cmd)
 
+    @unittest.skipUnless(HAS_DISPLAY, "GUI widgets need a display")
     def test_z_key_in_opengl_host_opens_a_visualizer_window(self):
         """Pressing Z in the OpenGL host (the Linux default) must open a new visualizer.
 

@@ -21,6 +21,12 @@ What it does
     quiet: the project-progress summary is the point, so a briefing is sent
     every twenty minutes whether or not anything changed.
 
+    The monitor ships disabled with no repository configured. Set
+    AUTO_RESPONDER_GITHUB_REPO to the owner/name (or github.com URL) of the
+    project you want to watch and set AUTO_RESPONDER_ENABLED to true before
+    installing the timer. With no repository configured the monitor makes no
+    GitHub calls and announces nothing.
+
 What counts as an update
     The repository issues endpoint is read with ``since=<last cursor>``. Every
     item updated in the window is compared with the previous snapshot:
@@ -81,7 +87,9 @@ from email.mime.text import MIMEText
 from html import escape as html_escape
 from pathlib import Path
 
-DEFAULT_REPO = "ItsNotRexed/Leonida"
+# No repository ships preconfigured: the monitor stays dormant until
+# AUTO_RESPONDER_GITHUB_REPO names an owner/name or github.com URL to watch.
+DEFAULT_REPO = ""
 DEFAULT_INTERVAL_MINUTES = 20
 DEFAULT_MAX_LISTED = 2000
 DEFAULT_MAX_SPOKEN = 8
@@ -152,12 +160,12 @@ CONFIG_DEFAULTS = {
     "CONFIRMATION_ALERT_SOUND":
         "/usr/share/sounds/freedesktop/stereo/complete.oga",
     # MP Auto Responder
-    "AUTO_RESPONDER_ENABLED": "true",
+    "AUTO_RESPONDER_ENABLED": "false",
     "AUTO_RESPONDER_EMAIL_ENABLED": "true",
     "AUTO_RESPONDER_GITHUB_REPO": DEFAULT_REPO,
     "AUTO_RESPONDER_INTERVAL_MINUTES": str(DEFAULT_INTERVAL_MINUTES),
     "AUTO_RESPONDER_RECIPIENTS": "",
-    "AUTO_RESPONDER_SUBJECT_PREFIX": "MP Auto Responder - Leonida Project",
+    "AUTO_RESPONDER_SUBJECT_PREFIX": "MP Auto Responder - Project",
     "AUTO_RESPONDER_GITHUB_TOKEN": "",
     "AUTO_RESPONDER_TTS_ENABLED": "true",
     "AUTO_RESPONDER_ATTACH_TEXT": "true",
@@ -214,7 +222,8 @@ def interval_minutes(cfg: dict) -> int:
 
 
 def repo_slug(cfg: dict) -> str:
-    slug = (cfg.get("AUTO_RESPONDER_GITHUB_REPO") or DEFAULT_REPO).strip()
+    """The configured owner/name slug, or "" when no project is configured."""
+    slug = (cfg.get("AUTO_RESPONDER_GITHUB_REPO") or "").strip()
     slug = slug.replace("https://github.com/", "").strip("/")
     if slug.endswith(".git"):
         slug = slug[:-4]
@@ -416,6 +425,19 @@ def _pct(part: int, total: int) -> float:
     if total <= 0:
         return 0.0
     return round(100.0 * part / total, 1)
+
+
+def blank_progress() -> dict:
+    """Zeroed progress so --status never calls GitHub with no repository."""
+    return {
+        "issues_open": 0, "issues_closed": 0, "prs_open": 0,
+        "prs_closed": 0, "prs_merged": 0, "created_24h": 0,
+        "closed_24h": 0, "merged_24h": 0, "issues_total": 0,
+        "prs_total": 0, "items_total": 0, "items_completed": 0,
+        "issues_resolved_pct": 0.0, "prs_merged_pct": 0.0,
+        "overall_pct": 0.0, "open_remaining": 0, "deltas": {},
+        "fallback": False,
+    }
 
 
 # ------------------------------------------------------------------------------
@@ -1276,9 +1298,14 @@ def execute_dispatch(force: bool = False, dry_run: bool = False) -> bool:
     # EMAIL_REPORTS_ENABLED is the master switch for the MP Reporter's other
     # mail dispatchers. The Auto Responder has its own delivery switch so it can
     # keep announcing on the workstation while every mailbox stays quiet.
-    if not truthy(cfg.get("AUTO_RESPONDER_ENABLED"), True):
+    if not truthy(cfg.get("AUTO_RESPONDER_ENABLED"), False):
         log_message("INFO", "MP Auto Responder is disabled")
         return False
+
+    if not repo_slug(cfg):
+        log_message("INFO", "no repository configured in "
+                            "AUTO_RESPONDER_GITHUB_REPO; nothing to monitor")
+        return True
 
     minutes = interval_minutes(cfg)
     lock_path = STATE_FILE.parent / "auto_responder.lock"
@@ -1530,14 +1557,19 @@ def print_status():
     state = load_state()
     minutes = interval_minutes(cfg)
     slug = repo_slug(cfg)
-    token = resolve_github_token(cfg)
-    progress = collect_progress(token, slug, state)
+    token = resolve_github_token(cfg) if slug else ""
+    progress = collect_progress(token, slug, state) if slug else blank_progress()
     print("=" * 72)
     print("     MP AUTO RESPONDER - GITHUB PROJECT MONITOR")
     print("=" * 72)
     print("  Enabled:            %s" % (
-        "YES" if truthy(cfg.get("AUTO_RESPONDER_ENABLED"), True) else "NO"))
-    print("  Repository:         %s" % slug)
+        "YES" if truthy(cfg.get("AUTO_RESPONDER_ENABLED"), False) else "NO"))
+    print("  Repository:         %s" % (slug or "(not configured)"))
+    if not slug:
+        print("  Note:               set AUTO_RESPONDER_GITHUB_REPO in "
+              "email_config.env")
+        print("                      to a project owner/name before enabling "
+              "the monitor.")
     print("  Interval:           every %d minutes" % minutes)
     print("  Email delivery:     %s" % (
         "YES" if truthy(cfg.get("AUTO_RESPONDER_EMAIL_ENABLED"), True)
@@ -1600,6 +1632,10 @@ def main(argv=None) -> int:
         cfg = load_config()
         state = load_state()
         slug = repo_slug(cfg)
+        if not slug:
+            print("MP Auto Responder: no repository configured in "
+                  "AUTO_RESPONDER_GITHUB_REPO; nothing to report.")
+            return 0
         start, end = window_bounds(state, interval_minutes(cfg))
         data = build_report_data(cfg, state, resolve_github_token(cfg),
                                  slug, start, end)

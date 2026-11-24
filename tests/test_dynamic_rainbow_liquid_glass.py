@@ -332,6 +332,7 @@ class TestCliPlayerAnimatesTheRainbowTheme(unittest.TestCase):
                  patch("MP_Audio_Player._present_frame",
                        side_effect=lambda lines, w, h: captured.extend(lines)), \
                  patch("MP_Audio_Player._win_visible_size", return_value=(120, 40)), \
+                 patch.object(ui.visualizer, "frame_time", return_value=moment), \
                  patch("MP_Audio_Player.time.monotonic", return_value=moment):
                 ui._get_status = MagicMock(return_value=st)
                 ui._draw_frame()

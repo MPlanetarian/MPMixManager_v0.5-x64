@@ -362,7 +362,14 @@ class AutoplayTest(unittest.TestCase):
         browser = self._browser("no-user-gesture-required")
         browser._new_target(self.server.base + "/")
 
-        state = self._wait_for(browser, lambda s: s.get("paused") is False, timeout=40)
+        # The overlay is dismissed in the same promise chain that starts the
+        # stream, so wait for both rather than sampling the instant paused
+        # first flips to False.
+        state = self._wait_for(
+            browser,
+            lambda s: s.get("paused") is False and s.get("overlay") is False,
+            timeout=40,
+        )
         self.assertFalse(state.get("paused"),
                          f"the stream never started on its own: {state}")
         # The element really points at the host's stream, not at an idle clip.
