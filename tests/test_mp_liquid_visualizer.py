@@ -27,9 +27,20 @@ from scripts.desktop_launch_screen import fit_square_on_main  # noqa: E402
 def _has_display() -> bool:
     """A real GLFW window needs a display server; a headless runner has none."""
     import os
+    import subprocess
     if sys.platform.startswith(("darwin", "win32")):
         return True
-    return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+    if not os.environ.get("DISPLAY"):
+        return False
+    # DISPLAY can be exported by a remote session with no X authority. Probe
+    # the server before letting a test call glfwInit(), which aborts the
+    # process instead of raising when the connection is refused.
+    try:
+        return subprocess.run(
+            ["xdpyinfo"], capture_output=True, timeout=5
+        ).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
 
 
 DISPLAY_AVAILABLE = _has_display()
@@ -460,8 +471,9 @@ class TestMPLiquidVisualizer(unittest.TestCase):
 
         That is a decoder/output-buffer sampling artefact, not a seek. Feeding
         it to the shared clock made the whole scene lurch backwards several
-        times a second, which is what "out of sync with the music" looked
-        like. A real seek (much larger) must still be followed.
+        times a second. A larger jump is a seek, and the picture must not
+        follow that either: Left/Right in the player move the song, not the
+        visualization.
         """
         with tempfile.TemporaryDirectory() as td:
             tmp_path = Path(td)
@@ -492,11 +504,60 @@ class TestMPLiquidVisualizer(unittest.TestCase):
             self.assertGreaterEqual(bridge.accum_time, before - 1e-6,
                                     "a backward blip must not rewind the scene")
 
-            # A real seek backwards (5 s) is followed.
+            # A 5 s rewind is a seek. The scene stays on the motion it had.
             time.sleep(0.02)
+            held = bridge.accum_time
             write(58.7)
             bridge.update(0.016)
-            self.assertLess(bridge.accum_time, before - 1.0)
+            self.assertLess(abs(bridge.accum_time - held), 0.5)
+
+    def test_arrow_seeks_do_not_jump_or_retune_the_scene(self):
+        """Left/Right seek the song by 10 s and must leave the picture alone.
+
+        The shared clock used to adopt any jump of about a second, so the
+        scene time and the swirl phases teleported with the song. The picture
+        keeps moving from where it already was.
+        """
+        with tempfile.TemporaryDirectory() as td:
+            tmp_path = Path(td)
+            state_file = tmp_path / "mp_player_state.json"
+            path = "/music/arrow-track.flac"
+            payload = {
+                "running": True, "state": "playing", "muted": False,
+                "rms_level": 0.4, "pitch_factor": 1.0, "position_sec": 40.0,
+                "path": path, "levels": [0.4, 0.7, 0.5, 0.3] * 6,
+            }
+
+            def write(pos: float) -> None:
+                state_file.write_text(json.dumps(dict(payload, position_sec=pos)),
+                                      encoding="utf-8")
+                now = time.time()
+                os.utime(state_file, (now, now))
+
+            write(40.0)
+            bridge = vis.AudioTelemetryBridge(config_dir=tmp_path)
+            bridge.update(0.016)
+            time.sleep(0.05)
+            before = bridge.accum_time
+            before_bass = bridge.bass_phase
+
+            write(50.0)
+            bridge.update(0.016)
+            self.assertLess(abs(bridge.accum_time - before), 0.5,
+                            "a forward seek must not jump the scene")
+            self.assertLess(abs(bridge.bass_phase - before_bass), 0.5,
+                            "a forward seek must not retune the swirls")
+
+            time.sleep(0.2)
+            bridge.update(0.016)
+            self.assertGreater(bridge.accum_time, before + 0.1,
+                               "ignoring a seek must not freeze the picture")
+
+            moving = bridge.accum_time
+            write(30.0)
+            bridge.update(0.016)
+            self.assertLess(abs(bridge.accum_time - moving), 0.5,
+                            "a backward seek must not jump the scene")
 
     def test_a_late_status_sample_does_not_rewind_the_scene(self):
         """A sample that moved forward, but by less than the time already shown.

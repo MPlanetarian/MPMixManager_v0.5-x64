@@ -110,13 +110,17 @@ from liquid_glass_opengl import (
 )
 try:  # The player keeps a slightly shorter bottom strip so its hints sit lower.
     from liquid_glass_slider import (  # noqa: E402
+        MAX_OPACITY,
+        MIN_OPACITY,
         SLIDER_FADE_IN_SECONDS,
         SLIDER_FADE_OUT_SECONDS,
         SLIDER_HOVER_PAD,
         SLIDER_LEFT,
         SLIDER_RIGHT_PAD,
         SLIDER_STRIP,
+        opacity_from_x,
         player_slider_strip,
+        slider_thumb_x,
     )
 except ImportError:
     SLIDER_STRIP = 44
@@ -125,9 +129,26 @@ except ImportError:
     SLIDER_HOVER_PAD = 16
     SLIDER_FADE_IN_SECONDS = 0.20
     SLIDER_FADE_OUT_SECONDS = 0.35
+    MIN_OPACITY = 0.10
+    MAX_OPACITY = 1.00
 
     def player_slider_strip(_cell_height=0.0):  # type: ignore[misc]
         return SLIDER_STRIP
+
+    def opacity_from_x(x, width):  # type: ignore[misc]
+        left = float(SLIDER_LEFT)
+        right = max(left + 40.0, float(width) - float(SLIDER_RIGHT_PAD))
+        t = (float(x) - left) / (right - left)
+        t = 0.0 if t < 0.0 else (1.0 if t > 1.0 else t)
+        return MIN_OPACITY + t * (MAX_OPACITY - MIN_OPACITY)
+
+    def slider_thumb_x(opacity, width):  # type: ignore[misc]
+        left = float(SLIDER_LEFT)
+        right = max(left + 40.0, float(width) - float(SLIDER_RIGHT_PAD))
+        span = max(1e-6, MAX_OPACITY - MIN_OPACITY)
+        t = (float(opacity) - MIN_OPACITY) / span
+        t = 0.0 if t < 0.0 else (1.0 if t > 1.0 else t)
+        return left + t * (right - left)
 
 def _kill_player_processes() -> List[int]:
     """SIGKILL every MP Audio Player owned by this user, and return the PIDs.
@@ -215,8 +236,8 @@ VERTICAL_COLS, VERTICAL_ROWS = 56, 52
 
 # Used when Hack is not installed, and when a measured cell has no face yet.
 DEFAULT_FONT = "Monospace 11"
-# Glass shader opacity when the window opens. VTE text remains fully opaque.
-# The slider runs from 0.20 to 0.80.
+# Glass opacity when the window opens. VTE text remains fully opaque.
+# The bar runs from 10% to 100%. The right end is a solid pane.
 # MP Liquid Player and MP Gui both use this host.
 DEFAULT_WINDOW_OPACITY = 0.80
 CONFIG_DIR = Path.home() / ".config" / "mix-manager"
@@ -582,7 +603,8 @@ class CustomGlassRenderer(LiquidGlassRendererOpenGL):
         aspect = float(fw) / max(1.0, float(fh))
         u = self._u_locs
 
-        GL.glUniform4f(u["u_res"], float(fw), float(fh), float(time.monotonic() - getattr(self, "_start", 0)), aspect)
+        slider = max(0.0, min(1.0, float(getattr(self, "clear_opacity", DEFAULT_WINDOW_OPACITY) or 0.0)))
+        GL.glUniform4f(u["u_res"], float(fw), float(fh), slider, aspect)
         GL.glUniform4f(u["u_themeA"], a[0], a[1], a[2], float(self.cursor[0]) / max(1.0, float(fw)))
         GL.glUniform4f(u["u_themeB"], b[0], b[1], b[2], float(self.cursor[1]) / max(1.0, float(fw)))
         GL.glUniform4f(u["u_themeC"], c[0], c[1], c[2], float(effective_opacity))
@@ -792,8 +814,7 @@ class CustomGlassRenderer(LiquidGlassRendererOpenGL):
             glEnableVertexAttribArray(0)
             glDrawArrays(GL_TRIANGLES, 0, 6)
 
-            t = (self.slider_val - 0.20) / (0.80 - 0.20)
-            thumb_x = x_left + t * (x_right - x_left)
+            thumb_x = slider_thumb_x(self.slider_val, ww)
 
             t_x1 = ((thumb_x - 6.0) / ww) * 2.0 - 1.0
             t_x2 = ((thumb_x + 6.0) / ww) * 2.0 - 1.0
@@ -1450,10 +1471,7 @@ class GlassHost:
         moved while the window stayed at 0.70. Writing both (and clearing the
         dynamic-factor memo) is what makes the drag actually change the glass.
         """
-        slider_left = 40.0
-        slider_right = max(80.0, float(w) - 40.0)
-        t = max(0.0, min(1.0, (x - slider_left) / (slider_right - slider_left)))
-        opacity = 0.20 + t * (0.80 - 0.20)
+        opacity = opacity_from_x(x, w)
         renderer = self.renderer
         renderer.slider_val = opacity
         renderer.clear_opacity = opacity

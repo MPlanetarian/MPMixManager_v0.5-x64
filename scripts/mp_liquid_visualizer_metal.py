@@ -145,7 +145,9 @@ try:  # imported as ``scripts.mp_liquid_visualizer_metal``
     from visualizer_monitor_span import MonitorSpanMixin, ROLE_SPAWNED
     from visualizer_player_bond import PlayerBondMixin
     from visualizer_random_mode import RandomPresetMixin
-    from visualizer_window_shape import DEFAULT_CORNER_RADIUS, RoundedWindowShaper
+    from visualizer_window_shape import (
+        DEFAULT_CORNER_RADIUS, RoundedWindowShaper, window_corners_enabled,
+    )
     from visualizer_z_cycle import (WINDOW_MODE_DEFAULT, WINDOW_MODE_FULLSCREEN,
                                     WINDOW_MODE_HALF, ZWindowCycleMixin)
 except ImportError:  # imported from the project root's ``scripts`` directory
@@ -154,7 +156,9 @@ except ImportError:  # imported from the project root's ``scripts`` directory
     from scripts.visualizer_monitor_span import MonitorSpanMixin, ROLE_SPAWNED
     from scripts.visualizer_player_bond import PlayerBondMixin
     from scripts.visualizer_random_mode import RandomPresetMixin
-    from scripts.visualizer_window_shape import DEFAULT_CORNER_RADIUS, RoundedWindowShaper
+    from scripts.visualizer_window_shape import (
+        DEFAULT_CORNER_RADIUS, RoundedWindowShaper, window_corners_enabled,
+    )
     from scripts.visualizer_z_cycle import (WINDOW_MODE_DEFAULT, WINDOW_MODE_FULLSCREEN,
                                             WINDOW_MODE_HALF, ZWindowCycleMixin)
 
@@ -1255,13 +1259,15 @@ class LiquidVisualizerMetalRenderer(MonitorSpanMixin, RandomPresetMixin, PlayerB
         the player's cut-aways. This applies the same rounded mask the Vulkan
         and OpenGL backends use, so all three share one silhouette.
 
-        Fullscreen and screensaver windows fill their area on purpose and stay
-        rectangular; leaving those modes restores the rounding.
+        A screensaver and an unbonded fullscreen window fill their area and stay
+        rectangular. A window bonded to the player stays rounded.
         """
         shaper = getattr(self, "_shaper", None)
         if shaper is None or not self._window:
             return False
-        if self.is_fullscreen or getattr(self, "_saver_bounds", None) or self.screensaver:
+        if not window_corners_enabled(self):
+            # Screensaver and an unbonded fullscreen window fill their area.
+            # A player-bonded window keeps the rounded silhouette.
             return shaper.apply(width=1, height=1, enabled=False,
                                 cocoa_window=self.cocoa_window())
         width, height = self.width, self.height

@@ -133,13 +133,13 @@ class HostSliderTest(unittest.TestCase):
         host.renderer = _renderer(OpenGLRenderer)
 
         host._update_slider_val(40.0, 1000.0)      # far left
-        self.assertAlmostEqual(host.renderer.slider_val, 0.20, places=3)
-        self.assertAlmostEqual(host.renderer.clear_opacity, 0.20, places=3)
+        self.assertAlmostEqual(host.renderer.slider_val, 0.10, places=3)
+        self.assertAlmostEqual(host.renderer.clear_opacity, 0.10, places=3)
 
         host.renderer._set_opacity.reset_mock()
-        host._update_slider_val(960.0, 1000.0)     # far right
-        self.assertAlmostEqual(host.renderer.slider_val, 0.80, places=3)
-        self.assertAlmostEqual(host.renderer.clear_opacity, 0.80, places=3)
+        host._update_slider_val(960.0, 1000.0)     # far right: zero transparency
+        self.assertAlmostEqual(host.renderer.slider_val, 1.00, places=3)
+        self.assertAlmostEqual(host.renderer.clear_opacity, 1.00, places=3)
 
     def test_a_left_to_right_drag_produces_distinct_opacities(self):
         """The reported symptom: dragging changed nothing on screen."""
@@ -155,6 +155,39 @@ class HostSliderTest(unittest.TestCase):
 
         self.assertGreater(len(set(seen)), 3, f"opacity barely moved: {seen}")
         self.assertLess(seen[0], seen[-1], "dragging right must increase opacity")
+
+
+class SolidRightEndTest(unittest.TestCase):
+    """The far right of the bar is a solid pane, zero transparency."""
+
+    def test_a_full_slider_publishes_opaque_even_while_the_theme_breathes(self):
+        """The rainbow theme scales opacity by about ±9%. At the right end
+        that breath must not open the desktop back up."""
+        self.assertEqual(slider_mod.published_window_opacity(1.0, 0.91), 1.0)
+        self.assertEqual(slider_mod.published_window_opacity(1.0, 1.09), 1.0)
+        self.assertAlmostEqual(slider_mod.published_window_opacity(0.70, 1.05), 0.70 * 1.05)
+
+    def test_a_full_slider_drops_the_translucent_glass_body(self):
+        """Premultiplied glass is about half clear. Leaving that path on at
+        opacity 1 still shows the desktop through the player."""
+        self.assertFalse(slider_mod.bezel_premultiplied(True, 1.0))
+        self.assertTrue(slider_mod.bezel_premultiplied(True, 0.70))
+        self.assertFalse(slider_mod.bezel_premultiplied(False, 0.70))
+
+    def test_the_shader_closes_the_glass_at_the_right_end(self):
+        frag = (ROOT / "shaders" / "liquid_glass.frag").read_text(encoding="utf-8")
+        gl = (ROOT / "shaders" / "liquid_glass_gl.frag").read_text(encoding="utf-8")
+        for src in (frag, gl):
+            self.assertIn("smoothstep(0.84, 1.0, requested)", src)
+            self.assertIn("alpha = mix(alpha, rim, solid)", src)
+
+    def test_renderer_at_full_opacity_publishes_one(self):
+        for cls in (OpenGLRenderer, VulkanRenderer):
+            with self.subTest(renderer=cls.__name__):
+                r = _renderer(cls)
+                r.clear_opacity = 1.0
+                self.assertTrue(r.apply_clear_opacity(0.91))
+                r._set_opacity.assert_called_once_with(0x1234, 1.0)
 
 
 class SliderStripTest(unittest.TestCase):

@@ -321,6 +321,8 @@ try:  # Keep the hover fade timing identical to the Vulkan/OpenGL backends.
         SLIDER_HOVER_PAD,
         SLIDER_LEFT,
         SLIDER_RIGHT_PAD,
+        opacity_from_x,
+        slider_thumb_x,
     )
 except ImportError:
     SLIDER_LEFT = 40
@@ -328,6 +330,20 @@ except ImportError:
     SLIDER_HOVER_PAD = 16
     SLIDER_FADE_IN_SECONDS = 0.20
     SLIDER_FADE_OUT_SECONDS = 0.35
+
+    def opacity_from_x(x, width):
+        left = float(SLIDER_LEFT)
+        right = max(left + 40.0, float(width) - float(SLIDER_RIGHT_PAD))
+        t = (float(x) - left) / (right - left)
+        t = 0.0 if t < 0.0 else (1.0 if t > 1.0 else t)
+        return 0.10 + t * 0.90
+
+    def slider_thumb_x(opacity, width):
+        left = float(SLIDER_LEFT)
+        right = max(left + 40.0, float(width) - float(SLIDER_RIGHT_PAD))
+        t = (float(opacity) - 0.10) / 0.90
+        t = 0.0 if t < 0.0 else (1.0 if t > 1.0 else t)
+        return left + t * (right - left)
 from liquid_player_visualizer import (
     macos_fullscreen_size,
     macos_liquid_player_window_size,
@@ -1005,8 +1021,8 @@ class TerminalOverlay:
             print(f"Overlay draw error: {e}", flush=True)
 
 
-# Opacity when the window opens. 0.80 is 80% opaque. The slider runs from 0.40 to 0.80.
-# MP Liquid Player and MP Gui both use this host.
+# Opacity when the window opens. 0.80 is 80% opaque. The bar runs from 0.10 to 1.00,
+# and the right end is fully opaque. MP Liquid Player and MP Gui both use this host.
 DEFAULT_WINDOW_OPACITY = 0.80
 
 
@@ -1157,11 +1173,7 @@ class CustomGlassRenderer(LiquidGlassRendererOpenGL):
                 self._glfw.glfwSetWindowPos.argtypes = [c_void_p, c_int, c_int]
 
     def _update_slider(self, xpos, ww):
-        slider_left = 40.0
-        slider_right = max(80.0, float(ww) - 40.0)
-        t = max(0.0, min(1.0, (xpos - slider_left) / (slider_right - slider_left)))
-        
-        self.slider_val = 0.40 + t * (0.80 - 0.40)
+        self.slider_val = opacity_from_x(xpos, ww)
         self.clear_opacity = self.slider_val
 
         if hasattr(self, "_glfw") and hasattr(self._glfw, "glfwSetWindowOpacity") and self._window:
@@ -1217,7 +1229,8 @@ class CustomGlassRenderer(LiquidGlassRendererOpenGL):
         aspect = float(fw) / max(1.0, float(fh))
         u = self._u_locs
 
-        GL.glUniform4f(u["u_res"], float(fw), float(fh), float(time.monotonic() - getattr(self, "_start", 0)), aspect)
+        slider = max(0.0, min(1.0, float(getattr(self, "clear_opacity", DEFAULT_WINDOW_OPACITY) or 0.0)))
+        GL.glUniform4f(u["u_res"], float(fw), float(fh), slider, aspect)
         GL.glUniform4f(u["u_themeA"], a[0], a[1], a[2], float(self.cursor[0]) / max(1.0, float(fw)))
         GL.glUniform4f(u["u_themeB"], b[0], b[1], b[2], float(self.cursor[1]) / max(1.0, float(fw)))
         GL.glUniform4f(u["u_themeC"], c[0], c[1], c[2], float(effective_opacity))
@@ -1364,8 +1377,7 @@ class CustomGlassRenderer(LiquidGlassRendererOpenGL):
             glEnableVertexAttribArray(0)
             glDrawArrays(GL_TRIANGLES, 0, 6)
 
-            t = (self.slider_val - 0.40) / (0.80 - 0.40)
-            thumb_x = x_left + t * (x_right - x_left)
+            thumb_x = slider_thumb_x(self.slider_val, ww)
             
             t_x1 = ((thumb_x - 6.0) / ww) * 2.0 - 1.0
             t_x2 = ((thumb_x + 6.0) / ww) * 2.0 - 1.0

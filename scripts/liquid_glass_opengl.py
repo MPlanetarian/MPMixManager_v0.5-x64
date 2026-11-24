@@ -704,7 +704,12 @@ void main() {
     float voidOut = 1.0 - step(0.001, dot(theme, vec3(0.299, 0.587, 0.114)));
     col = mix(col, vec3(0.0), voidOut);
     alpha = mix(alpha, 1.0, voidOut);
-    alpha *= smoothstep(0.8, -0.4, outer);
+    float rim = smoothstep(0.8, -0.4, outer);
+    alpha *= rim;
+    // res.z is the transparency bar. Its right end is zero transparency.
+    float requested = clamp(u.res.z, 0.0, 1.0);
+    float solid = smoothstep(0.84, 1.0, requested);
+    alpha = mix(alpha, rim, solid);
     vec3 rgb = clamp(col, 0.0, 1.0);
     if (u.bezel.z > 0.5) {
         outColor = vec4(rgb * alpha, alpha);
@@ -1072,7 +1077,8 @@ class LiquidGlassRendererOpenGL:
         aspect = float(fw) / max(1.0, float(fh))
 
         u = self._u_locs
-        GL.glUniform4f(u["u_res"], float(fw), float(fh), float(time.monotonic() - getattr(self, "_start", 0)), aspect)
+        slider = max(0.0, min(1.0, float(getattr(self, "clear_opacity", 0.70) or 0.0)))
+        GL.glUniform4f(u["u_res"], float(fw), float(fh), slider, aspect)
         GL.glUniform4f(u["u_themeA"], a[0], a[1], a[2], float(self.cursor[0]) / max(1.0, float(fw)))
         GL.glUniform4f(u["u_themeB"], b[0], b[1], b[2], float(self.cursor[1]) / max(1.0, float(fh)))
         GL.glUniform4f(u["u_themeC"], c[0], c[1], c[2], float(effective_opacity))
@@ -1434,24 +1440,26 @@ class LiquidGlassRendererOpenGL:
         next frame and an unchanged value costs nothing.
         """
         try:
+            from liquid_glass_slider import published_window_opacity
             base = float(self.clear_opacity)
             factor = float(factor)
-        except (TypeError, ValueError):
+            opacity = published_window_opacity(base, factor)
+        except (TypeError, ValueError, ImportError):
             return False
-        target_op = int(base * factor * 1000)
+        target_op = int(opacity * 1000)
         if getattr(self, "_last_dyn_opacity", None) == target_op:
             return False
         self._last_dyn_opacity = target_op
         win = self.x11_window() if hasattr(self, "x11_window") else 0
         if win:
-            self._set_opacity(win, base * factor)
+            self._set_opacity(win, opacity)
             return True
         if (
             self._window
             and hasattr(getattr(self, "_glfw", None), "glfwSetWindowOpacity")
         ):
             self._glfw.glfwSetWindowOpacity(
-                self._window, c_float(max(0.0, min(1.0, base * factor)))
+                self._window, c_float(max(0.0, min(1.0, opacity)))
             )
             return True
         return False

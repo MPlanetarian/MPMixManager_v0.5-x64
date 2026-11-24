@@ -8,18 +8,62 @@ black wedges.
 
 This module applies the *same* rounded rectangle to the visualizer window, with
 the same radius the Liquid Glass renderers use (``radius_px = 36``), so the two
-windows share one silhouette. Fullscreen windows (screen saver, F10/F11 spans,
-4K) are left unshaped on purpose: they are meant to fill the screen.
+windows share one silhouette. A screen saver, a VR backdrop and an unbonded
+fullscreen window are left rectangular on purpose: they are meant to fill the
+screen. A window bonded to the player keeps the rounded silhouette in every
+player mode, including the player's Full Screen, which is itself still rounded.
+
+On KWin the XShape mask is not enough. KWin composites an XWayland window from
+its alpha only when the window publishes a blur region and a window opacity.
+The hints are refreshed with the mask on every size change, so Vertical, Mini,
+Micro, Windowed and Full Screen all keep the same rounded rectangle.
 """
 from __future__ import annotations
 
 import ctypes
 import sys
-from ctypes import c_bool, c_char_p, c_double, c_int, c_uint32, c_uint64, c_void_p
+from ctypes import c_bool, c_char_p, c_double, c_int, c_uint32, c_uint64, c_ulong, c_void_p
 from typing import Optional, Tuple
 
 # Keep in sync with LiquidGlassRenderer.radius_px / LiquidGlassRendererOpenGL.radius_px.
 DEFAULT_CORNER_RADIUS = 36
+
+# KWin treats 0xFFFFFFFF as "no opacity property" and then paints an XWayland
+# window as a solid rectangle, which is how the visualizer's square corners
+# stayed on screen after the shader had already cut them. One step under full
+# opacity forces that blend. The picture does not dim: the missing step is
+# 1/4294967295 of the opacity range.
+COMPOSITE_OPACITY = 0xFFFFFFFE
+
+
+def window_corners_enabled(renderer) -> bool:
+    """Whether ``renderer`` should wear the player's rounded silhouette.
+
+    Screensaver, VR and an unbonded fullscreen window fill their rectangle.
+    A player-bonded window stays rounded while the player is maximized,
+    because that Full Screen pane keeps its own 36 px corners.
+    """
+    if getattr(renderer, "_saver_bounds", None) or getattr(renderer, "screensaver", False):
+        return False
+    if _renderer_is_vr_backdrop():
+        return False
+    if getattr(renderer, "is_fullscreen", False) and not getattr(renderer, "_player_bonded", False):
+        return False
+    return True
+
+
+def _renderer_is_vr_backdrop() -> bool:
+    try:
+        from mp_liquid_visualizer_vulkan import _vr_visualizer_side
+    except ImportError:
+        try:
+            from scripts.mp_liquid_visualizer_vulkan import _vr_visualizer_side
+        except ImportError:
+            return False
+    try:
+        return bool(_vr_visualizer_side())
+    except Exception:
+        return False
 
 # XShape kind/operation constants: ShapeBounding and ShapeSet are both 0.
 SHAPE_BOUNDING = 0
@@ -109,6 +153,14 @@ class RoundedWindowShaper:
             x11.XGetGeometry.restype = c_int
             x11.XSetErrorHandler.argtypes = [c_void_p]
             x11.XSetErrorHandler.restype = c_void_p
+            x11.XInternAtom.argtypes = [c_void_p, c_char_p, c_int]
+            x11.XInternAtom.restype = c_uint64
+            x11.XChangeProperty.argtypes = [
+                c_void_p, c_uint64, c_uint64, c_uint64, c_int, c_int, c_void_p, c_int,
+            ]
+            x11.XChangeProperty.restype = c_int
+            x11.XDeleteProperty.argtypes = [c_void_p, c_uint64, c_uint64]
+            x11.XDeleteProperty.restype = c_int
             ext = ctypes.CDLL("libXext.so.6")
             ext.XShapeCombineMask.argtypes = [c_void_p, c_uint64, c_int, c_int, c_int, c_uint64, c_int]
             ext.XShapeCombineMask.restype = None
@@ -181,8 +233,11 @@ class RoundedWindowShaper:
             self._own_display = display
         x11, ext = self._x11, self._xext
         if not enabled:
-            # Setting a None mask restores the original rectangle.
+            # Setting a None mask restores the original rectangle. Drop the
+            # compositor hints with it, or a screensaver would keep the blend
+            # the rounded window asked for.
             ext.XShapeCombineMask(display, window, SHAPE_BOUNDING, 0, 0, 0, SHAPE_SET)
+            self._clear_compositor_hints(display, window)
             x11.XFlush(display)
             return True
         # Trust the window over the caller. A bonded companion is force-resized
@@ -216,8 +271,57 @@ class RoundedWindowShaper:
         ext.XShapeCombineMask(display, window, SHAPE_BOUNDING, 0, 0, mask, SHAPE_SET)
         x11.XFreeGC(display, gc)
         x11.XFreePixmap(display, mask)
+        # The mask alone does not round the window on KWin: XWayland is drawn
+        # as a solid rectangle until the window asks to be composited. Publish
+        # the same blur region the player does, sized to this window, plus an
+        # opacity one step under opaque so the shader's transparent corners
+        # are what the screen shows.
+        self._publish_compositor_hints(display, window, width, height)
         x11.XFlush(display)
         return True
+
+    def _x_atom(self, display, name: bytes) -> int:
+        atoms = getattr(self, "_x_atoms", None)
+        if atoms is None:
+            atoms = {}
+            self._x_atoms = atoms
+        if name not in atoms:
+            atoms[name] = int(self._x11.XInternAtom(display, name, 0))
+        return atoms[name]
+
+    def _publish_compositor_hints(self, display, window: int, width: int, height: int) -> None:
+        x11 = self._x11
+        if x11 is None:
+            return
+        try:
+            cardinal = self._x_atom(display, b"CARDINAL")
+            region = (c_ulong * 4)(0, 0, int(width) & 0xFFFFFFFF, int(height) & 0xFFFFFFFF)
+            opacity = (c_ulong * 1)(COMPOSITE_OPACITY)
+            # XChangeProperty reads the buffer before it returns, but the
+            # caller's next frame must not collect it early on a slow server.
+            self._hint_keep = (region, opacity)
+            x11.XChangeProperty(
+                display, int(window),
+                self._x_atom(display, b"_KDE_NET_WM_BLUR_BEHIND_REGION"),
+                cardinal, 32, 0, ctypes.cast(region, c_void_p), 4,
+            )
+            x11.XChangeProperty(
+                display, int(window),
+                self._x_atom(display, b"_NET_WM_WINDOW_OPACITY"),
+                cardinal, 32, 0, ctypes.cast(opacity, c_void_p), 1,
+            )
+        except (AttributeError, OSError, ValueError):
+            return
+
+    def _clear_compositor_hints(self, display, window: int) -> None:
+        x11 = self._x11
+        if x11 is None:
+            return
+        try:
+            x11.XDeleteProperty(display, int(window), self._x_atom(display, b"_KDE_NET_WM_BLUR_BEHIND_REGION"))
+            x11.XDeleteProperty(display, int(window), self._x_atom(display, b"_NET_WM_WINDOW_OPACITY"))
+        except (AttributeError, OSError, ValueError):
+            return
 
     # -- Windows ----------------------------------------------------------
     def _apply_windows(self, hwnd: int, width: int, height: int, enabled: bool) -> bool:

@@ -1550,24 +1550,26 @@ class LiquidGlassRenderer:
         only moved its thumb while the window kept the startup opacity.
         """
         try:
+            from liquid_glass_slider import published_window_opacity
             base = float(self.clear_opacity)
             factor = float(factor)
-        except (TypeError, ValueError):
+            opacity = published_window_opacity(base, factor)
+        except (TypeError, ValueError, ImportError):
             return False
-        target_op = int(base * factor * 1000)
+        target_op = int(opacity * 1000)
         if getattr(self, "_last_dyn_opacity", None) == target_op:
             return False
         self._last_dyn_opacity = target_op
         win = self.x11_window() if hasattr(self, "x11_window") else 0
         if win:
-            self._set_opacity(win, base * factor)
+            self._set_opacity(win, opacity)
             return True
         if (
             self._window
             and hasattr(getattr(self, "_glfw", None), "glfwSetWindowOpacity")
         ):
             self._glfw.glfwSetWindowOpacity(
-                self._window, c_float(max(0.0, min(1.0, base * factor)))
+                self._window, c_float(max(0.0, min(1.0, opacity)))
             )
             return True
         return False
@@ -2518,12 +2520,20 @@ class LiquidGlassRenderer:
         radius = self.radius_px * scale
         mx, my = getattr(self, "cursor", (0.0, 0.0))
         ubo = GlassUBO()
-        ubo.res[:] = (float(fw), float(fh), float(time.monotonic() - getattr(self, "_start", time.monotonic())), fw / max(fh, 1))
+        try:
+            from liquid_glass_slider import bezel_premultiplied
+        except ImportError:
+            from scripts.liquid_glass_slider import bezel_premultiplied
+        requested = float(getattr(self, "clear_opacity", 0.70) or 0.0)
+        ubo.res[:] = (float(fw), float(fh), max(0.0, min(1.0, requested)), fw / max(fh, 1))
         a, b, c = (_rgb01(colors[0]), _rgb01(colors[1]), _rgb01(colors[2]))
         ubo.themeA[:] = (a[0], a[1], a[2], max(0.0, min(1.0, mx / max(ww, 1))))
         ubo.themeB[:] = (b[0], b[1], b[2], max(0.0, min(1.0, my / max(wh, 1))))
         ubo.themeC[:] = (c[0], c[1], c[2], float(opacity))
-        ubo.bezel[:] = (float(margin), float(radius), 1.0 if getattr(self, "premultiplied", True) else 0.0, 1.0)
+        # The right end of the bar is a solid pane. A premultiplied body
+        # stays about half clear, so that end takes the opaque fragment path.
+        premul = bezel_premultiplied(getattr(self, "premultiplied", True), requested)
+        ubo.bezel[:] = (float(margin), float(radius), 1.0 if premul else 0.0, 1.0)
         for slot, rect in zip((ubo.panel0, ubo.panel1), getattr(self, "panels", [])):
             x, y, w, h = rect
             slot[:] = (x * scale, y * scale, w * scale, h * scale)

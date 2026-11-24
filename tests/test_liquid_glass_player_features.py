@@ -439,6 +439,33 @@ class TestLiquidGlassPlayerFeatures(unittest.TestCase):
             "dropped the row colour",
         )
 
+    def test_into_darkness_selected_playlist_text_is_white(self):
+        """The cursor row on Into Darkness is white lettering on a dark bar.
+
+        The highlight used to be classic bold white. The selection bar cannot
+        read that as a fill, so it fell back to the theme text, saw white, and
+        painted black letters on a white slab. The row the user is on has to
+        stay white, and the fill has to stay dark enough to read it.
+        """
+        rows = self._render_rows("into_darkness_void_out", count=2)
+        selected = next(line for line in rows if "Mix 01" in line)
+        plain = next(line for line in rows if "Mix 02" in line)
+        for needle in ("Mix 01", "[   1]"):
+            ink = _foreground_at(selected, selected.find(needle))
+            self.assertEqual(
+                ink, (255, 255, 255),
+                f"Into Darkness playlist text at {needle!r} is {ink}",
+            )
+        self.assertNotIn("48;2;255;255;255", selected)
+        self.assertNotIn("38;2;0;0;0", selected)
+        self.assertEqual(_foreground_at(plain, plain.find("Mix 02")), (255, 255, 255))
+        bg, fg = MP_Audio_Player._selection_bar_ansi("into_darkness_void_out")
+        self.assertIn("38;2;255;255;255", fg)
+        hue = MP_Audio_Player._rgb_from_ansi(bg)
+        self.assertIsNotNone(hue)
+        lum = (hue[0] * 299 + hue[1] * 587 + hue[2] * 114) // 1000
+        self.assertLess(lum, 140, f"selection fill {hue} is light enough to force black text")
+
     def test_every_theme_keeps_the_mix_name_white(self):
         """The same ink check across the whole theme list."""
         themes = [
@@ -868,7 +895,7 @@ class TestLiquidGlassPlayerFeatures(unittest.TestCase):
         host.gtk_window.reset_mock()
         host._update_slider_val(40, 1000)
         host.gtk_window.set_opacity.assert_not_called()
-        self.assertEqual(host.renderer.slider_val, 0.20)
+        self.assertAlmostEqual(host.renderer.slider_val, 0.10)
 
         macos = (BASE_DIR / "MP_Audio_Player_Liquid_Glass_OpenGL_macOS.py").read_text(encoding="utf-8")
         self.assertIn("DEFAULT_WINDOW_OPACITY = 0.80", macos)

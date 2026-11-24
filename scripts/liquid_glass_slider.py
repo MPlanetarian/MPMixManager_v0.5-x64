@@ -91,6 +91,36 @@ def slider_thumb_x(opacity: float, width: float) -> float:
     return left + t * (right - left)
 
 
+def published_window_opacity(base: float, factor: float = 1.0) -> float:
+    """Window opacity for a slider value and a theme's oscillation factor.
+
+    The right end of the bar is fully opaque. A dynamic theme breathes the
+    pane by a few percent; that breath must not open the glass again once
+    the slider is parked at that end.
+    """
+    base = float(base)
+    factor = float(factor)
+    if base >= 0.999:
+        return 1.0
+    return base * factor
+
+
+def bezel_premultiplied(premultiplied: bool, opacity: float) -> bool:
+    """Whether the shader keeps its translucent glass body.
+
+    On a premultiplied swapchain the body is about half opaque, and the
+    window opacity is applied on top of that. Leaving the body on at the
+    right end of the bar still shows the desktop. The opaque fragment path
+    is what makes that end zero transparency.
+    """
+    try:
+        if float(opacity) >= 0.999:
+            return False
+    except (TypeError, ValueError):
+        return bool(premultiplied)
+    return bool(premultiplied)
+
+
 class GlassSlider:
     """A GTK overlay that draws the transparency bar for a glass window.
 

@@ -75,9 +75,13 @@ except ImportError:
     )
 
 try:
-    from visualizer_window_shape import DEFAULT_CORNER_RADIUS, RoundedWindowShaper
+    from visualizer_window_shape import (
+        DEFAULT_CORNER_RADIUS, RoundedWindowShaper, window_corners_enabled,
+    )
 except ImportError:
-    from scripts.visualizer_window_shape import DEFAULT_CORNER_RADIUS, RoundedWindowShaper
+    from scripts.visualizer_window_shape import (
+        DEFAULT_CORNER_RADIUS, RoundedWindowShaper, window_corners_enabled,
+    )
 
 try:
     from visualizer_player_bond import PlayerBondMixin
@@ -637,9 +641,9 @@ class AudioTelemetryBridge:
         # occasionally publishes a position ~0.3 s behind the one before it
         # (it samples the decoder while the output buffer is being refilled).
         # Feeding that straight into the shared clock made the scene lurch
-        # backwards every few hundred milliseconds, which reads as the
-        # visualizer losing the music. Keep the accepted snapshot and ignore
-        # only those small backward blips; a real seek is much larger.
+        # backwards every few hundred milliseconds. A jump of about a second
+        # or more is a seek (Left/Right move the song by 10 s). That jump
+        # belongs to the song. The picture keeps the motion it already has.
         self._timeline_pos: Optional[float] = None
         self._timeline_mtime = 0.0
         self._timeline_path = ""
@@ -754,15 +758,19 @@ class AudioTelemetryBridge:
             # Compare the new sample with the time already on screen, not with
             # the raw previous position. The player clock lags the speakers by
             # a fraction of a second (the output buffer). Taking that sample
-            # and zeroing the extrapolation rewound the scene on every write,
-            # which is the hitch that looks like the picture has left the
-            # music. A sample behind the picture by less than a second is
-            # ignored and the scene keeps moving. A seek is a jump of about a
-            # second or more, and that is followed.
+            # and zeroing the extrapolation rewound the scene on every write.
+            # A sample within about a second of the picture is the song
+            # keeping time, and a forward one is accepted. Left and Right in
+            # the player seek by 10 s. Following that jump teleports the
+            # swirls and makes the motion look like a different one. The
+            # picture stays where it is and keeps moving; the seek does not.
             shown = projected(self._timeline_pos, self._timeline_mtime)
             sample = projected(position, anchor)
             delta = sample - shown
-            if delta > 0.0 or delta <= -0.9:
+            if delta >= 0.9 or delta <= -0.9:
+                self._timeline_pos = shown
+                self._timeline_mtime = now
+            elif delta > 0.0:
                 self._timeline_pos = position
                 self._timeline_mtime = anchor
         return shared_track_base(path) + projected(self._timeline_pos, self._timeline_mtime)
@@ -831,8 +839,10 @@ class AudioTelemetryBridge:
                 v = float(lv[i0]) * (1.0 - (f - i0)) + float(lv[i0 + 1 if i0 < n else n]) * (f - i0)
                 raw16[i] = 0.0 if v < 0.0 else (1.0 if v > 1.0 else v)
         else:
-            pos = float(st.get("position_sec", t) or t)
-            raw16 = [0.25 + 0.20 * _sin(pos * (2.5 + i * 0.3) + i) ** 2 for i in range(16)]
+            # No spectrum was published. Drive the stand-in from the scene
+            # clock, not from position_sec, so a Left/Right seek cannot retune
+            # the motion by jumping the song position.
+            raw16 = [0.25 + 0.20 * _sin(t * (2.5 + i * 0.3) + i) ** 2 for i in range(16)]
             if rms < 0.28: rms = 0.28
         self._apply_bands(raw16, rms, p, dt)
         if timeline is not None:
@@ -1248,8 +1258,9 @@ class LiquidVisualizerVulkanRenderer(MonitorSpanMixin, RandomPresetMixin, Player
 
         The bonded window sits exactly behind the player at the same size, so
         without this the square corners showed as black wedges through the
-        player's rounded ones. Fullscreen and screen-saver windows keep their
-        plain rectangle because they are meant to fill the screen.
+        player's rounded ones. A screensaver, a VR backdrop and an unbonded
+        fullscreen window keep their plain rectangle. A window bonded to the
+        player stays rounded, including in the player's Full Screen.
 
         The shaper caches the last applied geometry, so a frame with nothing
         moved costs only the cache lookup. Both the window id and the live size
@@ -1260,10 +1271,10 @@ class LiquidVisualizerVulkanRenderer(MonitorSpanMixin, RandomPresetMixin, Player
         if shaper is None or not window:
             return False
         x11_window = self.x11_window()
-        if (self.is_fullscreen or getattr(self, "_saver_bounds", None)
-                or self.screensaver or _vr_visualizer_side()):
-            # Fullscreen, screensaver, and the VR backdrop fill their area and
-            # keep the plain rectangle.
+        if not window_corners_enabled(self):
+            # Screensaver, VR and an unbonded fullscreen window fill their
+            # area. A player-bonded window keeps the rounded silhouette,
+            # including while the player is in Full Screen.
             return shaper.apply(width=1, height=1, enabled=False,
                                 x11_window=x11_window, x11_display=self.x11_display(),
                                 win32_window=self.win32_window(), cocoa_window=self.cocoa_window())

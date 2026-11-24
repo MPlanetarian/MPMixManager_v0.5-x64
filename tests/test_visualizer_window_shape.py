@@ -128,15 +128,34 @@ class TestShaperGeometry(unittest.TestCase):
             # The first scanline starts inside the corner, by the radius.
             self.assertEqual(first[0], visualizer_window_shape.DEFAULT_CORNER_RADIUS)
             self.assertEqual(first[1], 0)
+            # KWin ignores the mask on XWayland unless the window asks to be
+            # composited. The blur region is the window rectangle and the
+            # opacity is one step under fully opaque.
+            hints = self._xprop(xid)
+            self.assertIn("_KDE_NET_WM_BLUR_BEHIND_REGION(CARDINAL) = 0, 0,", hints)
+            self.assertIn(str(visualizer_window_shape.COMPOSITE_OPACITY), hints)
 
             self.assertTrue(shaper.apply(width=1, height=1, enabled=False,
                                          x11_window=xid, x11_display=display))
             x11.XSync(display, 0)
             restored, _ = rect_count()
             self.assertEqual(restored, 1, "removing the mask restores the rectangle")
+            cleared = self._xprop(xid)
+            self.assertIn("_KDE_NET_WM_BLUR_BEHIND_REGION:  not found", cleared)
+            self.assertIn("_NET_WM_WINDOW_OPACITY:  not found", cleared)
         finally:
             glfw.glfwDestroyWindow(window)
             glfw.glfwTerminate()
+
+    @staticmethod
+    def _xprop(xid: int) -> str:
+        import subprocess
+        result = subprocess.run(
+            ["xprop", "-id", str(int(xid)),
+             "_KDE_NET_WM_BLUR_BEHIND_REGION", "_NET_WM_WINDOW_OPACITY"],
+            capture_output=True, text=True, check=False,
+        )
+        return (result.stdout or "") + (result.stderr or "")
 
     def test_shaper_is_idempotent(self):
         shaper = visualizer_window_shape.RoundedWindowShaper(36)
@@ -198,7 +217,62 @@ class TestOpenGLAlphaCorners(unittest.TestCase):
         source = liquid_player_visualizer.opengl_visualizer_source()
         self.assertIn("uniform float u_corner", source)
         self.assertIn("u_corner > 0.5", source)
-        self.assertIn("outColor = vec4(col, corner_a);", source)
+        # Premultiplied, so a zero-alpha corner is transparent black. Straight
+        # alpha (color, 0) is added onto the desktop by KWin and the square
+        # corner stays on screen.
+        self.assertIn("outColor = vec4(col * corner_a, corner_a);", source)
+
+    def test_the_presented_frame_cuts_the_corner_not_the_small_march(self):
+        """A downscaled march must not own the silhouette.
+
+        The upscale pass is what the screen shows. Cutting there, at the
+        framebuffer's radius, is what lines the visualizer up with the player
+        when the march is smaller than the window.
+        """
+        frag = liquid_player_visualizer._UPSCALE_FRAG
+        self.assertIn("uniform float u_corner", frag)
+        self.assertIn("uniform vec2 u_res", frag)
+        self.assertIn("outColor = vec4(color.rgb * corner_a, color.a * corner_a);", frag)
+
+    def test_the_corner_radius_matches_the_player_framebuffer_scale(self):
+        """36 window px times framebuffer/window, the player's glass formula."""
+        from types import SimpleNamespace
+        windowed = SimpleNamespace(
+            _window_corners=True, is_fullscreen=False,
+            _saver_bounds=None, screensaver=False,
+            window_size=lambda: (800, 400),
+        )
+        self.assertEqual(
+            liquid_player_visualizer._visualizer_corner_radius(windowed),
+            visualizer_window_shape.DEFAULT_CORNER_RADIUS,
+        )
+        self.assertEqual(
+            liquid_player_visualizer._visualizer_corner_radius(windowed, 400),
+            visualizer_window_shape.DEFAULT_CORNER_RADIUS,
+        )
+        self.assertEqual(
+            liquid_player_visualizer._visualizer_corner_radius(windowed, 800),
+            visualizer_window_shape.DEFAULT_CORNER_RADIUS * 2,
+        )
+
+    def test_a_bonded_fullscreen_window_stays_rounded(self):
+        """The player's Full Screen is a maximized rounded pane."""
+        from types import SimpleNamespace
+        bonded = SimpleNamespace(
+            _window_corners=True, is_fullscreen=True, _player_bonded=True,
+            _saver_bounds=None, screensaver=False,
+            window_size=lambda: (1920, 1080),
+        )
+        self.assertEqual(
+            liquid_player_visualizer._visualizer_corner_radius(bonded, 1080),
+            visualizer_window_shape.DEFAULT_CORNER_RADIUS,
+        )
+        free = SimpleNamespace(
+            _window_corners=True, is_fullscreen=True, _player_bonded=False,
+            _saver_bounds=None, screensaver=False,
+            window_size=lambda: (1920, 1080),
+        )
+        self.assertEqual(liquid_player_visualizer._visualizer_corner_radius(free, 1080), 0.0)
 
     def test_the_corner_radius_is_zero_for_fullscreen_and_saver(self):
         from types import SimpleNamespace
@@ -269,6 +343,28 @@ class TestFullscreenStaysRectangular(unittest.TestCase):
         with patch.object(mp_liquid_visualizer_vulkan, "_vr_visualizer_side", return_value=1200):
             renderer._apply_window_shape()
         self.assertFalse(renderer._shaper.apply.call_args.kwargs["enabled"])
+
+    def test_a_bonded_fullscreen_window_keeps_the_player_radius(self):
+        renderer = mp_liquid_visualizer_vulkan.LiquidVisualizerVulkanRenderer.__new__(
+            mp_liquid_visualizer_vulkan.LiquidVisualizerVulkanRenderer
+        )
+        renderer._shaper = MagicMock()
+        renderer._shaper.apply.return_value = True
+        renderer._window = MagicMock()
+        renderer.is_fullscreen = True
+        renderer._player_bonded = True
+        renderer.screensaver = False
+        renderer._saver_bounds = None
+        renderer._win_size = (1920, 1080)
+        renderer.x11_window = MagicMock(return_value=777)
+        renderer.x11_display = MagicMock(return_value=888)
+        renderer.win32_window = MagicMock(return_value=0)
+        renderer.cocoa_window = MagicMock(return_value=0)
+        with patch.object(mp_liquid_visualizer_vulkan, "_vr_visualizer_side", return_value=None):
+            self.assertTrue(renderer._apply_window_shape())
+        kwargs = renderer._shaper.apply.call_args.kwargs
+        self.assertTrue(kwargs["enabled"])
+        self.assertEqual((kwargs["width"], kwargs["height"]), (1920, 1080))
 
     def test_windowed_visualizer_uses_its_own_window_size(self):
         renderer = mp_liquid_visualizer_vulkan.LiquidVisualizerVulkanRenderer.__new__(

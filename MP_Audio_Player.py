@@ -5620,7 +5620,10 @@ _THEME_PALETTES = {
     "ice_cold": {"highlight": "\033[38;2;0;229;255m", "active": "\033[38;2;136;192;208m", "border": "\033[38;2;0;229;255m", "accent": "\033[38;2;129;161;193m"},
     "retro_terminal": {"highlight": "\033[1;37m", "active": "\033[1;37m", "border": "\033[1;37m", "accent": "\033[1;37m"},
     "retro_linux_memories": {"highlight": "\033[38;2;91;134;187m", "active": "\033[38;2;21;83;158m", "border": "\033[38;2;84;84;83m", "accent": "\033[38;2;240;173;78m"},
-    "into_darkness_void_out": {"highlight": "\033[1;37m", "active": "\033[38;2;200;200;200m", "border": "\033[38;2;72;72;72m", "accent": "\033[1;37m"},
+    # `highlight` is the selected row's fill. Classic bold white has no
+    # 24-bit colour, so the bar used the theme's white text as the fill and
+    # then picked black letters. A charcoal fill keeps the playlist white.
+    "into_darkness_void_out": {"highlight": "\033[38;2;48;48;54m", "active": "\033[38;2;200;200;200m", "border": "\033[38;2;72;72;72m", "accent": "\033[1;37m"},
     # Blood Moon: vivid crimson selection bar, deep ruby ink and a wine-tinted
     # console field, matching scripts/mp_theme_palette.py exactly.
     "blood_moon": {"highlight": "\033[38;2;255;32;64m", "active": "\033[38;2;255;90;95m", "border": "\033[38;2;180;0;32m", "accent": "\033[38;2;137;17;34m"},

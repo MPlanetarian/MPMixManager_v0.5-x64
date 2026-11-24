@@ -72,9 +72,13 @@ try:
 except ImportError:
     from scripts.visualizer_random_mode import RANDOM_PRESET_INTERVAL, RandomPresetMixin
 try:
-    from visualizer_window_shape import DEFAULT_CORNER_RADIUS, RoundedWindowShaper
+    from visualizer_window_shape import (
+        DEFAULT_CORNER_RADIUS, RoundedWindowShaper, window_corners_enabled,
+    )
 except ImportError:
-    from scripts.visualizer_window_shape import DEFAULT_CORNER_RADIUS, RoundedWindowShaper
+    from scripts.visualizer_window_shape import (
+        DEFAULT_CORNER_RADIUS, RoundedWindowShaper, window_corners_enabled,
+    )
 try:
     from visualizer_player_bond import PlayerBondMixin
 except ImportError:
@@ -312,29 +316,70 @@ _UPSCALE_FRAG = """#version 330 core
 in vec2 vUv;
 out vec4 outColor;
 uniform sampler2D uTex;
+uniform vec2 u_res;
+uniform float u_corner;
 void main() {
-    outColor = texture(uTex, vUv);
+    vec4 color = texture(uTex, vUv);
+    // The march is often smaller than the window. Cutting the corner here, in
+    // the presented framebuffer, keeps the radius in the same pixels as the
+    // player's glass. A cut made in the small image and then scaled would
+    // land on a different radius and blur the edge.
+    float corner_a = 1.0;
+    if (u_corner > 0.5) {
+        vec2 half_res = u_res * 0.5;
+        vec2 q = abs(vUv * u_res - half_res) - (half_res - vec2(u_corner));
+        float d = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - u_corner;
+        corner_a = 1.0 - smoothstep(-1.0, 1.0, d);
+    }
+    outColor = vec4(color.rgb * corner_a, color.a * corner_a);
 }
 """
 
 
-def _visualizer_corner_radius(renderer) -> float:
-    """The shader's rounded-corner radius, or 0 when the window fills its area.
+def _renderer_window_height(renderer) -> int:
+    """Window height in the same pixels the player's ``window_size()`` uses."""
+    size = None
+    getter = getattr(renderer, "window_size", None)
+    if callable(getter):
+        try:
+            size = getter()
+        except Exception:
+            size = None
+    if not size:
+        size = getattr(renderer, "_win_size", None) or getattr(renderer, "_windowed_size", None)
+    try:
+        height = int(size[1])
+    except (TypeError, ValueError, IndexError):
+        return 0
+    return height if height > 0 else 0
 
-    Windowed companions and Z windows use the player's 36 px silhouette.
-    Fullscreen, screensaver and VR windows are meant to fill the screen, so
-    they keep their plain rectangle. ``_window_corners`` is only set on the
-    standalone visualizer window: the same layer is also drawn *inside* the
-    player's glass, where the player window already owns the silhouette and
-    the layer must keep its alpha.
+
+def _visualizer_corner_radius(renderer, buffer_height: Optional[float] = None) -> float:
+    """Rounded-corner radius in pixels of the buffer about to be shaded.
+
+    The player cuts a 36 px corner in window pixels, then multiplies by
+    ``framebuffer_height / window_height`` in the glass shader. Passing the
+    presented buffer's height here lands on that same radius. With no buffer
+    height, or no known window, the unscaled 36 px value is returned.
+
+    ``_window_corners`` is only set on the standalone visualizer window. The
+    same layer is also drawn inside the player's glass, where the player
+    already owns the silhouette and this layer must keep its alpha. A
+    screensaver, a VR backdrop and an unbonded fullscreen window fill their
+    area. A window bonded to the player stays rounded in Full Screen too,
+    because the player's maximized pane is still rounded.
     """
     if not getattr(renderer, "_window_corners", False):
         return 0.0
-    if (getattr(renderer, "is_fullscreen", False)
-            or getattr(renderer, "_saver_bounds", None)
-            or getattr(renderer, "screensaver", False)):
+    if not window_corners_enabled(renderer):
         return 0.0
-    return float(DEFAULT_CORNER_RADIUS)
+    radius = float(DEFAULT_CORNER_RADIUS)
+    if buffer_height is None:
+        return radius
+    height = _renderer_window_height(renderer)
+    if height <= 0:
+        return radius
+    return radius * float(buffer_height) / float(height)
 
 
 def _config_env_value(name: str) -> str:
@@ -1235,11 +1280,12 @@ def opengl_visualizer_source() -> str:
     needle = "outColor = vec4(col, 1.0);"
     if needle not in body:
         raise RuntimeError("MP Visualizer shader is missing its output")
-    # The OpenGL window is an ARGB surface. KWin on Wayland ignores XShape on
-    # XWayland windows, so the window's own alpha is the only shape the
-    # compositor honours. Cut the same 36 px corners the player's glass uses;
-    # u_corner is zero for fullscreen, screensaver and VR, where the window is
-    # meant to fill its area.
+    # The OpenGL window is an ARGB surface. KWin blends premultiplied alpha, so
+    # a corner stored as (color, 0) is added on top of the desktop and the
+    # square corner stays visible. Write (0, 0, 0, 0) outside the curve, the
+    # same transparent black the player's glass shader writes. u_corner is the
+    # player's 36 px radius in this buffer's pixels, and zero when the window
+    # is meant to fill its area.
     corner = (
         "float corner_a = 1.0;\n"
         "    if (u_corner > 0.5) {\n"
@@ -1248,7 +1294,7 @@ def opengl_visualizer_source() -> str:
         "        float d = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - u_corner;\n"
         "        corner_a = 1.0 - smoothstep(-1.0, 1.0, d);\n"
         "    }\n"
-        "    outColor = vec4(col, corner_a);"
+        "    outColor = vec4(col * corner_a, corner_a);"
     )
     body = body.replace(needle, _TEXT_GUARD + "\n    " + corner, 1)
     source = _GL_HEADER + body
@@ -1455,6 +1501,8 @@ class PlayerVisualizerLayer:
         self._target_size: tuple = (0, 0)
         self._upscale = 0
         self._upscale_tex = -1
+        self._upscale_res = -1
+        self._upscale_corner = -1
         self._failed: set = set()
         # Thermal back-off state for low-power ARM boards.
         self._thermal_scale = 1.0
@@ -1564,21 +1612,27 @@ class PlayerVisualizerLayer:
         # because reading sysfs from the draw path is otherwise wasteful.
         if _LOW_POWER_GPU:
             rw, rh = self._thermally_limited_size(rw, rh)
+        # The radius is measured on the presented framebuffer, matching the
+        # player's glass. The low-resolution march must not cut the corner
+        # itself: that cut would be scaled and would no longer meet the player.
+        presented_corner = _visualizer_corner_radius(renderer, fh_i)
         if (rw, rh) != (fw_i, fh_i) and self._ensure_target(GL, rw, rh) and self._ensure_upscale(GL):
             GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, self._fbo)
             GL.glViewport(0, 0, rw, rh)
             try:
-                self._draw_scene(GL, renderer, rw, rh, bridge, text_guard=text_guard)
+                self._draw_scene(GL, renderer, rw, rh, bridge, text_guard=text_guard,
+                                 corner=0.0)
             finally:
                 GL.glBindFramebuffer(GL.GL_FRAMEBUFFER, 0)
                 GL.glViewport(0, 0, fw_i, fh_i)
-            self._draw_upscale(GL, renderer)
+            self._draw_upscale(GL, renderer, fw_i, fh_i, presented_corner)
             return True
-        self._draw_scene(GL, renderer, fw_i, fh_i, bridge, text_guard=text_guard)
+        self._draw_scene(GL, renderer, fw_i, fh_i, bridge, text_guard=text_guard,
+                         corner=presented_corner)
         return True
 
     def _draw_scene(self, GL, renderer, rw: int, rh: int, bridge,
-                    text_guard: bool = True) -> None:
+                    text_guard: bool = True, corner: Optional[float] = None) -> None:
         GL.glDisable(GL.GL_DEPTH_TEST)
         GL.glDisable(GL.GL_BLEND)
         GL.glUseProgram(self._prog)
@@ -1614,9 +1668,11 @@ class PlayerVisualizerLayer:
         guard = _loc(locs, "uTextGuard")
         if guard >= 0:
             GL.glUniform1f(guard, 1.0 if text_guard else 0.0)
-        corner = _loc(locs, "u_corner")
-        if corner >= 0:
-            GL.glUniform1f(corner, _visualizer_corner_radius(renderer))
+        corner_loc = _loc(locs, "u_corner")
+        if corner_loc >= 0:
+            if corner is None:
+                corner = _visualizer_corner_radius(renderer, rh)
+            GL.glUniform1f(corner_loc, float(corner))
         GL.glActiveTexture(GL.GL_TEXTURE0)
         GL.glBindTexture(GL.GL_TEXTURE_2D, self._tex)
         GL.glBindVertexArray(renderer._vao)
@@ -1765,17 +1821,23 @@ class PlayerVisualizerLayer:
         if self._upscale:
             return True
         vert_src = (ROOT / "shaders" / "liquid_glass_gl.vert").read_text(encoding="utf-8")
-        prog, locs = self._link_program(GL, vert_src, _UPSCALE_FRAG, ("uTex",))
+        prog, locs = self._link_program(GL, vert_src, _UPSCALE_FRAG, ("uTex", "u_res", "u_corner"))
         self._upscale = prog
         self._upscale_tex = _loc(locs, "uTex")
+        self._upscale_res = _loc(locs, "u_res")
+        self._upscale_corner = _loc(locs, "u_corner")
         return True
 
-    def _draw_upscale(self, GL, renderer) -> None:
+    def _draw_upscale(self, GL, renderer, fw: int, fh: int, corner: float) -> None:
         GL.glDisable(GL.GL_DEPTH_TEST)
         GL.glDisable(GL.GL_BLEND)
         GL.glUseProgram(self._upscale)
         if self._upscale_tex >= 0:
             GL.glUniform1i(self._upscale_tex, 0)
+        if self._upscale_res >= 0:
+            GL.glUniform2f(self._upscale_res, float(fw), float(fh))
+        if self._upscale_corner >= 0:
+            GL.glUniform1f(self._upscale_corner, float(corner))
         GL.glActiveTexture(GL.GL_TEXTURE0)
         GL.glBindTexture(GL.GL_TEXTURE_2D, self._color)
         GL.glBindVertexArray(renderer._vao)
@@ -2005,16 +2067,19 @@ class LiquidVisualizerOpenGLRenderer(MonitorSpanMixin, RandomPresetMixin, Player
         """Clip the window to the Liquid Player's rounded corners.
 
         The bonded visualizer sits behind the player at the same size, so an
-        unclipped square window showed black wedges in the player's corners.
-        Fullscreen and screensaver windows stay rectangular.
+        unclipped square window showed its corners through the player's.
+        A screensaver and an unbonded fullscreen window stay rectangular. A
+        window bonded to the player stays rounded in every player mode,
+        including Full Screen.
         """
         shaper = getattr(self, "_shaper", None)
         window = getattr(self, "_window", None)
         if shaper is None or not window:
             return False
-        if self.is_fullscreen or getattr(self, "_saver_bounds", None) or self.screensaver:
-            # Fullscreen and screensaver windows fill their area, so keep the
-            # plain rectangle.
+        if not window_corners_enabled(self):
+            # Screensaver, VR and an unbonded fullscreen window fill their
+            # area. A player-bonded window keeps the rounded silhouette,
+            # including while the player is in Full Screen.
             return shaper.apply(width=1, height=1, enabled=False,
                                 x11_window=self.x11_window(), x11_display=self.x11_display(),
                                 win32_window=self.win32_window(), cocoa_window=self.cocoa_window())
@@ -2550,7 +2615,10 @@ class LiquidVisualizerOpenGLRenderer(MonitorSpanMixin, RandomPresetMixin, Player
             "preset_name": self.preset.get("name"),
         }
         GL.glViewport(0, 0, fw, fh)
-        GL.glClearColor(0.0, 0.0, 0.0, 1.0)
+        # Transparent clear, same as the player's glass. The shader then writes
+        # premultiplied transparent black outside the rounded corner, so a
+        # pixel the shader misses cannot come back as a square wedge.
+        GL.glClearColor(0.0, 0.0, 0.0, 0.0)
         GL.glClear(GL.GL_COLOR_BUFFER_BIT)
         if not self._layer.draw_with_state(self, fw, fh, state, bridge=bridge,
                                            text_guard=False):

@@ -10,7 +10,7 @@
 in vec2 vUv;
 out vec4 outColor;
 
-uniform vec4 u_res;     // width, height, time (unused; the water is still), aspect
+uniform vec4 u_res;     // width, height, slider opacity (0..1), aspect
 uniform vec4 u_themeA;  // highlight rgb, mouse x
 uniform vec4 u_themeB;  // accent rgb, mouse y
 uniform vec4 u_themeC;  // second reflection rgb, opacity hint
@@ -217,7 +217,13 @@ void main() {
     float voidOut = 1.0 - step(0.001, dot(theme, vec3(0.299, 0.587, 0.114)));
     col = mix(col, vec3(0.0), voidOut);
     alpha = mix(alpha, 1.0, voidOut);
-    alpha *= smoothstep(0.8, -0.4, outer);
+    float rim = smoothstep(0.8, -0.4, outer);
+    alpha *= rim;
+    // res.z is the transparency bar. Its right end is zero transparency,
+    // so the glass closes across the last part of the bar.
+    float requested = clamp(u.res.z, 0.0, 1.0);
+    float solid = smoothstep(0.84, 1.0, requested);
+    alpha = mix(alpha, rim, solid);
     vec3 rgb = clamp(col, 0.0, 1.0);
     if (u.bezel.z > 0.5) {
         outColor = vec4(rgb * alpha, alpha);
