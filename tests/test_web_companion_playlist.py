@@ -192,6 +192,17 @@ class TestLibraryMode(CompanionTestBase):
         companion.invalidate_queue_cache()
         self.assertEqual(companion.scan_favorite_files(), [str(live)])
 
+    def test_an_empty_favorites_file_does_not_resurrect_the_mirror(self):
+        """Removing the last heart used to come back from favorites.m3u8."""
+        fav = _touch_audio(self.home / "MUSIC" / "fav.mp3")
+        _write(self.config / "favorites.json", json.dumps({"version": 1, "name": "Favorites", "tracks": []}))
+        _write(
+            self.config / "favorites.m3u8",
+            "#EXTM3U\n#EXTINF:-1,fav.mp3\n" + str(fav) + "\n",
+        )
+        companion._favorite_cache["stamp"] = object()
+        self.assertEqual(companion.scan_favorite_files(), [])
+
     def test_favorites_fall_back_to_the_m3u8_mirror(self):
         """favorites.m3u8 is written beside favorites.json by the player."""
         fav = _touch_audio(self.home / "MUSIC" / "fav.mp3")

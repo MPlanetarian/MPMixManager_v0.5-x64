@@ -796,9 +796,13 @@ MODE_LABELS = {
     LIBRARY_MODE_MUSIC: "Music",
     LIBRARY_MODE_FAVORITES: "Favorites",
 }
-# The Favorites playlist is shared with the MP Audio Player, which writes it on
-# every [H] mark, so the companion only ever reads it.
+# The Favorites playlist is shared with the MP Audio Player. The desk marks a
+# track with [H]; this page marks one with the heart. Both write this file.
 FAVORITES_FILE = CONFIG_DIR / "favorites.json"
+_favorites_lock = threading.Lock()
+# mtime, size -> keys. The status poll asks on every tick; the file is tiny
+# but it lives on the config dir and does not need to be re-parsed each time.
+_favorite_cache: Dict[str, Any] = {"stamp": object(), "keys": frozenset()}
 
 _autoplay_done = threading.Event()
 _autoplay_result: Dict[str, Any] = {"status": "pending", "detail": ""}
@@ -2044,10 +2048,17 @@ def scan_favorite_files() -> List[str]:
     so it is read in saved order - the player's Favorites order is meaningful,
     unlike the newest-first archive and music scans. The file is re-read on each
     call because it is tiny and the player may mark a track at any moment.
+
+    An empty JSON file is still the answer. Falling through to the m3u mirror
+    put tracks back after the last one had been removed.
     """
     paths: List[str] = []
     seen = set()
-    for cand in (FAVORITES_FILE, FAVORITES_FILE.with_suffix(".m3u8")):
+    if FAVORITES_FILE.is_file():
+        sources = (FAVORITES_FILE,)
+    else:
+        sources = (FAVORITES_FILE.with_suffix(".m3u8"),)
+    for cand in sources:
         if not cand.is_file():
             continue
         for path in _read_playlist_file(cand):
@@ -2056,9 +2067,160 @@ def scan_favorite_files() -> List[str]:
                 continue
             seen.add(key)
             paths.append(path)
-        if paths:
-            break
     return paths
+
+
+def _load_favorite_document() -> Dict[str, Any]:
+    """The desk player's favorites file, preserving rows it already stored."""
+    doc: Dict[str, Any] = {"version": 1, "name": "Favorites", "tracks": []}
+    if not FAVORITES_FILE.is_file():
+        return doc
+    try:
+        data = json.loads(FAVORITES_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return doc
+    if isinstance(data, list):
+        rows = data
+    elif isinstance(data, dict):
+        raw = data.get("tracks")
+        rows = raw if isinstance(raw, list) else []
+        doc["version"] = data.get("version", 1)
+        doc["name"] = data.get("name") or "Favorites"
+    else:
+        rows = []
+    tracks: List[Dict[str, Any]] = []
+    seen = set()
+    for row in rows:
+        if not isinstance(row, dict) or not row.get("path"):
+            continue
+        key = _favorite_key(row.get("path"))
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        tracks.append(row)
+    doc["tracks"] = tracks
+    return doc
+
+
+def _favorite_key_set() -> set:
+    """Keys currently in favorites.json. Cached on the file's own stamp.
+
+    A missing file is cached too. The playlist draws a heart on every row, and
+    re-reading a file that is not there on each row made that draw a stat storm.
+    """
+    try:
+        st = FAVORITES_FILE.stat()
+        stamp = (str(FAVORITES_FILE), st.st_mtime, st.st_size)
+    except OSError:
+        stamp = (str(FAVORITES_FILE), None)
+    if _favorite_cache.get("stamp") == stamp:
+        return set(_favorite_cache.get("keys") or ())
+    keys = set()
+    for row in _load_favorite_document().get("tracks") or []:
+        key = _favorite_key(row.get("path"))
+        if key:
+            keys.add(key)
+    _favorite_cache["stamp"] = stamp
+    _favorite_cache["keys"] = frozenset(keys)
+    return keys
+
+
+def is_favorite_path(path: Any) -> bool:
+    key = _favorite_key(path)
+    return bool(key) and key in _favorite_key_set()
+
+
+def _favorite_target_allowed(path: str) -> bool:
+    """A heart may only mark a library file, never an arbitrary path."""
+    if not path or not is_audio_file(path):
+        return False
+    if is_favorite_path(path):
+        return True
+    try:
+        if sec.safe_stream_path(path, stream_roots()) is not None:
+            return True
+    except Exception:
+        pass
+    try:
+        if path in build_stream_queue_cached():
+            return True
+    except Exception:
+        return False
+    return False
+
+
+def _favorite_row(path: str) -> Dict[str, Any]:
+    ext = Path(path).suffix.lstrip(".").upper() or "AUDIO"
+    try:
+        size_mb = os.path.getsize(path) / (1024.0 * 1024.0)
+    except OSError:
+        size_mb = 0.0
+    now = time.time()
+    return {
+        "name": os.path.basename(path) or "Unknown",
+        "path": path,
+        "ext": ext,
+        "size_mb": round(size_mb, 3),
+        "duration_fmt": "00:00",
+        "duration_sec": 0,
+        "source": get_library_mode(),
+        "mtime": now,
+        "added": now,
+    }
+
+
+def _write_favorite_m3u(tracks: List[Dict[str, Any]]) -> None:
+    """Mirror favorites.json the same way the desk player does."""
+    m3u = FAVORITES_FILE.with_suffix(".m3u8")
+    lines = ["#EXTM3U", "#PLAYLIST:MP Favorites"]
+    for track in tracks:
+        name = str(track.get("name") or os.path.basename(str(track.get("path") or "")))
+        lines.append("#EXTINF:-1," + name.replace("\n", " "))
+        lines.append(str(track.get("path") or ""))
+    tmp = m3u.with_name(m3u.name + ".tmp")
+    tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    tmp.replace(m3u)
+
+
+def toggle_favorite_path(path: str) -> Optional[bool]:
+    """Add or remove one track. True when it is now a favourite.
+
+    None means the path is not one this companion is allowed to mark. The
+    document stays in the shape FavoritesStore reads, so a heart tap and the
+    desk player's [H] edit the same playlist.
+    """
+    raw = str(path or "").strip()
+    if not _favorite_target_allowed(raw):
+        return None
+    key = _favorite_key(raw)
+    if not key:
+        return None
+    with _favorites_lock:
+        doc = _load_favorite_document()
+        tracks = list(doc.get("tracks") or [])
+        kept = [row for row in tracks if _favorite_key(row.get("path")) != key]
+        added = len(kept) == len(tracks)
+        if added:
+            kept.append(_favorite_row(raw))
+        doc["tracks"] = kept
+        FAVORITES_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = FAVORITES_FILE.with_name(FAVORITES_FILE.name + ".tmp")
+        payload = {
+            "version": int(doc.get("version") or 1),
+            "name": str(doc.get("name") or "Favorites"),
+            "tracks": kept,
+        }
+        tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        tmp.replace(FAVORITES_FILE)
+        try:
+            _write_favorite_m3u(kept)
+        except OSError:
+            pass
+        _favorite_cache["stamp"] = object()
+        _favorite_cache["keys"] = frozenset()
+    if get_library_mode() == LIBRARY_MODE_FAVORITES:
+        invalidate_queue_cache()
+    return added
 
 
 def _scan_dirs(roots: List[Path]) -> List[str]:
@@ -2579,7 +2741,7 @@ def build_stream_queue(force: bool = False) -> List[str]:
             _queue_source_state.update({
                 "fallback": False,
                 "music_offline": False,
-                "detail": "" if files else "No favorites yet - press H in the player to add one",
+                "detail": "" if files else "No favorites yet — tap the heart on a mix",
             })
         else:
             _queue_source_state.update({"fallback": False, "detail": "", "music_offline": False})
@@ -2809,6 +2971,112 @@ def autoplay_state() -> Dict[str, Any]:
 # ------------------------------------------------------------------------------
 # TRACKLIST RESOLUTION & METADATA PARSING
 # ------------------------------------------------------------------------------
+_COVER_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp")
+_COVER_NAMES = (
+    "Cover.png", "cover.png", "Cover.jpg", "cover.jpg", "cover.jpeg",
+    "folder.jpg", "Folder.jpg", "folder.png",
+)
+# path -> (expires_at, resolved cover or ""). Status polls must not stat a
+# handful of siblings on every tick.
+_artwork_cache: Dict[str, Tuple[float, str]] = {}
+_ARTWORK_TTL = 30.0
+
+
+def _find_sibling_cover(audio: Path) -> Optional[Path]:
+    """A picture sitting next to the mix, never a symlink that leaves its folder."""
+    parent = audio.parent
+    names = [audio.stem + ext for ext in _COVER_SUFFIXES]
+    names.extend(_COVER_NAMES)
+    try:
+        parent_resolved = parent.resolve()
+    except OSError:
+        return None
+    for name in names:
+        cand = parent / name
+        try:
+            if not cand.is_file():
+                continue
+            resolved = cand.resolve()
+        except OSError:
+            continue
+        if resolved.parent != parent_resolved:
+            continue
+        if resolved.suffix.lower() not in _COVER_SUFFIXES:
+            continue
+        return resolved
+    return None
+
+
+def artwork_for_stream(file_path: str) -> Optional[Path]:
+    """Cover image for a library mix, or None when there is nothing safe to show.
+
+    The query is an audio path. The picture is chosen here, so a client cannot
+    name an image of its own and read it through this route.
+    """
+    try:
+        audio = sec.safe_stream_path(file_path, stream_roots())
+    except Exception:
+        audio = None
+    if audio is None:
+        return None
+    now = time.time()
+    key = str(audio)
+    hit = _artwork_cache.get(key)
+    if hit and hit[0] > now:
+        return Path(hit[1]) if hit[1] else None
+    found = _find_sibling_cover(audio)
+    if len(_artwork_cache) > 2048:
+        _artwork_cache.clear()
+    _artwork_cache[key] = (now + _ARTWORK_TTL, str(found) if found else "")
+    return found
+
+
+def image_content_type(path: Path) -> str:
+    return {
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".webp": "image/webp",
+    }.get(path.suffix.lower(), "application/octet-stream")
+
+
+def app_icon_path() -> Optional[Path]:
+    """The install icon, used for the home-screen shortcut and a blank lock screen."""
+    base = get_base_dir()
+    for name in ("mp_liquid_glass_icon.png", "dreamworld_aurora.png", "Cover.png"):
+        cand = base / "assets" / name
+        if cand.is_file():
+            return cand
+    return None
+
+
+def web_manifest(theme: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Add-to-home-screen description. The page itself stays network-fresh."""
+    palette = theme or {}
+    theme_color = str(palette.get("bg") or "#000000")
+    if not theme_color.startswith("#"):
+        theme_color = "#000000"
+    background = str(palette.get("bg") or "#000000")
+    if not background.startswith("#"):
+        background = "#000000"
+    return {
+        "name": "MP Audio Player",
+        "short_name": "MP Audio",
+        "description": "Studio and DJ booth stream",
+        "start_url": "/",
+        "scope": "/",
+        "display": "standalone",
+        "background_color": background,
+        "theme_color": theme_color,
+        "icons": [{
+            "src": "/icon.png",
+            "sizes": "192x192",
+            "type": "image/png",
+            "purpose": "any",
+        }],
+    }
+
+
 def find_tracklist_for_mix(mix_file: str) -> str:
     if not mix_file:
         return ""
@@ -3490,6 +3758,8 @@ def get_eq_status(follow: str = "") -> Dict[str, Any]:
     playing = bool(state.get("playing"))
     pos = stream_position(state)
     dur = float(state.get("duration_sec", 0.0) or 0.0)
+    if dur <= 0 and active_file:
+        dur = probe_duration(active_file)
     pct = round(pos / dur * 100.0, 1) if dur > 0 else 0.0
     # The phone's own element is the only audio output, so the server cannot
     # observe it. Decode the file it is hearing instead. This is what feeds the
@@ -3842,6 +4112,8 @@ def host_player_payload() -> Optional[Dict[str, Any]]:
         "pitch_factor": float(data.get("pitch_factor", 1.0) or 1.0),
         "shuffle": bool(data.get("shuffle", False)),
         "repeat": str(data.get("repeat", "all")),
+        "favorite": is_favorite_path(active_file),
+        "has_artwork": bool(active_file) and artwork_for_stream(active_file) is not None,
         "levels": data.get("levels", [0.0] * 24),
         "peaks": data.get("peaks", [0.0] * 24),
         "mini_eq": str(data.get("mini_eq", "")),
@@ -3920,6 +4192,8 @@ def get_playback_status(cli_theme: Optional[str] = None, follow: str = "") -> Di
         "pitch_factor": round(pitch_factor_for(state.get("pitch_percent", 0)), 3),
         "shuffle": bool(state.get("shuffle", False)),
         "repeat": str(state.get("repeat", "all")),
+        "favorite": is_favorite_path(active_file),
+        "has_artwork": bool(active_file) and artwork_for_stream(active_file) is not None,
         "levels": [0.0] * 24,
         "peaks": [0.0] * 24,
         "mini_eq": "",
@@ -4019,6 +4293,7 @@ def _mini_playlist_item(path: str, index: int, current: bool, include_duration: 
         # Already proven undecodable on a device. The row stays visible (so
         # the listener can see what was skipped) but is greyed out.
         "unplayable": is_unplayable(path),
+        "favorite": is_favorite_path(path),
     }
     if include_duration:
         duration = probe_duration(path)
@@ -4276,6 +4551,17 @@ def _adopt_host_into_session(params: Dict[str, List[str]]) -> bool:
     return True
 
 
+def _queue_ends_after(queue: List[str], index: int) -> bool:
+    """True when the next forward step would wrap, or the queue has one entry."""
+    n = len(queue)
+    if n <= 1:
+        return True
+    nxt = next_playable_index(queue, (int(index) + 1) % n, 1)
+    if nxt is None:
+        return True
+    return nxt <= int(index)
+
+
 def control_player(action: str, params: Optional[Dict[str, List[str]]] = None) -> bool:
     """Drive playback. The running host player owns the audio, so a live one is
     forwarded to it; otherwise the browser performs the playback of its stream.
@@ -4316,6 +4602,14 @@ def control_player(action: str, params: Optional[Dict[str, List[str]]] = None) -
 
     if action == "adopt_host":
         return _adopt_host_into_session(params)
+
+    # The heart edits the shared playlist, not whichever player is on air.
+    # Doing it before the queue walk keeps a tap from scanning the library.
+    if action in ("toggle_favorite", "favorite"):
+        target = str((params.get("path") or [""])[0] or "")
+        if not target:
+            target, _state = current_stream_file(cached=True)
+        return toggle_favorite_path(target) is not None
 
     # A running MP Audio Player is what an unengaged dashboard is reporting, so
     # those transport buttons must act on that player. Without this the title
@@ -4458,12 +4752,22 @@ def control_player(action: str, params: Optional[Dict[str, List[str]]] = None) -
                 state["path"] = queue[0]
 
         pos = clamp_position(state, stream_position(state))
-        duration = float(state.get("duration_sec", 0.0) or 0.0) or probe_duration(state["path"])
-        # Persist the length we just learned. Without it `clamp_position` inside
-        # `seek_to` still saw duration 0 and a "seek +30" on the very first tap
-        # ran past the end of the mix instead of stopping at it.
-        if duration and not state.get("duration_sec"):
-            state["duration_sec"] = float(duration)
+        path_before = str(state.get("path") or "")
+        stored_duration = float(state.get("duration_sec", 0.0) or 0.0)
+        # A seek has to know the file it is inside. The first tap used to run
+        # past the end when duration_sec was still 0, and a later tap clamped
+        # to the previous mix when that length had been copied onto this one.
+        seek_action = action in ("seek", "seek_to", "seek_forward", "seek_backward")
+        if path_before and (seek_action or stored_duration <= 0):
+            probed_duration = probe_duration(path_before)
+        else:
+            probed_duration = 0.0
+        if probed_duration > 0:
+            duration = probed_duration
+            if stored_duration <= 0 or abs(stored_duration - probed_duration) > 0.5:
+                state["duration_sec"] = float(probed_duration)
+        else:
+            duration = stored_duration
 
         def seek_to(target: float) -> None:
             state["position_sec"] = clamp_position(state, target)
@@ -4598,11 +4902,30 @@ def control_player(action: str, params: Optional[Dict[str, List[str]]] = None) -
                 target = 0
             _set_stream_pitch(state, target)
         elif action == "track_ended":
-            # The phone finished the file: advance and keep the elapsed clock honest.
-            switch(1)
-            state["duration_sec"] = probe_duration(state["path"])
-            state["playing"] = True
-            state["started_at"] = time.time()
+            # The phone finished the file. Repeat One replays it, Repeat Off
+            # stops on the last mix, and Repeat All (or shuffle) advances.
+            # This used to call switch() unconditionally, so the button changed
+            # the badge and the queue ignored it.
+            repeat_mode = str(state.get("repeat", "all") or "all")
+            if repeat_mode not in ("off", "all", "one"):
+                repeat_mode = "all"
+            at_end = (not state.get("shuffle")) and _queue_ends_after(
+                queue, int(state.get("index", 0) or 0))
+            if repeat_mode == "one":
+                state["position_sec"] = 0.0
+                state["playing"] = True
+                state["started_at"] = time.time()
+                state["playback_exhausted"] = False
+            elif repeat_mode == "off" and at_end:
+                state["playing"] = False
+                state["started_at"] = 0.0
+                end_at = float(state.get("duration_sec", 0.0) or 0.0) or pos
+                state["position_sec"] = clamp_position(state, end_at)
+            else:
+                state["playing"] = True
+                switch(1)
+                state["started_at"] = time.time()
+                state["playback_exhausted"] = False
         elif action == "track_failed":
             # The device could not decode the file it was handed (a media error,
             # not a normal end). Two things have to happen:
@@ -4643,8 +4966,12 @@ def control_player(action: str, params: Optional[Dict[str, List[str]]] = None) -
         else:
             return False
 
-        if duration > 0:
-            state["duration_sec"] = duration
+        # Only write this length back when we are still on the file it
+        # describes. Next, previous and track-end already stored the new
+        # file's length inside switch(); putting `duration` back stamped the
+        # previous mix onto the new one, and the next seek clamped to it.
+        if duration > 0 and str(state.get("path") or "") == path_before:
+            state["duration_sec"] = float(duration)
         save_stream_session(state)
     return True
 
@@ -4877,6 +5204,14 @@ def render_html_page(theme: Dict[str, Any]) -> str:
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="MP Audio">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="{html.escape(str(t.get('bg') or '#000000'), quote=True)}">
+    <link rel="manifest" href="/manifest.webmanifest">
+    <link rel="apple-touch-icon" href="/icon.png">
+    <link rel="icon" href="/icon.png" type="image/png">
     <title>MP Audio Player (Web) — DJ Booth Remote</title>
     <style>
         :root {{
@@ -5251,6 +5586,21 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             color: var(--text-dim);
             margin-top: 2px;
         }}
+        .mini-pl-fav {{
+            flex: 0 0 36px;
+            width: 36px;
+            height: 36px;
+            border: none;
+            border-radius: 10px;
+            background: transparent;
+            color: var(--text-dim);
+            font-size: 1.05rem;
+            line-height: 1;
+            padding: 0;
+        }}
+        .mini-pl-fav.on {{
+            color: var(--accent-crimson);
+        }}
         .autoplay-notice {{
             margin-top: 8px;
             padding: 6px 12px;
@@ -5350,6 +5700,45 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             text-align: center;
             width: 100%;
             margin-bottom: 14px;
+        }}
+        .track-cover {{
+            width: 96px;
+            height: 96px;
+            object-fit: cover;
+            border-radius: 16px;
+            margin: 0 auto 10px;
+            display: block;
+            border: 1px solid var(--card-border);
+            background: rgba(0, 0, 0, 0.25);
+        }}
+        .track-cover[hidden] {{
+            display: none;
+        }}
+        .title-row {{
+            display: flex;
+            align-items: flex-start;
+            justify-content: center;
+            gap: 8px;
+        }}
+        .title-row .track-title {{
+            flex: 1;
+            min-width: 0;
+        }}
+        .btn-fav {{
+            flex: 0 0 44px;
+            width: 44px;
+            height: 44px;
+            border-radius: 12px;
+            border: 1px solid var(--card-border);
+            background: rgba(255, 255, 255, 0.05);
+            color: var(--text-dim);
+            font-size: 1.25rem;
+            line-height: 1;
+            padding: 0;
+        }}
+        .btn-fav.on {{
+            color: var(--accent-crimson);
+            border-color: var(--accent-crimson);
         }}
         .track-title {{
             font-size: 1.25rem;
@@ -5703,13 +6092,21 @@ def render_html_page(theme: Dict[str, Any]) -> str:
         }}
         .progress-bar-bg {{
             width: 100%;
-            height: 9px;
-            background: rgba(255, 255, 255, 0.08);
-            border-radius: 5px;
+            height: 44px;
+            display: flex;
+            align-items: center;
+            background: transparent;
             cursor: pointer;
-            overflow: hidden;
             position: relative;
             touch-action: none;
+        }}
+        .progress-track {{
+            width: 100%;
+            height: 8px;
+            background: rgba(255, 255, 255, 0.08);
+            border-radius: 5px;
+            overflow: hidden;
+            position: relative;
         }}
         .progress-bar-fill {{
             height: 100%;
@@ -5717,6 +6114,9 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             background: var(--progress-fill);
             border-radius: 5px;
             transition: width 0.15s ease-out;
+        }}
+        .progress-bar-bg.scrubbing .progress-bar-fill {{
+            transition: none;
         }}
         .time-row {{
             display: flex;
@@ -6567,7 +6967,14 @@ def render_html_page(theme: Dict[str, Any]) -> str:
         </div>
 
         <div class="track-info">
-            <div id="trackTitle" class="track-title">Connecting to MP Mix Session...</div>
+            <img id="trackCover" class="track-cover" alt="" hidden>
+            <div class="title-row">
+                <div id="trackTitle" class="track-title">Connecting to MP Mix Session...</div>
+                <button type="button" class="btn-fav" id="btnFavorite"
+                        onclick="toggleFavorite()"
+                        aria-pressed="false"
+                        aria-label="Add to favourites">♡</button>
+            </div>
             <div id="trackArtist" class="track-artist">—</div>
             <div id="trackSpecs" class="track-specs">
                 <span id="specFormat" class="spec-chip">FLAC / WAV</span>
@@ -6602,8 +7009,12 @@ def render_html_page(theme: Dict[str, Any]) -> str:
 
         <!-- Progress & Time -->
         <div class="progress-box">
-            <div class="progress-bar-bg" id="progressBg" onclick="seekClick(event)">
-                <div class="progress-bar-fill" id="progressBar"></div>
+            <div class="progress-bar-bg" id="progressBg" role="slider"
+                 aria-label="Playback position" aria-valuemin="0" aria-valuemax="100"
+                 aria-valuenow="0" tabindex="0">
+                <div class="progress-track">
+                    <div class="progress-bar-fill" id="progressBar"></div>
+                </div>
             </div>
             <div class="time-row">
                 <span id="posTime">00:00</span>
@@ -6628,8 +7039,12 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             <button class="btn-sub btn-mode" id="btnShuffle" onclick="sendAction('shuffle')">
                 <span>🔀</span> Shuffle: <span id="shufText">OFF</span>
             </button>
-            <button class="btn-sub btn-mode" id="btnRepeat" onclick="sendAction('repeat')">
+            <button class="btn-sub btn-mode" id="btnRepeat" onclick="cycleRepeat()">
                 <span>🔁</span> Repeat: <span id="repText">ALL</span>
+            </button>
+            <button class="btn-sub btn-mode" id="btnSleep" onclick="cycleSleep()"
+                    aria-label="Sleep timer">
+                <span>🌙</span> Sleep: <span id="sleepText">OFF</span>
             </button>
         </div>
 
@@ -6815,6 +7230,11 @@ def render_html_page(theme: Dict[str, Any]) -> str:
         // DJ pitch the browser is actually playing, in percent. The pill and
         // the <audio> element both read this so a tap is audible immediately.
         let currentPitchPercent = 0;
+        // Repeat mode the phone last heard from the server. Repeat One has to
+        // restart the element itself: the file does not change, so the poll
+        // never reloads a mix that has already ended.
+        let currentRepeatMode = 'all';
+        let scrubbing = false;
         // The level the phone is actually playing, and whether mute is on.
         // iOS ignores assignments to audio.volume, so these drive a GainNode.
         let currentVolumePercent = 100;
@@ -7772,6 +8192,7 @@ def render_html_page(theme: Dict[str, Any]) -> str:
                 }});
                 audioEl.addEventListener('pause', () => updateMediaSessionState(false));
                 audioEl.addEventListener('timeupdate', () => {{
+                    if (!scrubbing) paintLocalProgress(audioEl);
                     if (!('mediaSession' in navigator) || !navigator.mediaSession.setPositionState) return;
                     const dur = isFinite(audioEl.duration) ? audioEl.duration : 0;
                     if (dur <= 0) return;
@@ -7809,6 +8230,19 @@ def render_html_page(theme: Dict[str, Any]) -> str:
                     const sinceEngage = performance.now() - lastEngageAt;
                     if (audioStreamEngaged && lastEngageAt > 0 && sinceEngage < 2500) {{
                         restartStreamFromTop();
+                        return;
+                    }}
+                    // Repeat One stays on this file, so the status poll will
+                    // not load it again. Start it here, inside the ended
+                    // event, or the mix stops while the badge still says ONE.
+                    if (phoneOwnsPlayback() && currentRepeatMode === 'one') {{
+                        sendAction('track_ended');
+                        try {{
+                            listenerPaused = false;
+                            audioEl.currentTime = 0;
+                            const started = audioEl.play();
+                            if (started && started.catch) started.catch(() => {{}});
+                        }} catch (e) {{}}
                         return;
                     }}
                     sendAction('track_ended');
@@ -7879,6 +8313,8 @@ def render_html_page(theme: Dict[str, Any]) -> str:
                     resumeAfterNetworkDrop();
                 }});
             }}
+            bindScrubber();
+            restoreSleep();
             loadThemeList();
             fetchMiniPlaylist();
             paintAutoSpeak();
@@ -8133,7 +8569,7 @@ def render_html_page(theme: Dict[str, Any]) -> str:
                     empty.innerText = 'No tracks match "' + query + '"';
                 }} else {{
                     empty.innerText = (data && data.mode === 'FAVORITES')
-                        ? 'No favourites yet — press H in the player to add one'
+                        ? 'No favourites yet — tap ♡ on a mix to save it here'
                         : 'No audio found in this library';
                 }}
                 wrap.appendChild(empty);
@@ -8163,8 +8599,21 @@ def render_html_page(theme: Dict[str, Any]) -> str:
                 body.appendChild(title);
                 body.appendChild(dur);
 
+                const heart = document.createElement('button');
+                heart.type = 'button';
+                heart.className = 'mini-pl-fav' + (item.favorite ? ' on' : '');
+                heart.innerText = item.favorite ? '♥' : '♡';
+                heart.setAttribute('aria-label', item.favorite
+                    ? 'Remove from favourites' : 'Add to favourites');
+                heart.onclick = (ev) => {{
+                    ev.stopPropagation();
+                    ev.preventDefault();
+                    toggleFavorite(item.file);
+                }};
+
                 row.appendChild(num);
                 row.appendChild(body);
+                row.appendChild(heart);
                 wrap.appendChild(row);
             }});
             wrap.scrollTop = scrollTop;
@@ -9019,17 +9468,20 @@ def render_html_page(theme: Dict[str, Any]) -> str:
         // playbackState, iOS treats this page as the now-playing app and shows
         // transport controls instead of stopping the mix when the screen locks.
         // The <audio> element still owns the clock and the decoders.
-        let trackMeta = {{ title: '', artist: '', album: '' }};
+        let trackMeta = {{ title: '', artist: '', album: '', artwork: '' }};
 
         function updateMediaSessionMetadata() {{
             if (!('mediaSession' in navigator) || typeof MediaMetadata === 'undefined') return;
             const title = trackMeta.title || 'MP Mix Manager';
             const artist = trackMeta.artist || 'MPlanetarian';
+            const artSrc = trackMeta.artwork || '';
+            const artwork = artSrc ? [{{ src: artSrc }}] : [];
             try {{
                 navigator.mediaSession.metadata = new MediaMetadata({{
                     title: title,
                     artist: artist,
                     album: trackMeta.album || 'MP Mix Manager',
+                    artwork: artwork,
                 }});
             }} catch (e) {{}}
         }}
@@ -9077,13 +9529,24 @@ def render_html_page(theme: Dict[str, Any]) -> str:
             const ms = navigator.mediaSession;
             if (!ms.setActionHandler) return;
             const audioEl = document.getElementById('mobileAudioStream');
-            const seekBy = (delta) => {{
-                if (!audioEl) return;
+            const commitMediaSeek = (seconds) => {{
+                if (!audioEl || !isFinite(seconds)) return;
+                clearHostAlign();
                 try {{
                     const dur = isFinite(audioEl.duration) ? audioEl.duration : currentDurationSec;
-                    const next = audioEl.currentTime + delta;
-                    audioEl.currentTime = Math.max(0, dur > 0 ? Math.min(next, dur - 0.5) : next);
-                }} catch (e) {{}}
+                    let next = Math.max(0, seconds);
+                    if (dur > 0) next = Math.min(next, Math.max(0, dur - 0.25));
+                    audioSeekInFlight = true;
+                    audioEl.currentTime = next;
+                    setTimeout(() => {{ audioSeekInFlight = false; }}, 1500);
+                    if (phoneOwnsPlayback()) sendAction('seek_to', {{ position: next.toFixed(1) }});
+                }} catch (e) {{
+                    audioSeekInFlight = false;
+                }}
+            }};
+            const seekBy = (delta) => {{
+                if (!audioEl) return;
+                commitMediaSeek((audioEl.currentTime || 0) + delta);
             }};
             const actions = {{
                 play: mediaSessionPlay,
@@ -9094,11 +9557,8 @@ def render_html_page(theme: Dict[str, Any]) -> str:
                 seekbackward: (details) => seekBy(-(Number(details && details.seekOffset) || 30)),
                 seekforward: (details) => seekBy(Number(details && details.seekOffset) || 30),
                 seekto: (details) => {{
-                    if (!audioEl || details == null) return;
-                    try {{
-                        if (details.fastSeek && audioEl.fastSeek) audioEl.fastSeek(details.seekTime);
-                        else audioEl.currentTime = details.seekTime;
-                    }} catch (e) {{}}
+                    if (details == null || !isFinite(details.seekTime)) return;
+                    commitMediaSeek(Number(details.seekTime));
                 }},
             }};
             Object.keys(actions).forEach((name) => {{
@@ -9969,20 +10429,221 @@ def render_html_page(theme: Dict[str, Any]) -> str:
         }}
         requestAnimationFrame(animLoop);
 
-        async function seekClick(e) {{
-            clearHostAlign();
+        function paintLocalProgress(audioEl) {{
+            if (!audioEl || scrubbing) return;
+            if (!audioStreamConfigured) return;
+            if (!isFinite(audioEl.duration) || audioEl.duration <= 0) return;
+            currentDurationSec = audioEl.duration;
+            const pos = Math.max(0, audioEl.currentTime || 0);
+            const posEl = document.getElementById('posTime');
+            const durEl = document.getElementById('durTime');
+            const bar = document.getElementById('progressBar');
+            if (posEl) posEl.innerText = formatClock(pos);
+            if (durEl) durEl.innerText = formatClock(audioEl.duration);
+            if (bar) {{
+                const pct = (pos / audioEl.duration) * 100;
+                bar.style.width = Math.max(0, Math.min(100, pct)) + '%';
+            }}
+            const scrub = document.getElementById('progressBg');
+            if (scrub) {{
+                const pctNow = Math.round((pos / audioEl.duration) * 100);
+                scrub.setAttribute('aria-valuenow', String(pctNow));
+                scrub.setAttribute('aria-valuetext', formatClock(pos) + ' of ' + formatClock(audioEl.duration));
+            }}
+        }}
+
+        function progressFraction(ev, el) {{
+            const rect = el.getBoundingClientRect();
+            if (!rect.width) return 0;
+            const x = Number(ev.clientX) - rect.left;
+            return Math.max(0, Math.min(1, x / rect.width));
+        }}
+
+        function paintScrub(fraction) {{
+            const bar = document.getElementById('progressBar');
+            if (bar) bar.style.width = (Math.max(0, Math.min(1, fraction)) * 100) + '%';
+            if (currentDurationSec > 0) {{
+                const posEl = document.getElementById('posTime');
+                if (posEl) posEl.innerText = formatClock(fraction * currentDurationSec);
+            }}
+        }}
+
+        function commitScrub(fraction) {{
             if (!currentDurationSec || currentDurationSec <= 0) return;
-            const rect = e.currentTarget.getBoundingClientRect();
-            const clickX = e.clientX - rect.left;
-            const pct = Math.max(0, Math.min(1, clickX / rect.width));
-            const seekPos = pct * currentDurationSec;
-            
+            clearHostAlign();
+            const seekPos = Math.max(0, Math.min(1, fraction)) * currentDurationSec;
             const audioEl = document.getElementById('mobileAudioStream');
-            if (audioEl && audioEl.duration) {{
+            if (audioEl && (isFinite(audioEl.duration) || audioStreamEngaged)) {{
                 seekAudioTo(seekPos);
             }}
-
             sendAction('seek_to', {{ position: seekPos.toFixed(1) }});
+        }}
+
+        function bindScrubber() {{
+            const bg = document.getElementById('progressBg');
+            if (!bg || bg.dataset.bound) return;
+            bg.dataset.bound = '1';
+            bg.addEventListener('pointerdown', (ev) => {{
+                if (ev.button != null && ev.button > 0) return;
+                scrubbing = true;
+                bg.classList.add('scrubbing');
+                try {{ bg.setPointerCapture(ev.pointerId); }} catch (e) {{}}
+                paintScrub(progressFraction(ev, bg));
+                ev.preventDefault();
+            }});
+            bg.addEventListener('pointermove', (ev) => {{
+                if (!scrubbing) return;
+                paintScrub(progressFraction(ev, bg));
+            }});
+            const finish = (ev) => {{
+                if (!scrubbing) return;
+                scrubbing = false;
+                bg.classList.remove('scrubbing');
+                commitScrub(progressFraction(ev, bg));
+            }};
+            bg.addEventListener('pointerup', finish);
+            bg.addEventListener('pointercancel', () => {{
+                scrubbing = false;
+                bg.classList.remove('scrubbing');
+            }});
+        }}
+
+        function seekClick(e) {{
+            const bg = e.currentTarget || document.getElementById('progressBg');
+            if (!bg) return;
+            commitScrub(progressFraction(e, bg));
+        }}
+
+        function paintFavorite(on) {{
+            const btn = document.getElementById('btnFavorite');
+            if (!btn) return;
+            btn.classList.toggle('on', Boolean(on));
+            btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+            btn.innerText = on ? '♥' : '♡';
+            btn.setAttribute('aria-label', on ? 'Remove from favourites' : 'Add to favourites');
+        }}
+
+        function paintCover(url) {{
+            const img = document.getElementById('trackCover');
+            if (!img) return;
+            const next = url || '';
+            if (!next) {{
+                if (!img.hidden) {{
+                    img.hidden = true;
+                    img.removeAttribute('src');
+                }}
+                return;
+            }}
+            if (img.getAttribute('src') === next && !img.hidden) return;
+            img.hidden = false;
+            img.src = next;
+        }}
+
+        function toggleFavorite(path) {{
+            const file = path || activeAudioFile;
+            if (!file) return;
+            const btn = document.getElementById('btnFavorite');
+            if (!path && btn) paintFavorite(!btn.classList.contains('on'));
+            sendAction('toggle_favorite', {{ path: file }});
+        }}
+
+        const SLEEP_STEPS = [0, 15, 30, 60, 90];
+        let sleepMinutes = 0;
+        let sleepUntil = 0;
+        let sleepTimer = 0;
+        let sleepPaintTimer = 0;
+
+        function paintSleep() {{
+            const btn = document.getElementById('btnSleep');
+            const txt = document.getElementById('sleepText');
+            if (!btn || !txt) return;
+            if (!sleepUntil || Date.now() >= sleepUntil) {{
+                txt.innerText = 'OFF';
+                btn.classList.remove('active');
+                btn.setAttribute('aria-label', 'Sleep timer off');
+                return;
+            }}
+            const left = Math.max(1, Math.ceil((sleepUntil - Date.now()) / 60000));
+            txt.innerText = left + 'm';
+            btn.classList.add('active');
+            btn.setAttribute('aria-label', 'Sleep timer, ' + left + ' minutes left');
+        }}
+
+        function scheduleSleepPaint() {{
+            clearInterval(sleepPaintTimer);
+            sleepPaintTimer = 0;
+            if (!sleepUntil) return;
+            sleepPaintTimer = setInterval(() => {{
+                if (!sleepUntil || Date.now() >= sleepUntil) {{
+                    clearInterval(sleepPaintTimer);
+                    sleepPaintTimer = 0;
+                    return;
+                }}
+                paintSleep();
+            }}, 30000);
+        }}
+
+        function armSleep(minutes) {{
+            clearTimeout(sleepTimer);
+            sleepTimer = 0;
+            sleepMinutes = Number(minutes) || 0;
+            if (!sleepMinutes) {{
+                sleepUntil = 0;
+                try {{ sessionStorage.removeItem('mp-sleep-until'); }} catch (e) {{}}
+                paintSleep();
+                scheduleSleepPaint();
+                return;
+            }}
+            sleepUntil = Date.now() + sleepMinutes * 60000;
+            try {{ sessionStorage.setItem('mp-sleep-until', String(sleepUntil)); }} catch (e) {{}}
+            sleepTimer = setTimeout(fireSleep, sleepMinutes * 60000);
+            paintSleep();
+            scheduleSleepPaint();
+        }}
+
+        function cycleSleep() {{
+            const idx = SLEEP_STEPS.indexOf(sleepMinutes);
+            const next = SLEEP_STEPS[(idx < 0 ? 0 : idx + 1) % SLEEP_STEPS.length];
+            armSleep(next);
+        }}
+
+        function fireSleep() {{
+            sleepUntil = 0;
+            sleepMinutes = 0;
+            clearInterval(sleepPaintTimer);
+            sleepPaintTimer = 0;
+            try {{ sessionStorage.removeItem('mp-sleep-until'); }} catch (e) {{}}
+            paintSleep();
+            const audioEl = document.getElementById('mobileAudioStream');
+            if (!(audioEl && phoneOwnsPlayback() && !audioEl.paused)) return;
+            listenerPaused = true;
+            try {{ audioEl.pause(); }} catch (e) {{}}
+            sendAction('pause');
+            const note = document.getElementById('autoplayNotice');
+            if (note) {{
+                note.style.display = 'block';
+                note.className = 'autoplay-notice';
+                note.innerText = '🌙 Sleep timer — playback paused on this phone';
+            }}
+        }}
+
+        function restoreSleep() {{
+            let until = 0;
+            try {{ until = Number(sessionStorage.getItem('mp-sleep-until') || 0); }} catch (e) {{}}
+            if (!(until > Date.now() + 1000)) return;
+            sleepUntil = until;
+            sleepMinutes = Math.max(1, Math.round((until - Date.now()) / 60000));
+            sleepTimer = setTimeout(fireSleep, until - Date.now());
+            paintSleep();
+            scheduleSleepPaint();
+        }}
+
+        function cycleRepeat() {{
+            const order = ['off', 'all', 'one'];
+            const cur = order.indexOf(currentRepeatMode);
+            const next = order[(cur < 0 ? 1 : cur + 1) % order.length];
+            updateRepeatUI(next);
+            sendAction('repeat');
         }}
 
         function updateShuffleUI(isShuf) {{
@@ -10000,10 +10661,11 @@ def render_html_page(theme: Dict[str, Any]) -> str:
         }}
 
         function updateRepeatUI(repMode) {{
+            currentRepeatMode = String(repMode || 'all').toLowerCase();
             const btn = document.getElementById('btnRepeat');
             const txt = document.getElementById('repText');
-            if (txt) txt.innerText = String(repMode || 'ALL').toUpperCase();
-            if (btn) btn.classList.toggle('active', Boolean(repMode && repMode !== 'off'));
+            if (txt) txt.innerText = currentRepeatMode.toUpperCase();
+            if (btn) btn.classList.toggle('active', currentRepeatMode !== 'off');
         }}
 
         // DJ pitch, matching the desk player: percent moves speed and pitch
@@ -10093,7 +10755,9 @@ def render_html_page(theme: Dict[str, Any]) -> str:
                 const shownDur = hasLocalClock ? audioEl.duration : Number(data.duration_sec || 0);
                 if (hostPlayerActive && !phonePlaying) isPlayerActive = false;
 
-                if (hasLocalClock) {{
+                if (scrubbing) {{
+                    // A finger is on the bar. The poll must not yank it back.
+                }} else if (hasLocalClock) {{
                     document.getElementById('posTime').innerText = formatClock(shownPos);
                     document.getElementById('durTime').innerText = formatClock(shownDur);
                     const pct = shownDur > 0 ? (shownPos / shownDur) * 100 : 0;
@@ -10269,6 +10933,10 @@ def render_html_page(theme: Dict[str, Any]) -> str:
 
         async function fetchStatus() {{
             try {{
+                // A backgrounded iPhone delays setTimeout, so the sleep timer
+                // is also checked on this poll. The background poll is what
+                // still runs while the screen is locked.
+                if (sleepUntil && Date.now() >= sleepUntil) fireSleep();
                 const res = await fetch(apiUrl('/api/status'));
                 const data = await res.json();
                 statusFailureCount = 0;
@@ -10301,11 +10969,21 @@ def render_html_page(theme: Dict[str, Any]) -> str:
                 const nextTitle = data.title || '';
                 const nextArtist = data.artist || '';
                 const nextAlbum = data.album || '';
+                const nextArt = (data.has_artwork && data.active_file)
+                    ? (location.origin + '/api/artwork?file=' + encodeURIComponent(data.active_file))
+                    : (location.origin + '/icon.png');
                 if (nextTitle !== trackMeta.title || nextArtist !== trackMeta.artist ||
-                    nextAlbum !== trackMeta.album) {{
-                    trackMeta = {{ title: nextTitle, artist: nextArtist, album: nextAlbum }};
+                    nextAlbum !== trackMeta.album || nextArt !== trackMeta.artwork) {{
+                    trackMeta = {{
+                        title: nextTitle,
+                        artist: nextArtist,
+                        album: nextAlbum,
+                        artwork: nextArt,
+                    }};
                     updateMediaSessionMetadata();
                 }}
+                paintCover(data.has_artwork ? nextArt : '');
+                if (data.favorite !== undefined) paintFavorite(Boolean(data.favorite));
 
                 const badge = document.getElementById('playBadge');
                 const state = (data.state || "stopped").toLowerCase();
@@ -10333,7 +11011,13 @@ def render_html_page(theme: Dict[str, Any]) -> str:
                     applyStreamVolume(data.volume, data.muted);
                 }}
                 if (data.pitch_percent !== undefined) applyStreamPitch(data.pitch_percent);
-                currentDurationSec = data.duration_sec || 0;
+                // The element knows its own length once metadata has arrived.
+                // Overwriting that with the server clock aimed a scrub at the
+                // previous mix after a track change.
+                const clockEl = document.getElementById('mobileAudioStream');
+                const elementHasClock = Boolean(clockEl && audioStreamConfigured
+                    && isFinite(clockEl.duration) && clockEl.duration > 0);
+                if (!elementHasClock) currentDurationSec = Number(data.duration_sec) || 0;
                 // What bounds the auto-skip run, and the host's own verdict that
                 // every entry has already failed (e.g. another phone proved it,
                 // or this page was reloaded mid-run).
@@ -11020,6 +11704,41 @@ class CompanionHandler(http.server.BaseHTTPRequestHandler):
         """
         return self._client_allowed()
 
+    def _send_bytes(self, body: bytes, content_type: str, cache: str = "no-cache") -> None:
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", cache)
+        self.end_headers()
+        try:
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
+    def _serve_image(self, path: Path, cache: str) -> None:
+        try:
+            size = path.stat().st_size
+        except OSError:
+            self.send_response(404)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        # A cover is a picture beside a mix, not a movie. Refuse a huge file
+        # rather than holding the request thread while it is copied.
+        if size <= 0 or size > 15_000_000:
+            self.send_response(404)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        try:
+            body = path.read_bytes()
+        except OSError:
+            self.send_response(404)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        self._send_bytes(body, image_content_type(path), cache=cache)
+
     def _send_plain(self, code: int, message: str) -> None:
         body = json.dumps({"error": message}).encode("utf-8")
         try:
@@ -11050,6 +11769,12 @@ class CompanionHandler(http.server.BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+        elif url.path in ("/manifest.webmanifest", "/icon.png"):
+            content_type = "application/manifest+json" if url.path.endswith(".webmanifest") else "image/png"
+            self.send_response(200)
+            self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", "0")
             self.end_headers()
         elif url.path in ("/api/status", "/api/theme", "/api/eq", "/api/autoplay",
@@ -11176,6 +11901,26 @@ class CompanionHandler(http.server.BaseHTTPRequestHandler):
         elif url.path == "/api/assistant/start":
             payload = start_harmony_agent()
             self._send_json(200 if payload.get("success") else 501, payload)
+        elif url.path == "/manifest.webmanifest":
+            body = json.dumps(web_manifest(get_theme_palette(CLI_THEME))).encode("utf-8")
+            self._send_bytes(body, "application/manifest+json", cache="no-cache")
+        elif url.path == "/icon.png":
+            icon = app_icon_path()
+            if icon is None:
+                self.send_response(404)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+            else:
+                self._serve_image(icon, cache="public, max-age=86400")
+        elif url.path == "/api/artwork":
+            requested = parsed_query.get("file", [""])[0]
+            cover = artwork_for_stream(requested)
+            if cover is None:
+                self.send_response(404)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+            else:
+                self._serve_image(cover, cache="private, max-age=300")
         elif url.path == "/healthz":
             payload = {"ok": True, "service": "mp-web-companion", "version": VERSION}
             body = json.dumps(payload).encode("utf-8")
@@ -11613,6 +12358,7 @@ class CompanionHandler(http.server.BaseHTTPRequestHandler):
         elif url.path in ("/api/status", "/api/theme", "/api/eq", "/api/autoplay",
                           "/api/themes", "/api/set_theme", "/api/playlist", "/api/mode",
                           "/api/launchpad", "/api/play-random", "/api/stream",
+                          "/api/artwork", "/manifest.webmanifest", "/icon.png",
                           "/api/assistant/status", "/api/assistant/voices",
                           "/healthz"):
             # These are read-only (or deliberately GET-only, like set_theme).

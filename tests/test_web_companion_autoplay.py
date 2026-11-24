@@ -368,6 +368,137 @@ class StreamSessionTest(unittest.TestCase):
         path, _ = mwc.current_stream_file()
         self.assertEqual(path, self.queue[1])
 
+    def test_next_keeps_the_new_files_duration(self):
+        """A track change must not leave the previous mix's length behind.
+
+        The length was captured before the switch and written back afterwards,
+        so a seek on the new file clamped to the old one.
+        """
+        durations = {self.queue[0]: 600.0, self.queue[1]: 90.0}
+
+        def probe(path):
+            return durations.get(path, 600.0)
+
+        with mock.patch.object(mwc, "probe_duration", side_effect=probe):
+            mwc.save_stream_session({
+                "index": 0,
+                "path": self.queue[0],
+                "playing": True,
+                "position_sec": 10.0,
+                "duration_sec": 600.0,
+            })
+            self.assertTrue(mwc.control_player("next"))
+        state = mwc.load_stream_session()
+        self.assertEqual(state["path"], self.queue[1])
+        self.assertAlmostEqual(state["duration_sec"], 90.0, places=1)
+
+    def test_repeat_one_restarts_the_same_mix(self):
+        mwc.save_stream_session({
+            "index": 2,
+            "path": self.queue[2],
+            "playing": True,
+            "position_sec": 500.0,
+            "duration_sec": 600.0,
+            "repeat": "one",
+        })
+        self.assertTrue(mwc.control_player("track_ended"))
+        state = mwc.load_stream_session()
+        self.assertEqual(state["path"], self.queue[2])
+        self.assertEqual(state["index"], 2)
+        self.assertAlmostEqual(state["position_sec"], 0.0, places=1)
+        self.assertTrue(state["playing"])
+        self.assertEqual(state["repeat"], "one")
+
+    def test_repeat_off_stops_on_the_last_mix(self):
+        last = len(self.queue) - 1
+        mwc.save_stream_session({
+            "index": last,
+            "path": self.queue[last],
+            "playing": True,
+            "position_sec": 590.0,
+            "duration_sec": 600.0,
+            "repeat": "off",
+            "shuffle": False,
+        })
+        self.assertTrue(mwc.control_player("track_ended"))
+        state = mwc.load_stream_session()
+        self.assertEqual(state["path"], self.queue[last])
+        self.assertFalse(state["playing"])
+
+    def test_repeat_off_still_advances_before_the_end(self):
+        mwc.save_stream_session({
+            "index": 1,
+            "path": self.queue[1],
+            "playing": True,
+            "position_sec": 590.0,
+            "duration_sec": 600.0,
+            "repeat": "off",
+            "shuffle": False,
+        })
+        self.assertTrue(mwc.control_player("track_ended"))
+        state = mwc.load_stream_session()
+        self.assertEqual(state["path"], self.queue[2])
+        self.assertTrue(state["playing"])
+
+    def test_repeat_all_wraps_to_the_first_mix(self):
+        last = len(self.queue) - 1
+        mwc.save_stream_session({
+            "index": last,
+            "path": self.queue[last],
+            "playing": True,
+            "position_sec": 590.0,
+            "duration_sec": 600.0,
+            "repeat": "all",
+            "shuffle": False,
+        })
+        self.assertTrue(mwc.control_player("track_ended"))
+        state = mwc.load_stream_session()
+        self.assertEqual(state["path"], self.queue[0])
+        self.assertTrue(state["playing"])
+        self.assertAlmostEqual(state["position_sec"], 0.0, places=1)
+
+    def test_heart_toggles_the_shared_favorites_file(self):
+        fav = self.tmp / "favorites.json"
+        with mock.patch.object(mwc, "FAVORITES_FILE", fav), \
+             mock.patch.object(mwc, "stream_roots", return_value=[self.tmp]):
+            self.assertTrue(mwc.control_player(
+                "toggle_favorite", {"path": [self.queue[0]]}))
+            self.assertTrue(mwc.is_favorite_path(self.queue[0]))
+            saved = json.loads(fav.read_text(encoding="utf-8"))
+            self.assertEqual(saved["name"], "Favorites")
+            self.assertEqual(saved["tracks"][0]["path"], self.queue[0])
+            mirror = (self.tmp / "favorites.m3u8").read_text(encoding="utf-8")
+            self.assertIn(self.queue[0], mirror)
+            self.assertTrue(mwc.control_player(
+                "toggle_favorite", {"path": [self.queue[0]]}))
+            self.assertFalse(mwc.is_favorite_path(self.queue[0]))
+            saved = json.loads(fav.read_text(encoding="utf-8"))
+            self.assertEqual(saved["tracks"], [])
+            # The mirror must be emptied too, or the next read puts the track back.
+            self.assertNotIn(self.queue[0], (self.tmp / "favorites.m3u8").read_text(encoding="utf-8"))
+
+    def test_heart_refuses_a_path_outside_the_library(self):
+        fav = self.tmp / "favorites.json"
+        with mock.patch.object(mwc, "FAVORITES_FILE", fav):
+            self.assertFalse(mwc.control_player(
+                "toggle_favorite", {"path": ["/etc/passwd"]}))
+        self.assertFalse(fav.exists())
+
+    def test_cover_is_the_picture_beside_the_mix(self):
+        cover = self.tmp / "0.png"
+        cover.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 16)
+        outside_dir = self.tmp / "outside"
+        outside_dir.mkdir()
+        outside = outside_dir / "secret.png"
+        outside.write_bytes(b"\x89PNG\r\n\x1a\n")
+        escaped = self.tmp / "1.png"
+        escaped.symlink_to(outside)
+        mwc._artwork_cache.clear()
+        with mock.patch.object(mwc, "stream_roots", return_value=[self.tmp]):
+            self.assertEqual(mwc.artwork_for_stream(self.queue[0]), cover.resolve())
+            self.assertIsNone(mwc.artwork_for_stream(self.queue[1]))
+            self.assertIsNone(mwc.artwork_for_stream("/etc/passwd"))
+
     def test_select_index_jumps_to_a_specific_mix(self):
         mwc.control_player("select_index", {"index": ["3"]})
         path, _ = mwc.current_stream_file()

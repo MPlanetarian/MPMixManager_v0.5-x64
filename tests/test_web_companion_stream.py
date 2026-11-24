@@ -148,6 +148,25 @@ class ClientSyncTest(unittest.TestCase):
     def test_browser_reports_end_of_mix_to_the_server(self):
         self.assertIn("sendAction('track_ended')", self.html)
 
+    def test_repeat_one_restarts_the_element(self):
+        self.assertIn("currentRepeatMode === 'one'", self.html)
+        self.assertIn("audioEl.currentTime = 0", self.html)
+
+    def test_the_scrubber_follows_a_finger(self):
+        self.assertIn("function bindScrubber()", self.html)
+        self.assertIn("pointerdown", self.html)
+        self.assertIn("function paintLocalProgress(", self.html)
+        self.assertIn('id="progressBg"', self.html)
+        self.assertNotIn('id="progressBg" onclick', self.html)
+
+    def test_sleep_favourites_and_home_screen_are_on_the_page(self):
+        self.assertIn("function fireSleep()", self.html)
+        self.assertIn('id="btnSleep"', self.html)
+        self.assertIn('id="btnFavorite"', self.html)
+        self.assertIn('rel="manifest"', self.html)
+        self.assertIn("apple-mobile-web-app-capable", self.html)
+        self.assertIn("trackMeta.artwork", self.html)
+
 
 class Skip30SecondsTest(unittest.TestCase):
     """The 30 s arrows must move the element that is actually playing.
