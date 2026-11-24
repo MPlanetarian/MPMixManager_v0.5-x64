@@ -2,9 +2,10 @@
 """Dynamic Liquid Glass [Rainbow Colours] is the first-run default for the
 CLI manager, MP Gui, the Liquid Player and the standalone audio player.
 
-A fresh install writes that theme to the shared file, and those windows fall
-back to it when the file is missing. The MP Liquid Mixer and the auxiliary
-tools keep their existing Dreamworlds Ultra fallbacks.
+A fresh install writes that theme to the shared file (and replaces an empty
+file left behind by an interrupted install), and those windows fall back to it
+when the file is missing. The MP Liquid Mixer and the auxiliary tools keep
+their existing Dreamworlds Ultra fallbacks.
 """
 
 import os
@@ -34,6 +35,59 @@ class TestRainbowIsDefault(unittest.TestCase):
         text = (ROOT / "install.sh").read_text(encoding="utf-8")
         self.assertIn("printf '%s\\n' \"dynamic_rainbow_liquid_glass\"", text)
         self.assertIn("Default theme: Dynamic Liquid Glass [Rainbow Colours]", text)
+
+    def _run_installer_theme_block(self, home):
+        """Run the installer's real theme-selection block against *home*."""
+        text = (ROOT / "install.sh").read_text(encoding="utf-8")
+        start = text.index("# First install selects Dynamic Liquid Glass")
+        end = text.index("# Pick the MP Visualizer backend", start)
+        block = text[start:end]
+        return subprocess.run(
+            ["bash", "-c", block],
+            capture_output=True,
+            text=True,
+            cwd=str(ROOT),
+            env={"HOME": str(home), "PATH": os.environ.get("PATH", "")},
+        )
+
+    def test_a_fresh_install_writes_rainbow_to_the_shared_theme_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            result = self._run_installer_theme_block(home)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            theme_file = home / ".config" / "mix-manager" / "theme"
+            self.assertEqual(
+                theme_file.read_text(encoding="utf-8").strip(),
+                "dynamic_rainbow_liquid_glass",
+            )
+            self.assertIn("Default theme: Dynamic Liquid Glass", result.stdout)
+
+    def test_a_saved_choice_survives_a_second_install(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            theme_file = home / ".config" / "mix-manager" / "theme"
+            theme_file.parent.mkdir(parents=True)
+            theme_file.write_text("dreamworlds_ultra\n", encoding="utf-8")
+            result = self._run_installer_theme_block(home)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(theme_file.read_text(encoding="utf-8").strip(), "dreamworlds_ultra")
+            self.assertIn("Keeping your saved theme: dreamworlds_ultra", result.stdout)
+
+    def test_an_empty_theme_file_is_not_a_saved_choice(self):
+        for empty in ("", " \n\t\r\n"):
+            with tempfile.TemporaryDirectory() as tmp:
+                home = Path(tmp)
+                theme_file = home / ".config" / "mix-manager" / "theme"
+                theme_file.parent.mkdir(parents=True)
+                theme_file.write_text(empty, encoding="utf-8")
+                result = self._run_installer_theme_block(home)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(
+                    theme_file.read_text(encoding="utf-8").strip(),
+                    "dynamic_rainbow_liquid_glass",
+                    repr(empty),
+                )
+                self.assertIn("Default theme: Dynamic Liquid Glass", result.stdout)
 
     def test_manager_defaults_to_rainbow(self):
         script = """

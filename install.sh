@@ -743,15 +743,21 @@ fi
 # theme file is what the CLI manager, MP Gui, the Liquid Player and the
 # tracklist viewer all read, so writing it here means every window opens in
 # that theme. An existing choice is never overwritten: a reinstall or an
-# update keeps the theme the user picked with C.
+# update keeps the theme the user picked with C. An empty or whitespace-only
+# file is not a choice (an interrupted install or a packaging tool can leave
+# one behind), so it is replaced with the default instead of being "kept".
 MP_THEME_DIR="$HOME/.config/mix-manager"
 MP_THEME_FILE="$MP_THEME_DIR/theme"
 mkdir -p "$MP_THEME_DIR" 2>/dev/null || true
-if [ ! -f "$MP_THEME_FILE" ]; then
+MP_THEME_SAVED=""
+if [ -f "$MP_THEME_FILE" ]; then
+    MP_THEME_SAVED="$(tr -d '[:space:]' < "$MP_THEME_FILE" 2>/dev/null || true)"
+fi
+if [ -z "$MP_THEME_SAVED" ]; then
     printf '%s\n' "dynamic_rainbow_liquid_glass" > "$MP_THEME_FILE" 2>/dev/null || true
     echo -e "${GREEN}      ✓ Default theme: Dynamic Liquid Glass [Rainbow Colours]${NC}"
 else
-    echo -e "${DIM}      • Keeping your saved theme: $(tr -d ' \t\n\r' < "$MP_THEME_FILE" 2>/dev/null)${NC}"
+    echo -e "${DIM}      • Keeping your saved theme: ${MP_THEME_SAVED}${NC}"
 fi
 
 # Pick the MP Visualizer backend for this machine. NVIDIA GPUs that advertise a
