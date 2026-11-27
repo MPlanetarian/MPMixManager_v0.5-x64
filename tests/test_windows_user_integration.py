@@ -44,6 +44,11 @@ class TestWindowsUserIntegration(unittest.TestCase):
         self.assertNotIn("CommonDesktopDirectory", script)
         self.assertNotIn("Public\\Desktop", script)
 
+    def test_ensure_tray_uses_the_same_stay_open_mode_as_startup(self):
+        script = (ROOT / "scripts" / "windows_user_integration.ps1").read_text(encoding="utf-8")
+        ensure = script.split('if ($Action -eq "EnsureTray")', 1)[1].split("\n}", 1)[0]
+        self.assertIn("Start-MpTray -InstallRoot $Root -Stay", ensure)
+
     def test_tray_icon_uses_the_windows_notification_area(self):
         tray = (ROOT / "scripts" / "windows_tray.ps1").read_text(encoding="utf-8")
         self.assertIn("NotifyIcon", tray)

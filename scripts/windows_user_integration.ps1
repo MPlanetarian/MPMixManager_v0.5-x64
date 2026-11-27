@@ -597,7 +597,7 @@ if ($Action -eq "Status") {
 }
 
 if ($Action -eq "EnsureTray") {
-    if (Start-MpTray -InstallRoot $Root) { exit 0 }
+    if (Start-MpTray -InstallRoot $Root -Stay) { exit 0 }
     Write-Host "The MP Mix Manager tray icon did not start."
     exit 3
 }
