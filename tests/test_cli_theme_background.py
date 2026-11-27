@@ -204,6 +204,37 @@ class TestCliThemeBackground(unittest.TestCase):
         self.assertLess(load.find("_ensure_konsole_default_scheme"), load.find("_apply_cli_theme_background"))
         self.assertIn('_sync_btop_theme "$new_theme"; _apply_cli_theme_background', text)
 
+    def test_windows_console_helper_is_not_the_store_python3(self):
+        """A bare python3 on Windows 10 is the Microsoft Store alias, not Python.
+
+        The palette helper used to run `python3 -c ...` guarded only by
+        `command -v python3`, which the stub satisfies. It exited non-zero,
+        the status was discarded, and every theme kept the same console
+        background. The helper must take the resolved interpreter.
+        """
+        text = MGR_SH.read_text(encoding="utf-8")
+        block = text.split("_apply_windows_console_background() {", 1)[1]
+        block = block.split("\n_apply_macos_terminal_background() {", 1)[0]
+        self.assertNotIn("        python3 -c '", block)
+        self.assertIn('"$py" -c \'', block)
+        self.assertIn("MP_PY_BIN", block)
+        self.assertIn("WindowsApps", block)
+
+    def test_windows_console_helper_opens_conout(self):
+        """GetStdHandle(-11) is a pipe under $(...) and Git Bash.
+
+        The helper must open CONOUT$ like scripts/windows_console_scroll.py,
+        or the palette write has no console and silently does nothing.
+        """
+        text = MGR_SH.read_text(encoding="utf-8")
+        block = text.split("_apply_windows_console_background() {", 1)[1]
+        block = block.split("\n_apply_macos_terminal_background() {", 1)[0]
+        self.assertIn('CreateFileW("CONOUT$"', block)
+        # The call must not be wrapped in $(...): that is what made stdout a
+        # pipe. The reply travels through MP_BG_OUT instead.
+        self.assertNotIn('out="$(MP_BG_R=', block)
+        self.assertIn("MP_BG_OUT", block)
+
 
 if __name__ == "__main__":
     unittest.main()

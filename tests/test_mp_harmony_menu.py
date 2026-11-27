@@ -130,6 +130,51 @@ class TestHarmonyShiftA(unittest.TestCase):
             self.assertEqual(session.prompt(), "xA")
 
 
+class TestHarmonyPython(unittest.TestCase):
+    """The launcher must not use the Microsoft Store python3 alias.
+
+    On Windows 10 `python3` in WindowsApps is a stub that fails. Every API
+    call (load/pull/copy) and the agent launch are Python, so a machine with
+    Ollama running and the model installed still reported
+    "Ollama did not load ...". The launcher now resolves like the rest of
+    the suite and skips the alias.
+    """
+
+    def test_launcher_resolves_a_real_interpreter(self):
+        text = LAUNCHER.read_text(encoding="utf-8")
+        self.assertIn("_harmony_resolve_python", text)
+        self.assertIn("WindowsApps", text)
+        self.assertIn("resolve_mp_python.sh", text)
+        # The API helper and the agent must run on the resolved interpreter.
+        self.assertIn('"$HARMONY_PYTHON" - "$@"', text)
+        self.assertIn('"$HARMONY_PYTHON" "$HARMONY_SCRIPT"', text)
+        self.assertNotIn("    python3 - \"$@\"", text)
+
+    def test_resolver_never_returns_the_store_alias(self):
+        script = """
+        set -e
+        eval "$(awk '/^_harmony_resolve_python\\(\\)/{f=1} f{print} f&&/^}/{exit}' "$1")"
+        _harmony_resolve_python || exit 0
+        """
+        result = subprocess.run(
+            ["bash", "-c", script, "_", str(LAUNCHER)],
+            capture_output=True, text=True, timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for line in result.stdout.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            self.assertNotIn("WindowsApps", line, line)
+
+    def test_windows_ollama_install_is_found_outside_path(self):
+        """Ollama on Windows is a desktop app, not a Git Bash PATH entry."""
+        text = LAUNCHER.read_text(encoding="utf-8")
+        self.assertIn("harmony_find_ollama_exe", text)
+        self.assertIn("Programs/Ollama/ollama.exe", text)
+        self.assertIn("harmony_is_windows", text)
+
+
 class TestHarmonyGate(unittest.TestCase):
     def test_refuses_when_ollama_is_down(self):
         result = _run_launcher({"MP_HARMONY_FORCE_DOWN": "1"})

@@ -65,6 +65,10 @@ MENU_RESCAN_MUSIC = "Rescan Music Folders"
 # state whenever the menu opens, so it always states what a click will do.
 MENU_MUTE_AUDIO = "Mute MP Player Audio"
 MENU_UNMUTE_AUDIO = "Unmute MP Player Audio"
+# Pulls the latest version while the exit movie loops. Windows runs it from
+# scripts/windows_tray.ps1; this entry keeps the Linux, BSD and macOS trays
+# offering the same action.
+MENU_UPDATE = "Update MP Mix Manager"
 
 MENU_ENTRIES = (
     ("launch-gui", MENU_LAUNCH_GUI),
@@ -76,6 +80,7 @@ MENU_ENTRIES = (
     ("rescan-archive", MENU_RESCAN_ARCHIVE),
     ("rescan-music", MENU_RESCAN_MUSIC),
     ("mute-audio", MENU_MUTE_AUDIO),
+    ("update", MENU_UPDATE),
     ("close-all", MENU_CLOSE_ALL),
 )
 
@@ -937,10 +942,52 @@ def close_windows(titles: tuple[str, ...] = CLOSE_WINDOW_TITLES) -> None:
 
 
 def _which(name: str) -> str | None:
-    for directory in os.environ.get("PATH", "").split(":"):
-        candidate = Path(directory) / name
-        if candidate.is_file() and os.access(candidate, os.X_OK):
-            return str(candidate)
+    """Locate an executable on PATH.
+
+    PATH is split on ``:`` on POSIX and on ``;`` on Windows. Splitting on
+    ``:`` alone also tore ``C:\\...`` apart, so a Windows install could never
+    find ``bash.exe`` and the tray's rescan and update helpers failed with
+    ``[WinError 2]`` even though Git Bash was installed.
+    """
+    path = os.environ.get("PATH", "")
+    separators = (";", ":") if os.name == "nt" else (":",)
+    directories: list[str] = []
+    for separator in separators:
+        if separator in path:
+            directories.extend(path.split(separator))
+    if not directories:
+        directories = [path]
+    seen: set[str] = set()
+    # A bare "bash" has no extension, and Windows will not resolve it: the
+    # file is bash.exe. PATHEXT is the documented list, but the tray only
+    # ever asks for bash, so the two names that matter are tried directly.
+    names = [name]
+    if os.name == "nt" and not Path(name).suffix:
+        names = [name + ".exe", name + ".bat", name + ".cmd", name]
+    for directory in directories:
+        directory = directory.strip().strip('"')
+        if not directory or directory in seen:
+            continue
+        seen.add(directory)
+        for candidate_name in names:
+            candidate = Path(directory) / candidate_name
+            try:
+                if not candidate.is_file():
+                    continue
+                # The WindowsApps bash.exe is the WSL launcher, not Git Bash.
+                # WSL cannot see X:\ paths, so an update or rescan handed to
+                # it fails. Skip it and keep looking for a real shell.
+                if "windowsapps" in str(candidate).lower():
+                    continue
+                # os.access(X_OK) is unreliable on Windows (it reports True
+                # for almost any existing file, and some drives report False
+                # for a real executable). A Windows .exe that exists runs.
+                if os.name == "nt":
+                    return str(candidate)
+                if os.access(candidate, os.X_OK):
+                    return str(candidate)
+            except OSError:
+                continue
     return None
 
 
@@ -1745,6 +1792,151 @@ def run_rescan(action_id: str, base: Path) -> dict:
     return {"ok": False, "detail": f"Unknown rescan action: {action_id}"}
 
 
+# ------------------------------------------------------------------------------
+# Update MP Mix Manager
+# ------------------------------------------------------------------------------
+# `scripts/update_manager.sh --force` is the same updater the console's
+# "update" command runs, so the tray and the manager cannot install different
+# things. The exit movie loops for the whole run: an update can take minutes,
+# and a single play-through would leave an empty desktop while git works. The
+# movie is closed and the tray quits when it ends, or after
+# UPDATE_TIMEOUT_SECONDS if it cannot finish, so a failed update never leaves
+# the user inside a loop they cannot dismiss.
+UPDATE_TIMEOUT_SECONDS = 300
+
+
+def updater_script(base: Path) -> Path | None:
+    for candidate in (
+        Path(base) / "scripts" / "update_manager.sh",
+        Path(base) / "update_manager.sh",
+    ):
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _update_version_line(text: str) -> str:
+    """The "successfully updated to vX" line, or the last meaningful one."""
+    lines = [line.strip() for line in _strip_ansi(text or "").splitlines() if line.strip()]
+    for line in reversed(lines):
+        if "successfully updated" in line.lower():
+            return line.lstrip("✓ ").strip()
+    for line in reversed(lines):
+        if set(line) - set("=- "):
+            return line
+    return ""
+
+
+def run_update(base: Path, timeout: float = UPDATE_TIMEOUT_SECONDS) -> dict:
+    """Run the updater and return {ok, detail}. Never raises."""
+    script = updater_script(base)
+    if script is None:
+        return {"ok": False, "detail": f"update_manager.sh was not found in {base}."}
+    bash = _which("bash") or "/bin/bash"
+    env = _rescan_env()
+    # --force re-pulls even when git reports nothing new, so an interrupted
+    # install can be repaired from the tray.
+    code, stdout, stderr = _run_capture(
+        [bash, str(script), "--force"],
+        Path(base),
+        timeout,
+        env,
+    )
+    if code == 0:
+        return {"ok": True, "detail": _update_version_line(stdout)}
+    if code == 124:
+        return {"ok": False, "detail": f"The update did not finish within {int(timeout)} seconds."}
+    detail = _last_line(stderr) or _update_version_line(stdout)
+    return {"ok": False, "detail": detail or f"The updater exited with code {code}."}
+
+
+def update_message(result: dict) -> str:
+    if not result.get("ok"):
+        detail = result.get("detail") or "The update did not finish."
+        return f"The update did not complete. {detail}"
+    detail = result.get("detail") or ""
+    if detail:
+        return f"MP Mix Manager updated. {detail}"
+    return "MP Mix Manager was updated to the latest version."
+
+
+UPDATE_ICONS = "system-software-update"
+
+
+def start_update_video(base: Path) -> int:
+    """Start the exit movie in a loop and return the player pid, or 0.
+
+    `--loop-start` is the same entry the uninstaller uses: it repeats until
+    the caller stops it, and prints the pid it started. MP_EXIT_VIDEO_NO_TTY
+    keeps it from reading a skip key out of the tray's own terminal.
+    """
+    script = Path(base) / "scripts" / "display_loader_video.sh"
+    if not script.is_file():
+        return 0
+    bash = _which("bash") or "/bin/bash"
+    env = os.environ.copy()
+    env.pop("MP_SYSTEM_TRAY_CHILD", None)
+    env["MP_EXIT_VIDEO_NO_TTY"] = "1"
+    try:
+        result = subprocess.run(
+            [bash, str(script), "--loop-start"],
+            cwd=str(base),
+            env=env,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return 0
+    for line in reversed((result.stdout or "").splitlines()):
+        line = line.strip()
+        if line.isdigit() and int(line) > 1:
+            return int(line)
+    return 0
+
+
+def stop_update_video(pid: int, base: Path | None = None) -> None:
+    """Close the looping movie. Safe when the pid is 0 or already gone."""
+    if not pid:
+        return
+    # Ask the shared script to stop it first: it knows whether the window is
+    # an ffplay/mpv/VLC child and cleans up the process group on X11.
+    script = Path(base) / "scripts" / "display_loader_video.sh" if base else None
+    if script is not None and script.is_file():
+        bash = _which("bash") or "/bin/bash"
+        env = os.environ.copy()
+        env.pop("MP_SYSTEM_TRAY_CHILD", None)
+        env["MP_EXIT_VIDEO_NO_TTY"] = "1"
+        try:
+            subprocess.run(
+                [bash, str(script), "--loop-stop", str(int(pid))],
+                cwd=str(base),
+                env=env,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=15,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    for sig in (signal.SIGTERM, getattr(signal, "SIGKILL", signal.SIGTERM)):
+        try:
+            os.kill(pid, sig)
+        except OSError:
+            return
+        deadline = time.time() + 1.5
+        while time.time() < deadline:
+            try:
+                os.kill(pid, 0)
+            except OSError:
+                return
+            time.sleep(0.1)
+
+
+
 def rescan_message(action_id: str, result: dict) -> str:
     if action_id == "rescan-archive":
         return archive_rescan_message(result)
@@ -1791,6 +1983,12 @@ def perform_menu_action(base: Path, action_id: str) -> int:
         notify(title, rescan_message(action_id, result), RESCAN_ICONS[action_id])
         if not result.get("ok"):
             print(rescan_message(action_id, result), file=sys.stderr)
+        return 0 if result.get("ok") else 1
+    if action_id == "update":
+        result = run_update(base)
+        notify(MENU_UPDATE, update_message(result), UPDATE_ICONS)
+        if not result.get("ok"):
+            print(update_message(result), file=sys.stderr)
         return 0 if result.get("ok") else 1
     role = {
         "launch-gui": ROLE_GUI,
@@ -2324,6 +2522,8 @@ def run_tray(base: Path, config: Path, stay: bool = False) -> int:
     close_state = {"done": False, "error": ""}
     rescan_states: dict[str, dict] = {}
     rescan_timers: dict[str, tuple] = {}
+    update_state: dict = {}
+    update_timers: dict[str, tuple] = {}
 
     def _run_rescan(state_box: dict, action_id: str) -> None:
         """Scan on a worker thread so the icon keeps answering while it runs.
@@ -2336,6 +2536,15 @@ def run_tray(base: Path, config: Path, stay: bool = False) -> int:
         try:
             state_box["result"] = run_rescan(action_id, base)
         except Exception as exc:  # never leave the entry stuck on "Rescanning…"
+            state_box["result"] = {"ok": False, "detail": str(exc)}
+        finally:
+            state_box["done"] = True
+
+    def _run_update(state_box: dict) -> None:
+        """Install the update on a worker, so the icon keeps answering."""
+        try:
+            state_box["result"] = run_update(base)
+        except Exception as exc:  # never leave the entry stuck on "Updating…"
             state_box["result"] = {"ok": False, "detail": str(exc)}
         finally:
             state_box["done"] = True
@@ -2390,8 +2599,67 @@ def run_tray(base: Path, config: Path, stay: bool = False) -> int:
         watcher.timeout.connect(_check_finished)
         watcher.start()
 
+    def start_update() -> None:
+        """Update the suite while the exit movie loops.
+
+        The movie runs for the whole install: an update can take minutes, and
+        playing it once would leave an empty desktop while git works. It is
+        closed, and the tray quits, as soon as the update finishes or the
+        5 minute ceiling is reached. A failed update must not leave a looping
+        window (or this icon) behind, so the teardown runs in every case.
+        """
+        if update_state and not update_state["done"]:
+            return
+        box = {"done": False, "result": {}}
+        # The closure cannot rebind a plain name without `nonlocal`, and this
+        # function is defined inside run_tray's body. Mutate the dict the
+        # enclosing scope already holds so a second click sees "busy".
+        update_state.clear()
+        update_state.update(box)
+        action = update_action
+        if action is not None:
+            action.setEnabled(False)
+            action.setText("Updating MP Mix Manager…")
+        video_pid = start_update_video(base)
+        worker = threading.Thread(
+            target=_run_update,
+            args=(box,),
+            name="mp-tray-update",
+            daemon=True,
+        )
+        worker.start()
+        watcher = QTimer()
+        watcher.setInterval(250)
+        update_timers["update"] = (watcher, worker, video_pid)
+
+        def _check_update_finished() -> None:
+            if not box["done"]:
+                return
+            watcher.stop()
+            update_timers.pop("update", None)
+            stop_update_video(video_pid, base)
+            result = box.get("result") or {}
+            notify(MENU_UPDATE, update_message(result), UPDATE_ICONS)
+            try:
+                with open(log_path, "a", encoding="utf-8") as log_file:
+                    log_file.write(
+                        f"update: {'ok' if result.get('ok') else 'failed'} "
+                        f"{update_message(result)}\n"
+                    )
+            except OSError:
+                pass
+            # Either way this tray is done: the update replaced the tree it
+            # was running from, so it restarts with the next launch.
+            app.quit()
+
+        watcher.timeout.connect(_check_update_finished)
+        watcher.start()
+
     def dispatch(action_id: str) -> None:
         if state["closing"] and action_id != "web-audio":
+            return
+        if action_id == "update":
+            start_update()
             return
         if action_id in RESCAN_ACTIONS:
             start_rescan(action_id)
@@ -2468,6 +2736,7 @@ def run_tray(base: Path, config: Path, stay: bool = False) -> int:
     web_audio_action = None
     close_action = None
     mute_action = None
+    update_action = None
     rescan_actions: dict[str, object] = {}
     for action_id, label in menu_entries():
         if action_id == "close-all":
@@ -2481,6 +2750,10 @@ def run_tray(base: Path, config: Path, stay: bool = False) -> int:
             close_action = action
         elif action_id == "mute-audio":
             mute_action = action
+        elif action_id == "update":
+            # Keep a handle so the label can read "Updating…" and a second
+            # click cannot begin a second update.
+            update_action = action
         elif action_id in RESCAN_ACTIONS:
             rescan_actions[action_id] = action
 

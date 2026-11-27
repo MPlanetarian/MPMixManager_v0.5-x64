@@ -162,6 +162,7 @@ class TestMenu(unittest.TestCase):
                 "Rescan Mix Archive Folders",
                 "Rescan Music Folders",
                 "Mute MP Player Audio",
+                "Update MP Mix Manager",
                 "Close MP Mix Manager (Closes everything)",
             ],
         )
@@ -704,7 +705,10 @@ class TestCloseAllClosesEverything(unittest.TestCase):
             # sees the wrapper until the SIGKILL is issued.
             if reads["count"] == 1:
                 return survivor + [proc(11, 1, "python3 /opt/MP_Audio_Player.py")]
-            if any(sig == getattr(tray.signal, "SIGKILL") for sig, _ in calls):
+            # Windows has no SIGKILL, so the tray escalates with SIGTERM
+            # there. Compare against the same fallback the implementation uses.
+            kill_sig = getattr(tray.signal, "SIGKILL", tray.signal.SIGTERM)
+            if any(sig == kill_sig for sig, _ in calls):
                 return []
             return list(survivor)
 
@@ -721,7 +725,14 @@ class TestCloseAllClosesEverything(unittest.TestCase):
              patch.object(tray.time, "sleep"), \
              patch.object(tray.time, "time", side_effect=fake_time):
             tray.shutdown_suite(ROOT, play_exit=False)
-        self.assertIn((getattr(tray.signal, "SIGKILL"), [10]), calls)
+        kill_sig = getattr(tray.signal, "SIGKILL", tray.signal.SIGTERM)
+        # On Windows there is no SIGKILL, so the escalation reuses SIGTERM and
+        # the first sweep carries the same signal. Assert that the survivor
+        # (pid 10) was signalled with the escalation signal at least once.
+        self.assertTrue(
+            any(sig == kill_sig and 10 in pids for sig, pids in calls),
+            calls,
+        )
 
     def test_a_clean_close_needs_no_second_sweep(self):
         with patch.object(tray, "read_proc_table", return_value=[

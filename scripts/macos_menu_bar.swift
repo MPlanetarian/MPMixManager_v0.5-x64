@@ -52,6 +52,7 @@ final class MenuBarController: NSObject, NSApplicationDelegate, NSMenuDelegate {
             ("rescan-archive", "Rescan Mix Archive Folders"),
             ("rescan-music", "Rescan Music Folders"),
             ("mute-audio", "Mute MP Player Audio"),
+            ("update", "Update MP Mix Manager"),
         ]
         for (ident, title) in entries where self.entryEnabled(ident) {
             let menuItem = NSMenuItem(title: title, action: #selector(performAction(_:)), keyEquivalent: "")
@@ -119,7 +120,9 @@ final class MenuBarController: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard !action.isEmpty else { return }
         DispatchQueue.global(qos: .userInitiated).async {
             _ = self.runPython(["--action", action])
-            if action == "close-all" {
+            if action == "close-all" || action == "update" {
+                // An update installs the tree this agent runs from, so it
+                // restarts with the next login exactly like a Close All.
                 DispatchQueue.main.async {
                     NSApp.terminate(nil)
                 }

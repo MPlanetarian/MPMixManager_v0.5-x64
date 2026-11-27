@@ -15,6 +15,68 @@ _fmt_sec() { local t=${1:-0}; ((t<0)) && t=0; ((t>=3600)) && printf "%02d:%02d:%
 format_seconds_aud() { _fmt_sec "$1"; }
 format_seconds_straw() { _fmt_sec "$1"; }
 format_seconds_cliamp() { _fmt_sec "$1"; }
+# --- MP Harmony Agent presence ----------------------------------------------
+# MP Harmony is an optional project that lives outside this tree
+# (~/OpenAI/MP_Harmony_Agent, installed by scripts/install_harmony_agent.sh).
+# Nothing in the menu system may depend on it: when it is missing, every entry
+# point asks these helpers first, prints one short notice and returns without
+# starting Ollama, downloading a model, clearing the screen or changing the
+# terminal modes. mp_harmony_agent_dir caches the resolved directory because the
+# menu header is rebuilt often.
+_MP_HARMONY_DIR_CACHE=""
+mp_harmony_agent_dir() {
+    # A cached hit is re-verified, so installing the agent while the manager is
+    # open is picked up on the next key press instead of needing a restart.
+    local _hd
+    if [ -n "${_MP_HARMONY_DIR_CACHE:-}" ] \
+        && { [ -f "${_MP_HARMONY_DIR_CACHE}/MP_Harmony_Agent.py" ] || [ -f "${_MP_HARMONY_DIR_CACHE}/HA.py" ]; }; then
+        printf '%s\n' "$_MP_HARMONY_DIR_CACHE"
+        return 0
+    fi
+    _hd=""
+    if [ -n "${HARMONY_DIR:-}" ] \
+        && { [ -f "${HARMONY_DIR}/MP_Harmony_Agent.py" ] || [ -f "${HARMONY_DIR}/HA.py" ]; }; then
+        _hd="$HARMONY_DIR"
+    else
+        local _cand
+        for _cand in "$HOME/OpenAI/MP_Harmony_Agent" "$HOME/OpenAI/Harmony_Agent"; do
+            if [ -f "$_cand/MP_Harmony_Agent.py" ] || [ -f "$_cand/HA.py" ]; then
+                _hd="$_cand"
+                break
+            fi
+        done
+    fi
+    _MP_HARMONY_DIR_CACHE="$_hd"
+    [ -n "$_hd" ] || return 1
+    printf '%s\n' "$_hd"
+}
+mp_harmony_agent_installed() {
+    mp_harmony_agent_dir >/dev/null 2>&1
+}
+mp_harmony_agent_notice() {
+    local _ndir=""
+    _ndir="$(mp_harmony_agent_dir 2>/dev/null || true)"
+    [ -n "$_ndir" ] || _ndir="${HARMONY_DIR:-$HOME/OpenAI/MP_Harmony_Agent}"
+    printf '\n%s\n' "${YELLOW}MP Harmony Agent is not installed, so this option is unavailable.${NC}"
+    # %s, not printf %b: a Windows path such as X:\... contains backslash
+    # sequences that %b would expand into control characters.
+    printf '  It is an optional, separate project (expected in %s).\n' "$_ndir"
+    printf '%s\n' "  Install it with: ${BOLD}scripts/install_harmony_agent.sh install${NC}"
+    printf '%s\n' "  Or re-run ${BOLD}./install.sh${NC} and accept the optional agent."
+    printf '%s\n' "  The rest of MP Mix Manager is unaffected."
+}
+mp_harmony_menu_gate() {
+    # 0 when the assistant can be opened. Otherwise one notice, then 1. The
+    # notice pauses for a key press only on an interactive terminal, so a
+    # scripted or piped call (--harmony ...) still exits immediately.
+    mp_harmony_agent_installed && return 0
+    mp_harmony_agent_notice
+    if [ -t 0 ] || [ -t 1 ]; then
+        press_enter "Press [Enter] to return to the menu..."
+    fi
+    return 1
+}
+# -----------------------------------------------------------------------------
 generate_favorites_tracklist() {
 local title="${1:-Favorites}" dest="${2:-}" now="" line="" width=2 i=1
 local -a labels=()
@@ -1381,6 +1443,16 @@ local _rcfile="" _bash _saved_int="" _monitor=0
 [ -e /dev/tty ] || return 0
 if [ -n "${BASH:-}" ] && [ -x "${BASH}" ]; then _bash="$BASH"; else _bash="$(command -v bash 2>/dev/null || printf '%s' bash)"; fi
 _rcfile="$(mktemp "${TMPDIR:-/tmp}/mp-manager-bash.XXXXXX" 2>/dev/null)" || return 0
+# The prompt only advertises Shift+A when the optional MP Harmony Agent is
+# actually installed; otherwise an A at the empty prompt would leave the shell
+# for a menu entry that cannot open anything.
+if declare -F mp_harmony_agent_installed >/dev/null 2>&1 && mp_harmony_agent_installed; then
+  export MP_MANAGER_HARMONY_AVAILABLE=1
+  export MP_MANAGER_HARMONY_HINT=", or Shift+A for MP Harmony"
+else
+  export MP_MANAGER_HARMONY_AVAILABLE=0
+  export MP_MANAGER_HARMONY_HINT=""
+fi
 cat > "$_rcfile" << 'MPBASH'
 if [ "${MP_MANAGER_BASH_NORC:-0}" != 1 ] && [ -f "${HOME}/.bashrc" ]; then
   . "${HOME}/.bashrc"
@@ -1393,7 +1465,12 @@ _mp_manager_bash_key() {
   if [ -z "$trimmed" ]; then
     case "$key" in
       A)
-        exit 42
+        if [ "${MP_MANAGER_HARMONY_AVAILABLE:-0}" = "1" ]; then
+          exit 42
+        fi
+        printf '\033[0mMP Harmony Agent is not installed, so Shift+A has nothing to open.\n'
+        printf '  Install it with: scripts/install_harmony_agent.sh install\n'
+        return 0
         ;;
       g|G)
         if [ -n "${MP_GUI_LAUNCHER:-}" ] && [ -f "$MP_GUI_LAUNCHER" ]; then
@@ -1441,7 +1518,7 @@ else
   bind -x '"G": _mp_manager_bash_key G'
   bind -x '"A": _mp_manager_bash_key A'
 fi
-printf '\033[0mpress B to return to MP Manager, or G for MP Gui, or Shift+A for MP Harmony\n'
+printf '\033[0mpress B to return to MP Manager, or G for MP Gui%s\n' "${MP_MANAGER_HARMONY_HINT:-}"
 MPBASH
 export MP_GUI_LAUNCHER="${SCRIPT_DIR}/MP_Gui.sh"
 export MP_GUI_LOG="${HOME}/.config/mix-manager/mp_gui.log"
@@ -2114,7 +2191,9 @@ declare -F _paint_theme_background_on_load >/dev/null 2>&1 && _paint_theme_backg
 [ -z "${_LAST_SET_TITLE:-}" ] && ensure_manager_windowed
 local _menu_exit_hint="q to exit"; [ "${MP_GUI_SESSION:-0}" = "1" ] && _menu_exit_hint="q or Esc to close"; local menu_title="$1"; local menu_header="$2"; local -n _opts_ref="$3"; local cur_idx="${4:-0}"; local total_opts="${#_opts_ref[@]}"; command -v update_mp_bridge_menu &>/dev/null && update_mp_bridge_menu "${menu_title:-Main Console / Workstation Menu}" "true"; if [ "$total_opts" -eq 0 ]; then REPLY="0"; return 0; fi; local start_attempts=0; while [ "$start_attempts" -lt "$total_opts" ]; do IFS='|' read -r k_chk _ _ <<< "${_opts_ref[$cur_idx]}"; if [ "$k_chk" != "SECTION" ] && [ "$k_chk" != "SEP" ]; then break; fi; cur_idx=$(( (cur_idx + 1) % total_opts )); ((start_attempts++)); done; local -a selectable_map=(); local s_count=0; local i; for (( i=0; i<total_opts; i++ )); do IFS='|' read -r k_chk _ _ <<< "${_opts_ref[$i]}"; if [ "$k_chk" != "SECTION" ] && [ "$k_chk" != "SEP" ]; then selectable_map[i]=$s_count; ((s_count++)); else selectable_map[i]=-1; fi; done; _find_menu_search_match() { local q="${1,,}" start="${2:-0}" dir="${3:-1}"; [ -z "$q" ] && return 0; local step=0 idx="$start"; while [ "$step" -lt "$total_opts" ]; do local ok="" ol="" oe=""; IFS='|' read -r ok ol oe <<< "${_opts_ref[$idx]}"; if [ "$ok" != "SECTION" ] && [ "$ok" != "SEP" ]; then local haystack="${ok} ${ol} ${oe}"; haystack="${haystack,,}"; if [[ "$haystack" == *"$q"* ]]; then cur_idx=$idx; return 0; fi; fi; idx=$(( (idx + dir + total_opts) % total_opts )); ((step++)); done; return 1; }; if [ ! -t 0 ]; then clear; if [ -n "$menu_title" ]; then echo -e "${BOLD}${MAGENTA}${S70}${NC}\n${BOLD}${MAGENTA}       $menu_title${NC}\n${BOLD}${MAGENTA}${S70}${NC}"; elif [ -z "$menu_title" ] && [ -z "$menu_header" ] && command -v render_main_header &>/dev/null; then update_terminal_geometry 0; render_main_header "$(( _TERM_COLS - 4 ))" >/dev/null; menu_header="${_RENDERED_MAIN_HEADER:-}"; fi; [ -n "$menu_header" ] && echo -e "$menu_header"; if get_mp_audio_player_track_info 2>/dev/null; then local st_sym="${BOLD}${GREEN}▶ PLAYING${NC}"; [ "$MP_PLAYER_STATE" = "paused" ] && st_sym="${BOLD}${YELLOW}⏸ PAUSED${NC}"; local disp_title="$MP_PLAYER_TITLE"; [ ${#disp_title} -gt 40 ] && disp_title="${disp_title:0:37}..."; local p_hdr="♫ MP AUDIO PLAYER"; [ "$MP_PLAYER_MODE" = "MUSIC" ] && p_hdr="♫ MP AUDIO PLAYER [MUSIC MODE - TRACKS]"; local p_dashes=$(( 74 - ${#p_hdr} - 4 )); [ "$p_dashes" -lt 0 ] && p_dashes=0; local p_dash_str; printf -v p_dash_str '%*s' "$p_dashes" ''; p_dash_str="${p_dash_str// /─}"; echo -e "  ${BOLD}${MAGENTA}╭── ${p_hdr} ${p_dash_str}╮${NC}"; printf "  ${BOLD}${MAGENTA}│${NC} %b  ${BOLD}${YELLOW}%-40s${NC}  ${CYAN}%s/%s${NC} ${DIM}(%2s%%)${NC} ${BOLD}${MAGENTA}│\n" "$st_sym" "$disp_title" "$MP_PLAYER_POS_FMT" "$MP_PLAYER_DUR_FMT" "${MP_PLAYER_PROGRESS_PCT%.*}"; printf "  ${BOLD}${MAGENTA}│${NC}   %b %b  %b %b\n" "${MENU_WHITE}EQ:" "${MENU_WHITE}${MP_PLAYER_MINI_EQ:-        }" "${MENU_WHITE}Controls: [Space] Toggle [L] Liquid [C] Theme [n] Next [</>] Track [p] UI [f] FM" "${NC}${BOLD}${MAGENTA}│"; echo -e "  ${BOLD}${MAGENTA}╰──────────────────────────────────────────────────────────────────────────╯${NC}"; fi; for opt_entry in "${_opts_ref[@]}"; do IFS='|' read -r o_key o_label o_extra <<< "$opt_entry"; case "$o_key" in SECTION) echo -e "\n  ${BOLD}${BLUE}─── [ $o_label ] ─────────${NC}" ;; SEP) echo -e "  ${BOLD}${BLUE}──────────────────────────────────────────────────────────────────────────${NC}" ;; *) echo -e "  ${MENU_INK}${BOLD}$o_key)${NC}${MENU_INK} $o_label $o_extra${NC}" ;; esac; done; echo ""; run_deferred_startup; read -r -p "Enter choice: " REPLY; return 0; fi; update_terminal_geometry 0; local box_w; _set_menu_box_width box_w "${_TERM_COLS:-80}"; _CURRENT_BOX_W="$box_w"; _MENU_CURSOR_LOCK=1; local header_count=0; local cached_header_block=""; local cached_header_lines=0; local overhead=4
 build_header_block() {
-header_count=0; cached_header_block=""; cached_header_lines=0; local inner_w=$(( box_w - 2 )); local text_w=$(( box_w - 4 )); local h_border; printf -v h_border '%*s' "$inner_w" ''; h_border="${h_border// /─}"; if [ -n "$menu_title" ]; then cached_header_block+="  ${BOLD}${MAGENTA}╭${h_border}╮\033[K${NC}\n"; local title_line; printf -v title_line "  ${BOLD}${MAGENTA}│ %-${text_w}s │\033[K${NC}\n" "  ${menu_title}"; cached_header_block+="$title_line"; cached_header_block+="  ${BOLD}${MAGENTA}╰${h_border}╯\033[K${NC}\n"; cached_header_lines=$((cached_header_lines + 3)); fi; if [ -z "$menu_title" ] && command -v render_main_header &>/dev/null; then render_main_header "$box_w" >/dev/null; menu_header="${_RENDERED_MAIN_HEADER:-}"; fi; if [ -n "$menu_header" ]; then local exp_hdr=""; printf -v exp_hdr "%b" "$menu_header"; exp_hdr="${exp_hdr%$'\n'}"; while IFS= read -r h_line; do cached_header_block+="${h_line}\033[K\n"; ((header_count++)); done <<< "$exp_hdr"; cached_header_lines=$((cached_header_lines + header_count)); fi; if [ -n "$menu_title" ]; then _append_fitted_hint "$(( box_w + 2 ))" "Use [↑/↓] Arrows to navigate, [/] to search, [Enter] to select, [G] MP Gui, [B] Bash, [Shift+A] MP Harmony, [Esc] to return immediately"; else _append_fitted_hint "$(( box_w + 2 ))" "Use [↑/↓] Arrows to navigate, [/] to search, [Enter] to select, [G] MP Gui, [B] Bash, [Shift+A] MP Harmony, [C] Theme, [V] Visualizer, ${_menu_exit_hint}"; fi; ((cached_header_lines++)); overhead=$((cached_header_lines + 4))
+header_count=0; cached_header_block=""; cached_header_lines=0; local inner_w=$(( box_w - 2 )); local text_w=$(( box_w - 4 )); local h_border; printf -v h_border '%*s' "$inner_w" ''; h_border="${h_border// /─}"; if [ -n "$menu_title" ]; then cached_header_block+="  ${BOLD}${MAGENTA}╭${h_border}╮\033[K${NC}\n"; local title_line; printf -v title_line "  ${BOLD}${MAGENTA}│ %-${text_w}s │\033[K${NC}\n" "  ${menu_title}"; cached_header_block+="$title_line"; cached_header_block+="  ${BOLD}${MAGENTA}╰${h_border}╯\033[K${NC}\n"; cached_header_lines=$((cached_header_lines + 3)); fi; if [ -z "$menu_title" ] && command -v render_main_header &>/dev/null; then render_main_header "$box_w" >/dev/null; menu_header="${_RENDERED_MAIN_HEADER:-}"; fi; if [ -n "$menu_header" ]; then local exp_hdr=""; printf -v exp_hdr "%b" "$menu_header"; exp_hdr="${exp_hdr%$'\n'}"; while IFS= read -r h_line; do cached_header_block+="${h_line}\033[K\n"; ((header_count++)); done <<< "$exp_hdr"; cached_header_lines=$((cached_header_lines + header_count)); fi; # The [Shift+A] hint is only advertised when the optional MP Harmony Agent
+# is installed, so no menu points at a key that cannot open anything.
+local _harmony_hint=""; if declare -F mp_harmony_agent_installed >/dev/null 2>&1 && mp_harmony_agent_installed; then _harmony_hint=", [Shift+A] MP Harmony"; fi; if [ -n "$menu_title" ]; then _append_fitted_hint "$(( box_w + 2 ))" "Use [↑/↓] Arrows to navigate, [/] to search, [Enter] to select, [G] MP Gui, [B] Bash${_harmony_hint}, [Esc] to return immediately"; else _append_fitted_hint "$(( box_w + 2 ))" "Use [↑/↓] Arrows to navigate, [/] to search, [Enter] to select, [G] MP Gui, [B] Bash${_harmony_hint}, [C] Theme, [V] Visualizer, ${_menu_exit_hint}"; fi; ((cached_header_lines++)); overhead=$((cached_header_lines + 4))
 }
 # --- Multi-screen section columns -------------------------------------------
 # One SECTION group per display. Everything here is nested inside
@@ -2827,7 +2906,7 @@ TICK)
         fi
         _MENU_FRAME_FRESH=0
     fi ; local _idle_time=$(( _now_s - _LAST_NAV_TIME )); if [ "$_idle_time" -ge 10 ] && [ "${search_mode:-0}" -ne 1 ] && [ -z "${typed_buffer:-}" ]; then _IS_BREATHING=1; ((_BREATH_TICK_DIV++)); if [ "$_BREATH_TICK_DIV" -ge 2 ]; then _BREATH_TICK_DIV=0; _BREATH_STEP=$(( (_BREATH_STEP + 1) % 32 )); local cur_f="${_BREATH_FACTORS[_BREATH_STEP]}"; if [ "${_MS_ON:-0}" -eq 1 ]; then _MS_BREATH="$cur_f"; _ms_repaint_index "$cur_idx" || true; elif [ "${_menu_item_row[$cur_idx]:-0}" -ge 1 ] && [ "${_menu_item_row[$cur_idx]}" -lt "$_TERM_LINES" ]; then local o_key="" o_label="" o_extra="" sel_breath=""; IFS='|' read -r o_key o_label o_extra <<< "${_opts_ref[$cur_idx]}"; highlight_menu_line "$o_key" "$o_label" "$o_extra" "${selectable_map[$cur_idx]:-0}" sel_breath "$box_w" "$cur_f"; printf '\033[?25l\033[%s;1H%b\r\033[?25l' "${_menu_item_row[$cur_idx]}" "$sel_breath"; fi; fi; elif [ "$_IS_BREATHING" -eq 1 ]; then _IS_BREATHING=0; _BREATH_STEP=0; _BREATH_TICK_DIV=0; if [ "${_MS_ON:-0}" -eq 1 ]; then _MS_BREATH=100; _ms_repaint_index "$cur_idx" || true; elif [ "${_menu_item_row[$cur_idx]:-0}" -ge 1 ] && [ "${_menu_item_row[$cur_idx]}" -lt "$_TERM_LINES" ]; then local o_key="" o_label="" o_extra="" sel_restored=""; IFS='|' read -r o_key o_label o_extra <<< "${_opts_ref[$cur_idx]}"; highlight_menu_line "$o_key" "$o_label" "$o_extra" "${selectable_map[$cur_idx]:-0}" sel_restored "$box_w" 100; printf '\033[?25l\033[%s;1H%b\r\033[?25l' "${_menu_item_row[$cur_idx]}" "$sel_restored"; fi; fi; continue ;; CHAR:/) if [ "$search_mode" -eq 1 ]; then search_query+="/"; _find_menu_search_match "$search_query" 0 1; else search_mode=1; search_query=""; typed_buffer=""; fi; _MENU_FRAME_FRESH=0; continue ;; SPACE) if [ "$search_mode" -eq 1 ]; then search_query+=" "; _find_menu_search_match "$search_query" 0 1; _MENU_FRAME_FRESH=0; continue; fi; toggle_mp_audio_player; _MENU_FRAME_FRESH=0; continue ;; CHAR:m|CHAR:M) if [ "$search_mode" -eq 1 ]; then search_query+="${key_action#CHAR:}"; _find_menu_search_match "$search_query" 0 1; _MENU_FRAME_FRESH=0; continue; fi; _mp_key_m; _MENU_FRAME_FRESH=0; continue ;; CHAR:l|CHAR:L) if [ "$search_mode" -eq 1 ]; then search_query+="${key_action#CHAR:}"; _find_menu_search_match "$search_query" 0 1; _MENU_FRAME_FRESH=0; continue; fi; launch_mp_audio_player_liquid_glass >/dev/null 2>&1; _MENU_FRAME_FRESH=0; continue ;; CHAR:z|CHAR:Z) if [ "$search_mode" -eq 1 ]; then search_query+="${key_action#CHAR:}"; _find_menu_search_match "$search_query" 0 1; _MENU_FRAME_FRESH=0; continue; fi; launch_mp_liquid_visualizer >/dev/null 2>&1; _MENU_FRAME_FRESH=0; continue ;; CHAR:v|CHAR:V) if [ "$search_mode" -eq 1 ]; then search_query+="${key_action#CHAR:}"; _find_menu_search_match "$search_query" 0 1; _MENU_FRAME_FRESH=0; continue; fi; _toggle_mp_gui_visualizer; _MENU_FRAME_FRESH=0; continue ;;
-CHAR:A) if [ "$search_mode" -eq 1 ]; then search_query+="A"; _find_menu_search_match "$search_query" 0 1; _MENU_FRAME_FRESH=0; continue; fi; if [ "${_NAV_WIN_CON:-0}" -eq 1 ] && _nav_just_arrowed; then continue; fi; cleanup_submenu_screen; launch_mp_harmony_from_menu; _MENU_CURSOR_LOCK=1; _start_win_cursor_hider; printf '\033[?25l\033[?12l\033[?7l'; clear; typed_buffer=""; _last_menu_frame=""; _MENU_FRAME_FRESH=0; last_term_lines=0; continue ;;
+CHAR:A) if [ "$search_mode" -eq 1 ]; then search_query+="A"; _find_menu_search_match "$search_query" 0 1; _MENU_FRAME_FRESH=0; continue; fi; if [ "${_NAV_WIN_CON:-0}" -eq 1 ] && _nav_just_arrowed; then continue; fi; if ! mp_harmony_agent_installed; then cleanup_submenu_screen; clear; mp_harmony_menu_gate; _MENU_CURSOR_LOCK=1; _start_win_cursor_hider; printf '\033[?25l\033[?12l\033[?7l'; typed_buffer=""; _last_menu_frame=""; _MENU_FRAME_FRESH=0; last_term_lines=0; continue; fi; cleanup_submenu_screen; launch_mp_harmony_from_menu; _MENU_CURSOR_LOCK=1; _start_win_cursor_hider; printf '\033[?25l\033[?12l\033[?7l'; clear; typed_buffer=""; _last_menu_frame=""; _MENU_FRAME_FRESH=0; last_term_lines=0; continue ;;
 CHAR:g|CHAR:G) if [ "$search_mode" -eq 1 ]; then search_query+="${key_action#CHAR:}"; _find_menu_search_match "$search_query" 0 1; _MENU_FRAME_FRESH=0; continue; fi; launch_mp_gui_from_menu; _last_menu_frame=""; _MENU_FRAME_FRESH=0; continue ;;
 CHAR:h|CHAR:H) if [ "$search_mode" -eq 1 ]; then search_query+="${key_action#CHAR:}"; _find_menu_search_match "$search_query" 0 1; _MENU_FRAME_FRESH=0; continue; fi; toggle_hidden_mode; typed_buffer=""; _last_menu_frame=""; _MENU_FRAME_FRESH=0; continue ;;
 CHAR:K) if [ "$search_mode" -eq 1 ]; then search_query+="K"; _find_menu_search_match "$search_query" 0 1; _MENU_FRAME_FRESH=0; continue; fi; mp_stop_audio_players; _CACHED_PLAYER_CHECK_TIME=0; _CACHED_PLAYER_ACTIVE_RES=1; MP_PLAYER_RUNNING=0; MP_PLAYER_STATE="stopped"; typed_buffer=""; _last_menu_frame=""; _MENU_FRAME_FRESH=0; continue ;;
@@ -3075,11 +3154,55 @@ _apply_windows_console_background() {
     # Windows Terminal already applied OSC 11. mintty does too.
     [ -n "${WT_SESSION:-}" ] && return 0
     [ "${TERM_PROGRAM:-}" = "mintty" ] && return 0
-    command -v python3 >/dev/null 2>&1 || return 0
+    # The console palette is recoloured by a short Python helper. On Windows
+    # 10 a bare `python3` is the Microsoft Store alias in WindowsApps: it is
+    # not an interpreter, exits non-zero and prints "Python was not found".
+    # The old guard only asked whether *a* python3 existed on PATH, which the
+    # stub always satisfies, so the helper never ran, the exit status was
+    # discarded by `|| return 0`, and every theme painted the same console
+    # background. MP_PY_BIN is the interpreter the rest of the manager uses.
+    local py="${MP_PY_BIN:-}"
+    if [ -z "$py" ]; then
+        py="$(mp_python_bin 2>/dev/null || true)"
+    fi
+    case "$py" in
+        ''|*[Ww]indows[Aa]pps*)
+            # No real interpreter was resolved yet. load_theme() runs before
+            # the manager's own resolver block, so source the shared resolver
+            # here on first use and ask it once.
+            if ! declare -F resolve_mp_python >/dev/null 2>&1; then
+                local resolver="${SCRIPT_DIR:-}/scripts/resolve_mp_python.sh"
+                if [ -f "$resolver" ]; then
+                    # shellcheck disable=SC1090
+                    source "$resolver" >/dev/null 2>&1 || true
+                fi
+            fi
+            if declare -F resolve_mp_python >/dev/null 2>&1; then
+                py="$(resolve_mp_python 2>/dev/null | tail -n 1)"
+                py="${py//$'\r'/}"
+            fi
+            ;;
+    esac
+    case "$py" in
+        ''|*[Ww]indows[Aa]pps*)
+            command -v python3 >/dev/null 2>&1 || return 0
+            py="python3"
+            ;;
+    esac
+    [ -n "$py" ] || return 0
     local r="$1" g="$2" b="$3" mode="${4:-set}" out=""
-    out="$(MP_BG_R="$r" MP_BG_G="$g" MP_BG_B="$b" MP_BG_MODE="$mode" \
+    # The helper must not be called inside $(...): that hands the child a
+    # pipe for stdout, and the console palette write then has no console to
+    # talk to. Run it directly and read the slot/orig reply from a temp file.
+    local _WIN_BG_OUT=""
+    if [ "${OS_TYPE:-}" = "windows" ] || _cli_theme_is_windows; then
+        _WIN_BG_OUT="${TMPDIR:-${TEMP:-/tmp}}/mp_bg_$$.out"
+        rm -f "$_WIN_BG_OUT" 2>/dev/null || true
+    fi
+    MP_BG_R="$r" MP_BG_G="$g" MP_BG_B="$b" MP_BG_MODE="$mode" \
         MP_BG_SLOT="${_WIN_CONSOLE_BG_SLOT:-}" MP_BG_ORIG="${_WIN_CONSOLE_BG_ORIG:-}" \
-        python3 -c '
+        MP_BG_OUT="$_WIN_BG_OUT" \
+        "$py" -c '
 import ctypes, os, sys
 r = int(os.environ.get("MP_BG_R", "0"))
 g = int(os.environ.get("MP_BG_G", "0"))
@@ -3114,10 +3237,41 @@ class INFO(ctypes.Structure):
         ("ColorTable", ctypes.c_ulong * 16),
     ]
 
+# GetStdHandle(-11) is the console screen only when stdout is the console.
+# The manager calls this inside $(...), and Git Bash/MSYS2 also hand the
+# child a pipe, so the inherited handle is not a console: every call failed
+# and every theme kept the terminal background unchanged. CONOUT$ is the real
+# screen buffer whatever the shell did to stdout. windows_console_scroll.py
+# opens it the same way for the same reason.
+handle = 0
+closed = False
+try:
+    from ctypes import wintypes
+    k.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                              ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD,
+                              wintypes.HANDLE]
+    k.CreateFileW.restype = wintypes.HANDLE
+    k.CloseHandle.argtypes = [wintypes.HANDLE]
+    k.CloseHandle.restype = wintypes.BOOL
+    handle = k.CreateFileW("CONOUT$", 0x80000000 | 0x40000000, 0x1 | 0x2,
+                           None, 3, 0, None)
+    if handle in (0, None, -1, 0xFFFFFFFF, 0xFFFFFFFFFFFFFFFF):
+        handle = 0
+    else:
+        closed = True
+except Exception:
+    handle = 0
+if not handle:
+    handle = k.GetStdHandle(-11)
 info = INFO()
 info.cbSize = ctypes.sizeof(INFO)
-handle = k.GetStdHandle(-11)
-if not handle or not k.GetConsoleScreenBufferInfoEx(handle, ctypes.byref(info)):
+ok = bool(handle) and bool(k.GetConsoleScreenBufferInfoEx(handle, ctypes.byref(info)))
+if not ok:
+    if closed:
+        try:
+            k.CloseHandle(handle)
+        except Exception:
+            pass
     sys.exit(0)
 slot_env = os.environ.get("MP_BG_SLOT", "")
 orig_env = os.environ.get("MP_BG_ORIG", "")
@@ -3138,9 +3292,29 @@ else:
 info.srWindow.Right = info.srWindow.Right - 1
 info.srWindow.Bottom = info.srWindow.Bottom - 1
 info.cbSize = ctypes.sizeof(INFO)
-if k.SetConsoleScreenBufferInfoEx(handle, ctypes.byref(info)):
-    sys.stdout.write("%s %s\n" % (slot, orig))
-' 2>/dev/null)" || return 0
+written = bool(k.SetConsoleScreenBufferInfoEx(handle, ctypes.byref(info)))
+if closed:
+    try:
+        k.CloseHandle(handle)
+    except Exception:
+        pass
+if written:
+    # The caller reads this from a temp file: stdout may be a pipe here.
+    out_path = os.environ.get("MP_BG_OUT", "")
+    line = "%s %s\n" % (slot, orig)
+    if out_path:
+        try:
+            with open(out_path, "w", encoding="utf-8") as fh:
+                fh.write(line)
+        except OSError:
+            sys.stdout.write(line)
+    else:
+        sys.stdout.write(line)
+' 2>/dev/null
+    if [ -n "${_WIN_BG_OUT:-}" ] && [ -f "$_WIN_BG_OUT" ]; then
+        out="$(cat "$_WIN_BG_OUT" 2>/dev/null)"
+        rm -f "$_WIN_BG_OUT" 2>/dev/null || true
+    fi
     if [ -n "$out" ]; then
         read -r _WIN_CONSOLE_BG_SLOT _WIN_CONSOLE_BG_ORIG <<< "$out"
     fi
@@ -4886,7 +5060,14 @@ enter_bigscreen_vr_mode() {
 
 # First main-menu row. Shift+A opens it from any menu. The launcher
 # refuses to start unless Ollama is already answering.
+#
+# MP Harmony is optional, so this checks for the agent first. Without that
+# check Shift+A cleared the screen and reset the terminal (stty sane) before the
+# launcher could report the missing agent, which made the menu flicker and look
+# broken on a machine that never installed it. Now the menu stays exactly as it
+# is and only a short notice is printed.
 launch_mp_harmony_from_menu() {
+    mp_harmony_menu_gate || return 1
     local launcher="$SCRIPT_DIR/scripts/launch_mp_harmony.sh"
     if [ ! -f "$launcher" ]; then
         echo -e "\n${RED}scripts/launch_mp_harmony.sh was not found.${NC}"
@@ -6620,7 +6801,23 @@ esac
 done
 }
 manage_harmony_agent() {
-if [ $# -gt 0 ]; then run_sub_script "manage_harmony_agent.sh" "$@"; return; fi
+if [ $# -gt 0 ]; then
+    # A chat/voice/start action needs the agent. Status and install still work
+    # so the user can see what is missing and install it.
+    case "$1" in
+        status|install|setup|path|deps|unit)
+            ;;
+        # Ollama voice chat runs against the Ollama models and does not need
+        # the agent itself, so it stays reachable when the agent is absent.
+        ollama-voice|ollama-voice-chat|voice-ollama)
+            ;;
+        *)
+            mp_harmony_menu_gate || return 1
+            ;;
+    esac
+    run_sub_script "manage_harmony_agent.sh" "$@"; return
+fi
+mp_harmony_menu_gate || return 1
 local ha_opts=(
 "SECTION|INTERACTIVE CHAT & VOICE AI|"
 "1|Launch Interactive Chat CLI with MP Harmony Agent|(Terminal Console)"
@@ -8485,7 +8682,7 @@ manage_themes() {
 # dark chip keeps that white readable on the light tints and the dark panes.
 local _tw=$'\033[1;48;2;20;20;28;38;2;255;255;255m'
 while true; do
-    local m1="" m2="" m3="" m4="" m5="" m6="" m7="" m8="" m9="" m10="" m11="" m12="" m13="" m14="" m15="" m16="" m17="" m18="" m19="" m20="" m21=""
+    local m1="" m2="" m3="" m4="" m5="" m6="" m7="" m8="" m9="" m10="" m11="" m12="" m13="" m14="" m15="" m16="" m17="" m18="" m19="" m20="" m21="" m22=""
     case "$CURRENT_THEME" in
         dreamworlds)                    m1=" ${_tw}★ ACTIVE${NC}" ;;
         dreamworlds_ultra)              m2=" ${_tw}★ ACTIVE (DEFAULT)${NC}" ;;
@@ -8508,6 +8705,7 @@ while true; do
         retro_linux_memories)           m19=" ${_tw}★ ACTIVE (RETRO LINUX)${NC}" ;;
         the_whitest_white)              m20=" ${_tw}★ ACTIVE (WHITEST WHITE)${NC}" ;;
         blood_moon)                     m21=" ${_tw}★ ACTIVE (BLOOD MOON)${NC}" ;;
+        into_darkness_void_out)         m22=" ${_tw}★ ACTIVE (INTO DARKNESS)${NC}" ;;
     esac
     local opts=(
         "1|MPlanetarian Dreamworlds|[Sweet Hot Pink, Electric Cyan, Lavender & Violet]${m1}"
@@ -8531,6 +8729,7 @@ while true; do
         "19|Retro Linux Memories [GTK / VeraCrypt Dark Slate]|[Classic Retro Linux GTK Dark Slate, VeraCrypt Blue Selection & Beveled Steel]${m19}"
         "20|The Whitest White|[Pure white pane, black ink, black menu numbers]${m20}"
         "21|Blood Moon [Crimson Eclipse]|[Vivid Blood Crimson, Scarlet & Dark Ruby Wine Pane]${m21}"
+        "22|Into Darkness (Void Out)|[Void-out black pane, white ink • MP Liquid Mixer default]${m22}"
         "0|Return to Main Menu|(or Esc / q)"
     )
     run_interactive_submenu "Themes & Color Palette Switcher" "  ${_tw}Current Active Theme: ${CURRENT_THEME}${NC}\n" opts 0
@@ -8578,6 +8777,8 @@ while true; do
             save_theme "the_whitest_white"; echo -e "\n${_tw}✓ Theme switched to The Whitest White!${NC}"; sleep 0.8 ;;
         21|blood_moon|blood-moon|"blood moon"|crimson|crimson_eclipse|"crimson eclipse"|vampire|blood|blood_ruby|"blood ruby"|bloodmoon|"Blood Moon"|"Blood Moon [Crimson Eclipse]"|"Blood Moon MP Mix Manager")
             save_theme "blood_moon"; echo -e "\n${_tw}✓ Theme switched to Blood Moon [Crimson Eclipse]!${NC}"; sleep 0.8 ;;
+        22|into_darkness_void_out|into_darkness|void_out|"Into Darkness (Void Out)"|"Into Darkness"|"Void Out"|"into darkness")
+            save_theme "into_darkness_void_out"; echo -e "\n${_tw}✓ Theme switched to Into Darkness (Void Out)!${NC}"; sleep 0.8 ;;
         0|[bB]|[qQ]|ESC) return 0 ;;
         *) echo -e "\n${RED}Invalid choice!${NC}"; sleep 1.2 ;;
     esac
@@ -8982,6 +9183,10 @@ echo -e "\n${RED}Error: mp_tracklist_narrator.py was not found in scripts/!${NC}
 press_enter
 return 1
 fi
+# Narration is done by the optional MP Harmony Agent. Without it the narrator
+# would try to start Ollama and the agent, then fail after several prompts, so
+# explain once and stay in the tracklist suite instead.
+mp_harmony_menu_gate || return 1
 _collect_narrator_tracklists
 local -a ALL_TRACKLIST_FILES=("${NARRATOR_TRACKLISTS[@]}")
 if [ ${#ALL_TRACKLIST_FILES[@]} -eq 0 ]; then
@@ -10722,7 +10927,7 @@ manage_motd_and_tools() {
 local -A _MENU_ACT=([1]="manage_system_motd_menu" [2]="burn_iso_to_usb"); _m_loop "MOTD BANNER MANAGER & SYSTEM UTILITIES" "" "1|Dynamic System MOTD Banner Manager|(Last 3 Mixes, Date/Time, Size, Format & Specs)" "2|Burn ISO Image to USB Drive|(dd / diskutil with safety checks)" "0|Return to Main Menu|(or Esc / q)"
 }
 manage_settings_and_system() {
-local rb="systemctl reboot with confirmation"; case "$OS_TYPE" in macos) rb="macOS restart with confirmation" ;; windows|wsl) rb="Windows restart with confirmation" ;; freebsd) rb="FreeBSD restart with confirmation" ;; esac; local -A _MENU_ACT=([1]="manage_themes" [2]="manage_installation_and_config" [3]="configure_daily_reports_settings" [4]="manage_mix_reports_menu" [5]="run_bash_cli" [6]="reboot_system" [7]="configure_liquid_glass_backend" [8]="configure_visualizer_fps_cap" [9]="configure_visualizer_companion"); _m_loop "MANAGER SETTINGS, THEMES & SYSTEM SHELL" "" "1|Manager Themes & Color Palette Switcher|(21 Themes: Dreamworlds, Blood Moon, Sensorium...)" "2|Manage Installation & Configuration|(Migrate Path, Backup, Export, Import & Reinstall)" "3|Automated Daily Reports & Continuous Telemetry Settings|(Schedule Time, On/Off, Catch-Up)" "4|Daily Mix Reports, Telemetry & Predictive Analytics Suite|(PDF Reports, Multi-Archive Stats, Math Models)" "5|Run Bash CLI Commands|(Interactive Shell & Direct Runner)" "6|Reboot System|(${rb})" "7|Configure Liquid Glass Player Backend|(OpenGL [Default • AMD Radeon/Intel/Older Cards] or Vulkan)" "8|MP Visualizer Frame-Rate Cap|(30 / 60 / 120 / 144 FPS, or follow the display)" "9|MP Visualizer Background Window|(On/Off for MP Gui & MP Liquid Player - disable for a Slow Graphics Card / System)" "0|Return to Main Menu|(or Esc / q)"
+local rb="systemctl reboot with confirmation"; case "$OS_TYPE" in macos) rb="macOS restart with confirmation" ;; windows|wsl) rb="Windows restart with confirmation" ;; freebsd) rb="FreeBSD restart with confirmation" ;; esac; local -A _MENU_ACT=([1]="manage_themes" [2]="manage_installation_and_config" [3]="configure_daily_reports_settings" [4]="manage_mix_reports_menu" [5]="run_bash_cli" [6]="reboot_system" [7]="configure_liquid_glass_backend" [8]="configure_visualizer_fps_cap" [9]="configure_visualizer_companion"); _m_loop "MANAGER SETTINGS, THEMES & SYSTEM SHELL" "" "1|Manager Themes & Color Palette Switcher|(22 Themes: Dreamworlds, Into Darkness, Sensorium...)" "2|Manage Installation & Configuration|(Migrate Path, Backup, Export, Import & Reinstall)" "3|Automated Daily Reports & Continuous Telemetry Settings|(Schedule Time, On/Off, Catch-Up)" "4|Daily Mix Reports, Telemetry & Predictive Analytics Suite|(PDF Reports, Multi-Archive Stats, Math Models)" "5|Run Bash CLI Commands|(Interactive Shell & Direct Runner)" "6|Reboot System|(${rb})" "7|Configure Liquid Glass Player Backend|(OpenGL [Default • AMD Radeon/Intel/Older Cards] or Vulkan)" "8|MP Visualizer Frame-Rate Cap|(30 / 60 / 120 / 144 FPS, or follow the display)" "9|MP Visualizer Background Window|(On/Off for MP Gui & MP Liquid Player - disable for a Slow Graphics Card / System)" "0|Return to Main Menu|(or Esc / q)"
 }
 # MP Gui paints each header value after a label colon truecolor white.
 # The label, through the colon, keeps its own colour. A │ or | ends the

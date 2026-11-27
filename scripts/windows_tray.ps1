@@ -626,6 +626,219 @@ function Show-MpRescanResult {
     Show-MpNotice -Title "Rescan Music Folders" -Message "$saved music folder(s) refreshed | $tracks tracks in ALL"
 }
 
+# ------------------------------------------------------------------------------
+# Update MP Mix Manager
+# ------------------------------------------------------------------------------
+# Right-click > Update MP Mix Manager pulls the latest version while the
+# Exit_MP_Video.mp4 window loops. The loop is deliberate: an update can take
+# minutes, and a single play-through would leave a frozen frame or an empty
+# desktop while git works. The video is stopped, then the tray closes, as soon
+# as the update ends. If the update cannot finish the video is closed and the
+# program exits anyway, so the user is never left staring at a loop.
+$script:updateTimeoutSeconds = 300   # 5 minutes, per the shipped contract
+$script:updateWorker = $null
+$script:updateState = $null
+$script:updateTimer = $null
+$script:updateItem = $null
+$script:updateVideoPid = 0
+$script:updateLog = ""
+
+function Get-MpUpdaterScript {
+    foreach ($candidate in @(
+        (Join-Path $Root "scripts\update_manager.sh"),
+        (Join-Path $Root "update_manager.sh")
+    )) {
+        if (Test-Path -LiteralPath $candidate) { return $candidate }
+    }
+    return $null
+}
+
+function Start-MpUpdateVideo {
+    # Loop Exit_MP_Video.mp4 until Stop-MpUpdateVideo. The shared loader script
+    # already knows every player on Windows and prints the pid it started.
+    # MP_EXIT_VIDEO_NO_TTY stops it reading a skip key from the tray console.
+    $bash = Get-MpBash
+    if (-not $bash) { return $false }
+    $display = Join-Path $Root "scripts\display_loader_video.sh"
+    if (-not (Test-Path -LiteralPath $display)) { return $false }
+    $out = Join-Path $env:TEMP ("mp-update-video-{0}.out" -f ([guid]::NewGuid().ToString("N")))
+    try {
+        $env:MP_EXIT_VIDEO_NO_TTY = "1"
+        $proc = Start-Process -FilePath $bash -ArgumentList @("`"$display`"", "--loop-start") `
+            -WorkingDirectory $Root -WindowStyle Hidden -PassThru `
+            -RedirectStandardOutput $out -RedirectStandardError "$out.err"
+        $script:updateVideoPid = [int]$proc.Id
+        # --loop-start prints the *player* pid, which is the window to stop.
+        $deadline = (Get-Date).AddSeconds(10)
+        while ((Get-Date) -lt $deadline) {
+            Start-Sleep -Milliseconds 250
+            if (Test-Path -LiteralPath $out) {
+                $text = ([System.IO.File]::ReadAllText($out)).Trim()
+                if ($text -match '^\d+') {
+                    $script:updateVideoPid = [int]($text -split "`n")[0].Trim()
+                    break
+                }
+            }
+        }
+        Write-MpTrayLog "update: video pid=$($script:updateVideoPid)"
+        return $true
+    } catch {
+        Write-MpTrayLog "update: video failed to start: $($_.Exception.Message)"
+        return $false
+    } finally {
+        Remove-Item Env:\MP_EXIT_VIDEO_NO_TTY -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $out -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath "$out.err" -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Stop-MpUpdateVideo {
+    # Stop the looping window. The player is a child of the bash wrapper, so
+    # both are signalled; a stray unconverted pid is harmless.
+    if (-not $script:updateVideoPid) { return }
+    # $pid is a read-only PowerShell automatic variable, so the video pid
+    # must never be stored in a variable of that name.
+    [int]$videoPid = $script:updateVideoPid
+    $script:updateVideoPid = 0
+    try { Stop-Process -Id $videoPid -Force -ErrorAction SilentlyContinue } catch { }
+    # ffplay/mpv/VLC window may sit in a child of its own.
+    $bash = Get-MpBash
+    if ($bash) {
+        try {
+            $display = Join-Path $Root "scripts\display_loader_video.sh"
+            if (Test-Path -LiteralPath $display) {
+                & $bash $display --loop-stop $videoPid | Out-Null
+            }
+        } catch { }
+    }
+    Write-MpTrayLog "update: video stopped pid=$videoPid"
+}
+
+function Start-MpUpdate {
+    if ($script:updateWorker) { return }
+    $updater = Get-MpUpdaterScript
+    if (-not $updater) {
+        Show-MpNotice -Title "Update MP Mix Manager" -Message "scripts\update_manager.sh was not found."
+        Write-MpTrayLog "update: updater script missing"
+        return
+    }
+    $bash = Get-MpBash
+    if (-not $bash) {
+        Show-MpNotice -Title "Update MP Mix Manager" -Message "No Bash environment was found for the update."
+        Write-MpTrayLog "update: no bash"
+        return
+    }
+
+    $script:updateItemText = "Updating MP Mix Manager..."
+    if ($script:updateItem) {
+        $script:updateItem.Enabled = $false
+        $script:updateItem.Text = $script:updateItemText
+    }
+    if ($script:updateTimer) { $script:updateTimer.Stop(); $script:updateTimer.Dispose(); $script:updateTimer = $null }
+
+    $script:updateLog = Join-Path $env:TEMP ("mp-update-{0}.log" -f ([guid]::NewGuid().ToString("N")))
+    Write-MpTrayLog "update: starting"
+    Start-MpUpdateVideo | Out-Null
+
+    try {
+        $state = [hashtable]::Synchronized(@{
+            Done = $false
+            Ok = $false
+            Error = ""
+            Output = ""
+        })
+        $script:updateState = $state
+        $worker = [PowerShell]::Create()
+        $script:updateWorker = $worker
+        [void]$worker.AddScript({
+            param($State, $BashPath, $UpdaterScript, $RootDir, $LogPath, $TimeoutSeconds)
+            $ErrorActionPreference = "Continue"
+            $posixRoot = $RootDir -replace '\\', '/'
+            try {
+                # --force so "already up to date" is still a successful run.
+                $info = New-Object System.Diagnostics.ProcessStartInfo
+                $info.FileName = $BashPath
+                $info.Arguments = "`"$posixRoot/scripts/update_manager.sh`" --force"
+                $info.WorkingDirectory = $RootDir
+                $info.UseShellExecute = $false
+                $info.CreateNoWindow = $true
+                $info.RedirectStandardOutput = $true
+                $info.RedirectStandardError = $true
+                $proc = New-Object System.Diagnostics.Process
+                $proc.StartInfo = $info
+                [void]$proc.Start()
+                $stdout = $proc.StandardOutput.ReadToEndAsync()
+                $stderr = $proc.StandardError.ReadToEndAsync()
+                if (-not $proc.WaitForExit($TimeoutSeconds * 1000)) {
+                    try { $proc.Kill() } catch { }
+                    $State.Error = "The update did not finish within $TimeoutSeconds seconds."
+                    $State.Done = $true
+                    return
+                }
+                $text = $stdout.Result + $stderr.Result
+                try { [System.IO.File]::WriteAllText($LogPath, $text) } catch { }
+                $State.Output = $text
+                if ($proc.ExitCode -eq 0) {
+                    $State.Ok = $true
+                } else {
+                    $State.Error = "The updater exited with code $($proc.ExitCode)."
+                }
+            } catch {
+                $State.Error = "$($_.Exception.Message)"
+            } finally {
+                $State.Done = $true
+            }
+        }).AddArgument($state).AddArgument($bash).AddArgument($updater).AddArgument($Root).AddArgument($script:updateLog).AddArgument($script:updateTimeoutSeconds)
+        [void]$worker.BeginInvoke()
+    } catch {
+        Write-MpTrayLog "update: worker failed: $($_.Exception.Message)"
+        Stop-MpUpdateVideo
+        Show-MpNotice -Title "Update MP Mix Manager" -Message "The update could not start: $($_.Exception.Message)"
+        if ($script:updateItem) {
+            $script:updateItem.Enabled = $true
+            $script:updateItem.Text = "Update MP Mix Manager"
+        }
+        $script:updateWorker = $null
+        return
+    }
+
+    $script:updateTimer = New-Object System.Windows.Forms.Timer
+    $script:updateTimer.Interval = 400
+    $script:updateTimer.Add_Tick({
+        # Check the flag OUTSIDE the try. A `return` inside a try still runs
+        # its finally block, and the finally below quits the tray: doing the
+        # check inside would close the icon on the first tick instead of when
+        # the update finishes.
+        $finished = [bool]($script:updateState -and $script:updateState.Done)
+        if (-not $finished) { return }
+        try {
+            $script:updateTimer.Stop()
+            $script:updateTimer.Dispose()
+            $script:updateTimer = $null
+            # The video always closes first: the update is over either way, and
+            # a loop left running would be a window the user cannot dismiss.
+            Stop-MpUpdateVideo
+            $ok = [bool]($script:updateState -and $script:updateState.Ok)
+            $detail = ""
+            if ($script:updateState -and $script:updateState.Error) { $detail = $script:updateState.Error }
+            if ($ok) {
+                Write-MpTrayLog "update: completed"
+                Show-MpNotice -Title "Update MP Mix Manager" -Message "MP Mix Manager was updated to the latest version."
+            } else {
+                Write-MpTrayLog "update: failed $detail"
+                Show-MpNotice -Title "Update MP Mix Manager" -Message "The update did not complete. $detail"
+            }
+        } catch {
+            Write-MpTrayLog "update: result handling failed: $($_.Exception.Message)"
+            Stop-MpUpdateVideo
+        } finally {
+            # An update that cannot complete must close, not sit in the tray.
+            [System.Windows.Forms.Application]::Exit()
+        }
+    })
+    $script:updateTimer.Start()
+}
+
 function Get-MpCompanionProcess {
     foreach ($name in @("pythonw.exe", "python.exe")) {
         foreach ($proc in @(Get-CimInstance Win32_Process -Filter "Name = '$name'" -ErrorAction SilentlyContinue)) {
@@ -707,6 +920,10 @@ function Invoke-MpTrayAction {
     if ($script:closing) { return }
     if ($ActionId -eq "web") {
         Start-MpWebCompanion
+        return
+    }
+    if ($ActionId -eq "update") {
+        Start-MpUpdate
         return
     }
     if ($ActionId -eq "rescan-archive" -or $ActionId -eq "rescan-music") {
@@ -1103,6 +1320,7 @@ try {
         @{ Id = "rescan-archive"; Label = "Rescan Mix Archive Folders"; Component = "" },
         @{ Id = "rescan-music"; Label = "Rescan Music Folders"; Component = "" },
         @{ Id = "mute-audio"; Label = "Mute MP Player Audio"; Component = "" },
+        @{ Id = "update"; Label = "Update MP Mix Manager"; Component = "" },
         @{ Id = "close"; Label = "Close MP Mix Manager (Closes everything)"; Component = "" }
     )
     $installed = Get-MpInstalledComponents -InstallRoot $Root
@@ -1125,6 +1343,10 @@ try {
             # muted. Unlike the Linux tray this item is refreshed as the menu
             # opens, because WinForms has no per-open callback.
             $script:muteItem = $item
+        } elseif ($entry.Id -eq "update") {
+            # Keep a handle so the label can say "Updating..." and a second
+            # click cannot start a second update while one is running.
+            $script:updateItem = $item
         } elseif ($entry.Id -like "rescan-*") {
             # Both scan items are disabled while one runs, so a second click
             # cannot start a second scan over the same folders.
@@ -1181,6 +1403,11 @@ try {
     exit 1
 } finally {
     if ($script:closeTimer) { $script:closeTimer.Stop(); $script:closeTimer.Dispose() }
+    if ($script:updateTimer) { $script:updateTimer.Stop(); $script:updateTimer.Dispose() }
+    try { Stop-MpUpdateVideo } catch { }
+    if ($script:updateWorker) {
+        try { $script:updateWorker.Stop(); $script:updateWorker.Dispose() } catch { }
+    }
     if ($script:closeWorker) {
         try { $script:closeWorker.Stop(); $script:closeWorker.Dispose() } catch { }
     }

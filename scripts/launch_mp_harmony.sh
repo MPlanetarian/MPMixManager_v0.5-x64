@@ -32,6 +32,77 @@ CYAN=$'\033[0;36m'
 BOLD=$'\033[1m'
 NC=$'\033[0m'
 
+# Which interpreter runs the API helper and the agent.
+#
+# On Windows 10 a bare `python3` resolves to the Microsoft Store alias in
+# WindowsApps. That is a stub, not an interpreter: it prints "Python was not
+# found" and exits non-zero. Every API call in this script (model load, pull,
+# copy) and the agent launch are Python, so with the stub all of them failed
+# and a machine with Ollama running and gpt-oss-pinned:latest already
+# installed still reported "Ollama did not load the model".
+#
+# resolve_mp_python.sh is the resolver the rest of the suite already uses: it
+# skips the Store alias, prefers the project venv, then py -3, then the real
+# installations. MP_PY_BIN from the manager wins when it is set.
+_harmony_resolve_python() {
+    local bin=""
+    if [ -n "${MP_PY_BIN:-}" ]; then
+        if "$MP_PY_BIN" -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 8) else 1)" >/dev/null 2>&1; then
+            printf '%s\n' "$MP_PY_BIN"
+            return 0
+        fi
+    fi
+    if [ -n "${MP_PYTHON:-}" ]; then
+        case "$MP_PYTHON" in
+            *[Ww]indows[Aa]pps*) ;;
+            *)
+                if "$MP_PYTHON" -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 8) else 1)" >/dev/null 2>&1; then
+                    printf '%s\n' "$MP_PYTHON"
+                    return 0
+                fi
+                ;;
+        esac
+    fi
+    local resolver="${HARMONY_RESOLVER:-}"
+    if [ -z "$resolver" ]; then
+        local here=""
+        here="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)" || here=""
+        [ -n "$here" ] && [ -f "$here/resolve_mp_python.sh" ] && resolver="$here/resolve_mp_python.sh"
+    fi
+    if [ -n "$resolver" ] && [ -f "$resolver" ]; then
+        # The resolver prints the interpreter and exports MP_PYTHON.
+        bin="$(SCRIPT_DIR="${SCRIPT_DIR:-}" BASE_DIR="${BASE_DIR:-}" bash -c '
+            source "$1" >/dev/null 2>&1 || exit 1
+            mp_python_bin 2>/dev/null || resolve_mp_python 2>/dev/null
+        ' _ "$resolver" 2>/dev/null | tail -n 1)"
+        bin="${bin//$'\r'/}"
+        if [ -n "$bin" ] && "$bin" -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 8) else 1)" >/dev/null 2>&1; then
+            printf '%s\n' "$bin"
+            return 0
+        fi
+    fi
+    # Last resort: a python3 that is not the Store alias, then python.
+    for bin in python3 python; do
+        local found=""
+        found="$(type -p "$bin" 2>/dev/null || true)"
+        case "$found" in
+            ''|*[Ww]indows[Aa]pps*) continue ;;
+        esac
+        if "$found" -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 8) else 1)" >/dev/null 2>&1; then
+            printf '%s\n' "$found"
+            return 0
+        fi
+    done
+    return 1
+}
+
+HARMONY_PYTHON="$(_harmony_resolve_python 2>/dev/null || true)"
+if [ -z "$HARMONY_PYTHON" ]; then
+    # Keep the name so the failure below reads as a Python problem and not as
+    # a missing model. harmony_api_python reports it before it is used.
+    HARMONY_PYTHON="python3"
+fi
+
 harmony_say() {
     printf '%b\n' "$*"
 }
@@ -160,14 +231,72 @@ harmony_start_container() {
     return 1
 }
 
+harmony_find_ollama_exe() {
+    # Windows installs Ollama as a desktop app, not on the Git Bash PATH, so
+    # `command -v ollama` fails even though the server is installed. Look in
+    # the per-user and machine install folders the installer uses.
+    local cand
+    for cand in \
+        "${LOCALAPPDATA:-}/Programs/Ollama/ollama.exe" \
+        "${PROGRAMFILES:-}/Ollama/ollama.exe" \
+        "${PROGRAMFILES:-}/Ollama/ollama app.exe" \
+        "/c/Users/${USERNAME:-${USER:-}}/AppData/Local/Programs/Ollama/ollama.exe" \
+        "/c/Program Files/Ollama/ollama.exe" \
+        "/c/Program Files/Ollama/ollama app.exe"; do
+        [ -n "$cand" ] && [ -f "$cand" ] && { printf '%s\n' "$cand"; return 0; }
+    done
+    local found=""
+    found="$(type -p ollama 2>/dev/null || true)"
+    [ -n "$found" ] && { printf '%s\n' "$found"; return 0; }
+    return 1
+}
+
+harmony_is_windows() {
+    case "$(uname -s 2>/dev/null)" in
+        MINGW*|MSYS*|CYGWIN*) return 0 ;;
+    esac
+    [ -n "${WINDIR:-}" ] && return 0
+    return 1
+}
+
 harmony_start_local_serve() {
-    command -v ollama >/dev/null 2>&1 || {
+    local ollama_bin=""
+    ollama_bin="$(harmony_find_ollama_exe 2>/dev/null || true)"
+    if [ -z "$ollama_bin" ]; then
         harmony_say "${RED}No ollama binary was found on this machine.${NC}"
+        if harmony_is_windows; then
+            harmony_say "  Install it from ${BOLD}https://ollama.com/download/windows${NC} and try again."
+        fi
         return 1
-    }
+    fi
+    if harmony_is_windows; then
+        # The Windows build ships "ollama app.exe" (tray server) beside the
+        # CLI. Starting the app is what a normal install expects; `ollama
+        # serve` also works but shows a console window when started from a
+        # shell without a hidden launcher, so prefer the app first.
+        local app_bin=""
+        app_bin="$(dirname "$ollama_bin")/ollama app.exe"
+        if [ -f "$app_bin" ]; then
+            harmony_say "${BOLD}Starting the Ollama desktop app...${NC}"
+            ( cd "$(dirname "$app_bin")" && cmd.exe /c start "" "ollama app.exe" ) >/dev/null 2>&1 || true
+            if harmony_wait_for_ollama; then
+                return 0
+            fi
+            harmony_say "${YELLOW}The Ollama app did not answer in time; trying ollama serve.${NC}"
+        fi
+        harmony_say "${BOLD}Starting ollama serve in the background...${NC}"
+        : >"$OLLAMA_CONTAINER_LOG" 2>/dev/null || true
+        ( "$ollama_bin" serve >"$OLLAMA_CONTAINER_LOG" 2>&1 & ) || true
+        if harmony_wait_for_ollama; then
+            return 0
+        fi
+        harmony_say "${YELLOW}ollama serve did not answer within ${OLLAMA_START_TIMEOUT}s.${NC}"
+        harmony_say "  Log: ${OLLAMA_CONTAINER_LOG}"
+        return 1
+    fi
     harmony_say "${BOLD}Starting ollama serve in the background...${NC}"
     : >"$OLLAMA_CONTAINER_LOG" 2>/dev/null || true
-    nohup ollama serve >"$OLLAMA_CONTAINER_LOG" 2>&1 &
+    nohup "$ollama_bin" serve >"$OLLAMA_CONTAINER_LOG" 2>&1 &
     if harmony_wait_for_ollama; then
         return 0
     fi
@@ -205,9 +334,20 @@ harmony_model_installed() {
     if [ "${MP_HARMONY_FORCE_MODEL:-}" = "0" ]; then
         return 1
     fi
-    local tags=""
+    local tags="" bare="${HARMONY_MODEL%:latest}"
     tags="$(curl -sf --connect-timeout 3 --max-time 8 "${OLLAMA_API_URL}/api/tags" 2>/dev/null || true)"
+    [ -n "$tags" ] || return 1
+    # Ollama reports both "name" and "model" for a tag and has changed which
+    # one leads between releases, so match either key. The bare name is also
+    # accepted because `gpt-oss-pinned` and `gpt-oss-pinned:latest` are the
+    # same tag in Ollama and users type both.
     if printf '%s' "$tags" | grep -F "\"name\":\"${HARMONY_MODEL}\"" >/dev/null 2>&1; then
+        return 0
+    fi
+    if printf '%s' "$tags" | grep -F "\"model\":\"${HARMONY_MODEL}\"" >/dev/null 2>&1; then
+        return 0
+    fi
+    if printf '%s' "$tags" | grep -F "\"name\":\"${bare}\"" >/dev/null 2>&1; then
         return 0
     fi
     return 1
@@ -272,7 +412,15 @@ harmony_confirm_install() {
 }
 
 harmony_api_python() {
-    python3 - "$@" <<'PY'
+    # The Store alias must never be the interpreter: on Windows 10 `python3`
+    # is a stub that exits non-zero, which is what made the model load, pull
+    # and copy all fail on a machine where Ollama was already answering.
+    if [ -z "${HARMONY_PYTHON:-}" ] || ! "$HARMONY_PYTHON" -c "" >/dev/null 2>&1; then
+        harmony_say "${RED}No usable Python 3 was found for the Ollama API calls.${NC}"
+        harmony_say "  The Microsoft Store python3 alias is not an interpreter."
+        return 1
+    fi
+    "$HARMONY_PYTHON" - "$@" <<'PY'
 import json
 import sys
 import urllib.error
@@ -430,7 +578,7 @@ harmony_launch_agent() {
         cd "$HARMONY_DIR" || exit 1
         MP_MIX_MANAGER_SHIFT_A=1 \
             HARMONY_MODEL="$HARMONY_MODEL" \
-            python3 "$HARMONY_SCRIPT" "$HARMONY_MODEL"
+            "$HARMONY_PYTHON" "$HARMONY_SCRIPT" "$HARMONY_MODEL"
     )
 }
 
@@ -487,6 +635,22 @@ harmony_offer_start_ollama() {
 
 harmony_main() {
     printf '\033[0m\033[?25h'
+    # The agent is optional and installed outside this tree. Check for it before
+    # anything else: the Ollama and model gates below can ask questions and start
+    # services, and doing all that only to end with "not installed" is noise for
+    # a user who never opted in to MP Harmony.
+    harmony_resolve_script
+    if [ ! -f "${HARMONY_SCRIPT:-}" ]; then
+        harmony_say "${YELLOW}The MP Harmony Agent is not installed, so it cannot be started.${NC}"
+        # The path is printed with %s, because harmony_say uses printf %b and a
+        # Windows path such as X:\... would turn "\n" into a newline.
+        printf '  It is an optional, separate project expected at %s.\n' "$HARMONY_DIR"
+        harmony_say "  Install it with: ${BOLD}scripts/install_harmony_agent.sh install${NC}"
+        harmony_say "  Or re-run ${BOLD}./install.sh${NC} and accept the optional agent."
+        harmony_say "  The rest of MP Mix Manager is unaffected."
+        harmony_wait_enter
+        return 6
+    fi
     if ! harmony_ollama_is_running; then
         local start_rc=0
         harmony_offer_start_ollama || start_rc=$?

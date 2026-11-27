@@ -370,6 +370,7 @@ class TestTrayMenuFollowsTheSelection(SelectionBase):
                 "rescan-archive",
                 "rescan-music",
                 "mute-audio",
+                "update",
                 "close-all",
             ],
         )
@@ -377,12 +378,12 @@ class TestTrayMenuFollowsTheSelection(SelectionBase):
     def test_a_one_app_install_hides_the_other_launchers(self):
         selection.write(["gui"])
         ids = [ident for ident, _label in tray.menu_entries()]
-        self.assertEqual(ids, ["launch-gui", "web-audio", "rescan-archive", "rescan-music", "mute-audio", "close-all"])
+        self.assertEqual(ids, ["launch-gui", "web-audio", "rescan-archive", "rescan-music", "mute-audio", "update", "close-all"])
 
     def test_a_mixer_only_install_offers_the_mixer(self):
         selection.write(["mixer"])
         ids = [ident for ident, _label in tray.menu_entries()]
-        self.assertEqual(ids, ["launch-mixer", "web-audio", "rescan-archive", "rescan-music", "mute-audio", "close-all"])
+        self.assertEqual(ids, ["launch-mixer", "web-audio", "rescan-archive", "rescan-music", "mute-audio", "update", "close-all"])
 
     def test_the_rescan_and_mute_entries_survive_every_selection(self):
         for chosen in (["manager"], ["gui"], ["liquid"], ["visualizer"], ["mixer"], ["gui", "liquid"]):

@@ -54,6 +54,80 @@ have_git() { command -v git >/dev/null 2>&1; }
 
 have_agent() { [ -f "$TARGET/$ENTRY" ]; }
 
+# True on Git Bash / MSYS2 / Cygwin, where the agent runs against a Windows
+# Python instead of a system python3.
+is_windows() {
+    case "$(uname -s 2>/dev/null)" in
+        MINGW*|MSYS*|CYGWIN*) return 0 ;;
+    esac
+    [ -n "${WINDIR:-}" ] && return 0
+    return 1
+}
+
+# The interpreter the launcher will actually use (see launch_mp_harmony.sh).
+harmony_python() {
+    local bin=""
+    if [ -n "${MP_PY_BIN:-}" ] && "$MP_PY_BIN" -c "" >/dev/null 2>&1; then
+        printf '%s\n' "$MP_PY_BIN"
+        return 0
+    fi
+    local resolver
+    resolver="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)/resolve_mp_python.sh"
+    if [ -f "$resolver" ]; then
+        bin="$(SCRIPT_DIR="${SCRIPT_DIR:-$(dirname "$resolver")/..}" bash -c '
+            source "$1" >/dev/null 2>&1 || exit 1
+            mp_python_bin 2>/dev/null || resolve_mp_python 2>/dev/null
+        ' _ "$resolver" 2>/dev/null | tail -n 1)"
+        bin="${bin//$'\r'/}"
+    fi
+    if [ -z "$bin" ]; then
+        for bin in python3 python; do
+            local found=""
+            found="$(command -v "$bin" 2>/dev/null || true)"
+            case "$found" in
+                ''|*[Ww]indows[Aa]pps*) continue ;;
+            esac
+            bin="$found"
+            break
+        done
+    fi
+    [ -n "$bin" ] || return 1
+    printf '%s\n' "$bin"
+}
+
+# On Windows the agent imports readline and openai_harmony, which are not
+# stdlib there: readline is POSIX-only (pyreadline3 provides it) and the
+# Harmony renderer is a wheel. `ddgs` is the web-search tool. Installing them
+# from the installer is what makes the agent startable on a fresh machine
+# instead of dying on "No module named 'readline'".
+harmony_install_windows_deps() {
+    is_windows || return 0
+    local py
+    py="$(harmony_python || true)"
+    if [ -z "$py" ]; then
+        warn "No Windows Python found; the agent dependencies were not installed."
+        return 1
+    fi
+    if "$py" - <<'PY' >/dev/null 2>&1
+import importlib
+for name in ("httpx", "openai_harmony", "ddgs", "readline"):
+    importlib.import_module(name)
+PY
+    then
+        ok "Agent dependencies already present in ${CYAN}${py}${NC}"
+        return 0
+    fi
+    say "      Installing the agent dependencies into ${CYAN}${py}${NC} ..."
+    if "$py" -m pip install --disable-pip-version-check --no-input \
+            "openai-harmony" "httpx" "ddgs" "pyreadline3" >/dev/null 2>&1; then
+        ok "Agent dependencies installed."
+        return 0
+    fi
+    warn "Could not install the agent dependencies automatically."
+    say "        ${DIM}Run: \"$py\" -m pip install openai-harmony httpx ddgs pyreadline3${NC}"
+    return 1
+}
+
 # A directory that has the entry point is usable even if it is not a git
 # checkout: the user may have copied it, or cloned it themselves.
 agent_dir_kind() {
@@ -79,10 +153,12 @@ cmd_status() {
             local desc
             desc="$(git -C "$TARGET" log -1 --format='%h %s' 2>/dev/null || echo '?')"
             say "        branch: ${branch}  •  ${desc}"
+            harmony_report_windows_deps
             return 0
             ;;
         plain)
             ok "MP Harmony Agent found (not a git checkout): ${CYAN}${TARGET}${NC}"
+            harmony_report_windows_deps
             return 0
             ;;
         *)
@@ -90,6 +166,30 @@ cmd_status() {
             return 1
             ;;
     esac
+}
+
+# Status must not install anything, but on Windows it should say whether the
+# agent can start, because a missing readline wheel is otherwise only found
+# when the AI row is chosen.
+harmony_report_windows_deps() {
+    is_windows || return 0
+    local py
+    py="$(harmony_python || true)"
+    if [ -z "$py" ]; then
+        warn "No Windows Python found, so the agent cannot start."
+        return 1
+    fi
+    if "$py" - <<'PY' >/dev/null 2>&1
+import importlib
+for name in ("httpx", "openai_harmony", "ddgs", "readline"):
+    importlib.import_module(name)
+PY
+    then
+        say "        ${DIM}• Windows dependencies present.${NC}"
+        return 0
+    fi
+    warn "Windows dependencies missing. Run: bash scripts/install_harmony_agent.sh deps"
+    return 1
 }
 
 # Clone with a hard timeout so a blocked network never hangs the installer.
@@ -134,6 +234,7 @@ cmd_install() {
     if [ "$kind" = "plain" ]; then
         ok "MP Harmony Agent already present (not a git checkout): ${CYAN}${TARGET}${NC}"
         say "      ${DIM}• Leaving it untouched; delete it to let the installer clone a fresh copy.${NC}"
+        harmony_install_windows_deps || true
         return 0
     fi
 
@@ -164,6 +265,7 @@ cmd_install() {
 
     if have_agent; then
         ok "MP Harmony Agent installed: ${CYAN}${TARGET}${NC}"
+        harmony_install_windows_deps || true
         return 0
     fi
 
@@ -226,6 +328,8 @@ Commands:
   install     Clone the agent, or fast-forward an existing checkout (default)
   status      Report whether the agent is installed
   path        Print the resolved agent directory
+  deps        Install the Windows agent dependencies (openai-harmony, httpx,
+              ddgs, pyreadline3) into the interpreter the launcher uses
   unit        Write/repoint the systemd user unit only
 
 Environment:
@@ -233,6 +337,7 @@ Environment:
   HARMONY_REPO_URL    Git remote (default: ${REPO_URL})
   HARMONY_SKIP_PULL=1 Never update an existing checkout
   HARMONY_TIMEOUT     Git timeout in seconds (default: 120)
+  MP_PY_BIN           Interpreter to install the Windows dependencies into
 EOF
 }
 
@@ -242,6 +347,7 @@ main() {
         install)        cmd_install ;;
         status)         cmd_status ;;
         path)           printf '%s\n' "$TARGET" ;;
+        deps)           harmony_install_windows_deps ;;
         unit)           cmd_unit ;;
         -h|--help|help) usage; exit 0 ;;
         *)
