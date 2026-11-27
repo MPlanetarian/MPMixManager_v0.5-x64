@@ -12,7 +12,9 @@
 >
 > ### 📦 New packages are available to download — generated 27 November 2026
 >
-> Both **Microsoft Windows 10 / 11 MSI** installers and both **macOS `.pkg`** builds were **rebuilt and uploaded on 27 November 2026**. The Windows packages now actually install on Windows 10 (see the installer fix below), and the macOS packages carry every 0.5.4 commit, including the new MS Windows 95 GUI theme. Grab them from the release page or the [download table](#-download-mp-mix-manager-054-sensorium); the files keep their 0.5.4 names and are replaced in place, so the links below always serve the current build.
+> **Every platform was rebuilt and re-uploaded on 27 November 2026** — Windows, macOS, and the whole Linux set (Flatpak, `.deb`, `.rpm`, Arch, Alpine, Snap, AppImage, portable) plus the Raspberry Pi 4/5 bundle. All of them now carry the 27 November work, including the new MS Windows 95 GUI theme. Grab them from the release page or the [download table](#-download-mp-mix-manager-054-sensorium); the files keep their 0.5.4 names and are replaced in place, so the links below always serve the current build.
+>
+> The **Windows** packages now actually install on Windows 10 (see the installer fix below). The **AppImage** is back in the release after a missing `appimagetool`, and the Flatpak's per-build signing key was refreshed and its stale key removed, so an offline install keeps working.
 >
 > ### 🪟 What is new for Microsoft Windows 10 & 11 in this 27 November 2026 rebuild
 >
@@ -52,7 +54,7 @@
 >
 > Finally, **Dreamworlds Ultra** is the fresh-install default with light purple text, and three Liquid Glass skins were retired so the picker is easier to scan.
 >
-> **Rebuilt 27th November 2026:** both **Windows 10/11 MSI** installers now install on Windows 10 (the `VersionNT` trap is fixed), the **macOS `.pkg`** builds carry every commit, **MP Liquid Mixer runs natively on Windows**, and the **MS Windows 95 GUI (Nostalgia Theme)** joins the theme picker.
+> **Rebuilt 27th November 2026:** every platform — Windows 10/11 MSI, macOS `.pkg`, and the full Linux set plus the Raspberry Pi bundle. Both **Windows 10/11 MSI** installers now install on Windows 10 (the `VersionNT` trap is fixed), **MP Liquid Mixer runs natively on Windows**, and the **MS Windows 95 GUI (Nostalgia Theme)** joins the theme picker.
 >
 > Please see the rest of this page to discover even more — there are simply too many fixes to list for a short introduction.
 >
@@ -2080,6 +2082,28 @@ MP Mix Archive Manager includes an automated test harness ensuring shell script 
 ```
 
 Nothing is uploaded or published: the utility only builds local files.
+
+> [!TIP]
+> ### 🔁 Rebuilding a release (the 27 November 2026 process)
+> Every platform in this release was rebuilt on **27 November 2026**. The `.pkg` and `.msi` need their own hosts, so the release is assembled from three machines and published in one pass:
+>
+> | Target | Host | Notes |
+> | :--- | :--- | :--- |
+> | Linux set + Raspberry Pi | **Fedora 45 x86_64** | `-t linux,raspberrypi --arch amd64`. Needs `rpm-build`, `flatpak-builder`, `squashfs-tools` and `dpkg-dev`; a missing `appimagetool` silently skips **only** the AppImage, so pass `--appimagetool PATH` or the AppImage will be absent from the release. The Flatpak also needs `org.freedesktop.Sdk//25.08` and `org.flatpak.Builder` installed for the user. |
+> | macOS `.pkg` (arm64 + x86_64) | **Mac mini, arm64** | `-t macos`. Needs **bash 4+**, because the tree uses `coproc NAME`; macOS ships bash 3.2 at `/bin/bash`, so run the utility with `/opt/homebrew/bin/bash`. `pkgbuild` comes from the Xcode Command Line Tools. |
+> | Windows `.msi` (x64 + x86) | Windows 10 | WiX **5.0.2** as a `dotnet tool`, per `MP_Liquid_Mixer/WINDOWS_MSI_BUILD.md`. |
+>
+> **Build from a clean clone, not the working tree.** The utility snapshots the tree with `tar`, so a developer checkout carries gitignored debris into the package — `MP_Auto_Tester_Flash.sh` (LAN addresses and credentials), `PI_REVIEW_PACKET.md`, probe scripts, stray `.exe` files and archive lists. A fresh `git clone` of the tag's commit is the payload.
+>
+> `scripts/publish_release_assets.py` replaces the assets on the release and rebuilds `SHA256SUMS` from the digests GitHub reports for the files it actually stores, so the checksum file cannot drift from what a user downloads:
+>
+> ```bash
+> GH_TOKEN=... python3 scripts/publish_release_assets.py --dir <staged folder> --dry-run
+> GH_TOKEN=... python3 scripts/publish_release_assets.py --dir <staged folder> \
+>              --delete builder-<old-id>.rsa.pub      # the Flatpak key name changes per build
+> ```
+>
+> GitHub asset names are immutable, so each file is deleted and re-uploaded. Uploads go through `uploads.github.com`, which honours `HTTPS_PROXY` if the build host needs one.
 
 Every run writes **`BUILD-MANIFEST.txt`** with the host, the requested architectures, the targets and the exact artifacts produced, and each package also carries an `architecture.txt` / `ARCHITECTURE.txt`. Cross-architecture **RPMs** build inside a rootless podman/docker container of the target architecture (needs binfmt/qemu), and the Alpine **`.apk`** is `noarch`, so one file covers every architecture. Formats that embed a native builder are reported rather than faked: the **AppImage** and **Snap** are host-only (`--arch` lists them as skipped) and the **Flatpak** stays on the build host because `flatpak-builder` only builds for its own architecture.
 
