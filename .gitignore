@@ -200,6 +200,12 @@ test-evidence/
 /.probe_mgr.sh
 /MP_Error.log
 
+# Render/verification scratch: screenshots and throwaway probe scripts written
+# while testing a visual change. They are never shipped and would only add
+# stale duplicate images to the tree.
+/.tmp_preview/
+/scripts/_probe_*.ps1
+
 # Large sample media belongs in Git LFS or a release asset, not a blob.
 #
 # The exception below is deliberate and load-bearing: the bundled sample track is

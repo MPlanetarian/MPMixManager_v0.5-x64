@@ -1904,10 +1904,9 @@ class LiquidMixerWindows:
                                      y + h, fill=_hex(accent), outline="")
         self._text_in_box(box, "MP LIQUID MIXER", 21, glass, 0.96, True,
                           "start", 28 * s)
-        # The version sits under the two trims, dim and partly behind them, the
-        # way the reference ribbon shows it.
-        self._text_in_box(box, f"v{VERSION}", 12, glass, 0.55, False,
-                          "start", 252 * s)
+        # The build number sits under the title, clear of the two trims.
+        self._text(box[0] + 30 * s, box[1] + box[3] - 14 * s,
+                   f"v{VERSION}  beta", 9, glass, 0.50, False, "w")
         # MASTER / MONITOR trims sit right beside the title, as they do in the
         # reference window, with their percentages on one line underneath.
         self._paint_ribbon_knob(self.boxes["master_knob"], "MASTER",
@@ -2072,7 +2071,8 @@ class LiquidMixerWindows:
                            "button", f"sync:{channel}"))
 
         label = "LIVE" if playing else ("READY" if online else "OFFLINE")
-        self._text(header[0] + header[2] - 16 * s, led_y, label, 10, led, 0.95, True, "e")
+        # The state word sits just left of SYNC, as the Linux header draws it.
+        self._text(sync[0] - 14 * s, led_y, label, 9.5, led, 0.95, True, "e")
 
         message = ""
         if not playing and str(status.get("last_load_error") or ""):
@@ -2129,8 +2129,8 @@ class LiquidMixerWindows:
         playing = state == "PLAYING"
 
         self._text(x + pad, y + 64 * s,
-                   f"{'▶' if playing else '❚❚'} {state}  [{mode} MODE]  ♪ {_short(title, 58)}",
-                   12, cyan if playing else ink, 0.95, True, "w", w - 2 * pad)
+                   f"{'▶' if playing else '❚❚'} {state}  [{mode} MODE]  ♪ {_short(title, 54)}",
+                   12, cyan if playing else ink, 0.95, True, "w", 0)
 
         fmt = str(Path(str(status.get("path") or "")).suffix or "").lstrip(".").upper() or "—"
         rate = status.get("sample_rate")
@@ -2286,12 +2286,12 @@ class LiquidMixerWindows:
         hint_y = y + h - 30 * s
         self._text(x + pad, hint_y,
                    "↑/↓: Scroll   Enter: Play   [1] Mix  [2] Music  [3] Favorites  [H]: Shuffle",
-                   8.5, p["glass_ink"], 0.55, False, "w", w - 2 * pad)
+                   8.5, p["glass_ink"], 0.55, False, "w", 0)
         self._text(x + pad, hint_y + 13 * s,
                    f"Vol {volume}%   Pitch {pitch:+.1f}%   "
                    f"{'Playing' if playing else 'Paused'}   "
                    "Click a track to load it",
-                   8.5, p["glass_ink"], 0.48, False, "w", w - 2 * pad)
+                   8.5, p["glass_ink"], 0.48, False, "w", 0)
 
     def _draw_spectrum(self, x: float, y: float, w: float, h: float,
                        levels: List[Any], color: Tuple[int, int, int],
@@ -2543,7 +2543,7 @@ class LiquidMixerWindows:
 
         self._paint_fx_button(channel, hue, p)
         self._paint_monitor_button(channel, hue, p)
-        self._text(label_box[0] + label_box[2] / 2.0, label_box[1] + 8 * s,
+        self._text(label_box[0] + label_box[2] / 2.0, label_box[1] + 6 * s,
                    channel, 20, hue if active else (120, 128, 136),
                    0.98 if active else 0.55, True, "center")
 
