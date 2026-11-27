@@ -1064,15 +1064,22 @@ class GlassHost:
         23 rows below the visible area and ``stty size`` told it the space was
         there. Fitting the buffer makes the child read the real grid.
 
-        The resize is asynchronous, so a fit can run before the console has
-        taken its new size; the helper reports whether the buffer matches now
-        and the fit is retried on later frames until it does.
+        The console only updates its own idea of the window a frame or two
+        after ``SetWindowPos``, and a fit issued in that gap would size the
+        buffer to the *old* rectangle and then look consistent. So a well
+        change starts a short settle window: the fit is repeated every 150 ms
+        until the console's window and its buffer agree on the new rectangle.
         """
         if sys.platform != "win32" or not self.child_xid:
             return
         now = time.monotonic()
         well = getattr(self, "_last_well", None)
-        if well == getattr(self, "_console_fit_well", None):
+        if well != getattr(self, "_console_fit_well", None):
+            # A new well: remember it and open the settle window.
+            self._console_fit_well = well
+            self._console_fit_until = now + 1.6
+            self._console_fit_at = 0.0
+        if now > getattr(self, "_console_fit_until", 0.0):
             return
         if now < getattr(self, "_console_fit_at", 0.0):
             return
@@ -1082,15 +1089,12 @@ class GlassHost:
                 console_window_matches,
                 fit_console_buffer_for_window,
             )
-            # A fit must not run while the console is still moving to the new
-            # well: it would size the buffer to the old rectangle and then
-            # look consistent. Wait until the window has arrived.
-            if well and not console_window_matches(int(self.child_xid), *well):
-                return
-            if fit_console_buffer_for_window(int(self.child_xid)):
-                self._console_fit_well = well
+            hwnd = int(self.child_xid)
+            if well and not console_window_matches(hwnd, *well):
+                return                      # the console has not arrived yet
+            fit_console_buffer_for_window(hwnd)
         except Exception:
-            self._console_fit_well = well
+            self._console_fit_until = 0.0
 
     def _poll_due(self, attr: str, interval: float, now: float) -> bool:
         """True when ``interval`` seconds have passed since the last poll.

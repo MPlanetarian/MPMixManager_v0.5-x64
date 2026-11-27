@@ -34,6 +34,14 @@ class TestWindowsConsoleScroll(unittest.TestCase):
         self.assertTrue(Path(found).is_file())
 
     def test_player_and_hosts_hide_the_bar(self):
+        """A windowed restore must refit the console, not just hide the bar.
+
+        ``SetWindowPos`` changes how many rows a console window shows but leaves
+        its screen buffer at the old height. Restoring MP Gui from full screen
+        therefore left a 68-row buffer behind a 45-row window: the menu drew 23
+        rows below the visible area and the console told ``stty size`` the space
+        was there, so the window looked cut off and stuck.
+        """
         player = (ROOT / "MP_Audio_Player.py").read_text(encoding="utf-8")
         opengl = (ROOT / "MP_Audio_Player_Liquid_Glass_OpenGL.py").read_text(encoding="utf-8")
         vulkan = (ROOT / "MP_Audio_Player_Liquid_Glass.py").read_text(encoding="utf-8")
@@ -41,6 +49,42 @@ class TestWindowsConsoleScroll(unittest.TestCase):
         self.assertIn("hide_process_console_scrollbar", opengl)
         self.assertIn("hide_process_console_scrollbar", vulkan)
         self.assertIn("~0x00300000", opengl)
+        # The refit runs from the same place the console is moved, and it is
+        # retried while the console catches up with its new rectangle.
+        self.assertIn("_fit_console_to_well()", opengl)
+        self.assertIn("def _fit_console_to_well", opengl)
+        self.assertIn("console_window_matches", opengl)
+        fit_body = opengl.split("def _fit_console_to_well", 1)[1].split("\n    def ", 1)[0]
+        self.assertIn("_console_fit_until", fit_body)
+
+    def test_the_fit_helpers_exist_for_both_halves(self):
+        from windows_console_scroll import (  # noqa: F401
+            console_buffer_matches_window,
+            console_window_matches,
+            fit_console_buffer_for_window,
+        )
+        if sys.platform != "win32":
+            self.assertFalse(fit_console_buffer_for_window(0))
+            self.assertFalse(console_window_matches(0, 0, 0, 10, 10))
+            return
+        # A null handle must fail cleanly rather than raising.
+        self.assertFalse(fit_console_buffer_for_window(0))
+        self.assertFalse(console_window_matches(0, 0, 0, 10, 10))
+
+    def test_the_fit_uses_the_console_window_rect_not_the_requested_one(self):
+        """The retry must wait for the console to arrive, then fit twice.
+
+        A single fit issued while the console is still at its old rectangle
+        sizes the buffer to the old size and *looks* consistent, which is what
+        made the first attempt pass and the menu stay cut off.
+        """
+        opengl = (ROOT / "MP_Audio_Player_Liquid_Glass_OpenGL.py").read_text(encoding="utf-8")
+        body = opengl.split("def _fit_console_to_well", 1)[1].split("\n    def ", 1)[0]
+        settle = body.index("_console_fit_until")
+        window_check = body.index("console_window_matches(hwnd, *well)")
+        self.assertLess(settle, window_check)
+        self.assertIn("fit_console_buffer_for_window(hwnd)", body)
+
 
     def test_hide_fits_a_real_console_buffer(self):
         if sys.platform != "win32":
