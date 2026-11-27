@@ -219,6 +219,7 @@ It is one 1920×1080 (or 4K) window that inherits the entire Liquid Glass host: 
 - [🧹 Removed and Changed in v0.5.4](#-removed-and-changed-in-v054)
 - [🎨 Theme and Appearance in v0.5.4](#-theme-and-appearance-in-v054)
 - [🎨 New Feature Theme: MS Windows 95 GUI (Nostalgia Theme)](#-new-feature-theme-ms-windows-95-gui-nostalgia-theme--november-27-2026)
+- [🩹 Fixed in every package — the source-integrity guard](#-fixed-in-every-package--the-source-integrity-guard-failed-from-a-real-install)
 - [🩹 Windows 10 & 11 fixes in this rebuild](#-windows-10--11-fixes-in-this-rebuild--november-27-2026)
 - [🚀 What's New in v0.5.3 Stable (Sensorium)](#-whats-new-in-v053-stable-sensorium)
 - [✨ More in this 0.5.3 build](#-more-in-this-053-build)
@@ -393,6 +394,14 @@ It is one 1920×1080 (or 4K) window that inherits the entire Liquid Glass host: 
 | **Aliases** | `ms_windows_95_gui`, `ms_windows_95`, `ms windows 95 gui`, `windows_95`, `windows 95`, `win95`, `win_95`, `nostalgia`, and the exact display title **"MS Windows 95 GUI (Nostalgia Theme)"**. |
 
 `tests/test_ms_windows_95_theme.py` renders every surface and pins the palette entries, the aliases, the picker row and the 11.5:1 contrast ratio, so the theme cannot be dropped from one of the surfaces without a failure.
+
+### 🩹 Fixed in every package — the source-integrity guard failed from a real install
+
+| Bug | What changed |
+| :--- | :--- |
+| **The shipped test suite reported a false failure from the packaged install** | `tests/test_source_files_are_intact.py` ships inside every package and installs under `/opt/mp-mix-manager`, which is owned by **root**. `python -m py_compile` caches bytecode *beside each source file*, so a normal user running the guard from that tree got **`Permission denied` on `scripts/__pycache__`** and **2 of the 5 checks failed on a perfectly valid install**. Found on Fedora 45 by installing the `.deb` and running the guard: the same payload copied to a writable directory passed all 5, and re-running with `PYTHONPYCACHEPREFIX` set passed too — so the code was fine and the test was reporting a permissions artefact as a corrupt module. |
+| **The fix** | The compile subprocesses now run with `PYTHONPYCACHEPREFIX` pointed at a temp directory, so the checks report source health and nothing else. `PATH` and the rest of the environment are untouched, because resolving `bash` depends on it. |
+| **The guard** | New `TestTheGuardWorksFromAnInstalledTree` pins both halves: that the cache is redirected, and that compiling succeeds when the source tree is **read-only**. The second test reproduces the reported failure — against the previous code it raises `Access is denied` / `Permission denied` on `__pycache__` — and passes with the redirect. Verified afterwards from the installed payload in all four formats (`.deb`, `.rpm`, Arch, Snap), and from a `chmod -R a-w` copy on macOS. |
 
 ### 🩹 Windows 10 & 11 fixes in this rebuild — November 27, 2026
 
