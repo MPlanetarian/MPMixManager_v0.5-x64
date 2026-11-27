@@ -578,7 +578,7 @@ class LiquidMixerWindows:
         self.theme = self._initial_theme()
         self.model = self._load_model()
         self.library_mode = str(self.windows.get("library", "") or "").upper()
-        if self.library_mode not in ("MUSIC", "MIX_ARCHIVE"):
+        if self.library_mode not in ("MUSIC", "MIX_ARCHIVE", "FAVORITES"):
             self.library_mode = DeckEngine.default_library()
         self.profile = mixer_midi.normalize_profile(
             self.windows.get("midi_profile") or self.settings.midi_profile)
@@ -1145,6 +1145,62 @@ class LiquidMixerWindows:
         except Exception:
             pass
 
+    # -- the three chips under the spectrum --------------------------------
+    def _library_state_file(self) -> Path:
+        return CONFIG_DIR / "mixer_library_mode"
+
+    def _toggle_favorites_library(self) -> None:
+        """Switch the decks between their normal library and the Favorites
+        playlist. The favourites themselves are the ones MP_Audio_Player writes
+        to favorites.json, so both players share one list."""
+        favorite_path = CONFIG_DIR / "favorites.json"
+        if self.library_mode == "FAVORITES":
+            self.library_mode = DeckEngine.default_library()
+            self._notice = f"Library: {self.library_mode}"
+        else:
+            try:
+                rows = json.loads(favorite_path.read_text(encoding="utf-8"))
+            except Exception:
+                rows = None
+            tracks = (rows.get("tracks") if isinstance(rows, dict) else rows) or []
+            if not tracks:
+                self._notice = "Favorites is empty - add tracks in MP Audio Player"
+                self._notice_until = time.monotonic() + 2.4
+                self._draw()
+                return
+            self.library_mode = "FAVORITES"
+            for engine in self.decks.values():
+                engine.library_mode = "FAVORITES"
+            self._notice = f"Library: FAVORITES ({len(tracks)} tracks)"
+        for engine in self.decks.values():
+            if self.library_mode != "FAVORITES":
+                engine.set_library(self.library_mode)
+        try:
+            self._library_state_file().write_text(self.library_mode, encoding="utf-8")
+        except Exception:
+            pass
+        self._notice_until = time.monotonic() + 1.8
+        self._draw()
+
+    def _cycle_bass_boost(self) -> None:
+        """Cycle Normal -> Medium -> High, the modes MP_Audio_Player defines in
+        BASS_BOOST_MODES and persists to the `bass_boost` state file."""
+        modes = ("Normal", "Medium", "High")
+        state = CONFIG_DIR / "bass_boost"
+        try:
+            current = state.read_text(encoding="utf-8").strip()
+        except Exception:
+            current = "Normal"
+        index = modes.index(current.title()) if current.title() in modes else 0
+        self.bass_mode = modes[(index + 1) % len(modes)]
+        try:
+            state.write_text(self.bass_mode, encoding="utf-8")
+        except Exception:
+            pass
+        self._notice = f"Bass boost: {self.bass_mode}"
+        self._notice_until = time.monotonic() + 1.8
+        self._draw()
+
     def _toggle_visualizer(self) -> None:
         self.visualizer_enabled = not self.visualizer_enabled
         self.settings.visualizer_enabled = self.visualizer_enabled
@@ -1535,6 +1591,10 @@ class LiquidMixerWindows:
             self._cycle_theme()
         elif action == "visualizer":
             self._toggle_visualizer()
+        elif action == "favorites":
+            self._toggle_favorites_library()
+        elif action == "bass":
+            self._cycle_bass_boost()
         elif action == "record":
             self._toggle_recording()
         elif action == "settings":
@@ -2233,11 +2293,11 @@ class LiquidMixerWindows:
         # FAVORITES / VISUALIZATION / BASS BOOST chips.
         chip_y = spec_top + spec_h + 14 * s
         chip_h = 18 * s
-        chips = (("★ FAVORITES", p["glass_ink"]),
-                 ("VISUALIZATION", cyan),
-                 ("BASS BOOST: " + str(status.get("bass_mode") or "NORMAL").upper(), hue))
+        chips = (("★ FAVORITES", p["glass_ink"], "favorites"),
+                 ("VISUALIZATION", cyan, "visualizer"),
+                 ("BASS BOOST: " + str(status.get("bass_mode") or "NORMAL").upper(), hue, "bass"))
         chip_x = x + pad
-        for text, color in chips:
+        for text, color, chip_action in chips:
             chip_w = (len(text) * 7.2 + 22) * s
             chip_w = min(chip_w, (w - 2 * pad) / 3.0 - 6 * s)
             self._panel((chip_x, chip_y, chip_w, chip_h), color, 0.14, 3 * s)
@@ -2245,6 +2305,14 @@ class LiquidMixerWindows:
                                outline=_with(p["field"], color, 0.55))
             self._text_in_box((chip_x, chip_y, chip_w, chip_h), text, 10, color,
                               0.92, True)
+            # These three chips were painted but never registered as hit
+            # regions, so _hit_at() found nothing in them and _on_press treated
+            # the click as empty surface. With overrideredirect(True) there is
+            # no title bar, so the click became a window drag: the buttons read
+            # as dead. Registering them is enough for VISUALIZATION (its action
+            # already exists); favorites and bass have actions added alongside.
+            self._hits.append((chip_x, chip_y, chip_x + chip_w, chip_y + chip_h,
+                               "button", chip_action))
             chip_x += chip_w + 6 * s
 
         # The music library list this deck is mixing from.
