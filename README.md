@@ -1136,6 +1136,19 @@ Two releases back, October 24, 2026. Current release notes are [What's New in v0
 - 🔇 **Mute from the Tray**: **Mute MP Player Audio** silences MP Audio Player through its own IPC socket, the same path the player's `u` key and the phone dashboard use. While it is muted the entry reads **Unmute MP Player Audio** — the title is re-read every time the menu opens, so it names the action a click will take rather than the state it is in. If the player is not running the tray says so instead of enabling a dead entry.
 - 🔒 **Local Network Isolation**: Binds securely to your local LAN IP (`http://<WORKSTATION-IP>:8888`) with optional trusted-host verification.
 
+#### 🔄 Using the Two Tray Rescans
+
+The MP Tray has two separate rescan commands. Open the tray menu by right-clicking the icon on Windows/Linux, or clicking the menu-bar icon on macOS.
+
+1. **Prepare the folders first.** Connect the archive drives and make SMB shares reachable. For Music Folders, confirm the folders and SMB login under **Music Folders option 8** before scanning.
+2. **Choose one rescan:**
+   - **Rescan Mix Archive Folders** refreshes the configured Mix Archive inventory and header counts. It does not move, convert, or delete audio. The completion notice reports the archive-folder, FLAC, converted-WAV, pending-WAV, and missing-tracklist counts.
+   - **Rescan Music Folders** rebuilds the per-folder Music playlists and the combined **ALL** playlist. It does not download or copy music. The completion notice reports how many folders were refreshed and the total tracks in **ALL**.
+3. **Wait for the completion notification.** Large archives and SMB libraries can take minutes. The tray menu stays responsive, both rescan entries are disabled while a scan is running, and the Windows tray stays open so it can deliver the completion balloon.
+4. **Check the result.** Offline Music Folders are skipped and their existing playlists are left unchanged. If a share or drive is missing, reconnect it, verify its path/credentials, and run the rescan again.
+
+If no completion notice appears, check `~/.config/mix-manager/mp_system_tray.log` (Windows: `%USERPROFILE%\.config\mix-manager\mp_system_tray.log`) for the rescan start, exit code, and any error.
+
 #### 🧠 MP Assistant Tab
 
 The **MP Assistant** tab is the mobile front end for the **MP Harmony Agent**. The agent
