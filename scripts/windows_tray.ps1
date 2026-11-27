@@ -253,6 +253,45 @@ function Get-MpBash {
     return $null
 }
 
+function Get-MpPython {
+    # Git Bash commonly resolves python3 to the Microsoft Store alias. The
+    # Windows tray runs Python directly so a rescan never depends on that stub.
+    $candidates = @(
+        (Join-Path $Root "venv\Scripts\python.exe"),
+        (Join-Path $Root ".venv\Scripts\python.exe")
+    )
+    foreach ($version in @("314", "313", "312", "311", "310")) {
+        $candidates += @(
+            (Join-Path $env:LOCALAPPDATA "Programs\Python\Python$version\python.exe"),
+            (Join-Path $env:ProgramFiles "Python$version\python.exe")
+        )
+    }
+    $candidates += @(
+        (Join-Path $env:ProgramData "anaconda3\python.exe"),
+        (Join-Path $env:USERPROFILE "anaconda3\python.exe"),
+        (Join-Path $env:USERPROFILE "miniconda3\python.exe")
+    )
+    foreach ($name in @("python.exe", "pythonw.exe")) {
+        $commands = @(Get-Command $name -All -ErrorAction SilentlyContinue |
+            Where-Object { $_.Source -and $_.Source -notlike "*\WindowsApps\*" })
+        foreach ($command in $commands) { $candidates += $command.Source }
+    }
+
+    foreach ($candidate in ($candidates | Select-Object -Unique)) {
+        if (-not $candidate -or -not (Test-Path -LiteralPath $candidate)) { continue }
+        $previous = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        try {
+            & $candidate -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 8) else 1)" > $null 2>&1
+            if ($LASTEXITCODE -eq 0) { return $candidate }
+        } catch {
+        } finally {
+            $ErrorActionPreference = $previous
+        }
+    }
+    return $null
+}
+
 function Get-MpSuiteCloseFile {
     return (Join-Path $env:USERPROFILE ".config\mix-manager\instances\suite.closing")
 }
@@ -516,28 +555,53 @@ function Start-MpRescanProcess {
     # it runs as a child process and a UI timer collects the result.
     param([string]$ActionId)
     if ($script:rescanProcess -and -not $script:rescanProcess.HasExited) { return }
-    $bash = Get-MpBash
-    if (-not $bash) {
-        Show-MpNotice -Title "MP Mix Manager" -Message "No Bash environment was found for the rescan."
+    $python = Get-MpPython
+    if (-not $python) {
+        Show-MpNotice -Title "MP Mix Manager" -Message "No working Python interpreter was found for the rescan."
+        Write-MpTrayLog "rescan $ActionId could not start: no working Python interpreter"
         return
     }
-    $posixRoot = $Root -replace '\\', '/'
     $outFile = Join-Path $env:TEMP ("mp-rescan-{0}.out" -f ([guid]::NewGuid().ToString("N")))
     $errFile = "$outFile.err"
     if ($ActionId -eq "rescan-archive") {
+        $bash = Get-MpBash
+        if (-not $bash) {
+            Show-MpNotice -Title "MP Mix Manager" -Message "No Bash environment was found for the rescan."
+            Write-MpTrayLog "rescan $ActionId could not start: no Bash environment"
+            return
+        }
+        $posixRoot = $Root -replace '\\', '/'
+        $filePath = $bash
         $argumentList = @("`"$posixRoot/Mix_Archive_Manager.sh`"", "--rescan-archive")
     } else {
-        $argumentList = @("-c", "`"python3 '$posixRoot/scripts/music_folders_manager.py' --generate ALL`"")
+        # Run Python directly. Git Bash's python3 is often the Microsoft Store
+        # alias, which exits without running the Music Folders scan at all.
+        $filePath = $python
+        $argumentList = @("`"$(Join-Path $Root 'scripts\music_folders_manager.py')`"", "--generate", "ALL")
     }
     try {
         # Redirect to files instead of pipes: a scan that prints megabytes of
         # progress would fill a pipe buffer and block forever if nothing read
         # it while the icon was still being used.
-        $proc = Start-Process -FilePath $bash -ArgumentList $argumentList `
-            -WorkingDirectory $Root -WindowStyle Hidden -PassThru `
-            -RedirectStandardOutput $outFile -RedirectStandardError $errFile
+        $previousPython = $env:MP_PYTHON
+        $previousIoEncoding = $env:PYTHONIOENCODING
+        try {
+            # The archive rescan is a Bash entry point. Give its shared Python
+            # resolver the same verified interpreter used by the music rescan.
+            $env:MP_PYTHON = $python
+            # The scan's progress output contains Unicode symbols. A hidden
+            # Windows child otherwise defaults to cp1252 and aborts mid-scan.
+            $env:PYTHONIOENCODING = "utf-8"
+            $proc = Start-Process -FilePath $filePath -ArgumentList $argumentList `
+                -WorkingDirectory $Root -WindowStyle Hidden -PassThru `
+                -RedirectStandardOutput $outFile -RedirectStandardError $errFile
+        } finally {
+            $env:MP_PYTHON = $previousPython
+            $env:PYTHONIOENCODING = $previousIoEncoding
+        }
     } catch {
         Show-MpNotice -Title "MP Mix Manager" -Message "The rescan could not start: $($_.Exception.Message)"
+        Write-MpTrayLog "rescan $ActionId could not start: $($_.Exception.Message)"
         return
     }
     $script:rescanProcess = $proc
@@ -545,6 +609,7 @@ function Start-MpRescanProcess {
     $script:rescanOutFile = $outFile
     $script:rescanErrFile = $errFile
     Set-MpRescanItemsEnabled -Enabled $false
+    Write-MpTrayLog "rescan $ActionId started pid=$($proc.Id)"
     $timer = New-Object System.Windows.Forms.Timer
     $timer.Interval = 500
     $timer.Add_Tick({
@@ -557,6 +622,7 @@ function Start-MpRescanProcess {
             }
             $stdout = ""
             $stderr = ""
+            $exitCode = $script:rescanProcess.ExitCode
             # The scan wrote to files (see Start-MpRescanProcess), so read
             # them rather than a pipe nobody was draining.
             try {
@@ -579,6 +645,7 @@ function Start-MpRescanProcess {
             $action = $script:rescanAction
             try { $script:rescanProcess.Dispose() } catch { }
             $script:rescanProcess = $null
+            Write-MpTrayLog "rescan $action finished exit=$exitCode"
             Show-MpRescanResult -ActionId $action -Stdout $stdout -Stderr $stderr
         } catch {
             Write-MpTrayLog "rescan result failed: $($_.Exception.Message)"
@@ -1369,6 +1436,12 @@ try {
     $timer.Add_Tick({
         if ($Stay -or $script:closing) { return }
         if ((Get-Date) -lt $script:busyUntil) { return }
+        if ($script:rescanProcess -and -not $script:rescanProcess.HasExited) {
+            # A standalone tray must stay alive long enough to collect the
+            # result and post the completion notification for either rescan.
+            $script:absentSince = $null
+            return
+        }
         if (Test-MpSuiteRunning) {
             $script:absentSince = $null
             return

@@ -868,6 +868,32 @@ class TestTrayRescans(unittest.TestCase):
         self.assertIn("--generate", fn)
         self.assertIn("ALL", fn)
 
+    def test_windows_music_rescan_runs_a_real_python_directly(self):
+        text = (ROOT / "scripts" / "windows_tray.ps1").read_text(encoding="utf-8")
+        fn = text.split("function Start-MpRescanProcess", 1)[1].split("\nfunction ", 1)[0]
+        self.assertIn("Get-MpPython", fn)
+        self.assertIn("$filePath = $python", fn)
+        self.assertIn("music_folders_manager.py", fn)
+        self.assertIn("--generate", fn)
+        self.assertIn('$env:PYTHONIOENCODING = "utf-8"', fn)
+        self.assertNotIn("python3 '$posixRoot/scripts/music_folders_manager.py'", fn)
+        finder = text.split("function Get-MpPython", 1)[1].split("\nfunction ", 1)[0]
+        self.assertIn(r"venv\Scripts\python.exe", finder)
+        self.assertIn("WindowsApps", finder)
+
+    def test_windows_archive_rescan_receives_the_verified_python(self):
+        text = (ROOT / "scripts" / "windows_tray.ps1").read_text(encoding="utf-8")
+        fn = text.split("function Start-MpRescanProcess", 1)[1].split("\nfunction ", 1)[0]
+        self.assertIn("--rescan-archive", fn)
+        self.assertIn("$env:MP_PYTHON = $python", fn)
+        self.assertIn("$env:MP_PYTHON = $previousPython", fn)
+
+    def test_windows_tray_waits_for_a_rescan_before_idle_exit(self):
+        text = (ROOT / "scripts" / "windows_tray.ps1").read_text(encoding="utf-8")
+        idle = text.split("if ($Stay -or $script:closing)", 1)[1].split("$timer.Start()", 1)[0]
+        self.assertIn("$script:rescanProcess -and -not $script:rescanProcess.HasExited", idle)
+        self.assertIn("$script:absentSince = $null", idle)
+
     def test_the_rescan_reports_through_a_desktop_notification(self):
         text = (ROOT / "scripts" / "mp_system_tray.py").read_text(encoding="utf-8")
         self.assertIn("def notify(", text)
