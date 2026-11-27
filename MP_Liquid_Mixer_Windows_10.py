@@ -67,6 +67,9 @@ FORCED_THEME = core.FORCED_THEME
 CONFIG_DIR = Path.home() / ".config" / "mix-manager"
 WINDOWS_SETTINGS = CONFIG_DIR / "liquid_mixer_windows.json"
 VISUALIZER_PRESET_FILE = CONFIG_DIR / "visualizer_preset"
+# The player's own archive scan cache, read only so the panes can show the
+# archive before a deck engine answers IPC.
+ARCHIVE_CACHE = CONFIG_DIR / "archive_scan_cache.json"
 
 CREATE_NO_WINDOW = 0x08000000
 CREATE_NEW_PROCESS_GROUP = 0x00000200
@@ -152,6 +155,24 @@ def midi_profile_label(profile: Any) -> str:
     key = str(profile or "").strip().upper()
     labels = getattr(mixer_midi, "PROFILE_LABELS", {}) or {}
     return str(labels.get(key) or f"Profile {key or '?'}")
+
+
+def read_archive_rows(limit: int = 200) -> List[Dict[str, Any]]:
+    """Mix Archive rows from the player's own scan cache.
+
+    The four deck engines read the archive through ``MixArchiveScanner``, which
+    keeps this cache up to date. Reading it here means the player panes can
+    show the archive before an engine answers IPC, without triggering a walk of
+    the archive themselves.
+    """
+    try:
+        cache = json.loads(ARCHIVE_CACHE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeError):
+        return []
+    rows = cache.get("mixes") if isinstance(cache, dict) else cache
+    if not isinstance(rows, list):
+        return []
+    return [row for row in rows if isinstance(row, dict) and row.get("path")][:limit]
 
 
 def _console_python() -> str:
@@ -906,7 +927,13 @@ class LiquidMixerWindows:
             time.sleep(0.4)
 
     def _fetch_playlist(self, channel: str) -> List[Dict[str, Any]]:
-        """Rows for one deck: the engine's own list, else the shared one."""
+        """Rows for one deck: the engine's own list, else the shared library.
+
+        The engine is the authority, because its list is what the deck will
+        actually play. When IPC has not answered yet there is nothing better to
+        show than the library the mixer was opened on, so the pane stays
+        populated instead of flashing empty.
+        """
         namespace = core.DECK_NAMESPACES[channel]
         reply = core.send_ipc(namespace, "get_playlist", timeout=1.6) or {}
         rows = list(reply.get("playlist") or [])
@@ -919,11 +946,7 @@ class LiquidMixerWindows:
             return []
         if self.library_mode == "MUSIC":
             return core.read_playlist_rows()[:200]
-        try:
-            import mix_archive_scanner
-            return list(mix_archive_scanner.MixArchiveScanner().get_mixes()[:200])
-        except Exception:
-            return []
+        return read_archive_rows(200)
 
     def _command_worker(self) -> None:
         while not self._worker_stop.is_set():
@@ -1417,7 +1440,6 @@ class LiquidMixerWindows:
         if self.model.set_channel(channel, value):
             self._sync_level(channel)
             self._draw()
-
     def _adjust_fader(self, channel: str, delta: float) -> None:
         if self.model.set_channel(channel, self.model.channel_gain(channel) + delta):
             self._sync_level(channel)
@@ -1905,7 +1927,7 @@ class LiquidMixerWindows:
         self._text_in_box(box, "MP LIQUID MIXER", 21, glass, 0.96, True,
                           "start", 28 * s)
         # The build number sits under the title, clear of the two trims.
-        self._text(box[0] + 30 * s, box[1] + box[3] - 14 * s,
+        self._text(box[0] + 30 * s, box[1] + box[3] - 20 * s,
                    f"v{VERSION}  beta", 9, glass, 0.50, False, "w")
         # MASTER / MONITOR trims sit right beside the title, as they do in the
         # reference window, with their percentages on one line underneath.
@@ -2071,8 +2093,8 @@ class LiquidMixerWindows:
                            "button", f"sync:{channel}"))
 
         label = "LIVE" if playing else ("READY" if online else "OFFLINE")
-        # The state word sits just left of SYNC, as the Linux header draws it.
-        self._text(sync[0] - 14 * s, led_y, label, 9.5, led, 0.95, True, "e")
+        # The state word closes the header row, clear of the SYNC button.
+        self._text(sync[0] - 10 * s, led_y, label, 9, led, 0.95, True, "e")
 
         message = ""
         if not playing and str(status.get("last_load_error") or ""):
@@ -2543,8 +2565,9 @@ class LiquidMixerWindows:
 
         self._paint_fx_button(channel, hue, p)
         self._paint_monitor_button(channel, hue, p)
-        self._text(label_box[0] + label_box[2] / 2.0, label_box[1] + 6 * s,
-                   channel, 20, hue if active else (120, 128, 136),
+        self._text(label_box[0] + label_box[2] / 2.0,
+                   label_box[1] + label_box[3] / 2.0,
+                   channel, 17, hue if active else (120, 128, 136),
                    0.98 if active else 0.55, True, "center")
 
         cx = box[0] + box[2] / 2.0
@@ -2620,8 +2643,20 @@ class LiquidMixerWindows:
 
     def _draw_channel_meter(self, channel: str, p: Dict[str, Any]) -> None:
         box = self.boxes[f"meter_{channel}"]
-        peak = self._deck_peak_db(channel)
-        fraction = self.model.meter_fraction(channel, peak)
+        # A channel meter is the deck's own peak scaled by that channel's
+        # fader, so pulling a fader down visibly drops its ladder.
+        peaks = (self._deck_status.get(channel) or {}).get("peaks") or []
+        level = 0.0
+        if isinstance(peaks, list) and peaks:
+            try:
+                level = max(float(v) for v in peaks if isinstance(v, (int, float)))
+            except (TypeError, ValueError):
+                level = 0.0
+        if level > 0.0:
+            scaled = self.model.channel_volume(channel) / 100.0 * level
+            fraction = _clamp(scaled, 0.0, 1.0)
+        else:
+            fraction = self.model.meter_fraction(channel, self._deck_peak_db(channel))
         self._draw_meter_column(box, fraction, p)
 
     def _deck_peak_db(self, channel: str) -> float:

@@ -231,3 +231,92 @@ def hide_process_console_scrollbar(pid: int, hwnd: int = 0) -> bool:
         return hide_attached_console_scrollbar(int(hwnd or 0))
     finally:
         kernel32.FreeConsole()
+
+
+def console_window_matches(hwnd: int, x: int, y: int, width: int, height: int,
+                           tolerance: int = 8) -> bool:
+    """True when a console window already sits at the requested rectangle."""
+    if sys.platform != "win32" or not hwnd:
+        return False
+    import ctypes
+
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+
+    class RECT(ctypes.Structure):
+        _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long),
+                    ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
+
+    rect = RECT()
+    if not user32.GetWindowRect(ctypes.c_void_p(int(hwnd)), ctypes.byref(rect)):
+        return False
+    return (abs(int(rect.left) - int(x)) <= tolerance
+            and abs(int(rect.top) - int(y)) <= tolerance
+            and abs((int(rect.right) - int(rect.left)) - int(width)) <= tolerance
+            and abs((int(rect.bottom) - int(rect.top)) - int(height)) <= tolerance)
+
+
+def fit_console_buffer_for_window(hwnd: int) -> bool:
+    """Make a console's screen buffer match its window, given the window handle.
+
+    The glass host moves and resizes the embedded console with ``SetWindowPos``.
+    That changes how many rows the window can *show* but leaves the console's
+    screen buffer at its previous height, so a windowed restore from full
+    screen left a 68-row buffer behind a 45-row window: the menu drew its
+    whole 68-row frame, 23 rows of it scrolled out of sight, and the console
+    reported 68 rows to ``stty size`` so the menu believed the space existed.
+
+    This attaches to the console that owns ``hwnd`` and fits the buffer to the
+    visible window, so the child reads the true grid and paints inside it. The
+    pid is read from the window, so a caller needs no bookkeeping.
+
+    ``SetWindowPos`` on a console owned by another thread is not guaranteed to
+    have taken effect by the time the caller asks, so the return value says
+    whether the buffer matches the window *now*; a caller that gets False
+    should try again on a later frame.
+    """
+    if sys.platform != "win32" or not hwnd:
+        return False
+    import ctypes
+
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    pid = ctypes.c_ulong()
+    user32.GetWindowThreadProcessId.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong)]
+    user32.GetWindowThreadProcessId(ctypes.c_void_p(int(hwnd)), ctypes.byref(pid))
+    if not pid.value:
+        return False
+    hide_process_console_scrollbar(int(pid.value), int(hwnd))
+    return console_buffer_matches_window(int(pid.value))
+
+
+def console_buffer_matches_window(pid: int) -> bool:
+    """True when a console's screen buffer is exactly its visible window."""
+    if sys.platform != "win32" or not pid:
+        return False
+    import ctypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.AttachConsole.argtypes = [ctypes.c_uint32]
+    kernel32.AttachConsole.restype = ctypes.c_int
+    kernel32.FreeConsole.restype = ctypes.c_int
+    kernel32.AttachConsole(ctypes.c_uint32(int(pid)))
+    try:
+        handle, close_handle = _console_output_handle(kernel32)
+        if not _valid_handle(handle):
+            return False
+        try:
+            info = _read_buffer(kernel32, handle)
+            if info is None:
+                return False
+            window = info.srWindow
+            return buffer_matches_window(
+                int(info.dwSize.X), int(info.dwSize.Y),
+                int(window.Left), int(window.Top),
+                int(window.Right), int(window.Bottom),
+            )
+        finally:
+            if close_handle:
+                kernel32.CloseHandle(handle)
+    finally:
+        kernel32.FreeConsole()
+
+

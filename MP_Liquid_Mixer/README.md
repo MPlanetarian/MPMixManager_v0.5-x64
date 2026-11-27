@@ -11,9 +11,11 @@ Liquid Visualizer runs behind the whole surface.
 > The mixer always opens in **Into Darkness (Void Out)**.
 
 > **Windows 10/11 beta:** a native Tkinter/winmm port lives in
-> [WINDOWS_10.md](WINDOWS_10.md). It keeps the four-channel model, themes,
-> MIDI profiles, IPC decks, WASAPI recording and visualizer companion; the
-> GTK/VTE playlist panes are replaced by the library overlay.
+> [WINDOWS_10.md](WINDOWS_10.md). It draws the **same 1920x1080 design grid**
+> as the Linux window — same four-channel mixer column, same two player panes,
+> same theme table, same transparency model. The Linux build embeds VTE for the
+> two players; the Windows build paints those two panes from the deck engines'
+> own status and playlists instead.
 
 ---
 

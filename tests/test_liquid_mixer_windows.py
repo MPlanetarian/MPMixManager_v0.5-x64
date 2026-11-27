@@ -251,6 +251,20 @@ class TestTheTwoPlayerPanes(unittest.TestCase):
             self.app.library_mode = "MUSIC"
             self.assertEqual(self.app._fetch_playlist("A"), rows)
 
+    def test_the_pane_falls_back_to_the_archive_cache(self):
+        rows = [{"name": "mix.wav", "path": "B:/MIX_ARCHIVE/mix.wav", "ext": "WAV"}]
+        cache = Path(tempfile.mkdtemp()) / "archive_scan_cache.json"
+        cache.write_text(json.dumps({"mixes": rows}), encoding="utf-8")
+        with patch.object(core, "send_ipc", return_value=None), \
+             patch.object(mixer, "ARCHIVE_CACHE", cache):
+            self.app.library_mode = "MIX_ARCHIVE"
+            self.assertEqual(self.app._fetch_playlist("B"), rows)
+
+    def test_an_unreadable_archive_cache_is_not_fatal(self):
+        missing = Path(tempfile.mkdtemp()) / "nope.json"
+        with patch.object(mixer, "ARCHIVE_CACHE", missing):
+            self.assertEqual(mixer.read_archive_rows(), [])
+
     def test_clicking_a_row_loads_that_track_on_that_deck(self):
         self.app._playlist_rows["B"] = self._rows("right")
         with patch.object(self.app, "_send") as send, \

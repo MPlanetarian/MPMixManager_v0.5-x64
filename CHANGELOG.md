@@ -10,6 +10,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Launch MP Visualizer from MP Tray does nothing on Windows 10: `liquid_glass_opengl.py` was corrupt** (`scripts/liquid_glass_opengl.py`, `tests/test_source_files_are_intact.py`):
+  - **Symptom.** Right-clicking **MP Tray** and choosing **Launch MP Visualizer** produced no window at all. `scripts\launch_liquid_visualizer.bat` exited **0**, the tray logged a successful spawn, and the visualizer's own log stayed **empty**, so it looked like the launch was being ignored.
+  - **Why.** `scripts/liquid_glass_opengl.py` had its last five lines replaced by **147 NUL bytes**, which makes the file unimportable: reading it raises `SyntaxError: source code string cannot contain null bytes`. The visualizer calls `liquid_glass_opengl.load_glfw_dll()` from inside `load_glfw_dll()` the moment it creates a window, so the process died during import - before it opened a window, and before any of its own logging had started. The tray, the BAT file, GLFW and the Python install were all working correctly.
+  - **Why nothing caught it.** The visualizer tests stub the GLFW loader, so the corrupt module was never imported by the suite, and no test compiled the shipped modules as a group. A truncated or NUL-filled file was therefore indistinguishable from "the menu item does nothing" on a live machine.
+  - **The fix.** The tail of `liquid_glass_opengl.py` is restored (the `__main__` self-test block), keeping the `ms_windows_95_gui` ink entry added in the same edit.
+  - **The guard.** New `tests/test_source_files_are_intact.py` compiles **every** shipped Python module with `py_compile`, fails on any NUL byte in root or `scripts/` sources, imports `liquid_glass_opengl` for real, runs `bash -n` on `Mix_Archive_Manager.sh`, and asserts the four files the tray launches exist and compile. It was verified to fail three ways against the corrupt file and pass against the repaired one.
+  - **Verified live on Windows 10:** the tray action `Invoke-MpTrayAction -ActionId visualizer` now opens a window that stays up (observed for 16 s), where before no process survived past import.
+
 - **The Liquid Player and MP Gui transparency bar was drawn at the TOP of the window, not the bottom** (`MP_Audio_Player_Liquid_Glass_OpenGL.py`, `tests/test_liquid_glass_transparency_slider.py`):
   - **Symptom.** The bar could not be found at the bottom of the player, on any platform.
   - **Cause.** The NDC helper that places the bar was `1 - 2*(px/height)`. OpenGL NDC has `-1` at the bottom edge and `+1` at the top, so that formula maps a distance *above the bottom* to a distance *below the top*. A bar 12 px above the bottom edge was drawn 12 px below the top edge, under the title strip and the bezel where it was invisible. The comment above it claimed the opposite, which is why it survived review.
