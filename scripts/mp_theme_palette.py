@@ -51,6 +51,10 @@ THEME_COLORS: Dict[str, Tuple[RGB, RGB, RGB]] = {
     "monokai": ((249, 38, 114), (166, 226, 46), (102, 217, 239)),
     "emerald": ((46, 204, 113), (26, 188, 156), (0, 168, 132)),
     "blood_moon": ((255, 32, 64), (255, 90, 95), (180, 0, 32)),
+    # Windows 95: the classic title-bar navy, the teal desktop and the silver
+    # 3D window face. The glass mixes down to the pale blue-grey water field;
+    # the console paints the silver face directly (see _EXPLICIT_FIELDS).
+    "ms_windows_95_gui": ((0, 0, 128), (0, 128, 128), (192, 192, 192)),
 }
 
 # "The Whitest White" existed as a .theme file and a btop palette but was never
@@ -79,6 +83,7 @@ THEME_LABELS: Dict[str, str] = {
     "emerald": "Emerald",
     "blood_moon": "Blood Moon [Crimson Eclipse]",
     "the_whitest_white": "The Whitest White",
+    "ms_windows_95_gui": "MS Windows 95 GUI (Nostalgia Theme)",
 }
 
 # Friendly names, historical spellings and the labels the manager writes into
@@ -192,6 +197,22 @@ THEME_ALIASES: Dict[str, str] = {
     "blood ruby": "blood_moon",
     "blood moon [crimson eclipse]": "blood_moon",
     "blood moon mp mix manager": "blood_moon",
+    # MS Windows 95 GUI (Nostalgia Theme)
+    "ms_windows_95_gui": "ms_windows_95_gui",
+    "ms windows 95 gui": "ms_windows_95_gui",
+    "ms_windows_95": "ms_windows_95_gui",
+    "ms windows 95": "ms_windows_95_gui",
+    "ms-windows-95": "ms_windows_95_gui",
+    "windows_95": "ms_windows_95_gui",
+    "windows 95": "ms_windows_95_gui",
+    "windows95": "ms_windows_95_gui",
+    "win95": "ms_windows_95_gui",
+    "win_95": "ms_windows_95_gui",
+    "windows_95_gui": "ms_windows_95_gui",
+    "ms windows 95 gui (nostalgia theme)": "ms_windows_95_gui",
+    "nostalgia": "ms_windows_95_gui",
+    "nostalgia theme": "ms_windows_95_gui",
+    "windows_95_nostalgia": "ms_windows_95_gui",
 }
 
 DEFAULT_THEME = "dreamworlds_ultra"
@@ -227,6 +248,7 @@ _CONSOLE_THEME_IDS: Tuple[str, ...] = (
     "emerald",
     "classic",
     "the_whitest_white",
+    "ms_windows_95_gui",
 )
 
 
@@ -349,10 +371,19 @@ _DARK_FIELDS: Dict[str, RGB] = {
     "nord": (46, 52, 64),                           # Nord #2e3440
     "solarized": (140, 105, 0),                     # deep solar amber
 }
+
+# Themes that pin one explicit console pane instead of deriving it from the
+# glass mix. MS Windows 95 GUI paints its "Window" silver (#C0C0C0) so the
+# console reads as a real 95 window with black WindowText on it, while the
+# glass keeps the blue-grey still-water field the same palette produces.
+_EXPLICIT_FIELDS: Dict[str, RGB] = {
+    "ms_windows_95_gui": (192, 192, 192),           # Win95 Window / ButtonFace
+}
 THEME_BACKGROUNDS: Dict[str, RGB] = {
     name: (
         (0, 0, 0) if name in ("dreamworlds", "into_darkness_void_out", "matrix")
         else _CHARCOAL_FIELD if name == "retro_linux_memories"
+        else _EXPLICIT_FIELDS[name] if name in _EXPLICIT_FIELDS
         else _DARK_FIELDS[name] if name in _DARK_FIELDS
         else glass_field_rgb(name)
     )
@@ -394,6 +425,7 @@ def cycle_order() -> List[str]:
         "the_whitest_white",
         "into_darkness_void_out",
         "blood_moon",
+        "ms_windows_95_gui",
     ]
     return [tid for tid in preferred if tid in THEME_COLORS]
 

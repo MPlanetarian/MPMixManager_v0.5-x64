@@ -51,6 +51,7 @@ TRACKLIST_THEMES=(
     "classic"
     "retro_terminal"
     "retro_linux_memories"
+    "ms_windows_95_gui"
 )
 
 set_theme_colors() {
@@ -210,6 +211,17 @@ set_theme_colors() {
             WHITE='\033[38;2;255;255;255m'
             CURRENT_THEME="retro_linux_memories"
             THEME_DISPLAY_NAME="Retro Linux Memories"
+            ;;
+        ms_windows_95_gui|ms_windows_95|windows_95|windows95|win95|nostalgia|nostalgia_theme|"ms windows 95 gui"|"ms windows 95 gui (nostalgia theme)"|"windows 95"|"win95")
+            RED='\033[38;2;128;0;0m'
+            GREEN='\033[38;2;0;90;0m'
+            YELLOW='\033[38;2;107;90;0m'
+            BLUE='\033[38;2;0;0;128m'
+            MAGENTA='\033[38;2;128;0;128m'
+            CYAN='\033[38;2;0;80;80m'
+            WHITE='\033[38;2;0;0;0m'
+            CURRENT_THEME="ms_windows_95_gui"
+            THEME_DISPLAY_NAME="MS Windows 95 GUI (Nostalgia Theme)"
             ;;
         dracula)
             RED='\033[38;5;212m'

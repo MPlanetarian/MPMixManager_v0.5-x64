@@ -443,6 +443,9 @@ THEME_TEXT = {
     "monokai": (56, 255, 20),
     "emerald": (20, 255, 93),
     "blood_moon": (142, 0, 25),
+    # MS Windows 95 GUI: black WindowText on the silver window face, matching
+    # the manager's menu ink.
+    "ms_windows_95_gui": (0, 0, 0),
     # The Whitest White paints a white console pane, so its body ink has to be
     # black. It was missing from this table, which meant theme_text_rgb fell
     # through to the pink default and drew pink rows on a white pane.

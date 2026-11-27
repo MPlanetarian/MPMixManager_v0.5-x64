@@ -5636,6 +5636,9 @@ _THEME_PALETTES = {
     # bar on the white pane; _selection_bar_ansi picks black text from its
     # luminance. The remaining keys are ink and are black.
     "the_whitest_white": {"highlight": "\033[48;2;255;255;255m", "active": "\033[38;2;0;0;0m", "border": "\033[38;2;0;0;0m", "accent": "\033[38;2;0;0;0m"},
+    # MS Windows 95 GUI: the Active Title Bar navy fills the selected row,
+    # the teal desktop is the accent, and silver is the window face/border.
+    "ms_windows_95_gui": {"highlight": "\033[38;2;0;0;128m", "active": "\033[38;2;0;128;128m", "border": "\033[38;2;128;128;128m", "accent": "\033[38;2;0;0;128m"},
 }
 _DEFAULT_PALETTE = {"highlight": COLOR_HOT_PURPLE, "active": COLOR_NEON_PINK, "border": COLOR_HOT_PURPLE, "accent": COLOR_ELECTRIC_CYAN}
 
@@ -5678,6 +5681,19 @@ _THEME_ALIASES = {
     "crimson": "blood_moon",
     "vampire": "blood_moon",
     "blood_ruby": "blood_moon",
+    "ms_windows_95_gui": "ms_windows_95_gui",
+    "ms_windows_95": "ms_windows_95_gui",
+    "ms windows 95 gui": "ms_windows_95_gui",
+    "ms windows 95 gui (nostalgia theme)": "ms_windows_95_gui",
+    "ms windows 95": "ms_windows_95_gui",
+    "ms-windows-95": "ms_windows_95_gui",
+    "windows_95": "ms_windows_95_gui",
+    "windows 95": "ms_windows_95_gui",
+    "windows95": "ms_windows_95_gui",
+    "win95": "ms_windows_95_gui",
+    "win_95": "ms_windows_95_gui",
+    "nostalgia": "ms_windows_95_gui",
+    "nostalgia_theme": "ms_windows_95_gui",
     "retro_linux": "retro_linux_memories",
     "linux_memories": "retro_linux_memories",
     "retro-linux-memories": "retro_linux_memories",
@@ -5774,6 +5790,7 @@ class EqualizerVisualizer:
         "the_whitest_white",
         "into_darkness_void_out",
         "blood_moon",
+        "ms_windows_95_gui",
     ]
     THEME_NAMES = {
         "stream_of_frequency": "Stream of Frequency [Special Edition]",
@@ -5792,6 +5809,7 @@ class EqualizerVisualizer:
         "the_whitest_white": "The Whitest White",
         "into_darkness_void_out": "Into Darkness (Void Out)",
         "blood_moon": "Blood Moon [Crimson Eclipse]",
+        "ms_windows_95_gui": "MS Windows 95 GUI (Nostalgia Theme)",
     }
 
     def __init__(self, default_style: Optional[str] = None, default_theme: Optional[str] = None, theme: Optional[str] = None, style: Optional[str] = None):
@@ -6064,6 +6082,13 @@ class EqualizerVisualizer:
             return 0.53 + 0.47 * s, 0.83 + 0.17 * s, 0.97 + 0.03 * s
         if t == "phosphor": return 0.10 * (1.0 - c_frac), 0.95, 0.20
         if t == "retro_terminal": return 1.0, 1.0, 1.0
+        if t in ("ms_windows_95_gui", "ms_windows_95", "windows_95", "win95", "nostalgia"):
+            # Win95 title-bar navy -> desktop teal -> silver window face.
+            if c_frac < 0.5:
+                s = c_frac / 0.5
+                return 0.0 + 0.0 * s, 0.05 + 0.45 * s, 0.50 + 0.0 * s
+            s = (c_frac - 0.5) / 0.5
+            return 0.0 + 0.75 * s, 0.50 + 0.25 * s, 0.50 + 0.25 * s
         return 0.10 + 0.75 * (c_frac ** 1.5), 0.50 + 0.45 * c_frac, 1.0
 
     def _get_neon_prism_color(self, c_frac: float, r_frac: float, is_peak: bool = False, is_cap: bool = False) -> str:

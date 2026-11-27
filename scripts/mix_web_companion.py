@@ -476,6 +476,30 @@ THEMES: Dict[str, Dict[str, Any]] = {
         "badge_color": "#2b0a10",
         "eq_bar": "#5c2400",
         "eq_peak": "#263d00",
+    },
+    "ms_windows_95_gui": {
+        "id": "ms_windows_95_gui",
+        "name": "MS Windows 95 GUI (Nostalgia Theme)",
+        # The Win95 desktop teal behind the silver window face, black
+        # WindowText on the face, and the classic 3D bevel borders.
+        "bg": "#008080",
+        "card_bg": "#c0c0c0",
+        "card_border": "#808080",
+        "card_shadow": "inset -1px -1px 0 #000000, inset 1px 1px 0 #dfdfdf, 0 2px 6px rgba(0, 0, 0, 0.55)",
+        "text_main": "#000000",
+        "text_dim": "#404040",
+        "accent_primary": "#000080",     # Active Title Bar navy
+        "accent_secondary": "#008080",   # Desktop teal
+        "accent_tertiary": "#808080",    # Button shadow grey
+        "accent_crimson": "#800000",     # Classic dark red
+        "header_gradient": "linear-gradient(90deg, #000080 0%, #1084d0 100%)",
+        "btn_gradient": "linear-gradient(180deg, #dfdfdf 0%, #c0c0c0 100%)",
+        "btn_shadow": "inset -1px -1px 0 #000000, inset 1px 1px 0 #ffffff",
+        "progress_fill": "linear-gradient(90deg, #000080, #008080)",
+        "badge_bg": "#000080",
+        "badge_color": "#ffffff",
+        "eq_bar": "#000080",
+        "eq_peak": "#008080",
     }
 }
 
@@ -543,6 +567,15 @@ THEME_ALIASES: Dict[str, str] = {
     "veracrypt": "retro_linux_memories",
     "retrolinux": "retro_linux_memories",
     "linux": "retro_linux_memories",
+    "ms_windows_95_gui": "ms_windows_95_gui",
+    "ms_windows_95": "ms_windows_95_gui",
+    "ms windows 95 gui": "ms_windows_95_gui",
+    "ms windows 95 gui (nostalgia theme)": "ms_windows_95_gui",
+    "ms windows 95": "ms_windows_95_gui",
+    "windows_95": "ms_windows_95_gui",
+    "windows 95": "ms_windows_95_gui",
+    "win95": "ms_windows_95_gui",
+    "nostalgia": "ms_windows_95_gui",
 }
 
 CLI_THEME: Optional[str] = None

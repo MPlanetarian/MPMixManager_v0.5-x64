@@ -307,6 +307,18 @@ def show_welcome_message(wait_for_input=True):
         BLACK = "\033[38;2;0;0;0m"
         CYAN = MINT = PURPLE = BLUE = WHITE = GOLD = BLACK
         DIM = BLACK
+    elif _active_theme_name().strip().lower().replace(" ", "_") in (
+        "ms_windows_95_gui", "ms_windows_95", "windows_95", "win95", "nostalgia",
+    ):
+        # Win95 silver pane: the classic navy TitleBar ink for the headings and
+        # black WindowText for the body, so the banner reads on #c0c0c0.
+        CYAN = "\033[38;2;0;0;128m"
+        MINT = "\033[38;2;0;128;128m"
+        PURPLE = "\033[38;2;128;0;128m"
+        BLUE = "\033[38;2;0;0;128m"
+        WHITE = "\033[38;2;0;0;0m"
+        GOLD = "\033[38;2;128;128;0m"
+        DIM = "\033[38;2;0;0;0m"
     else:
         CYAN = "\033[38;2;0;245;255m"
         MINT = "\033[38;2;0;245;212m"

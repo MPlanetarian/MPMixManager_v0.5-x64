@@ -80,6 +80,27 @@ class TestThemeC(unittest.TestCase):
         self.patch.stop()
         self.tmp.cleanup()
 
+    def test_the_mixer_always_opens_in_into_darkness(self):
+        # The house theme, written before anything reads it so the four deck
+        # engines start in the same theme as the mixer.
+        self.theme_path.write_text("dreamworlds_neon\n", encoding="utf-8")
+        app = mixer.LiquidMixerWindows([])
+        self.assertEqual(app.theme, "into_darkness_void_out")
+        self.assertEqual(self.theme_path.read_text(encoding="utf-8").strip(),
+                         "into_darkness_void_out")
+        self.assertEqual(core.theme_label(app.theme), "Into Darkness (Void Out)")
+
+    def test_the_constant_matches_the_linux_mixer(self):
+        self.assertEqual(mixer.FORCED_THEME, core.FORCED_THEME)
+
+    def test_into_darkness_paints_a_black_field_with_readable_ink(self):
+        palette = self.app._palette()
+        self.assertEqual(palette["field"], (0, 0, 0))
+        # Black accents stay black as fills, but text needs to be legible.
+        self.assertEqual(palette["accent"], (0, 0, 0))
+        self.assertGreater(sum(palette["accent_ink"]), 250)
+        self.assertGreater(sum(palette["glass_ink"]), 600)
+
     def test_c_cycles_the_theme_and_keeps_it_readable(self):
         before = self.app.theme
         self.app._cycle_theme()
@@ -97,6 +118,158 @@ class TestThemeC(unittest.TestCase):
         palette = self.app._palette()
         red, green, blue = palette["ink"]
         self.assertGreater(red + green + blue, 400)
+
+
+class TestTheLayoutIsTheLinuxLayout(unittest.TestCase):
+    """The two ports must be one design, not two interpretations of it."""
+
+    def setUp(self):
+        self.app = mixer.LiquidMixerWindows([])
+
+    def test_the_design_grid_is_the_shared_1920x1080(self):
+        self.assertEqual(mixer.DESIGN, (core.DESIGN_W, core.DESIGN_H))
+        linux = core.layout(core.DESIGN_W, core.DESIGN_H)
+        windows = self.app.boxes
+        # Every Linux box is present at the same place and size. Only the three
+        # Windows-only boxes differ, plus the two controls the Windows ribbon
+        # moves aside for the close button.
+        moved = {"master_knob", "monitor_knob", "visualizer_button"}
+        for key, box in linux.items():
+            self.assertIn(key, windows)
+            if key in moved:
+                continue
+            for actual, expected in zip(windows[key], box):
+                self.assertAlmostEqual(actual, expected, places=3)
+        for key in ("master_knob", "monitor_knob", "visualizer_button"):
+            self.assertEqual(len(windows[key]), 4)
+
+    def test_the_players_and_the_mixer_column_match_linux(self):
+        boxes = self.app.boxes
+        for key in ("deck_a", "deck_b", "deck_a_header", "deck_a_term",
+                    "mixer", "xfader", "strip_A", "strip_D",
+                    "knob_gain_A", "knob_filter_D", "effect_slot_1_A",
+                    "verify_button", "browse_button", "mode_button",
+                    "format_button", "bitdepth_button", "record_button",
+                    "credit_button", "clock_button", "export_button"):
+            self.assertAlmostEqual(boxes[key][0], core.layout()[key][0], places=3)
+            self.assertAlmostEqual(boxes[key][2], core.layout()[key][2], places=3)
+
+    def test_the_four_channel_strips_are_the_small_linux_ones(self):
+        # A channel strip is a narrow 48px column inside the mixer, not a wide
+        # quarter of the window.
+        mixer_box = self.app.boxes["mixer"]
+        for channel in core.CHANNELS:
+            box = self.app.boxes[f"strip_{channel}"]
+            self.assertAlmostEqual(box[2], 48.0, places=3)
+            self.assertGreaterEqual(box[0], mixer_box[0])
+            self.assertLessEqual(box[0] + box[2], mixer_box[0] + mixer_box[2])
+
+    def test_the_windows_chrome_is_added_without_moving_linux_boxes(self):
+        boxes = self.app.boxes
+        self.assertIn("close_button", boxes)
+        self.assertIn("master_label", boxes)
+        # MASTER/MON sit beside the title, left of the Trance lamp.
+        self.assertLess(boxes["master_knob"][0], boxes["trance_button"][0])
+        self.assertLess(boxes["monitor_knob"][0], boxes["trance_button"][0])
+        # VISUALIZER and X never overlap, and X is the right-most control.
+        self.assertLess(boxes["visualizer_button"][0] + boxes["visualizer_button"][2],
+                        boxes["close_button"][0])
+        self.assertAlmostEqual(boxes["close_button"][0] + boxes["close_button"][2],
+                               boxes["top_bar"][2], places=1)
+
+    def test_the_window_scales_from_the_same_grid(self):
+        boxes = self.app._windows_layout(1280, 720)
+        linux = core.layout(1280, 720)
+        for key in ("deck_a", "mixer", "strip_B", "xfader"):
+            self.assertAlmostEqual(boxes[key][0], linux[key][0], places=3)
+            self.assertAlmostEqual(boxes[key][3], linux[key][3], places=3)
+
+
+class TestTheTwoPlayerPanes(unittest.TestCase):
+    """Two MP Liquid Players: one per side, each showing its own playlist."""
+
+    def setUp(self):
+        self.app = mixer.LiquidMixerWindows([])
+        self.app.canvas = MagicMock()
+        self.app._w, self.app._h = 1920, 1080
+        self.app._relayout(1920, 1080)
+
+    def _rows(self, prefix="track"):
+        return [{"index": i, "name": f"{prefix}-{i}.mp3", "ext": "MP3",
+                 "duration_fmt": "03:00", "path": f"B:/MIX_ARCHIVE/{prefix}-{i}.mp3"}
+                for i in range(12)]
+
+    def test_each_side_draws_a_player_pane_for_its_deck(self):
+        self.app._playlist_rows["A"] = self._rows("left")
+        self.app._playlist_rows["B"] = self._rows("right")
+        self.app._deck_status["A"] = {"state": "paused", "title": "left-0.mp3",
+                                      "total_tracks": 12, "index": 0}
+        self.app._deck_status["B"] = {"state": "playing", "title": "right-3.mp3",
+                                      "total_tracks": 12, "index": 3}
+        self.app._draw()
+        joined = self._drawn_text()
+        self.assertIn("left-0.mp3", joined)
+        self.assertIn("right-3.mp3", joined)
+        self.assertIn("MIX ARCHIVE", joined)
+
+    def _drawn_text(self) -> str:
+        texts = []
+        for call in self.app.canvas.create_text.call_args_list:
+            if call.kwargs.get("text"):
+                texts.append(str(call.kwargs["text"]))
+            elif len(call.args) > 2:
+                texts.append(str(call.args[2]))
+        return "\n".join(texts)
+
+    def test_the_left_pane_switches_to_deck_c_and_the_right_to_d(self):
+        self.app.model.toggle_side_deck("L")
+        self.app.model.toggle_side_deck("R")
+        visible = self.app._visible_decks()
+        self.assertEqual(visible, {"L": "C", "R": "D"})
+        self.app._playlist_rows["C"] = self._rows("c")
+        self.app._deck_status["C"] = {"state": "paused", "title": "c-2.mp3",
+                                      "total_tracks": 12, "index": 2}
+        self.app._draw()
+        texts = self._drawn_text()
+        self.assertIn("c-2.mp3", texts)
+        self.assertIn("SWITCH TO A", texts)
+
+    def test_the_pane_requests_the_engine_playlist(self):
+        rows = self._rows("engine")
+        with patch.object(core, "send_ipc",
+                          return_value={"status": "ok", "playlist": rows}) as send:
+            result = self.app._fetch_playlist("B")
+        send.assert_called_once()
+        self.assertEqual(send.call_args.args[0], core.DECK_NAMESPACES["B"])
+        self.assertEqual(send.call_args.args[1], "get_playlist")
+        self.assertEqual(result, rows)
+
+    def test_the_pane_falls_back_to_the_shared_library(self):
+        rows = self._rows("shared")
+        with patch.object(core, "send_ipc", return_value=None), \
+             patch.object(core, "read_playlist_rows", return_value=rows):
+            self.app.library_mode = "MUSIC"
+            self.assertEqual(self.app._fetch_playlist("A"), rows)
+
+    def test_clicking_a_row_loads_that_track_on_that_deck(self):
+        self.app._playlist_rows["B"] = self._rows("right")
+        with patch.object(self.app, "_send") as send, \
+             patch.object(self.app, "_draw"):
+            self.app._load_playlist_index("B", 4)
+        send.assert_called_once()
+        self.assertEqual(send.call_args.args[0], "B")
+        self.assertEqual(send.call_args.args[1], "select_index")
+        self.assertEqual(send.call_args.kwargs["index"], 4)
+        # Clicking a pane also makes it the browse target.
+        self.assertEqual(self.app.browse_target, "B")
+
+    def test_the_playing_row_is_scrolled_into_view(self):
+        self.app._playlist_rows["A"] = self._rows("long")
+        self.app._deck_status["A"] = {"state": "playing", "index": 40,
+                                      "total_tracks": 48, "title": "long-40.mp3"}
+        self.app._draw()
+        self.assertGreater(self.app._playlist_scroll["A"], 0)
+
 
 
 class TestMidiMapping(unittest.TestCase):
@@ -162,6 +335,7 @@ class TestEngineAndVisualizerWiring(unittest.TestCase):
 
     def test_the_visualizer_is_started_as_a_gui_companion(self):
         app = mixer.LiquidMixerWindows([])
+        app.visualizer_enabled = True
         app.root = MagicMock()
         app.root.winfo_rootx.return_value = 10
         app.root.winfo_rooty.return_value = 20
@@ -261,9 +435,48 @@ class TestTransparencyBar(unittest.TestCase):
         app.root = MagicMock()
         app.visualizer_enabled = True
         app._draw = MagicMock()
-        app._drag_opacity(75.0, (0.0, 100.0))
-        self.assertAlmostEqual(app.alpha, 0.875)
-        app.root.attributes.assert_called_with("-alpha", 0.875)
+        track = app.boxes["opacity"]
+        app._drag_opacity(track[0] + track[2], track)
+        self.assertAlmostEqual(app.model.opacity, 1.0)
+        app.root.attributes.assert_called_with("-alpha", 1.0)
+        app._drag_opacity(track[0], track)
+        self.assertAlmostEqual(app.model.opacity, mixer.core.MIN_OPACITY)
+        app.root.attributes.assert_called_with("-alpha", mixer.core.MIN_OPACITY)
+
+    def test_the_window_matches_the_model_opacity(self):
+        app = mixer.LiquidMixerWindows([])
+        app.root = MagicMock()
+        app.visualizer_enabled = True
+        for value in (1.0, 0.94, 0.70, 0.42):
+            app.model.opacity = value
+            self.assertAlmostEqual(app._apply_alpha(), value)
+            app.root.attributes.assert_called_with("-alpha", value)
+
+    def test_no_visualizer_forces_a_solid_window(self):
+        # Nothing is behind the glass without a companion, so the desktop must
+        # not bleed through the panels.
+        app = mixer.LiquidMixerWindows([])
+        app.root = MagicMock()
+        app.visualizer_enabled = False
+        app.model.opacity = 0.55
+        self.assertEqual(app._apply_alpha(), 1.0)
+        app.root.attributes.assert_called_with("-alpha", 1.0)
+
+    def test_the_transparency_value_comes_from_the_shared_mixer_model(self):
+        app = mixer.LiquidMixerWindows([])
+        self.assertIsInstance(app.model, mixer.core.MixerModel)
+        self.assertGreaterEqual(app.model.opacity, mixer.core.MIN_OPACITY)
+        self.assertLessEqual(app.model.opacity, mixer.core.MAX_OPACITY)
+        # The saved payload keeps the model value, not a private alpha field.
+        with patch.object(mixer, "CONFIG_DIR", Path(tempfile.mkdtemp())), \
+             patch.object(mixer, "WINDOWS_SETTINGS",
+                          Path(tempfile.mkdtemp()) / "liquid_mixer_windows.json"):
+            app.model.opacity = 0.66
+            app._save_windows_settings()
+            payload = json.loads(mixer.WINDOWS_SETTINGS.read_text(encoding="utf-8"))
+        self.assertAlmostEqual(payload["opacity"], 0.66, places=3)
+        self.assertNotIn("alpha", payload)
+
 
 
 class TestWindowDrag(unittest.TestCase):

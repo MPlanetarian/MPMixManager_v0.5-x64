@@ -696,7 +696,7 @@ RED='\033[38;2;217;83;79m'; GREEN='\033[38;2;92;184;92m'; YELLOW='\033[38;2;240;
 into_darkness_void_out|into_darkness|"Into Darkness (Void Out)"|"Into Darkness"|"Void Out")
 RED='\033[38;2;200;200;200m'; GREEN='\033[38;2;200;200;200m'; YELLOW='\033[1;37m'; BLUE='\033[38;2;72;72;72m'; MAGENTA='\033[38;2;200;200;200m'; CYAN='\033[1;37m'; CURRENT_THEME="into_darkness_void_out" ;;
 retro_terminal|unix_terminal|retro_unix|old_style_unix|unix_retro|white_on_black|retro|terminal|vt100|"Old Style Unix Terminal Retro Mode (White on Black)"|"Old Style Unix Terminal Retro Mode"|"Old Style Unix Terminal")
-RED='\033[1;37m' GREEN='\033[1;37m' YELLOW='\033[1;37m'; BLUE='\033[0;37m' MAGENTA='\033[1;37m' CYAN='\033[1;37m'; CURRENT_THEME="retro_terminal" ;; the_whitest_white|whitest_white|whitest|white|"The Whitest White"|"The Whitest White Theme"|"The Whitest White MP Mix Manager") RED='\033[38;2;0;0;0m'; GREEN='\033[38;2;0;0;0m'; YELLOW='\033[38;2;0;0;0m'; BLUE='\033[38;2;0;0;0m'; MAGENTA='\033[38;2;0;0;0m'; CYAN='\033[38;2;0;0;0m'; CURRENT_THEME="the_whitest_white" ;; blood_moon|blood-moon|"blood moon"|crimson|crimson_eclipse|"crimson eclipse"|vampire|blood|blood_ruby|"blood ruby"|bloodmoon|"Blood Moon"|"Blood Moon [Crimson Eclipse]"|"Blood Moon MP Mix Manager") RED='\033[38;2;255;32;64m'; GREEN='\033[38;2;255;90;95m'; YELLOW='\033[38;2;255;154;162m'; BLUE='\033[38;2;180;0;32m'; MAGENTA='\033[38;2;220;20;60m'; CYAN='\033[38;2;255;68;85m'; CURRENT_THEME="blood_moon" ;; dracula|dreamworlds_neon) RED='\033[38;5;212m' GREEN='\033[38;5;84m' YELLOW='\033[38;5;228m'; BLUE='\033[38;5;62m' MAGENTA='\033[38;5;141m' CYAN='\033[38;5;117m'; CURRENT_THEME="dracula" ;; nord|ice_cold) RED='\033[38;5;167m' GREEN='\033[38;5;108m' YELLOW='\033[38;5;221m'; BLUE='\033[38;5;110m' MAGENTA='\033[38;5;139m' CYAN='\033[38;5;117m'; CURRENT_THEME="nord" ;; matrix|phosphor) RED='\033[38;5;124m' GREEN='\033[38;5;46m' YELLOW='\033[38;5;190m'; BLUE='\033[38;5;29m' MAGENTA='\033[38;5;35m' CYAN='\033[38;5;120m'; CURRENT_THEME="matrix" ;; solarized) RED='\033[38;5;166m' GREEN='\033[38;5;64m' YELLOW='\033[38;5;136m'; BLUE='\033[38;5;33m' MAGENTA='\033[38;5;125m' CYAN='\033[38;5;37m'; CURRENT_THEME="solarized" ;; tokyo) RED='\033[38;5;203m' GREEN='\033[38;5;114m' YELLOW='\033[38;5;222m'; BLUE='\033[38;5;111m' MAGENTA='\033[38;5;176m' CYAN='\033[38;5;73m'; CURRENT_THEME="tokyo" ;; monokai) RED='\033[38;5;197m' GREEN='\033[38;5;148m' YELLOW='\033[38;5;220m'; BLUE='\033[38;5;141m' MAGENTA='\033[38;5;208m' CYAN='\033[38;5;81m'; CURRENT_THEME="monokai" ;; gruvbox|retro_studio) RED='\033[38;5;167m' GREEN='\033[38;5;142m' YELLOW='\033[38;5;214m'; BLUE='\033[38;5;109m' MAGENTA='\033[38;5;175m' CYAN='\033[38;5;108m'; CURRENT_THEME="gruvbox" ;; emerald) RED='\033[38;5;204m' GREEN='\033[38;5;48m' YELLOW='\033[38;5;221m'; BLUE='\033[38;5;31m' MAGENTA='\033[38;5;78m' CYAN='\033[38;5;86m'; CURRENT_THEME="emerald" ;; classic) RED='\033[0;31m' GREEN='\033[0;32m' YELLOW='\033[0;33m'; BLUE='\033[0;34m' MAGENTA='\033[0;35m' CYAN='\033[0;36m'; CURRENT_THEME="classic" ;; cyberpunk|cyber_neon) RED='\033[38;5;196m' GREEN='\033[38;5;48m' YELLOW='\033[38;5;226m'; BLUE='\033[38;5;45m' MAGENTA='\033[38;5;198m' CYAN='\033[38;5;51m'; CURRENT_THEME="cyberpunk" ;; *) RED='\033[38;2;255;45;142m' GREEN='\033[38;2;0;242;254m' YELLOW='\033[38;2;255;215;0m'; BLUE='\033[38;2;90;130;255m' MAGENTA='\033[38;2;176;88;255m' CYAN='\033[38;2;0;242;254m'; CURRENT_THEME="dynamic_rainbow_liquid_glass" ;; esac
+RED='\033[1;37m' GREEN='\033[1;37m' YELLOW='\033[1;37m'; BLUE='\033[0;37m' MAGENTA='\033[1;37m' CYAN='\033[1;37m'; CURRENT_THEME="retro_terminal" ;; the_whitest_white|whitest_white|whitest|white|"The Whitest White"|"The Whitest White Theme"|"The Whitest White MP Mix Manager") RED='\033[38;2;0;0;0m'; GREEN='\033[38;2;0;0;0m'; YELLOW='\033[38;2;0;0;0m'; BLUE='\033[38;2;0;0;0m'; MAGENTA='\033[38;2;0;0;0m'; CYAN='\033[38;2;0;0;0m'; CURRENT_THEME="the_whitest_white" ;; blood_moon|blood-moon|"blood moon"|crimson|crimson_eclipse|"crimson eclipse"|vampire|blood|blood_ruby|"blood ruby"|bloodmoon|"Blood Moon"|"Blood Moon [Crimson Eclipse]"|"Blood Moon MP Mix Manager") RED='\033[38;2;255;32;64m'; GREEN='\033[38;2;255;90;95m'; YELLOW='\033[38;2;255;154;162m'; BLUE='\033[38;2;180;0;32m'; MAGENTA='\033[38;2;220;20;60m'; CYAN='\033[38;2;255;68;85m'; CURRENT_THEME="blood_moon" ;; ms_windows_95_gui|ms_windows_95|"ms windows 95 gui"|"ms windows 95 gui (nostalgia theme)"|nostalgia|nostalgia_theme|win95|windows_95|windows95|"MS Windows 95 GUI"|"MS Windows 95 GUI (Nostalgia Theme)"|"MS Windows 95"|"Windows 95"|"Win95") RED='\033[38;2;128;0;0m'; GREEN='\033[38;2;0;90;0m'; YELLOW='\033[38;2;107;90;0m'; BLUE='\033[38;2;0;0;128m'; MAGENTA='\033[38;2;128;0;128m'; CYAN='\033[38;2;0;80;80m'; CURRENT_THEME="ms_windows_95_gui" ;; dracula|dreamworlds_neon) RED='\033[38;5;212m' GREEN='\033[38;5;84m' YELLOW='\033[38;5;228m'; BLUE='\033[38;5;62m' MAGENTA='\033[38;5;141m' CYAN='\033[38;5;117m'; CURRENT_THEME="dracula" ;; nord|ice_cold) RED='\033[38;5;167m' GREEN='\033[38;5;108m' YELLOW='\033[38;5;221m'; BLUE='\033[38;5;110m' MAGENTA='\033[38;5;139m' CYAN='\033[38;5;117m'; CURRENT_THEME="nord" ;; matrix|phosphor) RED='\033[38;5;124m' GREEN='\033[38;5;46m' YELLOW='\033[38;5;190m'; BLUE='\033[38;5;29m' MAGENTA='\033[38;5;35m' CYAN='\033[38;5;120m'; CURRENT_THEME="matrix" ;; solarized) RED='\033[38;5;166m' GREEN='\033[38;5;64m' YELLOW='\033[38;5;136m'; BLUE='\033[38;5;33m' MAGENTA='\033[38;5;125m' CYAN='\033[38;5;37m'; CURRENT_THEME="solarized" ;; tokyo) RED='\033[38;5;203m' GREEN='\033[38;5;114m' YELLOW='\033[38;5;222m'; BLUE='\033[38;5;111m' MAGENTA='\033[38;5;176m' CYAN='\033[38;5;73m'; CURRENT_THEME="tokyo" ;; monokai) RED='\033[38;5;197m' GREEN='\033[38;5;148m' YELLOW='\033[38;5;220m'; BLUE='\033[38;5;141m' MAGENTA='\033[38;5;208m' CYAN='\033[38;5;81m'; CURRENT_THEME="monokai" ;; gruvbox|retro_studio) RED='\033[38;5;167m' GREEN='\033[38;5;142m' YELLOW='\033[38;5;214m'; BLUE='\033[38;5;109m' MAGENTA='\033[38;5;175m' CYAN='\033[38;5;108m'; CURRENT_THEME="gruvbox" ;; emerald) RED='\033[38;5;204m' GREEN='\033[38;5;48m' YELLOW='\033[38;5;221m'; BLUE='\033[38;5;31m' MAGENTA='\033[38;5;78m' CYAN='\033[38;5;86m'; CURRENT_THEME="emerald" ;; classic) RED='\033[0;31m' GREEN='\033[0;32m' YELLOW='\033[0;33m'; BLUE='\033[0;34m' MAGENTA='\033[0;35m' CYAN='\033[0;36m'; CURRENT_THEME="classic" ;; cyberpunk|cyber_neon) RED='\033[38;5;196m' GREEN='\033[38;5;48m' YELLOW='\033[38;5;226m'; BLUE='\033[38;5;45m' MAGENTA='\033[38;5;198m' CYAN='\033[38;5;51m'; CURRENT_THEME="cyberpunk" ;; *) RED='\033[38;2;255;45;142m' GREEN='\033[38;2;0;242;254m' YELLOW='\033[38;2;255;215;0m'; BLUE='\033[38;2;90;130;255m' MAGENTA='\033[38;2;176;88;255m' CYAN='\033[38;2;0;242;254m'; CURRENT_THEME="dynamic_rainbow_liquid_glass" ;; esac
 # Bracketed menu numbers [ 0]. Each theme keeps its own hue. The shared
 # light-blue cyan is not reused, so changing theme always changes this colour.
 _menu_id="${theme_name}"
@@ -727,6 +727,7 @@ emerald) _menu_id=emerald ;;
 classic) _menu_id=classic ;;
 blood_moon|blood-moon|"blood moon"|crimson|crimson_eclipse|"crimson eclipse"|vampire|blood|blood_ruby|"blood ruby"|bloodmoon|"Blood Moon"|"Blood Moon [Crimson Eclipse]"|"Blood Moon MP Mix Manager") _menu_id=blood_moon ;;
 the_whitest_white|whitest_white|whitest|white|"The Whitest White"|"The Whitest White Theme"|"The Whitest White MP Mix Manager") _menu_id=the_whitest_white ;;
+ms_windows_95_gui|ms_windows_95|"ms windows 95 gui"|"ms windows 95 gui (nostalgia theme)"|nostalgia|nostalgia_theme|win95|windows_95|windows95|"MS Windows 95 GUI"|"MS Windows 95 GUI (Nostalgia Theme)"|"MS Windows 95"|"Windows 95"|"Win95") _menu_id=ms_windows_95_gui ;;
 cyberpunk) _menu_id=cyberpunk ;; *) _menu_id=dynamic_rainbow_liquid_glass ;;
 esac
 case "$_menu_id" in
@@ -757,6 +758,7 @@ emerald) _mr=7; _mg=91; _mb=33 ;;
 classic) _mr=99; _mg=86; _mb=35 ;;
 blood_moon) _mr=137; _mg=17; _mb=34 ;;
 the_whitest_white) _mr=0; _mg=0; _mb=0 ;;
+ms_windows_95_gui) _mr=0; _mg=0; _mb=128 ;;
 esac
 MENU_NUM="$(printf '\033[38;2;%s;%s;%sm' "$_mr" "$_mg" "$_mb")"
 MENU_NUM_R="$_mr"; MENU_NUM_G="$_mg"; MENU_NUM_B="$_mb"
@@ -800,6 +802,7 @@ emerald) _ir=7; _ig=91; _ib=33 ;;
 classic) _ir=99; _ig=86; _ib=35 ;;
 blood_moon) _ir=142; _ig=0; _ib=25 ;;
 the_whitest_white) _ir=0; _ig=0; _ib=0 ;;
+ms_windows_95_gui) _ir=0; _ig=0; _ib=0 ;;
 *) _ir=80; _ig=67; _ib=95 ;;
 esac
 # MP Gui sits on the same glass as MP Liquid Player. The player's unselected
@@ -843,6 +846,7 @@ matrix) SEL_BAR_R=57; SEL_BAR_G=255; SEL_BAR_B=20 ;;
 gruvbox) SEL_BAR_R=241; SEL_BAR_G=196; SEL_BAR_B=15 ;;
 classic) SEL_BAR_R=255; SEL_BAR_G=255; SEL_BAR_B=255 ;;
 blood_moon) SEL_BAR_R=255; SEL_BAR_G=32; SEL_BAR_B=64 ;;
+ms_windows_95_gui) SEL_BAR_R=0; SEL_BAR_G=0; SEL_BAR_B=128 ;;
 *) SEL_BAR_R=166; SEL_BAR_G=77; SEL_BAR_B=255 ;;
 esac
 SEL_BAR="$(printf '\033[48;2;%s;%s;%sm' "$SEL_BAR_R" "$SEL_BAR_G" "$SEL_BAR_B")"
@@ -888,6 +892,7 @@ gruvbox) THEME_BG_R=203; THEME_BG_G=195; THEME_BG_B=178 ;;
 emerald) THEME_BG_R=158; THEME_BG_G=201; THEME_BG_B=202 ;;
 classic) THEME_BG_R=199; THEME_BG_G=207; THEME_BG_B=221 ;;
 blood_moon) THEME_BG_R=204; THEME_BG_G=169; THEME_BG_B=188 ;;
+ms_windows_95_gui) THEME_BG_R=192; THEME_BG_G=192; THEME_BG_B=192 ;;
 *) THEME_BG_R=186; THEME_BG_G=180; THEME_BG_B=220 ;;
 esac
 # Neutral console ink for the Selection: line and the EQ line. The menu rows
@@ -3460,6 +3465,7 @@ local -a _cycle=(
     the_whitest_white
     into_darkness_void_out
     blood_moon
+    ms_windows_95_gui
 )
 local cur="${CURRENT_THEME:-}"
 case "$cur" in
@@ -3472,6 +3478,7 @@ case "$cur" in
     gruvbox) cur="retro_studio" ;;
     classic) cur="retro_terminal" ;;
     blood_moon|blood-moon|crimson|vampire) cur="blood_moon" ;;
+    ms_windows_95_gui|ms_windows_95|windows_95|windows95|win95|nostalgia) cur="ms_windows_95_gui" ;;
 esac
 local i n=${#_cycle[@]} next=0
 for ((i=0; i<n; i++)); do
@@ -3493,6 +3500,7 @@ case "$th" in
     sensorium)             tn="Sensorium_MP_Mix_Manager" ;;
     retro_linux_memories)  tn="Retro_Linux_Memories_MP_Mix_Manager" ;;
     blood_moon)            tn="Blood_Moon_MP_Mix_Manager" ;;
+    ms_windows_95_gui)     tn="MS_Windows_95_GUI_MP_Mix_Manager" ;;
     the_whitest_white)     tn="The_Whitest_White_MP_Mix_Manager" ;;
     *) return 0 ;;
 esac
@@ -8682,7 +8690,7 @@ manage_themes() {
 # dark chip keeps that white readable on the light tints and the dark panes.
 local _tw=$'\033[1;48;2;20;20;28;38;2;255;255;255m'
 while true; do
-    local m1="" m2="" m3="" m4="" m5="" m6="" m7="" m8="" m9="" m10="" m11="" m12="" m13="" m14="" m15="" m16="" m17="" m18="" m19="" m20="" m21="" m22=""
+    local m1="" m2="" m3="" m4="" m5="" m6="" m7="" m8="" m9="" m10="" m11="" m12="" m13="" m14="" m15="" m16="" m17="" m18="" m19="" m20="" m21="" m22="" m23=""
     case "$CURRENT_THEME" in
         dreamworlds)                    m1=" ${_tw}★ ACTIVE${NC}" ;;
         dreamworlds_ultra)              m2=" ${_tw}★ ACTIVE (DEFAULT)${NC}" ;;
@@ -8706,6 +8714,7 @@ while true; do
         the_whitest_white)              m20=" ${_tw}★ ACTIVE (WHITEST WHITE)${NC}" ;;
         blood_moon)                     m21=" ${_tw}★ ACTIVE (BLOOD MOON)${NC}" ;;
         into_darkness_void_out)         m22=" ${_tw}★ ACTIVE (INTO DARKNESS)${NC}" ;;
+        ms_windows_95_gui)              m23=" ${_tw}★ ACTIVE (WINDOWS 95)${NC}" ;;
     esac
     local opts=(
         "1|MPlanetarian Dreamworlds|[Sweet Hot Pink, Electric Cyan, Lavender & Violet]${m1}"
@@ -8730,6 +8739,7 @@ while true; do
         "20|The Whitest White|[Pure white pane, black ink, black menu numbers]${m20}"
         "21|Blood Moon [Crimson Eclipse]|[Vivid Blood Crimson, Scarlet & Dark Ruby Wine Pane]${m21}"
         "22|Into Darkness (Void Out)|[Void-out black pane, white ink • MP Liquid Mixer default]${m22}"
+        "23|MS Windows 95 GUI (Nostalgia Theme)|[Win95 Title-Bar Navy, Desktop Teal & Silver Window Face]${m23}"
         "0|Return to Main Menu|(or Esc / q)"
     )
     run_interactive_submenu "Themes & Color Palette Switcher" "  ${_tw}Current Active Theme: ${CURRENT_THEME}${NC}\n" opts 0
@@ -8779,6 +8789,8 @@ while true; do
             save_theme "blood_moon"; echo -e "\n${_tw}✓ Theme switched to Blood Moon [Crimson Eclipse]!${NC}"; sleep 0.8 ;;
         22|into_darkness_void_out|into_darkness|void_out|"Into Darkness (Void Out)"|"Into Darkness"|"Void Out"|"into darkness")
             save_theme "into_darkness_void_out"; echo -e "\n${_tw}✓ Theme switched to Into Darkness (Void Out)!${NC}"; sleep 0.8 ;;
+        23|ms_windows_95_gui|ms_windows_95|windows_95|windows95|win95|nostalgia|nostalgia_theme|"ms windows 95 gui"|"MS Windows 95 GUI"|"MS Windows 95 GUI (Nostalgia Theme)"|"Windows 95"|"Win95")
+            save_theme "ms_windows_95_gui"; echo -e "\n${_tw}✓ Theme switched to MS Windows 95 GUI (Nostalgia Theme)!${NC}"; sleep 0.8 ;;
         0|[bB]|[qQ]|ESC) return 0 ;;
         *) echo -e "\n${RED}Invalid choice!${NC}"; sleep 1.2 ;;
     esac
@@ -10928,7 +10940,7 @@ manage_motd_and_tools() {
 local -A _MENU_ACT=([1]="manage_system_motd_menu" [2]="burn_iso_to_usb"); _m_loop "MOTD BANNER MANAGER & SYSTEM UTILITIES" "" "1|Dynamic System MOTD Banner Manager|(Last 3 Mixes, Date/Time, Size, Format & Specs)" "2|Burn ISO Image to USB Drive|(dd / diskutil with safety checks)" "0|Return to Main Menu|(or Esc / q)"
 }
 manage_settings_and_system() {
-local rb="systemctl reboot with confirmation"; case "$OS_TYPE" in macos) rb="macOS restart with confirmation" ;; windows|wsl) rb="Windows restart with confirmation" ;; freebsd) rb="FreeBSD restart with confirmation" ;; esac; local -A _MENU_ACT=([1]="manage_themes" [2]="manage_installation_and_config" [3]="configure_daily_reports_settings" [4]="manage_mix_reports_menu" [5]="run_bash_cli" [6]="reboot_system" [7]="configure_liquid_glass_backend" [8]="configure_visualizer_fps_cap" [9]="configure_visualizer_companion"); _m_loop "MANAGER SETTINGS, THEMES & SYSTEM SHELL" "" "1|Manager Themes & Color Palette Switcher|(22 Themes: Dreamworlds, Into Darkness, Sensorium...)" "2|Manage Installation & Configuration|(Migrate Path, Backup, Export, Import & Reinstall)" "3|Automated Daily Reports & Continuous Telemetry Settings|(Schedule Time, On/Off, Catch-Up)" "4|Daily Mix Reports, Telemetry & Predictive Analytics Suite|(PDF Reports, Multi-Archive Stats, Math Models)" "5|Run Bash CLI Commands|(Interactive Shell & Direct Runner)" "6|Reboot System|(${rb})" "7|Configure Liquid Glass Player Backend|(OpenGL [Default • AMD Radeon/Intel/Older Cards] or Vulkan)" "8|MP Visualizer Frame-Rate Cap|(30 / 60 / 120 / 144 FPS, or follow the display)" "9|MP Visualizer Background Window|(On/Off for MP Gui & MP Liquid Player - disable for a Slow Graphics Card / System)" "0|Return to Main Menu|(or Esc / q)"
+local rb="systemctl reboot with confirmation"; case "$OS_TYPE" in macos) rb="macOS restart with confirmation" ;; windows|wsl) rb="Windows restart with confirmation" ;; freebsd) rb="FreeBSD restart with confirmation" ;; esac; local -A _MENU_ACT=([1]="manage_themes" [2]="manage_installation_and_config" [3]="configure_daily_reports_settings" [4]="manage_mix_reports_menu" [5]="run_bash_cli" [6]="reboot_system" [7]="configure_liquid_glass_backend" [8]="configure_visualizer_fps_cap" [9]="configure_visualizer_companion"); _m_loop "MANAGER SETTINGS, THEMES & SYSTEM SHELL" "" "1|Manager Themes & Color Palette Switcher|(23 Themes: Dreamworlds, Into Darkness, Sensorium...)" "2|Manage Installation & Configuration|(Migrate Path, Backup, Export, Import & Reinstall)" "3|Automated Daily Reports & Continuous Telemetry Settings|(Schedule Time, On/Off, Catch-Up)" "4|Daily Mix Reports, Telemetry & Predictive Analytics Suite|(PDF Reports, Multi-Archive Stats, Math Models)" "5|Run Bash CLI Commands|(Interactive Shell & Direct Runner)" "6|Reboot System|(${rb})" "7|Configure Liquid Glass Player Backend|(OpenGL [Default • AMD Radeon/Intel/Older Cards] or Vulkan)" "8|MP Visualizer Frame-Rate Cap|(30 / 60 / 120 / 144 FPS, or follow the display)" "9|MP Visualizer Background Window|(On/Off for MP Gui & MP Liquid Player - disable for a Slow Graphics Card / System)" "0|Return to Main Menu|(or Esc / q)"
 }
 # MP Gui paints each header value after a label colon truecolor white.
 # The label, through the colon, keeps its own colour. A │ or | ends the

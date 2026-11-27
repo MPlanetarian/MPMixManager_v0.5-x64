@@ -80,6 +80,7 @@ THEMES: dict[str, tuple[str, str, str, str, str, str, str, str, str, str, str]] 
     "sensorium": ("Sensorium", "Bright Tangerine, Acid Chartreuse & Electric Azure on a Light Coral Pane", "#5c2400", "#263d00", "#0b2f6b", "#7a3a3a", "#2b0a10", "#52242c", "#263d00", "#5e140f", "#4a3400"),
     "retro_linux_memories": ("Retro Linux Memories", "Classic Retro Linux GTK Dark Slate, VeraCrypt Blue Selection & Beveled Steel", "#15539e", "#5b86bb", "#f0ad4e", "#545453", "#ffffff", "#919190", "#5cb85c", "#d9534f", "#f0ad4e"),
     "blood_moon": ("Blood Moon [Crimson Eclipse]", "Vivid Blood Crimson, Scarlet & Dark Ruby on Dark Wine Pane", "#ff2040", "#ff5a5f", "#b40020", "#991a2e", "#ffeaed", "#8c404d", "#ff5a5f", "#ff2040", "#ff5a5f"),
+    "ms_windows_95_gui": ("MS Windows 95 GUI (Nostalgia Theme)", "Win95 Title-Bar Navy, Desktop Teal & Silver Window Face", "#000080", "#008080", "#c0c0c0", "#808080", "#000000", "#404040", "#008000", "#800000", "#808000"),
 }
 
 THEME_ALIASES: dict[str, str] = {
@@ -112,6 +113,15 @@ THEME_ALIASES: dict[str, str] = {
     "veracrypt": "retro_linux_memories",
     "retrolinux": "retro_linux_memories",
     "linux": "retro_linux_memories",
+    "ms_windows_95_gui": "ms_windows_95_gui",
+    "ms_windows_95": "ms_windows_95_gui",
+    "ms windows 95 gui": "ms_windows_95_gui",
+    "ms windows 95 gui (nostalgia theme)": "ms_windows_95_gui",
+    "ms windows 95": "ms_windows_95_gui",
+    "windows_95": "ms_windows_95_gui",
+    "windows 95": "ms_windows_95_gui",
+    "win95": "ms_windows_95_gui",
+    "nostalgia": "ms_windows_95_gui",
 }
 
 class ThemeColors:
