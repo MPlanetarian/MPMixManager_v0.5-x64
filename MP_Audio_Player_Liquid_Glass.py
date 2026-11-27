@@ -1412,11 +1412,13 @@ def spawn_new_visualizer() -> bool:
         try:
             from liquid_visualizer_session import (
                 MAX_VISUALIZER_WINDOWS,
+                visualizer_window_count,
                 visualizer_window_limit_reached,
             )
         except ImportError:
             from scripts.liquid_visualizer_session import (
                 MAX_VISUALIZER_WINDOWS,
+                visualizer_window_count,
                 visualizer_window_limit_reached,
             )
         try:
@@ -1435,6 +1437,12 @@ def spawn_new_visualizer() -> bool:
         kw = {"creationflags": 0x00000208} if IS_WIN else {"start_new_session": True}
         # companion=False -> MP_VISUALIZER_DETACHED=1: a free window.
         kw["env"] = _visualizer_env(companion=False)
+        try:
+            open_windows = visualizer_window_count(exclude_pid=os.getpid())
+        except Exception:
+            open_windows = 0
+        kw["env"]["MP_VISUALIZER_CASCADE_INDEX"] = str(
+            min(max(0, open_windows), MAX_VISUALIZER_WINDOWS - 1))
         with open(CONFIG_DIR / "liquid_visualizer.log", "a") as f:
             subprocess.Popen([sys.executable, str(vis_script), "--preset", "random", "--backend", "vulkan"], cwd=str(ROOT), stdin=subprocess.DEVNULL, stdout=f, stderr=f, **kw)
         return True

@@ -10,6 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Pressing `Z` repeatedly now shows multiple MP Visualizer windows instead of one stacked window** (`MP_Audio_Player_Liquid_Glass.py`, `MP_Audio_Player_Liquid_Glass_OpenGL.py`, `scripts/liquid_visualizer_session.py`, `scripts/mp_liquid_visualizer_vulkan.py`, `scripts/liquid_player_visualizer.py`, `tests/test_visualizer_window_limit.py`, `tests/test_auto_start_visualizer_on_liquid_player.py`):
+  - **Symptom.** Every `Z` press started another visualizer at the identical Windows `(160, 80)` rectangle, so only the newest window was visible and the feature looked single-instance.
+  - **Cause two.** Windows venv `pythonw.exe` starts a redirector and a real interpreter with the same command line. The cap counted both processes, so one visible window consumed two of the sixteen slots.
+  - **The fix.** Explicit `Z` windows receive a cascade index and open in a 28-pixel stepped fan, clamped to the primary monitor. Windows process counting now collapses each redirector/child pair to one window. The cap remains **16** actual visualizer windows.
+
 - **Launch MP Visualizer from MP Tray does nothing on Windows 10: `liquid_glass_opengl.py` was corrupt** (`scripts/liquid_glass_opengl.py`, `tests/test_source_files_are_intact.py`):
   - **Symptom.** Right-clicking **MP Tray** and choosing **Launch MP Visualizer** produced no window at all. `scripts\launch_liquid_visualizer.bat` exited **0**, the tray logged a successful spawn, and the visualizer's own log stayed **empty**, so it looked like the launch was being ignored.
   - **Why.** `scripts/liquid_glass_opengl.py` had its last five lines replaced by **147 NUL bytes**, which makes the file unimportable: reading it raises `SyntaxError: source code string cannot contain null bytes`. The visualizer calls `liquid_glass_opengl.load_glfw_dll()` from inside `load_glfw_dll()` the moment it creates a window, so the process died during import - before it opened a window, and before any of its own logging had started. The tray, the BAT file, GLFW and the Python install were all working correctly.

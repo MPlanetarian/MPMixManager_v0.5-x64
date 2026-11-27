@@ -6,6 +6,7 @@ companion window on screen. On macOS that window matches the Liquid Player.
 """
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import signal
@@ -15,7 +16,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
-_VISUALIZER_MARK = "MP_Liquid_Visualizer|mp_liquid_visualizer_vulkan"
+_VISUALIZER_MARK = "MP_Liquid_Visualizer.py|mp_liquid_visualizer_vulkan.py"
 _PLAYER_MARK = "MP_Audio_Player_Liquid_Glass"
 # The most MP Visualizer windows that may be open at once, across the Liquid
 # Player, MP Gui, the Liquid Mixer and the console manager. Sixteen covers a
@@ -216,7 +217,7 @@ def _proc_visualizer_pids() -> Optional[list[int]]:
         cmd = _cmdline(pid)
         if not cmd:
             continue
-        if "MP_Liquid_Visualizer" not in cmd and "mp_liquid_visualizer_vulkan" not in cmd:
+        if "MP_Liquid_Visualizer.py" not in cmd and "mp_liquid_visualizer_vulkan.py" not in cmd:
             continue
         argv0 = cmd.split(" ", 1)[0]
         if not os.path.basename(argv0).lower().startswith("python"):
@@ -225,6 +226,70 @@ def _proc_visualizer_pids() -> Optional[list[int]]:
             continue
         pids.append(pid)
     return pids
+
+
+def _normalised_commandline(value: str) -> str:
+    return " ".join((value or "").split())
+
+
+def _windows_visualizer_process_rows() -> list[dict]:
+    """Python visualizer processes with their parent PIDs on Windows.
+
+    A Windows venv ``pythonw.exe`` is a redirector: it starts the base
+    interpreter with the same command line. Counting both processes made one
+    visible window consume two of the sixteen slots.
+    """
+    if sys.platform != "win32":
+        return []
+    command = (
+        "Get-CimInstance Win32_Process | "
+        "Where-Object { $_.Name -like 'python*' -and "
+        "($_.CommandLine -like '*MP_Liquid_Visualizer.py*' -or "
+        "$_.CommandLine -like '*mp_liquid_visualizer_vulkan.py*') } | "
+        "Select-Object ProcessId,ParentProcessId,CommandLine | "
+        "ConvertTo-Json -Compress"
+    )
+    try:
+        out = subprocess.check_output(
+            ["powershell.exe", "-NoProfile", "-Command", command],
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=4,
+            **_quiet_kwargs(),
+        )
+        rows = json.loads(out or "[]")
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return []
+    if isinstance(rows, dict):
+        rows = [rows]
+    if not isinstance(rows, list):
+        return []
+    return [row for row in rows if isinstance(row, dict)]
+
+
+def _dedupe_windows_process_rows(rows: list[dict]) -> list[int]:
+    """Keep the real interpreter and drop identical venv redirector parents."""
+    by_pid: dict[int, dict] = {}
+    children: dict[int, list[str]] = {}
+    for row in rows:
+        try:
+            pid = int(row.get("ProcessId") or 0)
+            parent = int(row.get("ParentProcessId") or 0)
+        except (TypeError, ValueError):
+            continue
+        if pid <= 1:
+            continue
+        by_pid[pid] = row
+        children.setdefault(parent, []).append(
+            _normalised_commandline(str(row.get("CommandLine") or ""))
+        )
+    kept = []
+    for pid, row in by_pid.items():
+        command = _normalised_commandline(str(row.get("CommandLine") or ""))
+        if command and command in children.get(pid, []):
+            continue
+        kept.append(pid)
+    return sorted(set(kept))
 
 
 def visualizer_pids() -> list[int]:
@@ -236,9 +301,21 @@ def visualizer_pids() -> list[int]:
     the shutdown logic think a second window was open. Only processes whose
     executable is a Python interpreter are kept.
     """
+    me = os.getpid()
+    if sys.platform == "win32":
+        rows = _windows_visualizer_process_rows()
+        if rows:
+            pids = _dedupe_windows_process_rows(rows)
+            # A window may already be visible before CIM reflects its final
+            # interpreter. The HWND owns the window the user sees, so keep it.
+            pids.extend(_windows_visualizer_window_pids())
+            return sorted({pid for pid in pids if pid > 1 and pid != me})
+        visible = _windows_visualizer_window_pids()
+        if visible:
+            return sorted({pid for pid in visible if pid > 1 and pid != me})
     direct = _proc_visualizer_pids()
     if direct is not None:
-        return direct
+        return [pid for pid in direct if pid != me]
     pids = []
     for pid in _pgrep(_VISUALIZER_MARK):
         cmd = _cmdline(pid)
@@ -252,7 +329,7 @@ def visualizer_pids() -> list[int]:
         if "pgrep" in cmd or "pkill" in cmd:
             continue
         pids.append(pid)
-    return pids
+    return sorted({pid for pid in pids if pid != me})
 
 
 def visualizer_window_count(exclude_pid: Optional[int] = None) -> int:

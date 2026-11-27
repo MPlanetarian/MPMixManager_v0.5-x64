@@ -336,6 +336,46 @@ def preferred_window_edge() -> int:
     return WINDOW_WIDTH
 
 
+# Z opens free-standing windows. Without a cascade every one landed on the
+# exact same rectangle and only the newest was visible, which looked like Z
+# could open only one window.
+VISUALIZER_CASCADE_STEP = 28
+
+
+def visualizer_cascade_offset() -> Tuple[int, int]:
+    """Per-window offset supplied by the launcher for an explicit Z window."""
+    try:
+        index = max(0, int(os.environ.get("MP_VISUALIZER_CASCADE_INDEX", "0")))
+    except (TypeError, ValueError):
+        index = 0
+    return index * VISUALIZER_CASCADE_STEP, index * VISUALIZER_CASCADE_STEP
+
+
+def clamp_visualizer_origin(glfw, origin: Tuple[int, int],
+                            size: Tuple[int, int]) -> Tuple[int, int]:
+    """Keep a cascaded window on the primary monitor instead of off-screen."""
+    x, y = int(origin[0]), int(origin[1])
+    try:
+        monitor = glfw.glfwGetPrimaryMonitor()
+        mode = glfw.glfwGetVideoMode(monitor)
+        if not monitor or not mode:
+            return x, y
+        mode_data = getattr(mode, "contents", mode)
+        mode_width = int(getattr(mode_data, "width", 0) or 0)
+        mode_height = int(getattr(mode_data, "height", 0) or 0)
+        if mode_width <= 0 or mode_height <= 0:
+            return x, y
+        mx, my = c_int(), c_int()
+        glfw.glfwGetMonitorPos(monitor, byref(mx), byref(my))
+        max_x = int(mx.value) + max(0, mode_width - int(size[0]))
+        max_y = int(my.value) + max(0, mode_height - int(size[1]))
+        x = max(int(mx.value), min(x, max_x))
+        y = max(int(my.value), min(y, max_y))
+    except Exception:
+        pass
+    return x, y
+
+
 def _vr_visualizer_side() -> Optional[int]:
     """Square backdrop size set by scripts/bigscreen_vr.py for VR Mode."""
     if os.environ.get("MP_VR_LAYOUT") != "1":
@@ -1654,6 +1694,10 @@ class LiquidVisualizerVulkanRenderer(MonitorSpanMixin, RandomPresetMixin, Player
                 mx, my = c_int(), c_int()
                 g.glfwGetMonitorPos(m4k, byref(mx), byref(my))
                 ix, iy = mx.value, my.value
+        cascade_x, cascade_y = visualizer_cascade_offset()
+        if cascade_x or cascade_y:
+            ix, iy = clamp_visualizer_origin(
+                g, (ix + cascade_x, iy + cascade_y), (ww, wh))
         g.glfwSetWindowPos(w, ix, iy)
         self._cur_pos = (ix, iy)
         return w

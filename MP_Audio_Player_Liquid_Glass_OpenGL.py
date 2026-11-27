@@ -2165,11 +2165,13 @@ def spawn_new_visualizer() -> bool:
         try:
             from liquid_visualizer_session import (
                 MAX_VISUALIZER_WINDOWS,
+                visualizer_window_count,
                 visualizer_window_limit_reached,
             )
         except ImportError:
             from scripts.liquid_visualizer_session import (
                 MAX_VISUALIZER_WINDOWS,
+                visualizer_window_count,
                 visualizer_window_limit_reached,
             )
         try:
@@ -2189,6 +2191,12 @@ def spawn_new_visualizer() -> bool:
         # Z opens an extra window: it is explicitly detached from the
         # player, while the companion the player starts stays locked.
         extra_kw["env"] = _visualizer_env(companion=False)
+        try:
+            open_windows = visualizer_window_count(exclude_pid=os.getpid())
+        except Exception:
+            open_windows = 0
+        extra_kw["env"]["MP_VISUALIZER_CASCADE_INDEX"] = str(
+            min(max(0, open_windows), MAX_VISUALIZER_WINDOWS - 1))
         with open(CONFIG_DIR / "liquid_visualizer.log", "a") as f:
             f.write(f"\n--- spawn_new_visualizer: {vis_script.name} ---\n")
             f.flush()

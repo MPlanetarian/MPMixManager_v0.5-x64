@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """The MP Visualizer window cap: sixteen at once, from every host."""
 
+import os
 import sys
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 BASE = Path(__file__).resolve().parent.parent
 for path in (BASE, BASE / "scripts"):
@@ -30,12 +31,71 @@ class WindowCounterTests(unittest.TestCase):
         with patch.object(session, "visualizer_pids", return_value=list(range(1, 17))):
             self.assertTrue(session.visualizer_window_limit_reached(exclude_pid=999))
 
+    def test_windows_redirector_and_child_count_as_one_window(self):
+        command = r'X:\MP\venv\Scripts\pythonw.exe X:\MP\MP_Liquid_Visualizer.py'
+        rows = [
+            {"ProcessId": 100, "ParentProcessId": 10, "CommandLine": command},
+            {"ProcessId": 101, "ParentProcessId": 100, "CommandLine": command},
+            {"ProcessId": 102, "ParentProcessId": 10,
+             "CommandLine": r'X:\MP\venv\Scripts\pythonw.exe X:\MP\MP_Liquid_Visualizer.py --preset 2'},
+        ]
+        self.assertEqual(session._dedupe_windows_process_rows(rows), [101, 102])
+
+    def test_z_windows_receive_a_cascade_offset(self):
+        with patch.dict(os.environ, {"MP_VISUALIZER_CASCADE_INDEX": "3"}):
+            self.assertEqual(
+                vis.visualizer_cascade_offset(),
+                (3 * vis.VISUALIZER_CASCADE_STEP,
+                 3 * vis.VISUALIZER_CASCADE_STEP),
+            )
+        with patch.dict(os.environ, {"MP_VISUALIZER_CASCADE_INDEX": "bad"}):
+            self.assertEqual(vis.visualizer_cascade_offset(), (0, 0))
+
+    def test_cascade_is_clamped_to_the_primary_monitor(self):
+        class Mode:
+            width = 1920
+            height = 1080
+
+        class Glfw:
+            @staticmethod
+            def glfwGetPrimaryMonitor():
+                return 1
+
+            @staticmethod
+            def glfwGetVideoMode(_monitor):
+                return Mode()
+
+            @staticmethod
+            def glfwGetMonitorPos(_monitor, x, y):
+                x._obj.value = 0
+                y._obj.value = 0
+
+        self.assertEqual(
+            vis.clamp_visualizer_origin(Glfw(), (1800, 1000), (700, 700)),
+            (1220, 380),
+        )
+
 
 class LauncherCapTests(unittest.TestCase):
     def test_visualizer_refuses_the_seventeenth_window(self):
         with patch.object(session, "visualizer_pids", return_value=list(range(1, 17))), \
              patch.object(vis.mp_raspberry_pi, "visualizer_supported", return_value=True):
             self.assertEqual(vis.run_visualizer(), 1)
+
+    @patch("subprocess.Popen")
+    def test_z_spawn_passes_a_cascade_index(self, popen):
+        """Each explicit Z window gets a different on-screen cascade slot."""
+        import MP_Audio_Player_Liquid_Glass as vulkan_glass
+        import MP_Audio_Player_Liquid_Glass_OpenGL as opengl_glass
+
+        popen.return_value = MagicMock(pid=999)
+        with patch.object(session, "visualizer_window_count", return_value=3), \
+             patch.object(session, "visualizer_window_limit_reached", return_value=False):
+            for module in (opengl_glass, vulkan_glass):
+                popen.reset_mock()
+                self.assertTrue(module.spawn_new_visualizer())
+                self.assertEqual(
+                    popen.call_args[1]["env"]["MP_VISUALIZER_CASCADE_INDEX"], "3")
 
     def test_every_launcher_names_the_cap(self):
         mgr = (BASE / "Mix_Archive_Manager.sh").read_text(encoding="utf-8")

@@ -2195,6 +2195,12 @@ class LiquidVisualizerOpenGLRenderer(MonitorSpanMixin, RandomPresetMixin, Player
             ox, oy = int(bond_geometry[0]), int(bond_geometry[1])
         else:
             ox, oy = self._initial_offset()
+        if sys.platform == "win32":
+            try:
+                from mp_liquid_visualizer_vulkan import clamp_visualizer_origin
+                ox, oy = clamp_visualizer_origin(glfw, (ox, oy), self._size)
+            except Exception:
+                pass
         glfw.glfwSetWindowPos(window, ox, oy)
         self._cur_pos = (ox, oy)
         self._bind_input()
@@ -2267,15 +2273,21 @@ class LiquidVisualizerOpenGLRenderer(MonitorSpanMixin, RandomPresetMixin, Player
         return (WINDOW_WIDTH, WINDOW_WIDTH)
 
     def _initial_offset(self) -> tuple:
-        from mp_liquid_visualizer_vulkan import _IS_LINUX, window_launch_origin
+        from mp_liquid_visualizer_vulkan import (
+            _IS_LINUX,
+            visualizer_cascade_offset,
+            window_launch_origin,
+        )
         if _IS_LINUX:
             # Centre the visualizer instead of dropping it in the corner. The
             # window matches the Liquid Player, which is itself centred, so a
             # corner offset used to leave the pair hanging off the right edge.
             from desktop_launch_screen import main_window_origin
-            return main_window_origin(int(self._size[0]), int(self._size[1]), 72, 64)
-        x, y = window_launch_origin(160, 80)
-        return (int(x), int(y))
+            x, y = main_window_origin(int(self._size[0]), int(self._size[1]), 72, 64)
+        else:
+            x, y = window_launch_origin(160, 80)
+        cascade_x, cascade_y = visualizer_cascade_offset()
+        return int(x + cascade_x), int(y + cascade_y)
 
     def _bind_glfw(self, g) -> None:
         from ctypes import POINTER, c_char_p, c_int, c_uint64, c_void_p
