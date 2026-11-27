@@ -960,20 +960,32 @@ return 1
 }
 _nav_pending=""; _NAV_WIN_CON=""; _NAV_ARROW_AT=""
 _nav_just_arrowed() {
-    # Windows console arrow-echo guard (optimized for speed)
+    # Windows console arrow-echo guard. conhost echoes a lone CR (or an A/B)
+    # right after an arrow, and that byte must be swallowed instead of being
+    # read as ENTER, which would activate whichever row is highlighted.
+    # _NAV_ARROW_AT holds the EPOCHREALTIME stamp of the arrow just handled;
+    # the echo arrives within ~150 ms, a real key press does not.
     [[ -n "${_NAV_ARROW_AT:-}" ]] || return 1
-    
+
     local now="${EPOCHREALTIME:-}"
     [[ -n "$now" ]] || { _NAV_ARROW_AT=""; return 1; }
 
-    # Strip decimal/comma more efficiently
+    # EPOCHREALTIME is "seconds.microseconds", but the separator is locale
+    # dependent (a comma on some hosts), so accept either and keep the digits.
     local at="${_NAV_ARROW_AT//[.,]/}"
     now="${now//[.,]/}"
 
-    # Fast integer comparison (ensuring they look like valid digits)
-    (( at > 0 && now > 0 )) || { _NAV_ARROW_AT=""; return 1; }
+    # `10#` has to be followed by an *expansion*, never the bare variable name:
+    # `10#now` is read as the literal digits "now" and fails with "value too
+    # great for base". That silent failure disabled this guard on Windows, so
+    # every arrow echoed an error over the menu and every echoed CR became an
+    # ENTER. Validate the digits, then force base 10 so a leading zero is not
+    # mistaken for octal.
+    [[ "$now" =~ ^[0-9]+$ && "$at" =~ ^[0-9]+$ ]] || { _NAV_ARROW_AT=""; return 1; }
+    (( 10#$at > 0 )) || { _NAV_ARROW_AT=""; return 1; }
 
-    if (( 10#now - 10#at >= 0 && 10#now - 10#at < 150000 )); then
+    local _delta=$(( 10#$now - 10#$at ))
+    if (( _delta >= 0 && _delta < 150000 )); then
         return 0
     fi
 
@@ -1203,19 +1215,33 @@ read_nav_key() {
 
     _nav_mark_console
     local read_rc=0
-    
+
     # A key from a game controller is taken before the keyboard.
     if _gamepad_take _k; then _emit_key "$_k"; return 0; fi
+    # Bytes already decoded (an arrow the hold-drain handed back, or a whole
+    # ESC sequence pushed to the front) must be consumed before touching the
+    # console. The blocking Windows read below ignores _nav_pending on its own,
+    # so the pending byte is taken here or it is lost and the queued presses of
+    # a fast double-tap never reach the menu. read_rc stays 0 when a pending
+    # byte was taken, so the read below is skipped.
+    read_rc=1
+    if [[ -n "${_nav_pending:-}" ]]; then
+        _k="${_nav_pending:0:1}"
+        _nav_pending="${_nav_pending:1}"
+        read_rc=0
+    fi
     # Initial read for the first byte. A timed read on the Windows console
     # only wakes on a polling tick (50-120 ms, often more), which is exactly
     # the menu's input delay. Block instead: conhost wakes the reader as soon
     # as a key arrives. TICKs are not needed while idle on Windows.
-    if [[ "${_NAV_WIN_CON:-0}" -eq 1 ]]; then
-        IFS= read -rsn1 _k
-        read_rc=$?
-    else
-        _nav_pull 0.05 _k
-        read_rc=$?
+    if [[ "$read_rc" -ne 0 ]]; then
+        if [[ "${_NAV_WIN_CON:-0}" -eq 1 ]]; then
+            IFS= read -rsn1 _k
+            read_rc=$?
+        else
+            _nav_pull 0.05 _k
+            read_rc=$?
+        fi
     fi
 
     if [[ "$read_rc" -ne 0 ]]; then
@@ -1253,8 +1279,8 @@ read_nav_key() {
                 local c3=""
                 if _nav_pull 0.01 c3; then
                     case "$c3" in
-                        A) _emit_key "UP"    ; _NAV_ARROW_AT=1 ;;
-                        B) _emit_key "DOWN"  ; _NAV_ARROW_AT=1 ;;
+                        A) _emit_key "UP"    ; _NAV_ARROW_AT="${EPOCHREALTIME:-0}" ;;
+                        B) _emit_key "DOWN"  ; _NAV_ARROW_AT="${EPOCHREALTIME:-0}" ;;
                         C) _emit_key "RIGHT" ;;
                         D) _emit_key "LEFT"  ;;
                         H) _emit_key "HOME"  ;;
@@ -1263,8 +1289,8 @@ read_nav_key() {
                             local c4=""
                             if _nav_pull 0.01 c4; then
                                 case "$c4" in
-                                    A) _emit_key "UP"   ; _NAV_ARROW_AT=1 ;;
-                                    B) _emit_key "DOWN" ; _NAV_ARROW_AT=1 ;;
+                                    A) _emit_key "UP"   ; _NAV_ARROW_AT="${EPOCHREALTIME:-0}" ;;
+                                    B) _emit_key "DOWN" ; _NAV_ARROW_AT="${EPOCHREALTIME:-0}" ;;
                                     C) _emit_key "RIGHT";;
                                     D) _emit_key "LEFT" ;;
                                     *) _emit_key "UNKNOWN" ;;
@@ -1312,8 +1338,8 @@ read_nav_key() {
                 local c3=""
                 if _nav_pull 0.01 c3; then
                     case "$c3" in
-                        A) _emit_key "UP"    ; _NAV_ARROW_AT=1 ;;
-                        B) _emit_key "DOWN"  ; _NAV_ARROW_AT=1 ;;
+                        A) _emit_key "UP"    ; _NAV_ARROW_AT="${EPOCHREALTIME:-0}" ;;
+                        B) _emit_key "DOWN"  ; _NAV_ARROW_AT="${EPOCHREALTIME:-0}" ;;
                         C) _emit_key "RIGHT" ;;
                         D) _emit_key "LEFT"  ;;
                         H) _emit_key "HOME"  ;;
