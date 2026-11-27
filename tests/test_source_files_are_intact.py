@@ -21,12 +21,30 @@ They are deliberately cheap: the Python check compiles only (no imports, so no
 GPU, audio device or desktop is needed), and the shell check is ``bash -n``.
 """
 
+import os
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+
+
+def _compile_env() -> dict:
+    """An environment where ``py_compile`` can write its bytecode anywhere.
+
+    ``python -m py_compile`` caches next to the source. That is fine in a
+    checkout, but the suite also ships inside the packages and installs under
+    ``/opt/mp-mix-manager``, which is owned by root. A non-root user running
+    the guard from that install got *permission denied* on
+    ``scripts/__pycache__`` - a failure that looks like a corrupt module but
+    is only the read-only install path. Point the cache at a temp directory
+    instead, so the check reports source health and nothing else.
+    """
+    env = dict(os.environ)
+    env["PYTHONPYCACHEPREFIX"] = tempfile.mkdtemp(prefix="mp-pycache-")
+    return env
 
 # The modules the Windows tray launches. The tray starts each of these through
 # a .bat/.cmd shortcut with pythonw.exe, which has no console: an import error
@@ -85,6 +103,7 @@ class TestNoShippedSourceIsCorrupt(unittest.TestCase):
             [sys.executable, "-m", "py_compile", *[str(p) for p in files]],
             capture_output=True,
             text=True,
+            env=_compile_env(),
         )
         self.assertEqual(result.returncode, 0, result.stderr)
 
@@ -104,6 +123,7 @@ class TestNoShippedSourceIsCorrupt(unittest.TestCase):
             [sys.executable, "-m", "py_compile", *[str(ROOT / n) for n in python_targets]],
             capture_output=True,
             text=True,
+            env=_compile_env(),
         )
         self.assertEqual(result.returncode, 0, result.stderr)
 
@@ -142,6 +162,63 @@ class TestNoShippedSourceIsCorrupt(unittest.TestCase):
         if result.returncode != 0 and "WindowsApps" in (result.stderr or ""):
             self.skipTest("only the Microsoft Store bash stub is available here")
         self.assertEqual(result.returncode, 0, result.stderr)
+
+
+class TestTheGuardWorksFromAnInstalledTree(unittest.TestCase):
+    """The guard ships, and it installs under a root-owned /opt directory.
+
+    A non-root user running it there must get a verdict about the source, not
+    *permission denied* on ``__pycache__``. This was found on Fedora 45, where
+    the packaged tree is ``root:root`` and ``py_compile`` tried to cache beside
+    each module: 2 of the 5 checks failed on a perfectly good install.
+    """
+
+    def test_compile_env_redirects_the_bytecode_cache(self):
+        env = _compile_env()
+        prefix = env.get("PYTHONPYCACHEPREFIX")
+        self.assertTrue(prefix, "py_compile must not cache beside the source")
+        self.assertTrue(Path(prefix).is_dir(), prefix)
+        # The redirect must not disturb the rest of the environment the
+        # interpreter needs (PATH matters: `bash` is resolved through it).
+        self.assertEqual(env.get("PATH"), os.environ.get("PATH"))
+
+    def test_compiling_succeeds_with_a_read_only_source_tree(self):
+        """Reproduce the failure: a tree nobody can write to must still pass.
+
+        The source is copied to a temp directory and made read-only, which is
+        what ``/opt/mp-mix-manager`` looks like to a normal user. Without the
+        redirect this raises *Permission denied* on ``__pycache__``.
+        """
+        import shutil
+        import stat
+
+        with tempfile.TemporaryDirectory(prefix="mp-roitree-") as tmp:
+            root = Path(tmp)
+            shutil.copytree(ROOT / "scripts", root / "scripts")
+            target = root / "scripts" / "liquid_glass_opengl.py"
+            self.assertTrue(target.is_file())
+
+            for path in [root, *(root / "scripts").rglob("*")]:
+                try:
+                    os.chmod(path, stat.S_IRUSR | stat.S_IXUSR
+                             if path.is_dir() else stat.S_IRUSR)
+                except OSError:  # pragma: no cover - platform variance
+                    pass
+            try:
+                result = subprocess.run(
+                    [sys.executable, "-m", "py_compile", str(target)],
+                    capture_output=True,
+                    text=True,
+                    env=_compile_env(),
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertNotIn("Permission denied", result.stderr)
+            finally:
+                for path in [*(root / "scripts").rglob("*"), root / "scripts", root]:
+                    try:
+                        os.chmod(path, stat.S_IRWXU)
+                    except OSError:  # pragma: no cover
+                        pass
 
 
 if __name__ == "__main__":
