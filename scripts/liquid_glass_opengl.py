@@ -1014,8 +1014,19 @@ class LiquidGlassRendererOpenGL:
         return bool(layer.draw(self, int(fw), int(fh)))
 
     def sync_player_visualizer_opacity(self, active: bool) -> None:
-        """Make the glass window nearly solid while the visualizer is showing."""
+        """Make the glass window nearly solid while the visualizer is showing.
+
+        Windows has no X11 window id and is not macOS, so both branches below
+        used to fall through to a bare ``return``: the window kept the plain
+        slider opacity (0.70) with a full-brightness visualizer behind it, and
+        the terminal became unreadable. It now goes through
+        ``glfwSetWindowOpacity`` like macOS does.
+        """
         win = self.x11_window() if hasattr(self, "x11_window") else 0
+        glfw = getattr(self, "_glfw", None)
+        can_glfw = bool(
+            self._window and glfw is not None and hasattr(glfw, "glfwSetWindowOpacity")
+        )
         if not active:
             if getattr(self, "_vis_gl_opacity", None) is None:
                 return
@@ -1023,8 +1034,9 @@ class LiquidGlassRendererOpenGL:
             try:
                 if win:
                     self._set_opacity(win, float(self.clear_opacity))
-                elif is_macos() and self._window and hasattr(self._glfw, "glfwSetWindowOpacity"):
-                    self._glfw.glfwSetWindowOpacity(self._window, c_float(float(self.clear_opacity)))
+                elif can_glfw:
+                    glfw.glfwSetWindowOpacity(
+                        self._window, c_float(float(self.clear_opacity)))
             except Exception:
                 pass
             return
@@ -1037,6 +1049,15 @@ class LiquidGlassRendererOpenGL:
             except (TypeError, ValueError):
                 target = 0.94
             target = max(0.60, min(1.0, target))
+        elif is_windows():
+            # The Windows layered window is the only lever over the
+            # visualizer, and the scene is drawn at full brightness behind the
+            # text, so the pane has to stay near solid.
+            try:
+                target = float(os.environ.get("MP_WINDOWS_GLASS_OPACITY", "0.94"))
+            except (TypeError, ValueError):
+                target = 0.94
+            target = max(0.75, min(1.0, target))
         else:
             target = max(float(getattr(self, "clear_opacity", 0.70)), 0.94)
         if getattr(self, "_vis_gl_opacity", None) == target:
@@ -1044,8 +1065,8 @@ class LiquidGlassRendererOpenGL:
         try:
             if win:
                 self._set_opacity(win, target)
-            elif is_macos() and self._window and hasattr(self._glfw, "glfwSetWindowOpacity"):
-                self._glfw.glfwSetWindowOpacity(self._window, c_float(target))
+            elif can_glfw:
+                glfw.glfwSetWindowOpacity(self._window, c_float(target))
             else:
                 return
         except Exception:
@@ -1420,14 +1441,33 @@ class LiquidGlassRendererOpenGL:
                 pass
 
     def _set_opacity(self, window, opacity):
-        if is_macos():
-            # macOS handles transparency via GLFW_TRANSPARENT framebuffer hint
-            # and glfwSetWindowOpacity if needed
-            if hasattr(self._glfw, "glfwSetWindowOpacity") and self._window:
-                self._glfw.glfwSetWindowOpacity(self._window, c_float(max(0.0, min(1.0, float(opacity)))))
-            return
-        value = int(max(0.0, min(1.0, float(opacity))) * 0xFFFFFFFF)
-        self._change_cardinal(window, self._x_atom("_NET_WM_WINDOW_OPACITY"), [value])
+        """Publish window opacity on every platform.
+
+        The X11 property write is a no-op on Windows and macOS: there is no
+        display connection to change a property on, so the call silently did
+        nothing and the window kept its startup opacity. GLFW implements
+        glfwSetWindowOpacity with SetLayeredWindowAttributes on Windows and
+        the native layer on macOS, so those platforms go through it.
+        """
+        try:
+            value = max(0.0, min(1.0, float(opacity)))
+        except (TypeError, ValueError):
+            return False
+        if is_macos() or is_windows():
+            glfw = getattr(self, "_glfw", None)
+            if self._window and glfw is not None and hasattr(glfw, "glfwSetWindowOpacity"):
+                try:
+                    glfw.glfwSetWindowOpacity(self._window, c_float(value))
+                    return True
+                except Exception:
+                    pass
+            return False
+        win = int(window or 0) or (self.x11_window() if hasattr(self, "x11_window") else 0)
+        if not win:
+            return False
+        self._change_cardinal(win, self._x_atom("_NET_WM_WINDOW_OPACITY"),
+                              [int(value * 0xFFFFFFFF)])
+        return True
 
     def apply_clear_opacity(self, factor=1.0):
         """Publish ``clear_opacity * factor`` to the window, once per change.

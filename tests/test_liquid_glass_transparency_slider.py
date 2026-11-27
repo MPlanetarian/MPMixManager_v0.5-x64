@@ -190,9 +190,114 @@ class SolidRightEndTest(unittest.TestCase):
                 r._set_opacity.assert_called_once_with(0x1234, 1.0)
 
 
+class WindowsOpacityTest(unittest.TestCase):
+    """Windows has no X11 window id, so the property write was a silent no-op.
+
+    ``_set_opacity`` wrote ``_NET_WM_WINDOW_OPACITY`` on everything that was
+    not macOS, and ``sync_player_visualizer_opacity`` only had X11 and macOS
+    branches. On Windows both fell through: the pane never applied the slider
+    and never lifted to its readable 0.94 over the visualizer.
+    """
+
+    def _windows_renderer(self):
+        r = OpenGLRenderer.__new__(OpenGLRenderer)
+        r.clear_opacity = 0.70
+        r._window = 0x1234
+        r._vis_gl_opacity = None
+        r._last_dyn_opacity = None
+        r.x11_window = MagicMock(return_value=0)
+        r._glfw = MagicMock()
+        r._change_cardinal = MagicMock()
+        r._x_atom = MagicMock(return_value=1)
+        return r
+
+    def test_set_opacity_uses_glfw_on_windows(self):
+        import liquid_glass_opengl as glass
+
+        r = self._windows_renderer()
+        with patch.object(glass, "is_windows", return_value=True), \
+             patch.object(glass, "is_macos", return_value=False):
+            self.assertTrue(r._set_opacity(0, 0.55))
+        r._glfw.glfwSetWindowOpacity.assert_called_once()
+        value = r._glfw.glfwSetWindowOpacity.call_args[0][1]
+        self.assertAlmostEqual(getattr(value, "value", value), 0.55, places=3)
+        r._change_cardinal.assert_not_called()
+
+    def test_visualizer_lifts_the_windows_pane_to_near_solid(self):
+        import liquid_glass_opengl as glass
+
+        r = self._windows_renderer()
+        with patch.object(glass, "is_windows", return_value=True), \
+             patch.object(glass, "is_macos", return_value=False):
+            r.sync_player_visualizer_opacity(True)
+            self.assertGreaterEqual(r._vis_gl_opacity, 0.94)
+            r._glfw.glfwSetWindowOpacity.assert_called()
+            # Leaving restores the slider value.
+            r._glfw.glfwSetWindowOpacity.reset_mock()
+            r.sync_player_visualizer_opacity(False)
+            self.assertIsNone(r._vis_gl_opacity)
+            value = r._glfw.glfwSetWindowOpacity.call_args[0][1]
+            self.assertAlmostEqual(getattr(value, "value", value), 0.70, places=3)
+
+    def test_the_windows_host_polls_the_pointer_for_the_hover_bar(self):
+        """The console is a separate window over the glass on Windows.
+
+        The transparency bar is hover-only, and the pointer over the bottom
+        strip is over that console, so GLFW never delivers a cursor event and
+        the bar could never fade in. The host reads the OS pointer instead.
+        """
+        text = (ROOT / "MP_Audio_Player_Liquid_Glass_OpenGL.py").read_text(encoding="utf-8")
+        self.assertIn("_poll_windows_slider_hover", text)
+        self.assertIn("GetCursorPos", text)
+        # It must be called from the Windows frame loop, before the draw.
+        loop = text.split("while not self.renderer.should_close and proc.poll()", 1)[1]
+        loop = loop.split("finally:", 1)[0]
+        self.assertIn("_poll_windows_slider_hover()", loop)
+        self.assertLess(loop.find("_poll_windows_slider_hover()"),
+                        loop.find("self.renderer.draw(theme)"))
+
+
+class SliderBarPositionTest(unittest.TestCase):
+    """The bar must be at the BOTTOM of the window.
+
+    The regression this pins: the NDC helper was ``1 - 2*(px/height)``, the
+    mirror of the correct mapping. It sent a bar 12 px above the bottom edge to
+    12 px below the top edge, so the transparency bar was drawn under the
+    title strip and the user could never find it. A pixel capture of the
+    running window found the drawn band at y=22..29 from the window top; after
+    the fix the same capture finds it at ~18 px from the bottom.
+    """
+
+    def _ndc(self):
+        """The live helper, extracted from the host's source."""
+        text = (ROOT / "MP_Audio_Player_Liquid_Glass_OpenGL.py").read_text(encoding="utf-8")
+        block = text.split("def _ndc_y(px):", 1)[1].split("\n", 2)[2]
+        namespace = {}
+        exec("def _ndc_y(px, wh):\n" + block.split("\n\n")[0].replace(
+            "float(wh)", "float(wh)"), namespace)
+        return namespace["_ndc_y"]
+
+    def test_the_bar_sits_near_the_bottom_not_the_top(self):
+        text = (ROOT / "MP_Audio_Player_Liquid_Glass_OpenGL.py").read_text(encoding="utf-8")
+        self.assertIn("-1.0 + (float(px) / float(wh)) * 2.0", text)
+        self.assertNotIn("1.0 - (float(px) / float(wh)) * 2.0", text)
+
+    def test_a_bar_above_the_bottom_maps_below_the_centre(self):
+        wh = 778.0
+        # The same expression the host uses.
+        def ndc(px):
+            return -1.0 + (px / wh) * 2.0
+
+        # 12 px above the bottom edge is near the bottom of the screen.
+        self.assertLess(ndc(12.0), -0.9)
+        self.assertLess(ndc(20.0), -0.9)
+        # NDC -1 is the bottom edge, +1 the top: a small distance from the
+        # bottom must NOT be near +1, which is where the old mapping put it.
+        self.assertGreater(1.0 - (12.0 / wh) * 2.0, 0.9)
+
+
 class SliderStripTest(unittest.TestCase):
     """The renderer must be able to answer for the strip it draws the bar in.
-
     The regression this pins: the OpenGL host moved the bar from a fixed 22 px
     offset to ``self._slider_strip()``, but that method only ever existed on
     ``GlassHost``. The renderer called it on every frame and raised

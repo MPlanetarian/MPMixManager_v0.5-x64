@@ -1538,8 +1538,31 @@ class LiquidGlassRenderer:
                 pass
 
     def _set_opacity(self, window, opacity):
-        value = int(max(0.0, min(1.0, float(opacity))) * 0xFFFFFFFF)
-        self._change_cardinal(window, self._x_atom("_NET_WM_WINDOW_OPACITY"), [value])
+        """Publish window opacity on every platform.
+
+        The X11 property write is a no-op on Windows: there is no display to
+        attach a property to. GLFW implements glfwSetWindowOpacity with
+        SetLayeredWindowAttributes there, so Windows goes through it instead.
+        """
+        try:
+            value = max(0.0, min(1.0, float(opacity)))
+        except (TypeError, ValueError):
+            return False
+        if is_windows() or is_macos():
+            glfw = getattr(self, "_glfw", None)
+            if self._window and glfw is not None and hasattr(glfw, "glfwSetWindowOpacity"):
+                try:
+                    glfw.glfwSetWindowOpacity(self._window, c_float(value))
+                    return True
+                except Exception:
+                    pass
+            return False
+        win = int(window or 0) or (self.x11_window() if hasattr(self, "x11_window") else 0)
+        if not win:
+            return False
+        self._change_cardinal(win, self._x_atom("_NET_WM_WINDOW_OPACITY"),
+                              [int(value * 0xFFFFFFFF)])
+        return True
 
     def apply_clear_opacity(self, factor=1.0):
         """Publish ``clear_opacity * factor`` to the window, once per change.

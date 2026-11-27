@@ -774,12 +774,15 @@ class CustomGlassRenderer(LiquidGlassRendererOpenGL):
             c0 = _rgb01(colors[0])
             c1 = _rgb01(colors[1])
 
-            # NDC y grows upward, so a distance from the bottom becomes a
-            # negative offset: 1 - 2*(y/height). The previous 2*(y/height) - 1
-            # put the "22 px from the bottom" bar at the top of the window,
-            # where the bezel clipped it, so the slider looked missing.
+            # NDC y grows upward: -1 is the bottom edge, +1 is the top. The
+            # distance the bar sits *above the bottom* therefore maps to
+            # -1 + 2*(px/height). The old `1 - 2*(px/height)` is the mirror of
+            # that: it sent a bar 12 px from the bottom to 12 px from the TOP,
+            # which is why the transparency bar could not be found. A pixel
+            # capture of the running window located the drawn band at y=22..29
+            # from the window top, exactly where this mapping put it.
             def _ndc_y(px):
-                return 1.0 - (float(px) / float(wh)) * 2.0
+                return -1.0 + (float(px) / float(wh)) * 2.0
 
             ndc_x1 = (x_left / ww) * 2.0 - 1.0
             ndc_x2 = (x_right / ww) * 2.0 - 1.0
@@ -1045,11 +1048,49 @@ class GlassHost:
             except Exception:
                 pass
         self.renderer.place_terminal(self.child_xid, x, y, iw, ih)
+        self._fit_console_to_well()
         # The frame loop already measured the panels before drawing. A second
         # query here would land after the shader, one frame late, and it asks
         # VTE for the cell count again.
         if sync_panels:
             self._sync_panels()
+
+    def _fit_console_to_well(self) -> None:
+        """Match the embedded console's buffer to the window it now has.
+
+        ``SetWindowPos`` changes how many rows the console can show but leaves
+        its screen buffer at the old height. Coming back from full screen the
+        buffer stayed 68 rows tall behind a 45-row window, so the menu painted
+        23 rows below the visible area and ``stty size`` told it the space was
+        there. Fitting the buffer makes the child read the real grid.
+
+        The resize is asynchronous, so a fit can run before the console has
+        taken its new size; the helper reports whether the buffer matches now
+        and the fit is retried on later frames until it does.
+        """
+        if sys.platform != "win32" or not self.child_xid:
+            return
+        now = time.monotonic()
+        well = getattr(self, "_last_well", None)
+        if well == getattr(self, "_console_fit_well", None):
+            return
+        if now < getattr(self, "_console_fit_at", 0.0):
+            return
+        self._console_fit_at = now + 0.15
+        try:
+            from windows_console_scroll import (
+                console_window_matches,
+                fit_console_buffer_for_window,
+            )
+            # A fit must not run while the console is still moving to the new
+            # well: it would size the buffer to the old rectangle and then
+            # look consistent. Wait until the window has arrived.
+            if well and not console_window_matches(int(self.child_xid), *well):
+                return
+            if fit_console_buffer_for_window(int(self.child_xid)):
+                self._console_fit_well = well
+        except Exception:
+            self._console_fit_well = well
 
     def _poll_due(self, attr: str, interval: float, now: float) -> bool:
         """True when ``interval`` seconds have passed since the last poll.
@@ -1492,6 +1533,45 @@ class GlassHost:
             except Exception:
                 pass
 
+    def _poll_windows_slider_hover(self):
+        """Feed the glass renderer the real pointer position on Windows.
+
+        The transparency bar is hover-only, and on the other platforms the
+        GLFW cursor callback supplies the pointer. Here the terminal is a
+        *separate console window* owned by the glass, stacked above it, so the
+        pointer over the bottom strip is over the console: GLFW never receives
+        a cursor event for it, ``renderer.cursor`` keeps whatever value it last
+        had, and the bar never fades in. Reading the OS pointer and mapping it
+        into window coordinates makes the strip reachable again.
+        """
+        if not self.child_xid or self.renderer is None:
+            return
+        try:
+            import ctypes as _ct
+            user32 = _ct.windll.user32
+
+            class POINT(_ct.Structure):
+                _fields_ = [("x", _ct.c_long), ("y", _ct.c_long)]
+
+            pt = POINT()
+            if not user32.GetCursorPos(_ct.byref(pt)):
+                return
+            try:
+                x, y = self.renderer.window_pos()
+            except Exception:
+                return
+            ww, wh = self.renderer.window_size()
+            if ww <= 0 or wh <= 0:
+                return
+            local_x = float(pt.x - int(x))
+            local_y = float(pt.y - int(y))
+            self.renderer.cursor = (local_x, local_y)
+            self.renderer.cursor_inside = (
+                0.0 <= local_x <= float(ww) and 0.0 <= local_y <= float(wh)
+            )
+        except Exception:
+            return
+
     def _track_drag(self, was_down, dragging, origin, press_screen):
         if getattr(self, "_os_dragging", False):
             return False, False, origin, press_screen
@@ -1728,6 +1808,7 @@ class GlassHost:
                     self._publish_player_window_geometry()
                 self._sync_panels()
                 self._pump_windows_drag()
+                self._poll_windows_slider_hover()
                 self.renderer.draw(theme)
                 down, dragging, origin, press_screen = self._track_drag(down, dragging, origin, press_screen)
                 self._place_terminal(force=dragging, sync_panels=False)
