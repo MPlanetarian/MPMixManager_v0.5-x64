@@ -228,3 +228,6 @@ MP_SAMPLES/*.flac
 # file beside the checkout; it is never a release artifact.
 /PI_REVIEW_PACKET.md
 
+# Windows MSI build scratch (never shipped)
+.build_tmp/
+*.wixpdb
