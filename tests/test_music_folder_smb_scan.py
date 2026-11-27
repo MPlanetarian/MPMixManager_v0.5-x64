@@ -50,6 +50,7 @@ class _Proc:
 
 
 class TestSmbPlaylistScan(unittest.TestCase):
+    @unittest.skipIf(mfm.IS_WINDOWS, "Windows scans SMB UNC paths directly")
     def test_listing_uses_rclone_size_and_does_not_stat_the_mount(self):
         proc = _Proc([
             "Notes.txt|12|2026-11-04 12:46:42\n",
@@ -71,6 +72,7 @@ class TestSmbPlaylistScan(unittest.TestCase):
         self.assertTrue(tracks[0]["path"].endswith("Album/Song.mp3") or tracks[0]["path"].endswith("Album\\Song.mp3"))
         self.assertGreater(tracks[0]["mtime"], 0)
 
+    @unittest.skipIf(mfm.IS_WINDOWS, "Windows scans SMB UNC paths directly")
     def test_failed_listing_does_not_walk_the_mount(self):
         proc = _Proc([], errors="couldn't connect SMB: logon is invalid\n", rc=1)
         with patch.object(mfm, "connect_folder", return_value=(False, "not responding")), \
@@ -85,6 +87,18 @@ class TestSmbPlaylistScan(unittest.TestCase):
         filesystem.assert_not_called()
         self.assertIsNone(tracks)
         self.assertTrue(any("logon is invalid" in note for note in notes))
+
+    def test_empty_reachable_folder_saves_an_empty_playlist(self):
+        folder = dict(_folder(), id="DATAMAC2", name="DATAMAC2", share="DATAMAC2")
+        with tempfile.TemporaryDirectory() as tmp:
+            config = _config()
+            config["playlists_dir"] = Path(tmp)
+            with patch.object(mfm, "scan_folder_tracks", return_value=[]):
+                mfm.generate_advance_playlists("ALL", config=config, interactive=False, folders=[folder])
+            saved = Path(tmp) / "DJ_Tracks_DATAMAC2.json"
+            combined = Path(tmp) / "DJ_Tracks_ALL_MUSIC_FOLDERS.json"
+            self.assertEqual(json.loads(saved.read_text(encoding="utf-8")), [])
+            self.assertEqual(json.loads(combined.read_text(encoding="utf-8")), [])
 
     def test_combined_playlist_updates_before_a_later_folder_fails(self):
         first = _folder()

@@ -1067,7 +1067,7 @@ def generate_advance_playlists(target: str = ALL_TARGET, config: Optional[Dict[s
     for f in to_process:
         print(f"  {BOLD}{CYAN}▶ Scanning [{f['id']}] {display_path(f)}...{NC}", flush=True)
         tracks = scan_folder_tracks(f, config, progress_cb=lambda m: print(f"    {DIM}{m}{NC}", flush=True), interactive=interactive)
-        if not tracks:
+        if tracks is None:
             print(f"  {BOLD}{RED}✖ Could not list {f['name']}. Its playlist was left unchanged.{NC}\n", flush=True)
             continue
         save_playlist_files(tracks, f["id"], config, title=f["name"])

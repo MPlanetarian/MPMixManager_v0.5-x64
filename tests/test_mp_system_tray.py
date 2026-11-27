@@ -894,6 +894,19 @@ class TestTrayRescans(unittest.TestCase):
         self.assertIn("$script:rescanProcess -and -not $script:rescanProcess.HasExited", idle)
         self.assertIn("$script:absentSince = $null", idle)
 
+    def test_windows_music_rescan_reports_partial_failures(self):
+        text = (ROOT / "scripts" / "windows_tray.ps1").read_text(encoding="utf-8")
+        fn = text.split("function Show-MpRescanResult", 1)[1].split("\nfunction ", 1)[0]
+        self.assertIn("Could not list (.+)", fn)
+        self.assertIn("folder(s) failed:", fn)
+        self.assertIn("$names -join ', '", fn)
+
+    def test_windows_rescan_reads_the_child_exit_code(self):
+        text = (ROOT / "scripts" / "windows_tray.ps1").read_text(encoding="utf-8")
+        fn = text.split("function Start-MpRescanProcess", 1)[1].split("\nfunction ", 1)[0]
+        self.assertIn("$script:rescanProcess.WaitForExit(0)", fn)
+        self.assertIn("$exitCode = $script:rescanProcess.ExitCode", fn)
+
     def test_the_rescan_reports_through_a_desktop_notification(self):
         text = (ROOT / "scripts" / "mp_system_tray.py").read_text(encoding="utf-8")
         self.assertIn("def notify(", text)

@@ -622,6 +622,7 @@ function Start-MpRescanProcess {
             }
             $stdout = ""
             $stderr = ""
+            $null = $script:rescanProcess.WaitForExit(0)
             $exitCode = $script:rescanProcess.ExitCode
             # The scan wrote to files (see Start-MpRescanProcess), so read
             # them rather than a pipe nobody was draining.
@@ -690,7 +691,15 @@ function Show-MpRescanResult {
     $null = $complete[-1] -match '\(([0-9,]+) total tracks'
     $tracks = $Matches[1]
     $saved = @($text -split "`n" | Where-Object { $_ -match 'Saved .* Playlist:' }).Count
-    Show-MpNotice -Title "Rescan Music Folders" -Message "$saved music folder(s) refreshed | $tracks tracks in ALL"
+    $failed = @($text -split "`n" | Where-Object { $_ -match 'Could not list (.+)\.' })
+    $message = "$saved music folder(s) refreshed | $tracks tracks in ALL"
+    if ($failed.Count -gt 0) {
+        $names = @($failed | ForEach-Object {
+            if ($_ -match 'Could not list (.+)\.') { $Matches[1] }
+        })
+        $message += " | $($failed.Count) folder(s) failed: $($names -join ', ')"
+    }
+    Show-MpNotice -Title "Rescan Music Folders" -Message $message
 }
 
 # ------------------------------------------------------------------------------
