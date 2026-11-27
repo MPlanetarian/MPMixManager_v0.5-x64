@@ -9176,6 +9176,11 @@ shopt -u nullglob nocaseglob
 return 0
 }
 narrate_tracklist_with_harmony() {
+# Narration is done by the optional MP Harmony Agent. Check for it first: the
+# narrator would otherwise try to start Ollama and the agent, ask questions,
+# and only then fail. A missing agent is reported once and the tracklist suite
+# stays open.
+mp_harmony_menu_gate || return 1
 local narrator="$SCRIPT_DIR/scripts/mp_tracklist_narrator.py"
 [ ! -f "$narrator" ] && narrator="$SCRIPT_DIR/mp_tracklist_narrator.py"
 if [ ! -f "$narrator" ]; then
@@ -9183,10 +9188,6 @@ echo -e "\n${RED}Error: mp_tracklist_narrator.py was not found in scripts/!${NC}
 press_enter
 return 1
 fi
-# Narration is done by the optional MP Harmony Agent. Without it the narrator
-# would try to start Ollama and the agent, then fail after several prompts, so
-# explain once and stay in the tracklist suite instead.
-mp_harmony_menu_gate || return 1
 _collect_narrator_tracklists
 local -a ALL_TRACKLIST_FILES=("${NARRATOR_TRACKLISTS[@]}")
 if [ ${#ALL_TRACKLIST_FILES[@]} -eq 0 ]; then

@@ -286,9 +286,15 @@ class MenuWiringTest(unittest.TestCase):
         self.assertIn('[ "$_vis_show_hint" -eq 1 ] && _vis_text+="  ${_vis_hint}"', chunk)
 
     def test_the_key_hint_names_v_after_the_pinned_keys(self):
-        """V is appended, so the existing [B] Bash / [Shift+A] hint stays intact."""
+        """V is appended, so the existing [B] Bash / MP Harmony hint stays intact."""
         self.assertIn("[V] Visualizer", self.text)
-        self.assertIn("[B] Bash, [Shift+A] MP Harmony, [C] Theme", self.text)
+        # The MP Harmony part of the hint is conditional: it is only appended
+        # when the optional agent is installed, so the label follows [B] Bash
+        # through ${_harmony_hint} instead of being hard-coded.
+        self.assertIn(
+            '[B] Bash${_harmony_hint}, [C] Theme', self.text
+        )
+        self.assertIn('_harmony_hint=", [Shift+A] MP Harmony"', self.text)
 
     def test_the_cli_round_trips(self):
         with tempfile.TemporaryDirectory() as tmp:

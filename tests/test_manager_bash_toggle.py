@@ -85,8 +85,11 @@ class TestManagerBashToggle(unittest.TestCase):
         )
         self.assertIn("cleanup_submenu_screen; enter_manager_bash_terminal", text)
         self.assertIn("_nav_mouse_enable; printf", text)
-        self.assertIn("[B] Bash, [Shift+A] MP Harmony, [C] Theme", text)
-        self.assertIn("[B] Bash, [Shift+A] MP Harmony, [Esc] to return", text)
+        # The MP Harmony part of the hint is only shown when the optional agent
+        # is installed, so it lives in ${_harmony_hint} between [B] Bash and the
+        # rest of the keys.
+        self.assertIn("[B] Bash${_harmony_hint}, [C] Theme", text)
+        self.assertIn("[B] Bash${_harmony_hint}, [Esc] to return", text)
         self.assertNotIn('typed_buffer" = "b"', text)
         self.assertIn("_nav_just_arrowed; then continue; fi; if [ -z \"$typed_buffer\" ]", text)
 

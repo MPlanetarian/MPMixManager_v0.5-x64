@@ -107,6 +107,7 @@ ${BOLD}AVAILABLE MENU OPTIONS (INTERACTIVE & DIRECT SHORTCUTS):${NC}
   Press B on any menu to turn this window into a Bash prompt. Press B again on an empty line to return to the manager.
 
   Press Shift+A on any menu to open MP Harmony. Press Shift+A again on an empty assistant line to return.
+  MP Harmony Agent is an optional, separately installed component. When it is not installed, the menu says so and the rest of the manager is unaffected.
 
   ${BOLD}${BLUE}─── [ SECTION 1: Listen to Mixes & Tracks / Convert Audio / Import Mixes / Plus More ] ────${NC}
   ${BOLD}${CYAN}AI${NC}  ${BOLD}Load MP Mix Manager AI Assistant (MP Harmony) (New)${NC}
