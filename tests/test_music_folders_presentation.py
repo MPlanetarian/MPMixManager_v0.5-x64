@@ -7,6 +7,7 @@ The program does not ship with a fixed host or share list.
 """
 
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -142,7 +143,8 @@ class TestMusicFolderConfiguration(unittest.TestCase):
         self.assertEqual(parsed["MUSIC_SMB_PASSWORD"], password)
         self.assertEqual(parsed["MIX_ARCHIVE_DIR"], "/data/MIX_ARCHIVE")
         self.assertIn("# keep", cfg.read_text(encoding="utf-8"))
-        self.assertEqual(cfg.stat().st_mode & 0o777, 0o600)
+        if os.name != "nt":
+            self.assertEqual(cfg.stat().st_mode & 0o777, 0o600)
         save_smb_login("mplanetarian", "next", cfg)
         again = cfg.read_text(encoding="utf-8")
         self.assertEqual(parse_env_file(cfg)["MUSIC_SMB_PASSWORD"], "next")
@@ -153,6 +155,13 @@ class TestMusicFolderConfiguration(unittest.TestCase):
         seeded = _migrate_legacy_folders({"legacy_host": "192.0.2.20", "legacy_shares": "music001, music002"})
         self.assertEqual([f["id"] for f in seeded], ["MUSIC001", "MUSIC002"])
         self.assertEqual(_migrate_legacy_folders({"legacy_host": "", "legacy_shares": ""}), [])
+
+    def test_menu_launcher_uses_the_verified_python(self):
+        src = Path(mfm.__file__).parent.parent.joinpath("Mix_Archive_Manager.sh").read_text(encoding="utf-8", errors="replace")
+        fn = src.split("manage_music_folders_menu() {", 1)[1].split("\n}", 1)[0]
+        self.assertIn("mp_python_bin", fn)
+        self.assertIn('"$py_bin" "$py_script" --menu', fn)
+        self.assertNotIn('then python3 "$py_script"', fn)
 
     def test_option1_menu_exposes_add_and_remove(self):
         src = Path(mfm.__file__).read_text(encoding="utf-8")

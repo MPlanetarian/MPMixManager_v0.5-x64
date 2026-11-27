@@ -5888,7 +5888,26 @@ manage_mp_audio_player() {
     fi
 }
 manage_music_folders_menu() {
-local py_script="$SCRIPT_DIR/scripts/music_folders_manager.py"; [ ! -f "$py_script" ] && py_script="$SCRIPT_DIR/music_folders_manager.py"; if [ -f "$py_script" ]; then python3 "$py_script" --menu "$@"; else echo -e "${RED}Error: music_folders_manager.py not found!${NC}"; press_enter; fi
+    local py_script="$SCRIPT_DIR/scripts/music_folders_manager.py"
+    [ ! -f "$py_script" ] && py_script="$SCRIPT_DIR/music_folders_manager.py"
+    if [ -f "$py_script" ]; then
+        # Use the same verified interpreter as the player and tray. A bare
+        # python3 is the Microsoft Store alias on many Windows installations.
+        local py_bin="${MP_PY_BIN:-}"
+        if [ -z "$py_bin" ] && command -v mp_python_bin >/dev/null 2>&1; then
+            py_bin="$(mp_python_bin 2>/dev/null || true)"
+        fi
+        if [ -z "$py_bin" ] || [ "$py_bin" = "python3" ]; then
+            echo -e "${RED}Error: Python 3 was not found. Install Python or run install.sh again.${NC}"
+            press_enter
+            return 1
+        fi
+        "$py_bin" "$py_script" --menu "$@"
+    else
+        echo -e "${RED}Error: music_folders_manager.py not found!${NC}"
+        press_enter
+        return 1
+    fi
 }
 get_cliamp_track_info() {
 CLIAMP_RUNNING=0 CLIAMP_STATE="" CLIAMP_TITLE="" CLIAMP_ARTIST="" CLIAMP_RAW_PATH="" CLIAMP_RESOLVED_PATH="" CLIAMP_FILE_EXISTS=0 CLIAMP_FILE_SIZE="" CLIAMP_POSITION=0 CLIAMP_DURATION=0 CLIAMP_POS_FMT="00:00" CLIAMP_DUR_FMT="00:00" CLIAMP_PROGRESS_PCT=0; local cliamp_bin="cliamp"; if ! command -v cliamp &>/dev/null; then if [ -x "$SCRIPT_DIR/bin/cliamp" ]; then cliamp_bin="$SCRIPT_DIR/bin/cliamp"; elif [ -x "$HOME/.local/bin/cliamp" ]; then cliamp_bin="$HOME/.local/bin/cliamp"; else return 1; fi; fi; local pids; pids=$(pgrep -x cliamp 2>/dev/null); [ -z "$pids" ] && return 1; CLIAMP_RUNNING=1; local status_json parsed; status_json=$("$cliamp_bin" status --json 2>/dev/null); [ -z "$status_json" ] && return 1; parsed=$(jq -r 'select(.ok==true)|[(.state//"unknown"),(.track.title//""),(.track.artist//""),(.track.path//""),((.position//0)|floor|tostring),((.duration//0)|floor|tostring)]|join("\u001f")' <<<"$status_json" 2>/dev/null); [ -z "$parsed" ] && return 1; IFS=$'\x1f' read -r CLIAMP_STATE CLIAMP_TITLE CLIAMP_ARTIST CLIAMP_RAW_PATH CLIAMP_POSITION CLIAMP_DURATION <<< "$parsed"; CLIAMP_POSITION=${CLIAMP_POSITION:-0}; CLIAMP_DURATION=${CLIAMP_DURATION:-0}; CLIAMP_POS_FMT=$(_fmt_sec "$CLIAMP_POSITION"); CLIAMP_DUR_FMT=$(_fmt_sec "$CLIAMP_DURATION"); (( CLIAMP_DURATION > 0 )) && CLIAMP_PROGRESS_PCT=$((CLIAMP_POSITION * 100 / CLIAMP_DURATION)); CLIAMP_RESOLVED_PATH="$CLIAMP_RAW_PATH"; if [ -n "$CLIAMP_RESOLVED_PATH" ] && [ -e "$CLIAMP_RESOLVED_PATH" ]; then CLIAMP_FILE_EXISTS=1; else local alt="${CLIAMP_RAW_PATH/#\/media\//\/run\/media\/}" bname="${CLIAMP_RAW_PATH##*/}"; if [ -n "$alt" ] && [ -e "$alt" ]; then CLIAMP_RESOLVED_PATH="$alt"; CLIAMP_FILE_EXISTS=1; else local pid fd target dir; for pid in $pids; do for fd in /proc/"$pid"/fd/*; do [ -e "$fd" ] || continue; target=$(readlink "$fd" 2>/dev/null); if [ -n "$target" ] && [ "$bname" = "${target##*/}" ] && [ -e "$target" ]; then CLIAMP_RESOLVED_PATH="$target"; CLIAMP_FILE_EXISTS=1; break 2; fi; done; done; if [ "$CLIAMP_FILE_EXISTS" -eq 0 ] && [ -n "$bname" ]; then for dir in "${MIX_ARCHIVE_DIR:-}" "${MIX_ARCHIVE_DIR:-}/CONVERTED_WAV_FILES" "${MIX_ARCHIVE_DIR:-}/FLAC_CONVERTED_OUTPUTS" "$SCRIPT_DIR/MIX_ARCHIVE" "$SCRIPT_DIR/MIX_ARCHIVE/CONVERTED_WAV_FILES" "$SCRIPT_DIR/MIX_ARCHIVE/FLAC_CONVERTED_OUTPUTS" "/Volumes/WD BLACK B/MIX_ARCHIVE" "/Volumes/WD BLACK B/MIX_ARCHIVE/CONVERTED_WAV_FILES" "/Volumes/WD BLACK B/MIX_ARCHIVE/FLAC_CONVERTED_OUTPUTS" "/Volumes/MIX_ARCHIVE" "/d/MIX_ARCHIVE" "/e/MIX_ARCHIVE" "D:/MIX_ARCHIVE" "E:/MIX_ARCHIVE" "/mnt/d/MIX_ARCHIVE" "$SCRIPT_DIR" "$SCRIPT_DIR/CONVERTED_WAV_FILES" "$SCRIPT_DIR/FLAC_CONVERTED_OUTPUTS" "$PWD"; do if [ -n "$dir" ] && [ -f "$dir/$bname" ]; then CLIAMP_RESOLVED_PATH="$dir/$bname"; CLIAMP_FILE_EXISTS=1; break; fi; done; fi; fi; fi; (( CLIAMP_FILE_EXISTS )) && CLIAMP_FILE_SIZE=$(ls -lh "$CLIAMP_RESOLVED_PATH" 2>/dev/null | awk '{print $5}'); return 0
